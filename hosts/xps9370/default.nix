@@ -13,13 +13,22 @@
   boot.loader.systemd-boot.enable = true;
   # This chassis has a flaky CMOS battery history: on power loss the
   # firmware forgets its NVRAM boot entries and falls back to the ESP
-  # default path (EFI/BOOT/BOOTX64.EFI). bootctl installs a copy of
-  # systemd-boot there, so the machine still boots NixOS after a reset.
+  # default path (EFI/BOOT/BOOTX64.EFI). `bootctl install` writes a copy
+  # of systemd-boot to that fallback path by default (no extra option
+  # needed — systemd-boot has no installAsRemovable, that is a GRUB
+  # option), so the machine still boots NixOS after a reset.
   boot.loader.efi.canTouchEfiVariables = true;
 
   # 16GB RAM, no hibernation use-case on a project machine: compressed
   # RAM swap instead of a swap partition keeps the disk layout simpler.
   zramSwap.enable = true;
+
+  # Wi-Fi is this chassis's network path; NetworkManager belongs here, not
+  # in modules/base, since a headless/wired host wouldn't want it. Wi-Fi
+  # credentials are entered on the machine and live in
+  # /etc/NetworkManager/system-connections — private state that never
+  # enters this repo. Secrets tooling may take this over later.
+  networking.networkmanager.enable = true;
 
   # TODO(private-layer): these values identify a person, not a machine.
   # They move to the private layer as soon as its shape is decided
