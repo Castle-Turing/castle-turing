@@ -3,7 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixos-hardware.url = "github:NixOS/nixos-hardware";
+    nixos-hardware = {
+      url = "github:NixOS/nixos-hardware";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # Declarative disk layout, consumed by nixos-anywhere at install time.
     # The partition table is a checked-in artifact, not tacit knowledge.
     disko = {
@@ -20,15 +23,42 @@
       nixpkgs,
       nixos-hardware,
       disko,
-    }@inputs:
+    }:
     {
-      nixosConfigurations.xps9370 = nixpkgs.lib.nixosSystem {
+      # The mechanism, exported for private layers to assemble
+      # (Principle 02: the private repo instantiates the castle; this
+      # repo cannot name any resident).
+      nixosModules = {
+        base = ./modules/base;
+        # Hardware facts only. The wrapper binds this flake's
+        # nixos-hardware and disko pins so consumers need neither input.
+        host-xps9370 = {
+          imports = [
+            nixos-hardware.nixosModules.dell-xps-13-9370
+            disko.nixosModules.disko
+            ./hosts/xps9370
+          ];
+        };
+      };
+
+      # CI stand-in only — do not point nixos-anywhere or nixos-rebuild
+      # at this. A dummy resident, so `nix flake check` evaluates the
+      # full stack without this repo naming a person; the placeholder
+      # key is not valid key material, so nothing could authenticate to
+      # a machine built from it even by mistake, but disko's disk wipe
+      # still runs first. Real configurations live in private layers —
+      # see docs/private-layer.md.
+      nixosConfigurations.example = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
-        specialArgs = { inherit inputs; };
         modules = [
-          disko.nixosModules.disko
-          ./modules/base
-          ./hosts/xps9370
+          self.nixosModules.base
+          self.nixosModules.host-xps9370
+          {
+            castle.admin = {
+              username = "resident";
+              sshKeys = [ "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key" ];
+            };
+          }
         ];
       };
 

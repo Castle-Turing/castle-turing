@@ -43,3 +43,12 @@ can run the weekly-audit muscle on code the same way as on decisions.
 Before opening a PR, run `/code-review` on the branch and address its
 findings. Codex reviews the PR itself as a second, cross-model opinion; the
 human still makes every merge decision.
+
+## Spec workflow
+
+When asked to spec a feature: choose the smallest next chunk of useful
+work, ask clarifying questions first, then draft a numbered brief in
+`docs/tasks/` containing the spec, plan, and an implementation prompt
+for a separate session. Always ask for explicit approval before writing
+the brief — or any CLAUDE.md change — to disk. The brief is committed on
+the branch that implements it, per the tasks convention.

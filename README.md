@@ -38,15 +38,17 @@ hosts/           One module per machine. hosts/xps9370/ is the reference
                  leak into shared modules.
 modules/         Shared NixOS/home-manager modules — the framework proper.
 agent/           Agent tooling: prompts, glue scripts, journal machinery.
-flake.nix        Entry point. Currently a stub.
+flake.nix        Entry point: exports the framework's modules and a
+                 CI-only example configuration with a placeholder
+                 resident. Real configurations live in private layers.
 ```
 
 ## Reproducing this (eventually)
 
 The intended adoption path: clone this repo, write one host module for your
 hardware, supply your own private layer in the documented shape, and get
-*your* Castle Turing — not a copy of ours. The private-layer interface will be
-documented in `docs/` before the first feature that depends on it.
+*your* Castle Turing — not a copy of ours. The private-layer interface is
+documented in [`docs/private-layer.md`](docs/private-layer.md).
 
 ## Non-negotiables
 

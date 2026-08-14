@@ -1,9 +1,13 @@
 # hosts/xps9370 — Dell XPS 13 9370, the reference host.
-{ inputs, ... }:
+#
+# Machine facts only: the resident (castle.admin) is supplied by the
+# consuming private layer. The nixos-hardware and disko modules this
+# host needs are bound by flake.nix's `nixosModules.host-xps9370`
+# export, which is how this directory should be consumed.
+{ ... }:
 
 {
   imports = [
-    inputs.nixos-hardware.nixosModules.dell-xps-13-9370
     ./disko.nix
     ./hardware-configuration.nix
   ];
@@ -29,16 +33,6 @@
   # /etc/NetworkManager/system-connections — private state that never
   # enters this repo. Secrets tooling may take this over later.
   networking.networkmanager.enable = true;
-
-  # TODO(private-layer): these values identify a person, not a machine.
-  # They move to the private layer as soon as its shape is decided
-  # (Principle 01, consequence 3). Adopters: replace with your own.
-  castle.admin = {
-    username = "resident";
-    sshKeys = [
-      "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key"
-    ];
-  };
 
   # First installed from nixos-unstable ahead of the 26.11 release.
   # Never change this after install.
