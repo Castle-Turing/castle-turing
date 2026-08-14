@@ -39,7 +39,10 @@ in
       }
     ];
 
-    nix.settings.experimental-features = [ "nix-command" "flakes" ];
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
     nix.gc = {
       automatic = true;
       dates = "weekly";
@@ -51,7 +54,10 @@ in
     # Kept together deliberately so rotating a key is one edit, not two.
     users.users.${cfg.username} = {
       isNormalUser = true;
-      extraGroups = [ "wheel" "networkmanager" ];
+      extraGroups = [
+        "wheel"
+        "networkmanager"
+      ];
       openssh.authorizedKeys.keys = cfg.sshKeys;
     };
     users.users.root.openssh.authorizedKeys.keys = cfg.sshKeys;

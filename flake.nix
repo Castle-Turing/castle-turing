@@ -14,15 +14,29 @@
     # first credential exists anywhere in the system. See Principle 01.
   };
 
-  outputs = { self, nixpkgs, nixos-hardware, disko }@inputs: {
-    nixosConfigurations.xps9370 = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      specialArgs = { inherit inputs; };
-      modules = [
-        disko.nixosModules.disko
-        ./modules/base
-        ./hosts/xps9370
-      ];
+  outputs =
+    {
+      self,
+      nixpkgs,
+      nixos-hardware,
+      disko,
+    }@inputs:
+    {
+      nixosConfigurations.xps9370 = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = { inherit inputs; };
+        modules = [
+          disko.nixosModules.disko
+          ./modules/base
+          ./hosts/xps9370
+        ];
+      };
+
+      formatter = nixpkgs.lib.genAttrs [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ] (system: nixpkgs.legacyPackages.${system}.nixfmt-rfc-style);
     };
-  };
 }

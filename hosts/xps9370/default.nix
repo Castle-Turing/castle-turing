@@ -13,12 +13,11 @@
   boot.loader.systemd-boot.enable = true;
   # This chassis has a flaky CMOS battery history: on power loss the
   # firmware forgets its NVRAM boot entries and falls back to the ESP
-  # default path (EFI/BOOT/BOOTX64.EFI). canTouchEfiVariables only lets
-  # bootctl manage NVRAM entries; it does NOT write that fallback path.
-  # installAsRemovable is what actually installs a copy of systemd-boot
-  # there, so the machine still boots NixOS after a reset.
+  # default path (EFI/BOOT/BOOTX64.EFI). `bootctl install` writes a copy
+  # of systemd-boot to that fallback path by default (no extra option
+  # needed — systemd-boot has no installAsRemovable, that is a GRUB
+  # option), so the machine still boots NixOS after a reset.
   boot.loader.efi.canTouchEfiVariables = true;
-  boot.loader.systemd-boot.installAsRemovable = true;
 
   # 16GB RAM, no hibernation use-case on a project machine: compressed
   # RAM swap instead of a swap partition keeps the disk layout simpler.
