@@ -7,4 +7,5 @@
 # quirks, and this file intentionally contributes nothing.
 { ... }:
 
-{ }
+{
+}

@@ -28,7 +28,10 @@ in
   };
 
   config = {
-    nix.settings.experimental-features = [ "nix-command" "flakes" ];
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
     nix.gc = {
       automatic = true;
       dates = "weekly";
@@ -37,7 +40,10 @@ in
 
     users.users.${cfg.username} = {
       isNormalUser = true;
-      extraGroups = [ "wheel" "networkmanager" ];
+      extraGroups = [
+        "wheel"
+        "networkmanager"
+      ];
       openssh.authorizedKeys.keys = cfg.sshKeys;
     };
     # Remote `nixos-rebuild --target-host` needs non-interactive sudo.

@@ -25,6 +25,10 @@ decisions.
 - Design principles are numbered sequentially (`01-`, `02-`, …) and are only
   added deliberately — a principle doc is a commitment, not a note. Drafts
   live in PRs, not in `docs/principles/`.
+- Implementation work is specced as numbered briefs in `docs/tasks/`
+  (`0001-`, `0002-`, …). A brief is committed on the branch that implements
+  it, never separately — spec and implementation merge and get audited
+  together.
 - Prefer plain text and standard formats everywhere: they are the point of
   the project. If a tool choice trades AI-legibility for features, flag it.
 - Keep the flake evaluating (`nix flake check`) once it is non-trivial.
@@ -35,3 +39,7 @@ decisions.
 Parallel sessions use git worktrees, one branch per session. Do not commit
 directly to `main` from an agent session; merges go through PRs so the human
 can run the weekly-audit muscle on code the same way as on decisions.
+
+Before opening a PR, run `/code-review` on the branch and address its
+findings. Codex reviews the PR itself as a second, cross-model opinion; the
+human still makes every merge decision.
