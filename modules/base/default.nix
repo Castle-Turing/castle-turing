@@ -28,6 +28,17 @@ in
   };
 
   config = {
+    assertions = [
+      {
+        assertion = cfg.username != "";
+        message = ''
+          castle.admin.username is unset. Every host built on modules/base
+          must supply an admin identity — set it in hosts/<name>/ (or the
+          private layer, once its shape is decided).
+        '';
+      }
+    ];
+
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
     nix.gc = {
       automatic = true;
@@ -35,11 +46,15 @@ in
       options = "--delete-older-than 30d";
     };
 
+    # Both the admin user and root trust the same key set: nixos-anywhere
+    # installs as root, and remote rebuilds may target either account.
+    # Kept together deliberately so rotating a key is one edit, not two.
     users.users.${cfg.username} = {
       isNormalUser = true;
       extraGroups = [ "wheel" "networkmanager" ];
       openssh.authorizedKeys.keys = cfg.sshKeys;
     };
+    users.users.root.openssh.authorizedKeys.keys = cfg.sshKeys;
     # Remote `nixos-rebuild --target-host` needs non-interactive sudo.
     security.sudo.wheelNeedsPassword = false;
 
@@ -53,11 +68,5 @@ in
         PermitRootLogin = "prohibit-password";
       };
     };
-    users.users.root.openssh.authorizedKeys.keys = cfg.sshKeys;
-
-    # Wi-Fi credentials are entered on the machine and live in
-    # /etc/NetworkManager/system-connections — private state that never
-    # enters this repo. Secrets tooling may take this over later.
-    networking.networkmanager.enable = true;
   };
 }
