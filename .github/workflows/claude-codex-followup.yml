@@ -1,0 +1,71 @@
+# When Codex (ChatGPT Codex Connector) reviews a PR, Claude evaluates the
+# findings, pushes fixes for the valid ones, and replies to the rest.
+#
+# Loop prevention, by construction:
+#   - Triggers ONLY on reviews authored by the Codex bot — never on Claude's
+#     own comments, reviews, or pushes, and never on humans (the @claude
+#     mention flow in claude.yml covers those).
+#   - Claude is forbidden from writing "@codex" anywhere, so it can never
+#     summon the reviewer back.
+#   - One concurrency slot per PR: stacked Codex reviews collapse into the
+#     latest run instead of queueing repeated responses.
+#   - Same-repo branches only: never runs with write access against a fork.
+name: Claude — handle Codex review
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: codex-followup-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  handle-codex-review:
+    if: |
+      github.event.review.user.login == 'chatgpt-codex-connector[bot]' &&
+      github.event.review.state != 'approved' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Run Claude on Codex's findings
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: 'chatgpt-codex-connector[bot]'
+          prompt: |
+            Codex just submitted a code review on PR #${{ github.event.pull_request.number }}
+            in ${{ github.repository }}. You are on the PR branch.
+
+            1. Read the review and its inline comments:
+               gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}"
+               gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments"
+            2. Judge each finding on its merits. For valid findings, implement
+               the smallest correct fix, commit, and push to this branch. For
+               findings you disagree with or that are out of the PR's scope,
+               reply explaining why — never silently skip a finding. Every
+               disagreement between reviewers must stay legible to the human.
+            3. Finish with one PR comment summarizing what you fixed and what
+               you declined, with reasoning.
+
+            Hard rules:
+            - Never write the Codex trigger phrase (the reviewer's @-mention)
+              in any comment, commit message, or file — it would re-summon
+              the reviewer and start a loop.
+            - Never merge, close, approve, or re-request review on the PR;
+              the human makes every merge decision.
+            - Do not expand the diff beyond what the findings require.
+            - Follow the repository's CLAUDE.md.
+          claude_args: '--allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh api:*),Bash(nix:*)"'
