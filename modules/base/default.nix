@@ -12,29 +12,44 @@ in
   options.castle.admin = {
     username = lib.mkOption {
       type = lib.types.str;
+      default = "";
       description = ''
         Login name of the human administrator. Supplied by the private
-        layer (or, until that exists, by the host module).
+        layer — see docs/private-layer.md.
       '';
     };
     sshKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
+      default = [ ];
       description = ''
         SSH public keys granted admin access. Public keys are not secrets,
         but they identify a person, so they are configuration — not
-        framework.
+        framework. Supplied by the private layer — see
+        docs/private-layer.md.
       '';
     };
   };
 
   config = {
+    # Both fields default to empty (rather than being left without a
+    # default) so a missing private layer fails here, with this message,
+    # instead of on NixOS's generic "option used but not defined" error.
     assertions = [
       {
         assertion = cfg.username != "";
         message = ''
-          castle.admin.username is unset. Every host built on modules/base
-          must supply an admin identity — set it in hosts/<name>/ (or the
-          private layer, once its shape is decided).
+          castle.admin.username is unset. Every host built on
+          modules/base must be given an admin identity by its private
+          layer — see docs/private-layer.md.
+        '';
+      }
+      {
+        assertion = cfg.sshKeys != [ ];
+        message = ''
+          castle.admin.sshKeys is empty. Without at least one key,
+          nothing can authenticate to this host over SSH (password auth
+          is disabled) — supply one from the private layer, see
+          docs/private-layer.md.
         '';
       }
     ];

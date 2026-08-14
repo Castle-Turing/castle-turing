@@ -27,9 +27,14 @@ identity is not part of a host and lives in your private layer.
    set a root password with `sudo passwd`, and note the IP from `ip a`.
 2. The installable configuration lives in your private flake, not here —
    this repo's `nixosConfigurations.example` is a CI stand-in with a
-   placeholder resident. From a machine with Nix and your private flake
-   checked out (with this repo checked out as a sibling, so the generated
-   hardware config lands in the public tree where machine facts belong):
+   placeholder resident. This first install still runs against the
+   placeholder `hardware-configuration.nix` committed in this directory
+   (fine — the `dell-xps-13-9370` nixos-hardware module already carries
+   this chassis's known quirks); the real one is captured as a *side
+   effect* of this same command for you to commit afterward, not
+   consumed by it. From a machine with Nix and your private flake
+   checked out (with this repo checked out as a sibling, so the
+   generated file lands in the public tree where machine facts belong):
 
    ```sh
    nix run github:nix-community/nixos-anywhere -- \
@@ -39,10 +44,12 @@ identity is not part of a host and lives in your private layer.
      root@<installer-ip>
    ```
 
-   This partitions the disk per `disko.nix`, writes the real
-   `hardware-configuration.nix` into this directory (commit it here, then
-   bump your private flake's pin of this repo), installs, and reboots.
-3. On first boot, join Wi-Fi once with `nmtui`; the credential stays on
+   This partitions the disk per `disko.nix`, installs, and reboots.
+3. Commit the freshly generated `hardware-configuration.nix` in this
+   directory, bump your private flake's pin of this repo, and do one
+   rebuild (below) so the real hardware facts take effect — the install
+   itself ran without them.
+4. On first boot, join Wi-Fi once with `nmtui`; the credential stays on
    the machine, not in this repo.
 
 ## Rebuilding after changes

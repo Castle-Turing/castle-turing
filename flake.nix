@@ -3,7 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixos-hardware.url = "github:NixOS/nixos-hardware";
+    nixos-hardware = {
+      url = "github:NixOS/nixos-hardware";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # Declarative disk layout, consumed by nixos-anywhere at install time.
     # The partition table is a checked-in artifact, not tacit knowledge.
     disko = {
@@ -38,9 +41,13 @@
         };
       };
 
-      # CI stand-in: a dummy resident, so `nix flake check` evaluates the
-      # full stack without this repo naming a person. Real configurations
-      # live in private layers — see docs/private-layer.md.
+      # CI stand-in only — do not point nixos-anywhere or nixos-rebuild
+      # at this. A dummy resident, so `nix flake check` evaluates the
+      # full stack without this repo naming a person; the placeholder
+      # key is not valid key material, so nothing could authenticate to
+      # a machine built from it even by mistake, but disko's disk wipe
+      # still runs first. Real configurations live in private layers —
+      # see docs/private-layer.md.
       nixosConfigurations.example = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
