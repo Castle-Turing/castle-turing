@@ -13,9 +13,18 @@ Ethernet port (the XPS 13 9370), that step cannot be skipped.
 
 **What we already know.**
 
-- Blocked on `secrets-tooling.md`. A PSK is a credential; it cannot be
-  committed to either repo in plaintext, which is why task 0006
-  deliberately did not bake one into the image.
+- **Possibly not blocked on `secrets-tooling.md` after all.** A PSK is a
+  credential and cannot be committed to either repo in plaintext, which
+  is why task 0006 deliberately did not bake one into the image. But
+  nixpkgs ships
+  `networking.networkmanager.ensureProfiles.environmentFiles`, which
+  references a PSK by an out-of-store file path — public mechanism (the
+  option), private configuration (whatever keeps that file secret).
+  That is Principle 01's split without any secrets tooling, and it
+  deserves evaluating before assuming this waits on sops-nix.
+  Surfaced by review during task 0006, after the manual-join decision
+  was already made deliberately; recorded here rather than reopening
+  that decision.
 - NetworkManager profiles are declarable in NixOS, and the PSK can be
   referenced from a secrets file rather than inlined once the tooling
   exists.
