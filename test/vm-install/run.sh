@@ -47,21 +47,28 @@ trap cleanup EXIT
 
 NIX_BUILD_ARGS=(--extra-experimental-features "nix-command flakes" --no-link --print-out-paths)
 
-build_pkg() {
-  # ^out: some packages (e.g. openssh) have more than one default output
-  # (out, man, ...); --print-out-paths would print one line per output
-  # and break the single-path assumption every caller here makes.
-  nix build "${NIX_BUILD_ARGS[@]}" -f "$HARNESS_DIR/pkgs.nix" "$1^out" | head -n1
-}
 build_expr() {
+  # Attribute access (not the CLI's ATTR^output syntax) so Nix's own
+  # output-selection sugar resolves the path exactly once: some packages
+  # (e.g. openssh) have more than one default output (out, man, ...),
+  # and --print-out-paths would print one line per output otherwise,
+  # breaking the single-path assumption every caller here makes.
   nix build --impure "${NIX_BUILD_ARGS[@]}" --expr "$1" | head -n1
+}
+build_pkg() {
+  # Caller supplies the exact attribute path, including any output
+  # selector needed (e.g. "openssh.out", or plain "OVMF.fd" — OVMF.fd is
+  # already a specific output of the OVMF derivation, and appending
+  # ".out" to it re-selects OVMF's plain "out" output instead, discarding
+  # the ".fd" narrowing).
+  build_expr "(import \"$HARNESS_DIR/pkgs.nix\").$1"
 }
 
 log "Building harness tooling (qemu, OVMF, nixos-anywhere, openssh) from this flake's pinned nixpkgs..."
-QEMU=$(build_pkg qemu)
+QEMU=$(build_pkg qemu.out)
 OVMF=$(build_pkg OVMF.fd)
-NIXOS_ANYWHERE=$(build_pkg nixos-anywhere)
-OPENSSH=$(build_pkg openssh)
+NIXOS_ANYWHERE=$(build_pkg nixos-anywhere.out)
+OPENSSH=$(build_pkg openssh.out)
 
 QEMU_BIN="$QEMU/bin/qemu-system-x86_64"
 QEMU_IMG_BIN="$QEMU/bin/qemu-img"
