@@ -82,7 +82,7 @@ PRs #8, #10, and #11 may merge while you work. Rebase onto updated
 `origin/main` before opening your PR, and scope every diff and review
 against `origin/main` per CLAUDE.md.
 
-## Precondition for Wesley's reinstall pass (record in the PR)
+## Precondition for the reinstall pass (record in the PR)
 
 Before any from-scratch reinstall of the XPS, everything on that
 machine must be committed and pushed — a wipe destroys uncommitted
