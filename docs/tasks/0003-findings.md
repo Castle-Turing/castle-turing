@@ -129,7 +129,8 @@ pushed publicly) is a separate, deliberate step per
 
 Runbook implication: `hosts/xps9370/README.md`'s install instructions
 should say this explicitly rather than leaving it implied by "use an
-input override."
+input override." **See finding #9 — this override has a sharp edge that
+bit us later in this same task.**
 
 ## 5. Dead-CMOS reality and the ESP fallback path
 
@@ -232,3 +233,79 @@ of the config being redeployed alongside the boot-loader fix; the
 provisioned Wi-Fi connection profile itself (interface `wlp2s0`, no
 `permissions=` restriction) was confirmed fine independently — it was
 purely a missing-firmware problem, not a bad connection file.
+
+**Correction, added after further investigation:** the redeploy that
+was supposed to ship this fix (the one referenced in finding #5's
+"Redeploy result") did not actually ship it. See finding #9 — the fix
+was correct, but the deploy that was meant to carry it consumed a stale
+snapshot of the worktree that predated the fix's own commit. The
+firmware config was correct in the repo the whole time; it just hadn't
+reached the machine yet as of that redeploy.
+
+## 9. `path:` flake-input overrides lock silently — a redeploy trap
+
+The single most expensive mistake in this task, and worth a numbered
+finding of its own because it's a general agentic-workflow hazard, not
+a one-off slip.
+
+Finding #4 documented using `nix flake lock --override-input castle-turing
+path:/abs/path/to/local/checkout` in the private repo so nixos-anywhere
+would build from a local, uncommitted public checkout instead of its
+pinned GitHub rev. What wasn't obvious at the time: **that command
+doesn't create a live pointer to the directory — it takes a content
+snapshot (a `narHash`) of whatever is in that directory *at the moment
+the lock command runs*, and writes that snapshot into `flake.lock`.**
+Every subsequent `nix build`/`nix run` against that flake re-evaluates
+against the *locked* snapshot, not the directory's current contents,
+even though the directory keeps changing underneath it and even though
+`path:` inputs are exactly the kind of thing that looks like it should
+always be "live."
+
+What happened here: the override lock was created once, early in this
+task's Phase 2, before the `hardware.enableRedistributableFirmware`
+commit existed. A redeploy was later run (to ship that exact firmware
+fix) without re-running `nix flake lock --override-input` first. The
+redeploy evaluated the *stale* pre-firmware-fix snapshot, built a
+closure that never included `linux-firmware`, deployed it, and reported
+success — because from Nix's perspective, nothing was wrong: it
+faithfully built and deployed exactly the input it was told to use. The
+symptom on the machine (`ath10k_pci` still couldn't find firmware after
+the "fix" was "deployed") was the first sign anything was off, and it
+took direct evidence from the machine's own console — not the deploy
+log — to catch it. The tell that should have been caught sooner: the
+redeploy finished in well under a minute, ludicrously fast for a build
+that was supposed to newly pull in `linux-firmware` (a large package
+this connection could never fetch and unpack that quickly). A near-instant
+"successful" rebuild after a source change is itself a red flag worth
+stopping on, not just a nice performance surprise.
+
+**The fix, and the rule going forward:** re-run
+`nix flake lock --override-input castle-turing path:<checkout>` in the
+consuming (private) flake *every single time* the overridden public
+checkout gets a new commit that needs to reach the deploy — there is no
+way to make a `path:` override "just stay live" once it's been locked;
+re-locking is the only refresh mechanism. Better still, before trusting
+any redeploy that's supposed to carry a specific change: positively
+assert the change is in the evaluated config or build closure ahead of
+time, rather than inferring success from a clean exit code and a
+plausible-looking log. Two cheap assertions that would have caught this
+immediately, and are worth making a standing habit for this kind of
+override-then-deploy flow:
+
+```sh
+# 1. The option evaluates the way you expect:
+nix eval .#nixosConfigurations.xps9370.config.hardware.enableRedistributableFirmware
+# → should print `true`
+
+# 2. The package you expect is actually in the build closure — instantiate
+#    the derivation (cheap, no building) and query its requisites:
+nix-store --query --requisites \
+  "$(nix eval --raw .#nixosConfigurations.xps9370.config.system.build.toplevel.drvPath)" \
+  | grep linux-firmware
+```
+
+Runbook implication for `hosts/xps9370/README.md` and any future
+install/redeploy tooling built on this pattern: treat "re-lock the
+override, then assert the expected delta is present" as two mandatory
+steps of the redeploy sequence, not optional diligence — an agent (or a
+human moving fast) will otherwise trust a fast, clean, wrong deploy.
