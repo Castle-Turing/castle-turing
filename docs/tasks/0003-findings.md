@@ -36,36 +36,51 @@ Either closes the loop; the second also helps with finding #3 below.
 Whichever direction is chosen, it needs a numbered task of its own — this
 repo shouldn't ship a host module that strands its own admin.
 
-## 2. "No Boot Device Found" after install (root cause TBD)
+## 2. "No Boot Device Found" after install (root cause confirmed)
 
-After the nixos-anywhere run reported success (see exit-status note
-below) and the machine rebooted, the human pulled the USB stick per the
-brief's normal first-boot sequence — and the XPS came up to a firmware
-"No Boot Device Found" screen instead of NixOS. Investigation is in
-progress (through `main`, over SSH once the installer is back up); this
-section is a placeholder for the root cause, not a diagnosis. Known facts
-worth carrying into that investigation, pulled from the install log so
-they don't have to be re-derived:
+After the nixos-anywhere run reported success and the machine rebooted,
+the human pulled the USB stick per the brief's normal first-boot
+sequence — and the XPS came up to a firmware "No Boot Device Found"
+screen instead of NixOS. Confirmed by direct inspection of the deployed
+ESP (over SSH, from the reboot-into-installer path): **the fallback file
+`EFI/BOOT/BOOTX64.EFI` was not on the disk**, despite the install log's
+own "Copied ... to /boot/EFI/BOOT/BOOTX64.EFI" line claiming it had been
+written. The log line and the on-disk reality disagreed — the log is not
+trustworthy evidence of what actually landed on the ESP for this kind of
+chroot install; the two facts recorded in the previous version of this
+entry (the "Copied" log line, and `canTouchEfiVariables` being
+graceful-skipped inside the chroot) turned out to be a red herring for
+the "Copied" half — the file genuinely didn't survive, for reasons not
+fully root-caused beyond "don't trust the log, verify the ESP directly."
 
-- The install log shows `bootctl` copying the systemd-boot binary to
-  *both* `/boot/EFI/systemd/systemd-bootx64.efi` and the UEFI fallback
-  path `/boot/EFI/BOOT/BOOTX64.EFI`. The fallback file that
-  `hosts/xps9370/default.nix` documents as the mechanism (see finding #5)
-  does appear to have been written.
-- Immediately before that, the log shows: `Not booted with EFI or
-  running in a container, skipping EFI variable modifications.` This is
-  nixos-anywhere's normal chroot-install behavior — `canTouchEfiVariables
-  = true` never gets a chance to act during this kind of install, because
-  the installing process has no access to `/sys/firmware/efi/efivars`
-  from inside the target's chroot. In other words: **no NVRAM boot entry
-  was ever created**, by design of how nixos-anywhere installs, not as a
-  bug in this run. The system was always going to depend entirely on the
-  firmware's own fallback-path scanning (or the ESP's ordering vs. the
-  wiped-away Ubuntu partition table) working correctly on this chassis.
-- Whether that's the actual cause (vs. e.g. an ESP that didn't get marked
-  bootable, a GPT issue from disko, or something chassis-specific) is
-  what the current investigation is for. Fill in above this line once
-  known.
+Two more contributing/compounding factors, found during the same
+inspection:
+
+- The firmware also carried **stale NVRAM boot entries** from the wiped
+  Ubuntu install (Ubuntu's own boot entry, and a leftover rEFInd entry) —
+  removed as part of the live fix.
+- Separately, the boot attempt that produced "No Boot Device Found" was
+  compounded by the firmware being switched to **Legacy boot mode**
+  (needed transiently for the USB stick) instead of UEFI — human error at
+  the keyboard, not a config bug, but it stacked with the missing
+  fallback file to produce a worse symptom than either alone. Confirmed
+  back in UEFI mode; Secure Boot was already off and uninvolved.
+- The CMOS battery itself was replaced during this task (separately from
+  the software fix), removing the underlying reason NVRAM entries were
+  untrustworthy in the first place — see finding #5 for why the config
+  still treats NVRAM as unreliable regardless.
+
+**Live fix applied** (through `main`, over SSH, on the booted-from-USB
+installer with the target's filesystems mounted): copied
+`systemd-bootx64.efi` to `EFI/BOOT/BOOTX64.EFI` by hand, removed the
+stale Ubuntu/rEFInd NVRAM entries. Machine then booted NixOS
+successfully from the internal disk. That direct fix is necessarily
+non-declarative (a hand-edit of a live ESP); task 0003's redeploy step
+re-runs `nixos-install` against the same (already-partitioned, not
+reformatted) disk to confirm the fallback file survives a real
+`bootctl install` pass this time, now that the stale NVRAM confusion and
+Legacy-mode issue are out of the picture. Result of that redeploy: see
+finding #5.
 
 ## 3. Installer ephemerality blocks agent-driven repeatability
 
@@ -118,17 +133,32 @@ input override."
 
 ## 5. Dead-CMOS reality and the ESP fallback path
 
-This chassis's CMOS battery history means NVRAM boot entries can't be
+This chassis's CMOS battery history meant NVRAM boot entries couldn't be
 trusted — a power loss forgets them, and the firmware's F12 one-time-boot
-menu is the only reliably reachable path to the installer USB.
-`hosts/xps9370/default.nix` already documents the intended mitigation for
-the *installed system*: systemd-boot has no GRUB-style
-`installAsRemovable` option, but `bootctl install` writes a copy to the
-UEFI-standard fallback path (`EFI/BOOT/BOOTX64.EFI`) unconditionally, so
-the machine should boot from the ESP even with an empty NVRAM boot entry
-list. Whether that mitigation is actually sufficient on this hardware is
-exactly what finding #2 is investigating — this finding is the design
-intent it's being checked against, not a claim that it worked.
+menu is the only reliably reachable path to the installer USB. The
+battery was replaced during this task, but `hosts/xps9370/default.nix`
+still treats NVRAM as unreliable on principle — a working battery today
+isn't a guarantee, and the config has no way to detect a future failure.
+
+`hosts/xps9370/default.nix` documents the intended mitigation for the
+*installed system*: `bootctl install` is supposed to write a copy of
+systemd-boot to the UEFI-standard fallback path (`EFI/BOOT/BOOTX64.EFI`)
+unconditionally, so the machine boots from the ESP even with an empty
+NVRAM boot entry list. Verified (per this flake's pinned nixpkgs source):
+systemd-boot genuinely has no GRUB-style `installAsRemovable` option to
+configure — there's nothing to turn on, the fallback write is supposed
+to just happen as part of `bootctl install`.
+
+On the *first* install it didn't — see finding #2. After main's live fix
+(manual copy + stale NVRAM cleanup) got the machine booting once, task
+0003's redeploy re-ran `nixos-install` against the same disk (not
+reformatted) specifically to check whether a real `bootctl install` pass
+reproduces the fallback file on its own now that the confounding factors
+(stale NVRAM entries, Legacy boot mode) are gone:
+
+**Redeploy result:** [fill in after the redeploy in this session —
+whether `EFI/BOOT/BOOTX64.EFI` was present on the ESP immediately after
+`nixos-install` completed, verified before reboot.]
 
 ## 6. Sudo-over-SSH and `!` shell can't carry interactive passwords
 
@@ -156,3 +186,25 @@ write/rename/checksum round-trip (checksums matched throughout, `dmesg`
 showed no I/O errors) before trusting the drive with the real backup.
 Anyone who next mounts this drive on Linux and sees scary `ls` output
 should know it's expected, not a sign of corruption.
+
+## 8. Missing Wi-Fi firmware (root cause confirmed, fixed)
+
+Separate from the boot failure: once the machine *did* boot NixOS
+successfully, it had no working Wi-Fi. `journalctl` on the installed
+system showed:
+
+```
+ath10k_pci: could not fetch firmware files (-2)
+```
+
+The chassis's Killer/Atheros wireless card needs a redistributable
+firmware blob that NixOS does not ship by default, and the
+`dell-xps-13-9370` module from nixos-hardware does not turn this on for
+you (it covers the chassis's other quirks, not this one). Fixed by
+adding `hardware.enableRedistributableFirmware = true;` to
+`hosts/xps9370/default.nix` — a hardware fact about this chassis, so it
+belongs in the host module rather than `modules/base`. This is now part
+of the config being redeployed alongside the boot-loader fix; the
+provisioned Wi-Fi connection profile itself (interface `wlp2s0`, no
+`permissions=` restriction) was confirmed fine independently — it was
+purely a missing-firmware problem, not a bad connection file.
