@@ -309,3 +309,40 @@ install/redeploy tooling built on this pattern: treat "re-lock the
 override, then assert the expected delta is present" as two mandatory
 steps of the redeploy sequence, not optional diligence — an agent (or a
 human moving fast) will otherwise trust a fast, clean, wrong deploy.
+
+**Addendum:** the very next redeploy in this same task re-demonstrated
+the hazard from the other side. After committing one more docs-only
+change (this finding, ironically) *after* refreshing the override lock
+but *before* the next `nix build`, that build failed outright with
+`error: NAR hash mismatch in input 'path:...'` rather than silently
+using either version. That's Nix noticing the on-disk directory no
+longer matches what the lockfile recorded and refusing to guess — a
+much better failure mode than finding #9's original silent-stale-build,
+but it only triggers when the *invoking* command relies on the
+already-written lockfile entry without re-passing
+`--override-input` itself. The practical rule this confirms: treat
+"refresh the override lock" as the *last* step before the build/deploy
+command that consumes it, not an early one-time setup step — any commit
+to the overridden checkout after refreshing, including a docs commit,
+reopens the gap.
+
+## 10. iPhone USB tethering isn't a working recovery path (yet)
+
+Considered as a way to get the XPS on the network without Wi-Fi/firmware
+at all — plug in an iPhone, tether over USB, get a wired-ish interface
+with no `ath10k` dependency, SSH in over that. It doesn't work on the
+config as it stands: iPhone USB tethering on Linux goes through
+`usbmuxd`, which isn't installed (`services.usbmuxd` is off, and nothing
+pulls it in transitively).
+
+This is worth more than a one-line config toggle. The broader lesson
+(feeds `docs/tasks/0005`, whatever that turns out to be): a machine
+whose only network path is Wi-Fi has exactly one thing standing between
+"reachable" and "needs a human physically present with a keyboard and a
+USB stick" — this task hit that wall directly when the Wi-Fi firmware
+gap took the network down after an otherwise-successful boot. A
+deliberately-designed headless recovery path — `services.usbmuxd`
+enabled as cheap insurance, and/or a wired-Ethernet-first policy, and/or
+the declarative-Wi-Fi-profile direction from finding #1 — deserves to be
+a first-class design decision for this host, not something reached for
+ad hoc mid-incident.
