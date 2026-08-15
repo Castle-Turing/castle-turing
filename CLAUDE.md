@@ -52,3 +52,10 @@ work, ask clarifying questions first, then draft a numbered brief in
 for a separate session. Always ask for explicit approval before writing
 the brief — or any CLAUDE.md change — to disk. The brief is committed on
 the branch that implements it, per the tasks convention.
+
+Every brief states its verification plan: what the implementing agent
+can test with no human involved (build it if cheap — a VM, a dry run,
+CI), and which steps genuinely need human hands. Bias toward the
+user's time when it's faster — a minute of manual work beats an hour
+of harness-building for a one-off — but a step that will repeat
+belongs in a harness before it repeats.

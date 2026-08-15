@@ -30,13 +30,28 @@
       # repo cannot name any resident).
       nixosModules = {
         base = ./modules/base;
+        # The single-disk GPT layout (ESP + root) every host currently
+        # uses; host modules declare only their device path
+        # (castle.disk.device) — see modules/disk-layout.nix.
+        diskLayout = ./modules/disk-layout.nix;
         # Hardware facts only. The wrapper binds this flake's
         # nixos-hardware and disko pins so consumers need neither input.
         host-xps9370 = {
           imports = [
             nixos-hardware.nixosModules.dell-xps-13-9370
             disko.nixosModules.disko
+            self.nixosModules.diskLayout
             ./hosts/xps9370
+          ];
+        };
+        # A fully-virtual QEMU/OVMF machine, not a real host — it exists
+        # so test/vm-install/ can exercise the install mechanism in CI.
+        # See docs/tasks/0004-install-test-harness.md.
+        host-vm-test = {
+          imports = [
+            disko.nixosModules.disko
+            self.nixosModules.diskLayout
+            ./hosts/vm-test
           ];
         };
       };
@@ -53,6 +68,24 @@
         modules = [
           self.nixosModules.base
           self.nixosModules.host-xps9370
+          {
+            castle.admin = {
+              username = "resident";
+              sshKeys = [ "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key" ];
+            };
+          }
+        ];
+      };
+
+      # Same role as .example, for hosts/vm-test: proves the mechanism
+      # evaluates without naming a person. The install-loop test harness
+      # (test/vm-install/) builds its own instantiation with a real,
+      # throwaway per-run key instead of using this one directly.
+      nixosConfigurations.vm-test-example = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          self.nixosModules.base
+          self.nixosModules.host-vm-test
           {
             castle.admin = {
               username = "resident";
