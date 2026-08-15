@@ -346,3 +346,44 @@ enabled as cheap insurance, and/or a wired-Ethernet-first policy, and/or
 the declarative-Wi-Fi-profile direction from finding #1 — deserves to be
 a first-class design decision for this host, not something reached for
 ad hoc mid-incident.
+
+## 11. The change → push → verify → rollback → verify loop (milestone 0's acceptance test)
+
+This is the substrate claim task 0003 exists to check: versioned,
+rollbackable, remotely operable. Run once the machine was up on its own
+Wi-Fi with a working `wesley@` login, from this Mac:
+
+1. Added `pkgs.htop` to `environment.systemPackages` in
+   `hosts/xps9370/default.nix` — a trivial, obviously-reversible
+   one-line change. Committed on `first-install`.
+2. Refreshed the private repo's `path:` override lock (finding #9's
+   habit — this was its first real test on a genuine content change, not
+   a docs-only one) and asserted `htop-3.5.2.drv` was actually present in
+   the new closure's requisites *before* deploying.
+3. `nixos-rebuild switch --flake .#xps9370 --target-host root@192.168.2.54
+   --build-host root@192.168.2.54` (building on the XPS itself — this
+   Mac is aarch64-darwin and cannot build the x86_64-linux target
+   locally). Landed as generation 3. Verified over SSH: `which htop`
+   resolved, `htop --version` printed `3.5.2`.
+4. Rolled back. First attempt
+   (`nixos-rebuild switch --rollback --target-host root@192.168.2.54`,
+   *without* `--flake`) failed outright — this particular
+   `nixos-rebuild` (the newer Python/"-ng" implementation, going by its
+   `--elevate`/`--json`/`--ask-elevate-password` flags) falls back to a
+   legacy `NIX_PATH`-based config lookup when `--rollback` is given
+   without `--flake`, and errors because there's no `nixos-config` in
+   `$NIX_PATH` on a flake-only setup like this one. **`--flake .#xps9370`
+   is required on the rollback invocation too, not just the forward
+   switch** — easy to drop by mimicking the brief's shorthand
+   (`nixos-rebuild --rollback --target-host ...`) too literally. Retried
+   with `nixos-rebuild switch --rollback --flake .#xps9370
+   --target-host root@192.168.2.54`: exit 0.
+5. Verified the rollback landed, not just that the command exited clean:
+   `readlink /nix/var/nix/profiles/system` → `system-2-link`;
+   `nixos-rebuild list-generations` shows generation 2 marked Current,
+   generation 3 (the htop change) present but not current; `which htop`
+   → not found.
+
+Runbook implication for `hosts/xps9370/README.md`'s rebuild section:
+the rollback example should include `--flake .#xps9370` explicitly,
+not just `--target-host`, to avoid this exact trap.
