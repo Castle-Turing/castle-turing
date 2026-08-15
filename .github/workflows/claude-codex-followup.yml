@@ -57,7 +57,14 @@ jobs:
                findings you disagree with or that are out of the PR's scope,
                reply explaining why — never silently skip a finding. Every
                disagreement between reviewers must stay legible to the human.
-            3. Finish with one PR comment summarizing what you fixed and what
+            3. Leave the receipt WHERE THE FINDING LIVES: reply directly on
+               each inline review thread (POST
+               repos/.../pulls/N/comments/COMMENT_ID/replies via gh api),
+               citing the fix commit hash or your reasoning for declining.
+               Then resolve each addressed thread via the GraphQL
+               resolveReviewThread mutation. A top-level summary without
+               inline replies is not sufficient — the human reads threads.
+            4. Finish with one PR comment summarizing what you fixed and what
                you declined, with reasoning.
 
             Hard rules:
