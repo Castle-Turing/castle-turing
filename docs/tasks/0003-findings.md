@@ -360,13 +360,13 @@ Wi-Fi with a working `resident@` login, from this Mac:
    habit — this was its first real test on a genuine content change, not
    a docs-only one) and asserted `htop-3.5.2.drv` was actually present in
    the new closure's requisites *before* deploying.
-3. `nixos-rebuild switch --flake .#xps9370 --target-host root@192.168.2.54
-   --build-host root@192.168.2.54` (building on the XPS itself — this
+3. `nixos-rebuild switch --flake .#xps9370 --target-host root@<host-ip>
+   --build-host root@<host-ip>` (building on the XPS itself — this
    Mac is aarch64-darwin and cannot build the x86_64-linux target
    locally). Landed as generation 3. Verified over SSH: `which htop`
    resolved, `htop --version` printed `3.5.2`.
 4. Rolled back. First attempt
-   (`nixos-rebuild switch --rollback --target-host root@192.168.2.54`,
+   (`nixos-rebuild switch --rollback --target-host root@<host-ip>`,
    *without* `--flake`) failed outright — this particular
    `nixos-rebuild` (the newer Python/"-ng" implementation, going by its
    `--elevate`/`--json`/`--ask-elevate-password` flags) falls back to a
@@ -377,7 +377,7 @@ Wi-Fi with a working `resident@` login, from this Mac:
    switch** — easy to drop by mimicking the brief's shorthand
    (`nixos-rebuild --rollback --target-host ...`) too literally. Retried
    with `nixos-rebuild switch --rollback --flake .#xps9370
-   --target-host root@192.168.2.54`: exit 0.
+   --target-host root@<host-ip>`: exit 0.
 5. Verified the rollback landed, not just that the command exited clean:
    `readlink /nix/var/nix/profiles/system` → `system-2-link`;
    `nixos-rebuild list-generations` shows generation 2 marked Current,
