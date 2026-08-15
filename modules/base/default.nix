@@ -28,6 +28,27 @@ in
         docs/private-layer.md.
       '';
     };
+    initialHashedPassword = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Hashed (never plaintext) password for the admin account,
+        generated with e.g. `mkpasswd -m sha-512`. Wired into
+        `users.users.<name>.initialHashedPassword`, so it only seeds the
+        account at first creation and is never overwritten by later
+        rebuilds — a resident who changes their password with `passwd`
+        keeps that change.
+
+        Optional at this layer: a host with no interactive console (the
+        vm-test harness, a headless server with SSH-key-only admin) has
+        no use for one. A host with a login prompt does — see
+        modules/desktop, which asserts this is set, and
+        docs/tasks/0003-findings.md finding #1 for why (an unset
+        password and a login prompt is a chicken-and-egg console
+        lockout). Secret-adjacent data — supplied by the private layer,
+        never this repo. See docs/private-layer.md.
+      '';
+    };
   };
 
   config = {
@@ -74,6 +95,7 @@ in
         "networkmanager"
       ];
       openssh.authorizedKeys.keys = cfg.sshKeys;
+      initialHashedPassword = cfg.initialHashedPassword;
     };
     users.users.root.openssh.authorizedKeys.keys = cfg.sshKeys;
     # Remote `nixos-rebuild --target-host` needs non-interactive sudo.
