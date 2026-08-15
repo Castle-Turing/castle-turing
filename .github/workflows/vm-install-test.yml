@@ -37,13 +37,16 @@ jobs:
       - name: Run the install-loop harness
         run: test/vm-install/run.sh
         env:
-          CASTLE_HARNESS_LOG_DIR: ${{ github.workspace }}/test/vm-install/.ci-logs
+          CASTLE_HARNESS_LOG_DIR: ${{ github.workspace }}/test/vm-install/harness-logs
 
       - name: Upload harness logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: vm-install-harness-logs
-          path: test/vm-install/.ci-logs/
+          # Not a dot-directory: actions/upload-artifact excludes hidden
+          # files by default, which silently dropped every log the first
+          # time this ran (path was .ci-logs/).
+          path: test/vm-install/harness-logs/
           if-no-files-found: ignore
           retention-days: 14

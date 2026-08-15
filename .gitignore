@@ -2,4 +2,4 @@ result
 result-*
 .direnv/
 .DS_Store
-test/vm-install/.ci-logs/
+test/vm-install/harness-logs/
