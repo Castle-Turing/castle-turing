@@ -51,12 +51,19 @@
   # fallback copy not surviving) by hand. Phases 1-3 (NVRAM intact) still
   # pass; phase 4 (NVRAM wiped, relies on this exact file) should go red.
   # Reverted in the next commit once that's confirmed.
+  #
+  # `sync` matters: the harness deliberately hard-kills qemu right after
+  # SSH answers (that's the power-cycle assertion), and this unit already
+  # finishes well before sshd starts (verified in phase2's serial log) —
+  # but on a vfat ESP, `rm` alone can still leave the directory-entry
+  # write sitting in the page cache, unflushed to the disk image, so the
+  # very next hard-kill silently discarded it and phase4 stayed green.
   systemd.services.harness-scratch-break-fallback = {
     description = "SCRATCH (task 0004): delete the ESP fallback bootloader";
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
     serviceConfig.Type = "oneshot";
-    script = "rm -f /boot/EFI/BOOT/BOOTX64.EFI";
+    script = "rm -f /boot/EFI/BOOT/BOOTX64.EFI && sync";
   };
 
   # QEMU's usermode networking (SLiRP) hands out an address over DHCP;
