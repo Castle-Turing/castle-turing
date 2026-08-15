@@ -156,9 +156,33 @@ reformatted) specifically to check whether a real `bootctl install` pass
 reproduces the fallback file on its own now that the confounding factors
 (stale NVRAM entries, Legacy boot mode) are gone:
 
-**Redeploy result:** [fill in after the redeploy in this session —
-whether `EFI/BOOT/BOOTX64.EFI` was present on the ESP immediately after
-`nixos-install` completed, verified before reboot.]
+**Redeploy result:** fixed. With the stale NVRAM entries removed and the
+firmware back in UEFI mode, a redeploy via `nixos-install --root /mnt`
+(nixos-anywhere `--phases install`, disk left mounted from the earlier
+manual fix, not reformatted) produced a fallback file that actually
+survived this time — verified directly on the ESP, not by trusting the
+install log:
+
+```
+$ sha256sum /mnt/boot/EFI/BOOT/BOOTX64.EFI /mnt/boot/EFI/systemd/systemd-bootx64.efi
+71b27b28854dee4663685a46b1f6c07761c373990581564b0ed2b6130591e2a2  BOOTX64.EFI
+71b27b28854dee4663685a46b1f6c07761c373990581564b0ed2b6130591e2a2  systemd-bootx64.efi
+```
+
+This run also created proper NVRAM entries ("Linux Boot Manager",
+"Fallback Linux Boot Manager") — unlike the first install, there was no
+"skipping EFI variable modifications" line this time, and no stale
+Ubuntu/rEFInd entries came back. The firmware's own generic
+"UEFI: ...Partition 1" fallback entry (auto-managed by the firmware
+itself, not by NixOS) also points at the same now-present file, so even
+that path independently works now. Best available read: the original
+failure was some combination of the stale competing NVRAM entries and
+the Legacy-boot-mode detour confusing the firmware's own boot selection
+during the *original* install/reboot sequence, rather than a single
+clean root cause in `bootctl` itself — the exact mechanism by which the
+first install's fallback copy failed to persist despite its log claim
+remains not fully explained, but the fix and the reproduction-under-fixed-
+conditions are both directly verified.
 
 ## 6. Sudo-over-SSH and `!` shell can't carry interactive passwords
 
