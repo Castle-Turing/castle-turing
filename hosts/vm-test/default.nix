@@ -45,6 +45,20 @@
   # USB round-trip again.
   boot.loader.efi.canTouchEfiVariables = true;
 
+  # SCRATCH — task 0004 scope item 4: intentional-breakage proof that the
+  # harness catches a real regression. Deletes the ESP fallback file on
+  # every boot, reproducing docs/tasks/0003-findings.md finding #2 (the
+  # fallback copy not surviving) by hand. Phases 1-3 (NVRAM intact) still
+  # pass; phase 4 (NVRAM wiped, relies on this exact file) should go red.
+  # Reverted in the next commit once that's confirmed.
+  systemd.services.harness-scratch-break-fallback = {
+    description = "SCRATCH (task 0004): delete the ESP fallback bootloader";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "local-fs.target" ];
+    serviceConfig.Type = "oneshot";
+    script = "rm -f /boot/EFI/BOOT/BOOTX64.EFI";
+  };
+
   # QEMU's usermode networking (SLiRP) hands out an address over DHCP;
   # this must work with zero console interaction — the harness's whole
   # point is proving SSH comes up on its own (docs/tasks/0003-findings.md
