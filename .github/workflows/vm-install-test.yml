@@ -29,13 +29,33 @@ jobs:
       # GitHub's hosted Ubuntu runners support nested virtualization, but
       # /dev/kvm isn't group-writable by default — this is the standard
       # fix (used by e.g. android-emulator-runner).
+      #
+      # Fail fast and explicitly if this didn't work, rather than let a
+      # bare `ls` failure crash the step opaquely (no message beyond a
+      # red X) or, the other wrong direction, silently swallow it and
+      # let the job proceed. run.sh's own `[ -r /dev/kvm ]` check and its
+      # ACCEL=tcg fallback are correct and deliberately left as-is — but
+      # that fallback exists for a developer's KVM-less box running this
+      # harness *locally* (test/vm-install/README.md). In CI, on a
+      # runner that's supposed to have KVM, no-KVM isn't a condition to
+      # degrade through: TCG-emulated x86 is slow enough that the
+      # harness's four boots would blow well past this job's
+      # timeout-minutes budget, turning an instant, legible "KVM is
+      # broken on this runner" into an opaque 25-minute timeout instead.
       - name: Enable KVM access
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-castle-turing-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          ls -la /dev/kvm
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            ls -la /dev/kvm
+          else
+            msg="KVM unavailable on this runner; the harness's TCG fallback would exceed the job's time budget — failing fast rather than timing out opaquely."
+            echo "$msg" >&2
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Run the install-loop harness
         run: test/vm-install/run.sh

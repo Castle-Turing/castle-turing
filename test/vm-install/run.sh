@@ -6,12 +6,15 @@
 # times to check the specific ways task 0003's physical shakedown found
 # the mechanism broken:
 #
-#   1. install completes and the VM boots from its own disk, installer
+#   1. the installer image itself is SSH-reachable by key with zero
+#      console interaction (regression test for finding #3, installer
+#      ephemerality — docs/tasks/0006-installer-image.md);
+#   2. install completes and the VM boots from its own disk, installer
 #      detached;
-#   2. SSH comes up as the admin, by key, with zero console interaction
+#   3. SSH comes up as the admin, by key, with zero console interaction
 #      (regression test for the first-boot lockout, finding #1);
-#   3. survives a power-cycle (hard stop + restart);
-#   4. survives an NVRAM wipe, forcing the firmware down the ESP fallback
+#   4. survives a power-cycle (hard stop + restart);
+#   5. survives an NVRAM wipe, forcing the firmware down the ESP fallback
 #      path EFI/BOOT/BOOTX64.EFI (finding #2/#5, the dead-CMOS lesson).
 #
 # Requires: Nix (flakes enabled) and a KVM-capable Linux box. See
@@ -33,7 +36,13 @@ QEMU_PID=""
 log() { printf '>>> %s\n' "$*"; }
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
-  printf 'Logs and disk/OVMF state preserved at: %s\n' "$WORKDIR" >&2
+  # Logs and disk/OVMF state live in different places whenever
+  # CASTLE_HARNESS_LOG_DIR is set to something other than $WORKDIR/logs —
+  # which CI always does (a workspace path the "Upload harness logs" step
+  # actually picks up), so reporting only $WORKDIR here would send anyone
+  # debugging a red CI run to a directory with nothing useful in it.
+  printf 'Logs preserved at: %s\n' "$LOG_DIR" >&2
+  printf 'Disk/OVMF state preserved at: %s\n' "$WORKDIR" >&2
   exit 1
 }
 
@@ -84,14 +93,24 @@ ADMIN_KEY="$WORKDIR/admin_key"
 "$SSH_KEYGEN_BIN" -q -t ed25519 -N "" -C "castle-turing-harness" -f "$ADMIN_KEY"
 ADMIN_PUB="$ADMIN_KEY.pub"
 
-log "Building the installer image (hosts/vm-test's SSH-reachable installer)..."
+log "Building the installer image (flake.nixosModules.installer, docs/tasks/0006)..."
 ISO_OUT=$(build_expr "(import \"$HARNESS_DIR/installer.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.isoImage")
 ISO_PATH=$(find "$ISO_OUT/iso" -maxdepth 1 -name '*.iso' | head -n1)
 [ -n "$ISO_PATH" ] || fail "installer ISO build produced no .iso file"
 
 log "Building the target system (hosts/vm-test + a throwaway admin key)..."
-TOPLEVEL=$(build_expr "(import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.toplevel")
-DISKO_SCRIPT=$(build_expr "(import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.diskoScript")
+# One nix build, not two: TOPLEVEL and DISKO_SCRIPT used to come from two
+# separate `nix build --impure --expr` calls that each independently
+# imported vm-test-system.nix, so the full nixosSystem evaluation
+# (including its self-referential getFlake) ran twice per harness run —
+# docs/tasks/0006-installer-image.md's parked-cleanup item. A linkFarm
+# evaluates vm-test-system.nix exactly once and exposes both outputs as
+# named symlinks in one derivation; the two artifacts are then resolved
+# to their real store paths (readlink -f) rather than passed to
+# nixos-anywhere as symlinks living inside the linkFarm's own output.
+ARTIFACTS=$(build_expr "let system = import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }; pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"vm-test-artifacts\" { toplevel = system.config.system.build.toplevel; diskoScript = system.config.system.build.diskoScript; }")
+TOPLEVEL=$(readlink -f "$ARTIFACTS/toplevel")
+DISKO_SCRIPT=$(readlink -f "$ARTIFACTS/diskoScript")
 
 log "Preparing disk image and OVMF NVRAM vars..."
 DISK="$WORKDIR/disk.qcow2"
@@ -175,8 +194,11 @@ wait_for_ssh() {
 # --- Phase 1: boot the installer, run the real install path ---------------
 log "[phase1] Booting installer image..."
 start_qemu phase1-installer -cdrom "$ISO_PATH" -boot order=d
-wait_for_ssh root "$BOOT_TIMEOUT" || fail "installer did not come up over SSH within ${BOOT_TIMEOUT}s"
-log "[phase1] Installer reachable. Running nixos-anywhere (disko + install)..."
+if ! wait_for_ssh root "$BOOT_TIMEOUT"; then
+  fail "assertion failed: the installer image is SSH-reachable by key with zero console interaction within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0003-findings.md finding #3, closed by docs/tasks/0006-installer-image.md"
+fi
+log "[phase1] PASS: installer SSH-reachable by key with zero console interaction."
+log "[phase1] Running nixos-anywhere (disko + install)..."
 if ! "$NIXOS_ANYWHERE_BIN" \
     --store-paths "$DISKO_SCRIPT" "$TOPLEVEL" \
     --target-host "root@127.0.0.1" \
@@ -191,11 +213,47 @@ log "[phase1] Install completed. Unmounting the installed filesystems and syncin
 # "reboot" phase (we need to swap boot media, not just reboot in place),
 # so nothing has unmounted /mnt or flushed the writes bootctl just made
 # to the vfat ESP — those are the two things phases 2-4 depend on having
-# actually landed. `;` (not `&&`) so sync still runs even if a sub-mount
-# is reported busy.
-"$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
-  "umount -R /mnt 2>&1 || true; sync" \
-  || log "[phase1] WARNING: unmount/sync over SSH failed; proceeding to detach anyway"
+# actually landed.
+#
+# This is a hard assertion, not a warning: qcow2/virtio-blk isn't
+# write-through by default, so a flush that silently fails here, right
+# before the deliberate kill -9 below, can lose the ESP write outright —
+# and phase 2/3/4 would then fail for a completely different, confusing
+# reason (looking exactly like a bootloader-fallback regression) instead
+# of reporting the actual problem, which is that this step never
+# confirmed the flush happened.
+#
+# The remote command runs sync unconditionally (even if umount fails on
+# a busy sub-mount, still worth flushing whatever can be flushed) but
+# now genuinely requires *both* to succeed for the assertion to pass:
+# an earlier version used `umount ... || true`, which swallowed umount's
+# exit status entirely and left the whole check gated on sync alone —
+# sync succeeds almost unconditionally, so that version could never
+# actually catch the busy-sub-mount case its own comment described.
+# Single-quoted so `$?` etc. reach the remote shell, not this one.
+#
+# Several attempts over ~30s, not one retry: this runs immediately after
+# disko+install on a CI runner (or under TCG locally), and a single
+# 2-second-spaced retry doesn't give a loaded box enough headroom to
+# reconnect — that would trade the original silent-warning flake for an
+# impatient false-negative that gates every PR instead, which is a worse
+# failure mode than the one this hard assertion was added to catch.
+# Still fails hard at the end; it's the timing budget that was wrong,
+# not the decision to assert.
+unmount_sync_ok=0
+attempt=0
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
+  attempt=$((attempt + 1))
+  if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+      'umount -R /mnt 2>&1; u=$?; sync; s=$?; [ "$u" -eq 0 ] && [ "$s" -eq 0 ]'; then
+    unmount_sync_ok=1
+    break
+  fi
+  log "[phase1] unmount/sync attempt $attempt failed, retrying..."
+  sleep 5
+done
+[ "$unmount_sync_ok" = 1 ] || fail "could not confirm the installed filesystems were unmounted and synced before detaching the installer — phases 2-4 need bootctl install's ESP writes to have actually landed on disk, and this harness won't guess that they did"
 log "[phase1] Detaching installer (hard stop from here on, same as every later transition)."
 stop_qemu_hard
 

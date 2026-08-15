@@ -72,6 +72,10 @@ The exported modules:
   security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
   gh, ripgrep, fd, claude-code). No private data, no assertions.
+- `nixosModules.installer` — the agentic installer image: bootable NixOS
+  media, SSH-reachable with zero console interaction, using the same
+  `castle.admin` values as everything else here. See "The installer
+  image" below.
 
 `nixpkgs.follows = "castle-turing/nixpkgs"` keeps your system on exactly
 the package set the framework is tested against. Omit it only if you know
@@ -120,6 +124,57 @@ The values this repo may never contain:
   commit identity, wired into home-manager's `programs.git`. Only
   required if you import `nixosModules.home`, which asserts both are
   set.
+
+## The installer image (optional, per host)
+
+`castle-turing.nixosModules.installer` (`docs/tasks/0006-installer-image.md`)
+is a bootable NixOS ISO that's immediately SSH-reachable — no fetching a
+key by hand, no reading an IP off a router's admin page — closing
+`docs/tasks/0003-findings.md` finding #3. It needs no new private file
+or format: it reuses the same `castle.admin` values `resident.nix`
+already supplies, the same way `nixosModules.host-xps9370` does. Add a
+second `nixosConfiguration` to your private flake:
+
+```nix
+nixosConfigurations.xps9370-installer = nixpkgs.lib.nixosSystem {
+  system = "x86_64-linux";
+  modules = [
+    castle-turing.nixosModules.installer
+    ./resident.nix
+  ];
+};
+```
+
+Build it and write the result to a USB stick:
+
+```sh
+nix build .#nixosConfigurations.xps9370-installer.config.system.build.isoImage
+# result/iso/*.iso -> dd to a USB stick
+```
+
+Boot the target machine from it (see `hosts/xps9370/README.md`) and its
+own console tells you what to do next: if it's on Ethernet, DHCP just
+works and the console shows you're reachable at
+`ssh root@castle-installer.local` (or whatever `networking.hostName`
+you set — override it per host in the block above if you'll ever have
+more than one installer image live on the same LAN segment at once)
+within a few seconds, no interaction needed. If it isn't, the console
+notices and walks you straight into `nmtui` to join Wi-Fi — there's no
+step to remember, the machine asks.
+
+**Wi-Fi credentials are not baked into the image**, and that's a
+deliberate design choice, not a gap: a Wi-Fi PSK is private-layer data,
+and baking one into a NetworkManager connection profile at ISO-build
+time would mean writing it in plaintext into a private-layer Nix file —
+exactly the "private repo is access control, not encryption" problem
+the Secrets slot below exists to eventually close. Rather than invent a
+way around that, this mechanism accepts one guided, one-time Wi-Fi join
+at the console as a better trade than a plaintext credential anywhere —
+and makes sure that step is unmissable (a persistent on-console prompt,
+not a manual `nmtui` ritual you have to already know) rather than
+apologizing for it. Once sops-nix (or equivalent) lands, a private layer
+will be able to supply a real declarative Wi-Fi profile and skip even
+that; until then, this is the honest unattended-by-default story.
 
 ## `flake.lock`
 

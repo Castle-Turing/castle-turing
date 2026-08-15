@@ -58,6 +58,12 @@
         # This project's own development tools (Emacs, git, gh, ripgrep,
         # fd, claude-code) — see docs/tasks/0005-dogfooding-desktop.md.
         dev = ./modules/dev;
+        # The agentic installer image (docs/tasks/0006): stock NixOS
+        # installer media plus modules/base, so it's SSH-reachable by the
+        # same castle.admin.sshKeys key a private layer already supplies
+        # for the installed system — no console interaction, no separate
+        # identity mechanism. See modules/installer.nix.
+        installer = ./modules/installer.nix;
         # Hardware facts only. The wrapper binds this flake's
         # nixos-hardware and disko pins so consumers need neither input.
         host-xps9370 = {
@@ -122,6 +128,24 @@
         modules = [
           self.nixosModules.base
           self.nixosModules.host-vm-test
+          {
+            castle.admin = {
+              username = "resident";
+              sshKeys = [ "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key" ];
+            };
+          }
+        ];
+      };
+
+      # Proves the installer mechanism evaluates without this repo naming
+      # a person, same role as .example/.vm-test-example. The real
+      # installer image (with a real admin key) is built from the
+      # private layer, exactly like the real xps9370 nixosConfiguration
+      # is — see docs/private-layer.md.
+      nixosConfigurations.installer-example = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          self.nixosModules.installer
           {
             castle.admin = {
               username = "resident";
