@@ -44,6 +44,14 @@ Before opening a PR, run `/code-review` on the branch and address its
 findings. Codex reviews the PR itself as a second, cross-model opinion; the
 human still makes every merge decision.
 
+Scope every review and diff against `origin/main`, never a local branch
+ref. Worktrees accumulate stale local branches, and a stale base produces
+confident findings about code you never touched. `git fetch` first, then
+confirm the real scope with `git diff origin/main...HEAD --stat` before
+trusting any review output. The same rule holds for anything else derived
+from a ref you did not just refresh — flake locks and path overrides
+included.
+
 ## Spec workflow
 
 When asked to spec a feature: choose the smallest next chunk of useful
