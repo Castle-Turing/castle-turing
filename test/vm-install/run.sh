@@ -209,9 +209,26 @@ log "[phase1] Install completed. Unmounting the installed filesystems and syncin
 # to the vfat ESP — those are the two things phases 2-4 depend on having
 # actually landed. `;` (not `&&`) so sync still runs even if a sub-mount
 # is reported busy.
-"$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
-  "umount -R /mnt 2>&1 || true; sync" \
-  || log "[phase1] WARNING: unmount/sync over SSH failed; proceeding to detach anyway"
+#
+# This is a hard assertion, not a warning: qcow2/virtio-blk isn't
+# write-through by default, so a flush that silently fails here, right
+# before the deliberate kill -9 below, can lose the ESP write outright —
+# and phase 2/3/4 would then fail for a completely different, confusing
+# reason (looking exactly like a bootloader-fallback regression) instead
+# of reporting the actual problem, which is that this step never
+# confirmed the flush happened. One retry absorbs a transient SSH
+# reconnect blip; anything past that is treated as real.
+unmount_sync_ok=0
+for attempt in 1 2; do
+  if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+      "umount -R /mnt 2>&1 || true; sync"; then
+    unmount_sync_ok=1
+    break
+  fi
+  log "[phase1] unmount/sync attempt $attempt failed, retrying..."
+  sleep 2
+done
+[ "$unmount_sync_ok" = 1 ] || fail "could not confirm the installed filesystems were unmounted and synced before detaching the installer — phases 2-4 need bootctl install's ESP writes to have actually landed on disk, and this harness won't guess that they did"
 log "[phase1] Detaching installer (hard stop from here on, same as every later transition)."
 stop_qemu_hard
 

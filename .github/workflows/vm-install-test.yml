@@ -28,14 +28,21 @@ jobs:
 
       # GitHub's hosted Ubuntu runners support nested virtualization, but
       # /dev/kvm isn't group-writable by default — this is the standard
-      # fix (used by e.g. android-emulator-runner).
+      # fix (used by e.g. android-emulator-runner). The final check is
+      # diagnostic only (`|| true`): steps here run under `bash -eo
+      # pipefail`, so a bare `ls` on a genuinely absent /dev/kvm would
+      # hard-fail the job right here — before run.sh's own `[ -r /dev/kvm ]`
+      # check ever runs and takes its documented, graceful ACCEL=tcg
+      # fallback. That would make the workflow and the script disagree
+      # about what a missing /dev/kvm means, with the workflow crashing
+      # instead of the fallback ever executing.
       - name: Enable KVM access
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-castle-turing-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          ls -la /dev/kvm
+          ls -la /dev/kvm || true
 
       - name: Run the install-loop harness
         run: test/vm-install/run.sh

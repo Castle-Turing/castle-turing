@@ -68,30 +68,40 @@ survive:
    Write `result/iso/*.iso` to a USB stick and boot the target machine
    from it (F12, or your firmware's one-time-boot menu).
 
-2. **Plug the target into Ethernet before powering it on.** The image
-   auto-connects a wired interface over DHCP and brings up sshd with
-   zero console interaction — nothing to type at the machine at all.
-   Wi-Fi is deliberately **not** provisioned by this image: a Wi-Fi PSK
-   is private-layer data, and baking one into the image would mean
-   writing it in plaintext into a private-layer file, which this repo
-   treats as equivalent to committing a credential (no secrets tooling
-   like sops-nix exists here yet — see `docs/private-layer.md`). If
-   Ethernet genuinely isn't available, join Wi-Fi by hand with `nmtui`
-   on this image, same as the old ceremony required — that manual path
-   still exists, it's just no longer the default.
+2. Power the target on and watch its screen — the console's whole job
+   now is getting it onto a network, and it tells you what it's doing:
 
-3. Reach the installer over mDNS — no console, no router admin page:
+   - **On Ethernet**, DHCP just works. Within a few seconds the console
+     shows a status block: connected, its mDNS name and IP, and the
+     `ssh` command to reach it. Nothing to type at the machine.
+   - **On Wi-Fi (or anything else without a network yet)**, the console
+     doesn't sit there silently — it walks straight into `nmtui` so you
+     can join a network, then shows you the same status block the
+     moment you're connected. Quit `nmtui` (Esc) once you're on; the
+     console will notice and clear itself.
+
+   Wi-Fi credentials are deliberately **not** baked into the image: a
+   PSK is private-layer data, and baking one in would mean writing it in
+   plaintext into a private-layer file, which this repo treats as
+   equivalent to committing a credential (no secrets tooling like
+   sops-nix exists here yet — see `docs/private-layer.md`). One guided,
+   unmissable Wi-Fi join at the console is the accepted trade-off, not a
+   gap — see `docs/private-layer.md` for the reasoning.
+
+3. Once the console shows its status block, reach the installer exactly
+   as it says:
 
    ```sh
    ssh root@castle-installer.local
    ```
 
    (or whatever hostname your private flake's installer configuration
-   set — see `docs/private-layer.md`). **Check `date` over that session
-   before doing anything else** (`ssh root@castle-installer.local date`):
-   a dead or wrong hardware clock breaks TLS for every download the
-   install needs; set it by hand (`date -s ...`) over the same session
-   if it's off — still no console required.
+   set — the console shows whichever one is actually running).
+   **Check `date` over that session before doing anything else**
+   (`ssh root@castle-installer.local date`): a dead or wrong hardware
+   clock breaks TLS for every download the install needs; set it by hand
+   (`date -s ...`) over the same session if it's off — still no console
+   interaction required.
 
 4. The installable configuration lives in your private flake, not here
    — this repo's `nixosConfigurations.example` is a CI stand-in with a
@@ -114,11 +124,17 @@ survive:
 
    (Point `--generate-hardware-config`'s path at wherever your public
    checkout actually lives — it doesn't have to be a sibling directory
-   named `castle-turing`, just a real path on disk.) This partitions the
-   disk per `disko.nix` and installs. `--phases disko,install`
-   deliberately excludes nixos-anywhere's own reboot phase, so the
-   installed filesystems stay mounted at `/mnt` over the same installer
-   SSH session afterward — that's what the next step needs.
+   named `castle-turing`, just a real path on disk.) `--phases
+   disko,install` names two of nixos-anywhere's four default phases
+   (`kexec,disko,install,reboot`) and skips the other two, deliberately:
+   `kexec` exists to take over a machine that isn't already running a
+   NixOS installer environment (e.g. a bare cloud VM's rescue image) by
+   chain-loading one — that doesn't apply here, since you've already
+   booted the real Castle Turing installer image directly, so the install
+   starts straight at `disko`. `reboot` is skipped because we need to
+   swap boot media (detach the USB stick), not just reboot in place, so
+   the installed filesystems stay mounted at `/mnt` over the same
+   installer SSH session afterward — that's what the next step needs.
 
    **Before trusting a reboot, verify the boot actually landed** — don't
    just watch the log. `bootctl install`'s log output claiming it wrote

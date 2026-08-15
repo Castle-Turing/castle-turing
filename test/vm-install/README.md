@@ -1,15 +1,23 @@
 # test/vm-install — the install-loop test harness
 
 What `docs/tasks/0004-install-test-harness.md` asked for: a way to
-exercise the real install mechanism (`hosts/vm-test/` +
-`modules/base` + `modules/disk-layout.nix` + `modules/installer.nix`)
-end to end, unattended,
-so a regression like task 0003's physical-shakedown findings goes red
-in CI instead of costing a human a USB round-trip.
+exercise the real install mechanism (`hosts/vm-test/` + `modules/base` +
+`modules/disk-layout.nix` + `modules/installer.nix`) end to end,
+unattended, so a regression like task 0003's physical-shakedown findings
+goes red in CI instead of costing a human a USB round-trip.
 `docs/tasks/0006-installer-image.md` later pointed this same harness at
 the real installer image (`flake.nixosModules.installer`) instead of a
 one-off test fixture, and added the "installer itself is SSH-reachable
 unattended" assertion below.
+
+What this harness does **not** cover: `modules/installer.nix`'s console
+UX (the auto-`nmtui`-on-no-connectivity prompt and the persistent
+status block showing the installer's mDNS name/IP/SSH command). Every
+assertion here goes over the network (SSH by key), because that's what
+CI can drive unattended — nobody, human or script, is watching the QEMU
+VM's virtual console in this harness. The console behavior needs a
+human's eyes at least once, on real hardware, to confirm it reads the
+way it's supposed to; see `hosts/xps9370/README.md`.
 
 ## What it asserts
 
