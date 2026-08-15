@@ -111,7 +111,11 @@ The values this repo may never contain:
   are never overwritten by a rebuild. Only required if you import
   `nixosModules.desktop`, which asserts it is set — see that module for
   why (`docs/tasks/0003-findings.md` finding #1, the first-boot console
-  lockout).
+  lockout). Whatever you seed here — even a deliberately weak,
+  known-to-you-only default — `nixosModules.base` nags an interactive
+  shell to run `passwd` until the hash actually changes, and stops the
+  moment it does. It never forces the change (no PAM-level expiry): that
+  risks a tuigreet/greetd lockout of its own.
 - `castle.person.gitUserName` / `castle.person.gitUserEmail` — your git
   commit identity, wired into home-manager's `programs.git`. Only
   required if you import `nixosModules.home`, which asserts both are
