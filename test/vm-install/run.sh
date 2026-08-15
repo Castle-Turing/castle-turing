@@ -36,7 +36,13 @@ QEMU_PID=""
 log() { printf '>>> %s\n' "$*"; }
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
-  printf 'Logs and disk/OVMF state preserved at: %s\n' "$WORKDIR" >&2
+  # Logs and disk/OVMF state live in different places whenever
+  # CASTLE_HARNESS_LOG_DIR is set to something other than $WORKDIR/logs —
+  # which CI always does (a workspace path the "Upload harness logs" step
+  # actually picks up), so reporting only $WORKDIR here would send anyone
+  # debugging a red CI run to a directory with nothing useful in it.
+  printf 'Logs preserved at: %s\n' "$LOG_DIR" >&2
+  printf 'Disk/OVMF state preserved at: %s\n' "$WORKDIR" >&2
   exit 1
 }
 
