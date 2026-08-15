@@ -27,7 +27,7 @@ its exported modules:
 ```nix
 {
   inputs = {
-    castle-turing.url = "github:whharris/castle-turing";
+    castle-turing.url = "github:Castle-Turing/castle-turing";
     nixpkgs.follows = "castle-turing/nixpkgs";
   };
 
@@ -39,6 +39,9 @@ its exported modules:
         modules = [
           castle-turing.nixosModules.base
           castle-turing.nixosModules.host-xps9370 # or your own host module
+          castle-turing.nixosModules.home # optional: home-manager + git identity
+          castle-turing.nixosModules.desktop # optional: Sway desktop session
+          castle-turing.nixosModules.dev # optional: Emacs, git, gh, ripgrep, fd, claude-code
           ./resident.nix
         ];
       };
@@ -57,6 +60,18 @@ The exported modules:
   hardware, write your own host module in your private repo (or better,
   PR it here — hosts are public, machine facts identify no one) following
   `hosts/xps9370/`'s shape.
+- `nixosModules.home` — home-manager, wired in with its own input already
+  bound, plus your git commit identity from `castle.person.*`. Optional:
+  a headless host has no use for a per-user environment.
+- `nixosModules.desktop` — the graphical session: Sway (with its IPC
+  socket as the documented control surface a future agent layer will
+  drive), foot, fonts, XDG portals, PipeWire, Firefox, and greetd +
+  tuigreet for login. Deliberately no auto-login — see the module's own
+  comments for why. Asserts `castle.admin.initialHashedPassword` is set,
+  since a login prompt with no password behind it is a lockout, not
+  security. Optional: skip it on a headless host.
+- `nixosModules.dev` — this project's own development tools (Emacs, git,
+  gh, ripgrep, fd, claude-code). No private data, no assertions.
 
 `nixpkgs.follows = "castle-turing/nixpkgs"` keeps your system on exactly
 the package set the framework is tested against. Omit it only if you know
@@ -72,6 +87,16 @@ The values this repo may never contain:
   castle.admin = {
     username = "<your-login>";
     sshKeys = [ "<your-openssh-public-key>" ];
+    # Optional — only needed if you use nixosModules.desktop (or any
+    # other host with an interactive console). Generate with
+    # `mkpasswd -m sha-512`; never a plaintext password.
+    initialHashedPassword = "<your-password-hash>";
+  };
+
+  # Optional — only needed if you use nixosModules.home.
+  castle.person = {
+    gitUserName = "<your-name>";
+    gitUserEmail = "<your-email>";
   };
 }
 ```
@@ -81,6 +106,20 @@ The values this repo may never contain:
   access (both to your user and to root, for remote rebuilds). Public
   keys are not secrets, but they identify a person — that is why they
   live here.
+- `castle.admin.initialHashedPassword` — hashed (never plaintext)
+  password seeded at first account creation only; later `passwd` changes
+  are never overwritten by a rebuild. Only required if you import
+  `nixosModules.desktop`, which asserts it is set — see that module for
+  why (`docs/tasks/0003-findings.md` finding #1, the first-boot console
+  lockout). Whatever you seed here — even a deliberately weak,
+  known-to-you-only default — `nixosModules.base` nags an interactive
+  shell to run `passwd` until the hash actually changes, and stops the
+  moment it does. It never forces the change (no PAM-level expiry): that
+  risks a tuigreet/greetd lockout of its own.
+- `castle.person.gitUserName` / `castle.person.gitUserEmail` — your git
+  commit identity, wired into home-manager's `programs.git`. Only
+  required if you import `nixosModules.home`, which asserts both are
+  set.
 
 ## `flake.lock`
 

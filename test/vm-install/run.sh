@@ -207,6 +207,41 @@ if ! wait_for_ssh harness "$BOOT_TIMEOUT"; then
 fi
 log "[phase2] PASS: SSH as admin came up with zero console interaction, installer detached."
 
+# --- Phase 2b: graphical target reached, Sway IPC socket present ----------
+# A GUI can't be driven headlessly, but "the compositor started and is
+# controllable over IPC" can be checked — docs/tasks/0005-dogfooding-
+# desktop.md. modules/desktop (vm-test-system.nix imports the published
+# module) starts Sway with a test-only auto-login override, no console
+# interaction either. This deliberately runs against the same still-
+# booted VM as phase 2, not a fresh boot — nothing about this assertion
+# needs another reboot cycle.
+log "[phase2b] Waiting for graphical.target..."
+GRAPHICAL_DEADLINE=$((SECONDS + BOOT_TIMEOUT))
+GRAPHICAL_OK=""
+while (( SECONDS < GRAPHICAL_DEADLINE )); do
+  if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 \
+      systemctl is-active graphical.target >/dev/null 2>&1; then
+    GRAPHICAL_OK=1
+    break
+  fi
+  sleep 3
+done
+[ -n "$GRAPHICAL_OK" ] || fail "assertion failed: graphical.target was not reached within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase2-first-boot.serial.log)"
+log "[phase2b] PASS: graphical.target reached."
+
+log "[phase2b] Checking for Sway's IPC socket and querying it..."
+SWAY_IPC_CHECK='
+set -e
+sockfile="$(ls /run/user/*/sway-ipc.*.sock 2>/dev/null | head -n1)"
+[ -n "$sockfile" ] || { echo "no sway-ipc socket found" >&2; exit 1; }
+SWAYSOCK="$sockfile" swaymsg -t get_version
+'
+if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 "$SWAY_IPC_CHECK" \
+    >"$LOG_DIR/phase2b-sway-ipc.log" 2>&1; then
+  fail "assertion failed: Sway's IPC socket did not appear or did not answer swaymsg (see $LOG_DIR/phase2b-sway-ipc.log)"
+fi
+log "[phase2b] PASS: Sway IPC socket present and answered swaymsg."
+
 # --- Phase 3: power-cycle (hard stop + restart), NVRAM intact -------------
 log "[phase3] Power-cycling (hard stop, then restart with NVRAM intact)..."
 stop_qemu_hard

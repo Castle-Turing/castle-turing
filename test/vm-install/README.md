@@ -16,6 +16,14 @@ Run in order, against one QEMU/OVMF VM:
    and SSH comes up as the admin, by key, **with zero console
    interaction** — the regression test for the first-boot lockout
    (`docs/tasks/0003-findings.md` finding #1).
+2b. On that same boot (`docs/tasks/0005-dogfooding-desktop.md`):
+   `graphical.target` is reached, and Sway's IPC socket appears and
+   answers `swaymsg -t get_version`. A GUI can't be driven headlessly,
+   but this much can be checked with no human and no display —
+   `vm-test-system.nix` imports the published `modules/desktop` and
+   layers a test-only auto-login on top (never present in the real
+   module — see that file's header comment) so Sway starts with, again,
+   zero console interaction.
 3. The VM survives a power-cycle: a hard stop (`kill -9` the QEMU
    process — no clean shutdown) followed by a restart with its NVRAM
    intact.
@@ -97,6 +105,16 @@ Phase names map directly to the assertions above:
   own, or SSH as the admin needed something console/Wi-Fi/password
   shaped it shouldn't. Check `phase2-first-boot.serial.log` for where
   boot stalled.
+- `phase2b` (no separate boot, same VM as phase 2) — either
+  `graphical.target` never became active (check
+  `phase2-first-boot.serial.log` for where greetd/sway stalled), or the
+  IPC socket didn't appear or didn't answer `swaymsg` (check
+  `phase2b-sway-ipc.log`). The latter is most often a Sway/wlroots
+  startup failure — `WLR_BACKENDS=headless` should make that
+  unconditional in a display-less VM, so a failure here usually means
+  something changed in how `modules/desktop` or the test-only auto-login
+  override (`vm-test-system.nix`) starts the session, not a real display
+  problem.
 - `phase3-power-cycle` — the system didn't come back cleanly after a
   hard stop (a filesystem that won't mount without an interactive fsck
   prompt is the classic cause — check the serial log for an `fsck`
@@ -117,7 +135,8 @@ Phase names map directly to the assertions above:
   a key at a physical console (`docs/tasks/0003-findings.md` finding
   #3).
 - `vm-test-system.nix` — the real `hosts/vm-test` `nixosConfiguration`
-  under test, with the run's throwaway admin key.
+  under test (`modules/base` + `modules/desktop`), with the run's
+  throwaway admin key and a test-only Sway auto-login override.
 - `pkgs.nix` — this flake's own pinned nixpkgs, so harness tooling
   (qemu, OVMF, nixos-anywhere) stays on the revision the mechanism is
   tested against.
