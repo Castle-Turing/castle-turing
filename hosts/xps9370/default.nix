@@ -14,6 +14,12 @@
 
   networking.hostName = "xps9370";
 
+  # This chassis's Killer/Atheros Wi-Fi card (ath10k_pci) needs a firmware
+  # blob NixOS doesn't ship by default. Confirmed via journalctl on the
+  # first real install: "could not fetch firmware files (-2)" — the
+  # nixos-hardware dell-xps-13-9370 module does not set this itself.
+  hardware.enableRedistributableFirmware = true;
+
   boot.loader.systemd-boot.enable = true;
   # This chassis has a flaky CMOS battery history: on power loss the
   # firmware forgets its NVRAM boot entries and falls back to the ESP
