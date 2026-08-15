@@ -27,8 +27,8 @@ in
       default = "";
       description = ''
         Git commit author name, wired into home-manager's
-        `programs.git.userName`. Personal data — supplied by the
-        private layer, never this repo. See docs/private-layer.md.
+        `programs.git.settings.user.name`. Personal data — supplied by
+        the private layer, never this repo. See docs/private-layer.md.
       '';
     };
     gitUserEmail = lib.mkOption {
@@ -36,8 +36,8 @@ in
       default = "";
       description = ''
         Git commit author email, wired into home-manager's
-        `programs.git.userEmail`. Personal data — supplied by the
-        private layer, never this repo. See docs/private-layer.md.
+        `programs.git.settings.user.email`. Personal data — supplied by
+        the private layer, never this repo. See docs/private-layer.md.
       '';
     };
   };
