@@ -26,6 +26,16 @@ Run in order, against one QEMU/OVMF VM:
    #2/#5 — a missing or non-surviving fallback file is exactly the bug
    that produced "No Boot Device Found" on the real XPS.
 
+The `kill -9` in assertions 3 and 4 is deliberate, not a shortcut: an
+ungraceful stop is the actual failure mode a power-cycle test exists to
+cover, so `run.sh` never unmounts or syncs before those two. The one
+exception is the phase 1 → phase 2 transition (detaching the installer
+after a successful install) — that one *does* explicitly `umount` and
+`sync` first, because it stands in for a normal reboot after install,
+not a power loss, and phases 2-4 need the install's own writes (notably
+`bootctl install`'s vfat ESP writes) to have actually landed on disk
+before they can mean anything.
+
 Each step is a hard assertion: the script exits non-zero the moment one
 fails, and says which assertion failed and where its log is.
 

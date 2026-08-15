@@ -133,7 +133,11 @@ start_qemu() {
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
     -drive "if=pflash,format=raw,file=$OVMF_VARS"
     -drive "file=$DISK,format=qcow2,if=virtio"
-    -nic "user,hostfwd=tcp::${SSH_PORT}-:22,model=virtio-net-pci"
+    # hostaddr must be explicit (127.0.0.1): slirp binds an empty one to
+    # 0.0.0.0, exposing the installer's/target's key-only sshd to the
+    # whole network for the run's duration. Every caller in this script
+    # already dials 127.0.0.1, so nothing is lost by restricting it.
+    -nic "user,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,model=virtio-net-pci"
     -display none
     -serial "file:$LOG_DIR/$phase.serial.log"
     "$@"
@@ -182,7 +186,17 @@ if ! "$NIXOS_ANYWHERE_BIN" \
     2>&1 | tee "$LOG_DIR/phase1-nixos-anywhere.log"; then
   fail "nixos-anywhere install failed — see $LOG_DIR/phase1-nixos-anywhere.log"
 fi
-log "[phase1] Install completed. Detaching installer (hard stop; disko already unmounted its own targets)."
+log "[phase1] Install completed. Unmounting the installed filesystems and syncing before detaching the installer..."
+# --phases disko,install deliberately excludes nixos-anywhere's own
+# "reboot" phase (we need to swap boot media, not just reboot in place),
+# so nothing has unmounted /mnt or flushed the writes bootctl just made
+# to the vfat ESP — those are the two things phases 2-4 depend on having
+# actually landed. `;` (not `&&`) so sync still runs even if a sub-mount
+# is reported busy.
+"$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+  "umount -R /mnt 2>&1 || true; sync" \
+  || log "[phase1] WARNING: unmount/sync over SSH failed; proceeding to detach anyway"
+log "[phase1] Detaching installer (hard stop from here on, same as every later transition)."
 stop_qemu_hard
 
 # --- Phase 2: first real boot, installer detached, zero console interaction
