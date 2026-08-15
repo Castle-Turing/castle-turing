@@ -1,0 +1,52 @@
+name: vm-install-test
+
+# The install-loop test harness (docs/tasks/0004): exercises the real
+# nixos-anywhere install path against a QEMU/OVMF VM and goes red when the
+# mechanism regresses. Only runs when something that could plausibly
+# affect it changes — it's the slowest job in the repo by a wide margin.
+on:
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "modules/**"
+      - "hosts/**"
+      - "test/vm-install/**"
+      - ".github/workflows/vm-install-test.yml"
+
+jobs:
+  vm-install-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      # GitHub's hosted Ubuntu runners support nested virtualization, but
+      # /dev/kvm isn't group-writable by default — this is the standard
+      # fix (used by e.g. android-emulator-runner).
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-castle-turing-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm
+
+      - name: Run the install-loop harness
+        run: test/vm-install/run.sh
+        env:
+          CASTLE_HARNESS_LOG_DIR: ${{ github.workspace }}/test/vm-install/harness-logs
+
+      - name: Upload harness logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-install-harness-logs
+          # Not a dot-directory: actions/upload-artifact excludes hidden
+          # files by default, which silently dropped every log the first
+          # time this ran (path was .ci-logs/).
+          path: test/vm-install/harness-logs/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -38,6 +38,8 @@ hosts/           One module per machine. hosts/xps9370/ is the reference
                  leak into shared modules.
 modules/         Shared NixOS/home-manager modules — the framework proper.
 agent/           Agent tooling: prompts, glue scripts, journal machinery.
+test/            Automated harnesses, e.g. test/vm-install/ — the
+                 install mechanism exercised end to end in CI.
 flake.nix        Entry point: exports the framework's modules and a
                  CI-only example configuration with a placeholder
                  resident. Real configurations live in private layers.
