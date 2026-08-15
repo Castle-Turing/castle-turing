@@ -4,7 +4,7 @@
 # consuming private layer. The nixos-hardware and disko modules this
 # host needs are bound by flake.nix's `nixosModules.host-xps9370`
 # export, which is how this directory should be consumed.
-{ ... }:
+{ pkgs, ... }:
 
 {
   imports = [
@@ -52,4 +52,11 @@
   # First installed from nixos-unstable ahead of the 26.11 release.
   # Never change this after install.
   system.stateVersion = "26.11";
+
+  # Trivial, obviously-reversible change used to exercise task 0003's
+  # rebuild/rollback round-trip (the brief's step 8) — the acceptance
+  # test for "versioned, rollbackable, remotely operable." Not meaningful
+  # on its own; remove freely once the round-trip has been run again by
+  # whoever next needs to verify the loop still works.
+  environment.systemPackages = [ pkgs.htop ];
 }
