@@ -387,3 +387,8 @@ Wi-Fi with a working `wesley@` login, from this Mac:
 Runbook implication for `hosts/xps9370/README.md`'s rebuild section:
 the rollback example should include `--flake .#xps9370` explicitly,
 not just `--target-host`, to avoid this exact trap.
+
+(The `htop` line itself was reverted out of `hosts/xps9370/default.nix`
+after this verification — it was always a throwaway test vehicle, and
+the machine's own current generation already doesn't have it; the
+evidence lives here, not in the committed config.)

@@ -4,7 +4,7 @@
 # consuming private layer. The nixos-hardware and disko modules this
 # host needs are bound by flake.nix's `nixosModules.host-xps9370`
 # export, which is how this directory should be consumed.
-{ pkgs, ... }:
+{ ... }:
 
 {
   imports = [
@@ -35,7 +35,9 @@
   # On the first real install this fallback copy did not survive to the
   # deployed ESP despite the install log claiming to have written it —
   # see docs/tasks/0003-findings.md finding #2 for the investigation and
-  # finding #5 for how this was confirmed fixed (or not) on redeploy.
+  # finding #5 for how a clean redeploy (stale NVRAM entries removed,
+  # firmware back in UEFI mode) produced a fallback file that did
+  # survive, checksum-verified against the source binary.
   boot.loader.efi.canTouchEfiVariables = true;
 
   # 16GB RAM, no hibernation use-case on a project machine: compressed
@@ -52,11 +54,4 @@
   # First installed from nixos-unstable ahead of the 26.11 release.
   # Never change this after install.
   system.stateVersion = "26.11";
-
-  # Trivial, obviously-reversible change used to exercise task 0003's
-  # rebuild/rollback round-trip (the brief's step 8) — the acceptance
-  # test for "versioned, rollbackable, remotely operable." Not meaningful
-  # on its own; remove freely once the round-trip has been run again by
-  # whoever next needs to verify the loop still works.
-  environment.systemPackages = [ pkgs.htop ];
 }
