@@ -25,37 +25,83 @@ identity is not part of a host and lives in your private layer.
 Task `docs/tasks/0003-findings.md` is the detailed shakedown log for
 everything below — read it if a step here doesn't match reality on your
 hardware; several things that looked right on paper weren't, on this
-chassis.
+chassis. `docs/tasks/0006-installer-image.md` retired the ceremony this
+section used to describe (boot the stock graphical ISO, join Wi-Fi with
+`nmtui`, set a root password, read the IP off `ip a`) — that cost a
+full round of console interaction per attempt, which doesn't scale to
+an agent retrying a failed install (finding #3). The install now uses a
+Castle Turing installer image that's SSH-reachable the moment it boots.
 
-1. Boot the target machine from a NixOS installer USB (the graphical ISO
-   is easiest for Wi-Fi). In a terminal on the target: connect to Wi-Fi,
-   set a root password with `sudo passwd`, and note the IP from `ip a`.
-   **Check `date` before doing anything else.** A dead or wrong hardware
-   clock breaks TLS for every download the install needs; force an NTP
-   sync (or set the date by hand) first if it's off.
-2. The installable configuration lives in your private flake, not here —
-   this repo's `nixosConfigurations.example` is a CI stand-in with a
-   placeholder resident. This first install still runs against whatever
-   `hardware-configuration.nix` is currently committed in this directory
-   (fine even if it's still the placeholder — the `dell-xps-13-9370`
-   nixos-hardware module already carries this chassis's known quirks);
-   the real one is captured as a *side effect* of this same command for
-   you to commit afterward, not consumed by it.
+A wipe destroys whatever is currently on the machine. Before starting,
+on *every* machine and repo that has anything on this box that should
+survive:
+
+- [ ] `git status` is clean (or anything uncommitted has been
+      deliberately discarded) in every repo checked out on the target
+      — public, private, and any others
+- [ ] Everything that should survive is pushed to its remote, not just
+      committed locally
+- [ ] Any non-git data worth keeping (documents, backups) is copied off
+
+1. Build the installer image from your private flake's directory — it
+   bakes in the same `castle.admin.sshKeys` that will administer the
+   installed machine, via `castle-turing.nixosModules.installer`; see
+   `docs/private-layer.md` for the exact `nixosConfiguration` to add:
+
+   ```sh
+   nix build .#nixosConfigurations.xps9370-installer.config.system.build.isoImage
+   ```
 
    If you're working from a local checkout of this repo that isn't the
-   exact rev your private flake has pinned (a worktree, an
-   uncommitted fix, anything not yet pushed), point the private flake's
-   `castle-turing` input at it first — **this is a one-shot snapshot, not
-   a live link, and it must be redone after every commit you want the
-   build to actually pick up** (see finding #9 in the findings doc if
-   that sentence doesn't sound alarming enough on its own):
+   exact rev your private flake has pinned (a worktree, an uncommitted
+   fix, anything not yet pushed), point the private flake's
+   `castle-turing` input at it first — **this is a one-shot snapshot,
+   not a live link, and it must be redone after every commit you want
+   the build to actually pick up** (see finding #9 in the findings doc
+   if that sentence doesn't sound alarming enough on its own):
 
    ```sh
    # from your private flake's directory:
    nix flake lock --override-input castle-turing path:/abs/path/to/your/checkout
    ```
 
-   Then, from that same private flake directory, with Nix installed:
+   Write `result/iso/*.iso` to a USB stick and boot the target machine
+   from it (F12, or your firmware's one-time-boot menu).
+
+2. **Plug the target into Ethernet before powering it on.** The image
+   auto-connects a wired interface over DHCP and brings up sshd with
+   zero console interaction — nothing to type at the machine at all.
+   Wi-Fi is deliberately **not** provisioned by this image: a Wi-Fi PSK
+   is private-layer data, and baking one into the image would mean
+   writing it in plaintext into a private-layer file, which this repo
+   treats as equivalent to committing a credential (no secrets tooling
+   like sops-nix exists here yet — see `docs/private-layer.md`). If
+   Ethernet genuinely isn't available, join Wi-Fi by hand with `nmtui`
+   on this image, same as the old ceremony required — that manual path
+   still exists, it's just no longer the default.
+
+3. Reach the installer over mDNS — no console, no router admin page:
+
+   ```sh
+   ssh root@castle-installer.local
+   ```
+
+   (or whatever hostname your private flake's installer configuration
+   set — see `docs/private-layer.md`). **Check `date` over that session
+   before doing anything else** (`ssh root@castle-installer.local date`):
+   a dead or wrong hardware clock breaks TLS for every download the
+   install needs; set it by hand (`date -s ...`) over the same session
+   if it's off — still no console required.
+
+4. The installable configuration lives in your private flake, not here
+   — this repo's `nixosConfigurations.example` is a CI stand-in with a
+   placeholder resident. This first install still runs against whatever
+   `hardware-configuration.nix` is currently committed in this directory
+   (fine even if it's still the placeholder — the `dell-xps-13-9370`
+   nixos-hardware module already carries this chassis's known quirks);
+   the real one is captured as a *side effect* of this same command for
+   you to commit afterward, not consumed by it. From that same private
+   flake directory, with Nix installed:
 
    ```sh
    nix run github:nix-community/nixos-anywhere -- \
@@ -63,7 +109,7 @@ chassis.
      --generate-hardware-config nixos-generate-config \
        /abs/path/to/your/checkout/hosts/xps9370/hardware-configuration.nix \
      --phases disko,install \
-     root@<installer-ip>
+     root@castle-installer.local
    ```
 
    (Point `--generate-hardware-config`'s path at wherever your public
@@ -79,26 +125,39 @@ chassis.
    the UEFI fallback file (`EFI/BOOT/BOOTX64.EFI`) is not proof that it
    did; check it directly over the still-open installer SSH session
    (`ls`/`sha256sum` against `/mnt/boot/EFI/systemd/systemd-bootx64.efi`)
-   before pulling the USB stick and rebooting by hand (`reboot`, or
-   power-cycle). This bit us for real on this chassis's first install —
-   see findings #2 and #5. If you need to redeploy onto a disk that
-   already has real data on it (not a from-scratch wipe), swap
+   before rebooting (`reboot`, or power-cycle) or unplugging the USB
+   stick. This bit us for real on this chassis's first install — see
+   findings #2 and #5. If you need to redeploy onto a disk that already
+   has real data on it (not a from-scratch wipe), swap
    `--phases disko,install` for `--phases disko,install
    --disko-mode mount`, which mounts the existing, already-partitioned
    filesystems without touching their contents; plain `--phases install`
    if something has already mounted the target at `/mnt` for you.
-3. Commit the freshly generated `hardware-configuration.nix` in this
+
+5. Commit the freshly generated `hardware-configuration.nix` in this
    directory, bump your private flake's pin of this repo to the real
-   published rev (replacing the local-path override from step 2 — that
+   published rev (replacing the local-path override from step 1 — that
    override was only ever a one-shot local build aid, never meant to be
    committed), and do one rebuild (below) so the real hardware facts
    take effect — the install itself ran without them.
-4. On first boot, join Wi-Fi once with `nmtui`; the credential stays on
-   the machine, not in this repo. (As of this writing there's no
-   password on the admin account at first boot and no declarative
-   Wi-Fi profile either, which is its own chicken-and-egg problem — see
-   finding #1. Until that's fixed, plan for a human at the physical
-   keyboard for this step.)
+
+6. On the *installed* system's own first independent boot (not the
+   chroot install above, which never left the installer's own SSH
+   session) — this chassis has no Ethernet port, so it needs Wi-Fi to
+   be reachable at all, and Wi-Fi still needs a human at the physical
+   keyboard running `nmtui` once: there is no password on the admin
+   account and no declarative Wi-Fi profile either, which is its own
+   chicken-and-egg problem — see finding #1. This installer image closes
+   finding #3 (installer ephemerality); finding #1 is explicitly **not**
+   closed by this task — it needs either a private-layer admin password
+   or a declarative, private-layer Wi-Fi profile, neither of which is
+   in scope here (both would change what the installed system contains,
+   a non-goal of `docs/tasks/0006-installer-image.md`, and touch
+   `hosts/xps9370/default.nix`, which this task doesn't own). Until
+   that lands, plan for a human at the keyboard for exactly this one
+   step, on this one chassis, on a from-scratch install. (An
+   already-installed machine keeps its NetworkManager Wi-Fi profile
+   across ordinary reboots — this only bites a fresh wipe.)
 
 ## Rebuilding after changes
 

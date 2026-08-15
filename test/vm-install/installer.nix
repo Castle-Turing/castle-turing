@@ -1,39 +1,36 @@
-# The installer image the harness boots as its QEMU "target": the stock
-# NixOS minimal installer profile, plus SSH reachable by the same
-# throwaway key run.sh generates for the run — standing in for a human
-# typing `nmtui` and fetching a key by hand at the console, which is
-# exactly the manual step docs/tasks/0003-findings.md (finding #3) says
-# doesn't scale to an agent retrying an install. Test-only: never built or
-# published outside a harness run.
+# The installer image the harness boots as its QEMU "target": the real
+# public mechanism (flake.nixosModules.installer, docs/tasks/0006-
+# installer-image.md), instantiated with the run's throwaway admin key.
+# This is the same artifact a real install would use — not a parallel
+# test-only stand-in — so this harness exercises the actual
+# castle.admin.sshKeys + zero-console-interaction path that closes
+# docs/tasks/0003-findings.md finding #3.
+#
+# --impure only for the getFlake self-reference (needed to pick up
+# uncommitted working-tree changes under test, same as `nix flake check`
+# would see) and the pubkey argument read from a file run.sh generates.
 {
   pubkeyFile,
 }:
 let
   flake = builtins.getFlake (toString ../..);
-  nixpkgs = flake.inputs.nixpkgs;
-  lib = nixpkgs.lib;
+  lib = flake.inputs.nixpkgs.lib;
   pubkey = lib.removeSuffix "\n" (builtins.readFile pubkeyFile);
 in
-nixpkgs.lib.nixosSystem {
+flake.inputs.nixpkgs.lib.nixosSystem {
   system = "x86_64-linux";
   modules = [
-    "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix"
+    flake.nixosModules.installer
     {
-      # Faster/smaller image; CI time budget matters more than a tight
-      # image for a disk that's discarded at the end of the job.
-      isoImage.squashfsCompression = "gzip -Xcompression-level 1";
-      # The ISO profile sets its own default (10s, for a human at a real
-      # console); this harness is never at a console.
-      boot.loader.timeout = lib.mkForce 0;
-
+      castle.admin = {
+        username = "harness";
+        sshKeys = [ pubkey ];
+      };
       # run.sh captures qemu's -serial as <phase>.serial.log for failure
-      # diagnosis; without this the kernel only writes to the (discarded)
-      # VGA console and that log is empty.
+      # diagnosis; without this the kernel only writes to the (discarded,
+      # -display none) VGA console and that log is empty. Test-only: a
+      # real, redistributed installer image keeps the stock VGA console.
       boot.kernelParams = [ "console=ttyS0" ];
-
-      services.openssh.enable = true;
-      services.openssh.settings.PermitRootLogin = "prohibit-password";
-      users.users.root.openssh.authorizedKeys.keys = [ pubkey ];
     }
   ];
 }

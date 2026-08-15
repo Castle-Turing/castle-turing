@@ -6,12 +6,15 @@
 # times to check the specific ways task 0003's physical shakedown found
 # the mechanism broken:
 #
-#   1. install completes and the VM boots from its own disk, installer
+#   1. the installer image itself is SSH-reachable by key with zero
+#      console interaction (regression test for finding #3, installer
+#      ephemerality — docs/tasks/0006-installer-image.md);
+#   2. install completes and the VM boots from its own disk, installer
 #      detached;
-#   2. SSH comes up as the admin, by key, with zero console interaction
+#   3. SSH comes up as the admin, by key, with zero console interaction
 #      (regression test for the first-boot lockout, finding #1);
-#   3. survives a power-cycle (hard stop + restart);
-#   4. survives an NVRAM wipe, forcing the firmware down the ESP fallback
+#   4. survives a power-cycle (hard stop + restart);
+#   5. survives an NVRAM wipe, forcing the firmware down the ESP fallback
 #      path EFI/BOOT/BOOTX64.EFI (finding #2/#5, the dead-CMOS lesson).
 #
 # Requires: Nix (flakes enabled) and a KVM-capable Linux box. See
@@ -84,14 +87,24 @@ ADMIN_KEY="$WORKDIR/admin_key"
 "$SSH_KEYGEN_BIN" -q -t ed25519 -N "" -C "castle-turing-harness" -f "$ADMIN_KEY"
 ADMIN_PUB="$ADMIN_KEY.pub"
 
-log "Building the installer image (hosts/vm-test's SSH-reachable installer)..."
+log "Building the installer image (flake.nixosModules.installer, docs/tasks/0006)..."
 ISO_OUT=$(build_expr "(import \"$HARNESS_DIR/installer.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.isoImage")
 ISO_PATH=$(find "$ISO_OUT/iso" -maxdepth 1 -name '*.iso' | head -n1)
 [ -n "$ISO_PATH" ] || fail "installer ISO build produced no .iso file"
 
 log "Building the target system (hosts/vm-test + a throwaway admin key)..."
-TOPLEVEL=$(build_expr "(import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.toplevel")
-DISKO_SCRIPT=$(build_expr "(import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.diskoScript")
+# One nix build, not two: TOPLEVEL and DISKO_SCRIPT used to come from two
+# separate `nix build --impure --expr` calls that each independently
+# imported vm-test-system.nix, so the full nixosSystem evaluation
+# (including its self-referential getFlake) ran twice per harness run —
+# docs/tasks/0006-installer-image.md's parked-cleanup item. A linkFarm
+# evaluates vm-test-system.nix exactly once and exposes both outputs as
+# named symlinks in one derivation; the two artifacts are then resolved
+# to their real store paths (readlink -f) rather than passed to
+# nixos-anywhere as symlinks living inside the linkFarm's own output.
+ARTIFACTS=$(build_expr "let system = import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }; pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"vm-test-artifacts\" { toplevel = system.config.system.build.toplevel; diskoScript = system.config.system.build.diskoScript; }")
+TOPLEVEL=$(readlink -f "$ARTIFACTS/toplevel")
+DISKO_SCRIPT=$(readlink -f "$ARTIFACTS/diskoScript")
 
 log "Preparing disk image and OVMF NVRAM vars..."
 DISK="$WORKDIR/disk.qcow2"
@@ -175,8 +188,11 @@ wait_for_ssh() {
 # --- Phase 1: boot the installer, run the real install path ---------------
 log "[phase1] Booting installer image..."
 start_qemu phase1-installer -cdrom "$ISO_PATH" -boot order=d
-wait_for_ssh root "$BOOT_TIMEOUT" || fail "installer did not come up over SSH within ${BOOT_TIMEOUT}s"
-log "[phase1] Installer reachable. Running nixos-anywhere (disko + install)..."
+if ! wait_for_ssh root "$BOOT_TIMEOUT"; then
+  fail "assertion failed: the installer image is SSH-reachable by key with zero console interaction within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0003-findings.md finding #3, closed by docs/tasks/0006-installer-image.md"
+fi
+log "[phase1] PASS: installer SSH-reachable by key with zero console interaction."
+log "[phase1] Running nixos-anywhere (disko + install)..."
 if ! "$NIXOS_ANYWHERE_BIN" \
     --store-paths "$DISKO_SCRIPT" "$TOPLEVEL" \
     --target-host "root@127.0.0.1" \

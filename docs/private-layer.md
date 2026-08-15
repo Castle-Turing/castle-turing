@@ -72,6 +72,10 @@ The exported modules:
   security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
   gh, ripgrep, fd, claude-code). No private data, no assertions.
+- `nixosModules.installer` — the agentic installer image: bootable NixOS
+  media, SSH-reachable with zero console interaction, using the same
+  `castle.admin` values as everything else here. See "The installer
+  image" below.
 
 `nixpkgs.follows = "castle-turing/nixpkgs"` keeps your system on exactly
 the package set the framework is tested against. Omit it only if you know
@@ -120,6 +124,50 @@ The values this repo may never contain:
   commit identity, wired into home-manager's `programs.git`. Only
   required if you import `nixosModules.home`, which asserts both are
   set.
+
+## The installer image (optional, per host)
+
+`castle-turing.nixosModules.installer` (`docs/tasks/0006-installer-image.md`)
+is a bootable NixOS ISO that's immediately SSH-reachable — no console
+login, no manual Wi-Fi join, no fetching a key by hand — closing
+`docs/tasks/0003-findings.md` finding #3. It needs no new private file
+or format: it reuses the same `castle.admin` values `resident.nix`
+already supplies, the same way `nixosModules.host-xps9370` does. Add a
+second `nixosConfiguration` to your private flake:
+
+```nix
+nixosConfigurations.xps9370-installer = nixpkgs.lib.nixosSystem {
+  system = "x86_64-linux";
+  modules = [
+    castle-turing.nixosModules.installer
+    ./resident.nix
+  ];
+};
+```
+
+Build it and write the result to a USB stick:
+
+```sh
+nix build .#nixosConfigurations.xps9370-installer.config.system.build.isoImage
+# result/iso/*.iso -> dd to a USB stick
+```
+
+Boot the target machine from it over Ethernet (see
+`hosts/xps9370/README.md`) and it comes up reachable at
+`ssh root@castle-installer.local` (or whatever `networking.hostName` you
+set — override it per host in the block above if you'll ever have more
+than one installer image live on the same LAN segment at once) using
+the same key `resident.nix` already grants.
+
+**Wi-Fi is not provisioned by this mechanism**, and that is a deliberate
+scope limit, not an oversight: a Wi-Fi PSK is private-layer data, and
+baking one into a NetworkManager connection profile at ISO-build time
+would mean writing it in plaintext into a private-layer Nix file —
+exactly the "private repo is access control, not encryption" problem
+the Secrets slot below exists to eventually close. Until this repo has
+a secrets mechanism (sops-nix or equivalent — not yet in scope), wire
+the target machine to Ethernet for installs, or join Wi-Fi by hand with
+`nmtui` on the installer image, same as the stock installer requires.
 
 ## `flake.lock`
 
