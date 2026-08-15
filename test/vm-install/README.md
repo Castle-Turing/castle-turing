@@ -86,7 +86,14 @@ gets.
 
 Needs: a KVM-capable **x86_64** Linux box (same architecture as the
 reference host, `hosts/xps9370`) with `/dev/kvm` accessible, and Nix
-with flakes enabled.
+with flakes enabled. If `/dev/kvm` isn't accessible, `run.sh` falls back
+to TCG (software) emulation automatically rather than refusing to run —
+dramatically slower, but a working answer for a developer's machine.
+That fallback is deliberately *not* mirrored in CI
+(`.github/workflows/vm-install-test.yml`): there, a missing `/dev/kvm`
+means the runner itself is broken, TCG would blow the job's time
+budget, and the workflow fails the KVM-setup step outright instead of
+letting `run.sh` quietly take the slow path.
 
 ```sh
 test/vm-install/run.sh

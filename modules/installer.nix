@@ -61,8 +61,18 @@ let
       config.networking.networkmanager.package
     ];
     text = ''
-      have_route() {
-        ip -4 route show default 2>/dev/null | grep -q .
+      # Ask NetworkManager whether it considers itself connected, rather
+      # than inferring readiness from the kernel routing table directly.
+      # `ip -4 route show default` can go true the instant a route
+      # appears, which can precede NetworkManager finishing activation
+      # (DNS, etc.) — a gap where this script would tell the operator
+      # "connected" before the machine actually is, which is exactly the
+      # kind of console-lies-to-the-operator failure this feature exists
+      # to prevent. "connected-global" is NetworkManager's own signal
+      # for "has real, non-link-local connectivity" and doesn't require
+      # its optional internet-reachability check to be configured.
+      have_network() {
+        [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected-global" ]
       }
 
       show_addrs() {
@@ -70,28 +80,55 @@ let
           | awk '{print $4}' | cut -d/ -f1 | paste -sd', ' -
       }
 
-      clear
+      # `clear`'s exit status depends on TERM/terminfo being usable on
+      # this tty; writeShellApplication runs everything under
+      # `set -euo pipefail`, so an unguarded `clear` that happens to fail
+      # (unset TERM, a terminfo entry this tty's driver doesn't have)
+      # would abort the whole script right there -- landing a dead,
+      # blank console exactly where this feature promises the opposite.
+      # Never load-bearing, so never allowed to take the script down.
+      safe_clear() { clear 2>/dev/null || true; }
+
+      safe_clear
       echo "Castle Turing installer -- booting, checking for a network connection..."
 
       # Give DHCP a head start before assuming nobody's on a network yet
       # (the common case: Ethernet, already plugged in, needs no prompt
       # at all).
       deadline=$((SECONDS + 20))
-      while (( SECONDS < deadline )) && ! have_route; do
+      while (( SECONDS < deadline )) && ! have_network; do
         sleep 1
       done
 
-      # Never sit here silently unconnected: if nothing showed up in the
-      # grace period, take over the console with nmtui until something
-      # does. `timeout` bounds each attempt so an unattended machine
-      # (nobody at the keyboard at all, e.g. this repo's own CI harness)
-      # can't get stuck in an interactive prompt forever — it just
-      # re-checks and, if a route has shown up in the meantime (nmtui
-      # itself displays live connection state, so a human watching it
-      # would normally just back out the moment they see it), moves on.
-      while ! have_route; do
-        clear
-        cat <<'BANNER'
+      # One loop, not two: re-checking have_network every iteration --
+      # including the "connected" branch below -- is what makes this
+      # loop back into the join prompt if the network drops after the
+      # status block was already showing, instead of sitting there
+      # confidently repeating a now-false "connected" claim with a stale
+      # address forever. A console that lies about connectivity is worse
+      # than one that says nothing, and that's the exact failure this
+      # feature exists to replace.
+      while true; do
+        if ! have_network; then
+          # Never sit here silently unconnected: take over the console
+          # with nmtui until something changes. `timeout` bounds each
+          # attempt so an unattended machine (nobody at the keyboard at
+          # all, e.g. this repo's own CI harness) can't get stuck in an
+          # interactive prompt forever -- it just loops back and
+          # re-checks (nmtui itself displays live connection state, so a
+          # human watching it would normally just back out the moment
+          # they see it connected).
+          #
+          # The `sleep 2` after nmtui returns is load-bearing, not
+          # cosmetic: if nmtui exits immediately instead of blocking (no
+          # controlling TTY yet, NetworkManager's D-Bus not up yet, or
+          # some other startup-ordering hiccup) and connectivity still
+          # isn't up, this branch would otherwise busy-spin -- clear,
+          # print, exec-fail, repeat, as fast as the shell can fork --
+          # pegging a core and flooding the console/serial log for as
+          # long as the machine sits unconnected.
+          safe_clear
+          cat <<'BANNER'
 ======================================================================
  Castle Turing installer -- no network yet.
 
@@ -102,15 +139,18 @@ let
  (Esc) to return here.
 ======================================================================
 BANNER
-        timeout 300 nmtui || true
-      done
+          timeout 300 nmtui || true
+          sleep 2
+          continue
+        fi
 
-      # Connected: this is the persistent, prominent status block finding
-      # #3's own account of task 0003 was missing -- no more running
-      # `ip a` by hand and reading the address back to yourself every
-      # boot. Refreshed periodically in case DHCP hands out a new lease.
-      while true; do
-        clear
+        # Connected: this is the persistent, prominent status block
+        # finding #3's own account of task 0003 was missing -- no more
+        # running `ip a` by hand and reading the address back to
+        # yourself every boot. Refreshed periodically in case DHCP hands
+        # out a new lease, and re-verified at the top of this same loop
+        # on every refresh -- see the comment above.
+        safe_clear
         addrs=$(show_addrs)
         cat <<BANNER
 ======================================================================
@@ -165,13 +205,16 @@ in
     # deliberately narrower than "no manual step, ever":
     #
     # The installation-device profile this image is built on already
-    # enables NetworkManager (nixos/modules/profiles/installation-device.nix),
-    # which auto-connects a wired interface over DHCP with zero
-    # interaction — asserted explicitly here (rather than left as an
-    # inherited default) because it's the supported unattended path this
-    # mechanism is built around. Plug the target into Ethernet before
-    # powering it on and the machine reaches the LAN, and is
-    # SSH-reachable, with nobody ever touching its keyboard.
+    # enables NetworkManager (nixos/modules/profiles/installation-device.nix,
+    # a plain assignment, not mkDefault) — auto-connecting a wired
+    # interface over DHCP with zero interaction is already what a stock
+    # installer does. `mkForce` here doesn't change that; it guarantees
+    # it: everything above (mDNS, the console status/prompt script) is
+    # built on NetworkManager actually running, so this line exists to
+    # keep that true even against a private layer's own modules, not to
+    # merely restate nixpkgs's current default. Plug the target into
+    # Ethernet before powering it on and the machine reaches the LAN,
+    # and is SSH-reachable, with nobody ever touching its keyboard.
     #
     # Wi-Fi is intentionally NOT provisioned by this module — that's a
     # deliberate scope decision, not a gap this module tries to paper
@@ -186,7 +229,7 @@ in
     # One manual Wi-Fi join, guided and impossible to miss (statusScript
     # above), is a better trade than inventing a hack around that. See
     # docs/private-layer.md and hosts/xps9370/README.md.
-    networking.networkmanager.enable = lib.mkDefault true;
+    networking.networkmanager.enable = lib.mkForce true;
 
     # The console's whole job now: get the machine onto a network (with
     # help if it needs it), then display how to reach it and hand off to

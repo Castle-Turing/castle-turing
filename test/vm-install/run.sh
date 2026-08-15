@@ -222,17 +222,28 @@ log "[phase1] Install completed. Unmounting the installed filesystems and syncin
 # and phase 2/3/4 would then fail for a completely different, confusing
 # reason (looking exactly like a bootloader-fallback regression) instead
 # of reporting the actual problem, which is that this step never
-# confirmed the flush happened. One retry absorbs a transient SSH
-# reconnect blip; anything past that is treated as real.
+# confirmed the flush happened.
+#
+# Several attempts over ~30s, not one retry: this runs immediately after
+# disko+install on a CI runner (or under TCG locally), and a single
+# 2-second-spaced retry doesn't give a loaded box enough headroom to
+# reconnect — that would trade the original silent-warning flake for an
+# impatient false-negative that gates every PR instead, which is a worse
+# failure mode than the one this hard assertion was added to catch.
+# Still fails hard at the end; it's the timing budget that was wrong,
+# not the decision to assert.
 unmount_sync_ok=0
-for attempt in 1 2; do
+attempt=0
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
+  attempt=$((attempt + 1))
   if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
       "umount -R /mnt 2>&1 || true; sync"; then
     unmount_sync_ok=1
     break
   fi
   log "[phase1] unmount/sync attempt $attempt failed, retrying..."
-  sleep 2
+  sleep 5
 done
 [ "$unmount_sync_ok" = 1 ] || fail "could not confirm the installed filesystems were unmounted and synced before detaching the installer — phases 2-4 need bootctl install's ESP writes to have actually landed on disk, and this harness won't guess that they did"
 log "[phase1] Detaching installer (hard stop from here on, same as every later transition)."
