@@ -87,7 +87,7 @@ finding #5.
 Every boot of the stock NixOS graphical ISO starts from zero: Wi-Fi has
 to be joined by hand (`nmtui`, since the installer has no saved
 profiles), and SSH access requires fetching the admin's public key fresh
-each time (`github:whharris.keys` or equivalent) since the live image
+each time (`github:resident.keys` or equivalent) since the live image
 has no persistence. That's two rounds of human-at-the-keyboard work per
 attempt, which is fine once but doesn't scale to "agent retries the
 install after a failure" — the stated design goal of this whole
