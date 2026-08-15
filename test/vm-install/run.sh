@@ -48,10 +48,13 @@ trap cleanup EXIT
 NIX_BUILD_ARGS=(--extra-experimental-features "nix-command flakes" --no-link --print-out-paths)
 
 build_pkg() {
-  nix build "${NIX_BUILD_ARGS[@]}" -f "$HARNESS_DIR/pkgs.nix" "$1"
+  # ^out: some packages (e.g. openssh) have more than one default output
+  # (out, man, ...); --print-out-paths would print one line per output
+  # and break the single-path assumption every caller here makes.
+  nix build "${NIX_BUILD_ARGS[@]}" -f "$HARNESS_DIR/pkgs.nix" "$1^out" | head -n1
 }
 build_expr() {
-  nix build --impure "${NIX_BUILD_ARGS[@]}" --expr "$1"
+  nix build --impure "${NIX_BUILD_ARGS[@]}" --expr "$1" | head -n1
 }
 
 log "Building harness tooling (qemu, OVMF, nixos-anywhere, openssh) from this flake's pinned nixpkgs..."
