@@ -25,6 +25,10 @@ decisions.
 - Design principles are numbered sequentially (`01-`, `02-`, …) and are only
   added deliberately — a principle doc is a commitment, not a note. Drafts
   live in PRs, not in `docs/principles/`.
+- Deferred work lives in `docs/backlog/`, one plain-text file per item,
+  not in an issue tracker — see that directory's README. Speccing an
+  entry promotes it to a numbered brief and deletes the backlog file in
+  the same commit.
 - Implementation work is specced as numbered briefs in `docs/tasks/`
   (`0001-`, `0002-`, …). A brief is committed on the branch that implements
   it, never separately — spec and implementation merge and get audited
