@@ -26,6 +26,11 @@ nixpkgs.lib.nixosSystem {
       # console); this harness is never at a console.
       boot.loader.timeout = lib.mkForce 0;
 
+      # run.sh captures qemu's -serial as <phase>.serial.log for failure
+      # diagnosis; without this the kernel only writes to the (discarded)
+      # VGA console and that log is empty.
+      boot.kernelParams = [ "console=ttyS0" ];
+
       services.openssh.enable = true;
       services.openssh.settings.PermitRootLogin = "prohibit-password";
       users.users.root.openssh.authorizedKeys.keys = [ pubkey ];

@@ -32,6 +32,10 @@
   boot.loader.systemd-boot.enable = true;
   # Nobody is ever at this console; don't sit at a boot menu.
   boot.loader.timeout = 0;
+  # test/vm-install/run.sh captures qemu's -serial as the diagnostic log
+  # for boot failures; without this the kernel only writes to the
+  # (discarded, -display none) VGA console and that log is empty.
+  boot.kernelParams = [ "console=ttyS0" ];
   # Same fallback-boot posture as hosts/xps9370, and the reason this host
   # exists: docs/tasks/0003-findings.md (finding #2/#5, first-install
   # branch) traced a real "No Boot Device Found" failure to the ESP
