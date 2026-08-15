@@ -213,8 +213,7 @@ log "[phase1] Install completed. Unmounting the installed filesystems and syncin
 # "reboot" phase (we need to swap boot media, not just reboot in place),
 # so nothing has unmounted /mnt or flushed the writes bootctl just made
 # to the vfat ESP — those are the two things phases 2-4 depend on having
-# actually landed. `;` (not `&&`) so sync still runs even if a sub-mount
-# is reported busy.
+# actually landed.
 #
 # This is a hard assertion, not a warning: qcow2/virtio-blk isn't
 # write-through by default, so a flush that silently fails here, right
@@ -223,6 +222,15 @@ log "[phase1] Install completed. Unmounting the installed filesystems and syncin
 # reason (looking exactly like a bootloader-fallback regression) instead
 # of reporting the actual problem, which is that this step never
 # confirmed the flush happened.
+#
+# The remote command runs sync unconditionally (even if umount fails on
+# a busy sub-mount, still worth flushing whatever can be flushed) but
+# now genuinely requires *both* to succeed for the assertion to pass:
+# an earlier version used `umount ... || true`, which swallowed umount's
+# exit status entirely and left the whole check gated on sync alone —
+# sync succeeds almost unconditionally, so that version could never
+# actually catch the busy-sub-mount case its own comment described.
+# Single-quoted so `$?` etc. reach the remote shell, not this one.
 #
 # Several attempts over ~30s, not one retry: this runs immediately after
 # disko+install on a CI runner (or under TCG locally), and a single
@@ -238,7 +246,7 @@ deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
   attempt=$((attempt + 1))
   if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
-      "umount -R /mnt 2>&1 || true; sync"; then
+      'umount -R /mnt 2>&1; u=$?; sync; s=$?; [ "$u" -eq 0 ] && [ "$s" -eq 0 ]'; then
     unmount_sync_ok=1
     break
   fi

@@ -175,6 +175,32 @@ in
   ];
 
   config = {
+    # users.users.nixos.shell (below) repoints the stock installer's own
+    # "nixos" account at the status script instead of a real shell. If a
+    # private layer ever picks castle.admin.username = "nixos" — a
+    # natural-looking choice, it's literally the stock installer's own
+    # account name — modules/base would authorize that same account's
+    # SSH keys, and `ssh nixos@... <cmd>` would hang forever (the status
+    # script never exits) with no error at all: root access is
+    # unaffected, so nothing else would look broken. Catch it at eval
+    # time with a real message instead of leaving that trap silent.
+    assertions = [
+      {
+        assertion = config.castle.admin.username != "nixos";
+        message = ''
+          castle.admin.username is "nixos", which collides with this
+          installer image's own built-in "nixos" account — its shell is
+          repointed at the console status/prompt script (see
+          modules/installer.nix), not a real shell. SSHing in as
+          nixos@... would hang forever instead of giving you a session;
+          root@... is unaffected but the failure mode for the "nixos"
+          account itself is silent otherwise. Pick a different
+          castle.admin.username for any private-layer configuration that
+          imports nixosModules.installer.
+        '';
+      }
+    ];
+
     # Nobody is ever at a *boot menu* by design — don't sit there waiting
     # for a keypress that will never come. (0 disables the timeout
     # entirely for both the BIOS/syslinux and EFI/grub menus this
