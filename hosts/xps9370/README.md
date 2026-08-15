@@ -62,26 +62,31 @@ chassis.
      --flake .#xps9370 \
      --generate-hardware-config nixos-generate-config \
        /abs/path/to/your/checkout/hosts/xps9370/hardware-configuration.nix \
+     --phases disko,install \
      root@<installer-ip>
    ```
 
    (Point `--generate-hardware-config`'s path at wherever your public
    checkout actually lives — it doesn't have to be a sibling directory
    named `castle-turing`, just a real path on disk.) This partitions the
-   disk per `disko.nix`, installs, and by default reboots automatically.
+   disk per `disko.nix` and installs. `--phases disko,install`
+   deliberately excludes nixos-anywhere's own reboot phase, so the
+   installed filesystems stay mounted at `/mnt` over the same installer
+   SSH session afterward — that's what the next step needs.
 
    **Before trusting a reboot, verify the boot actually landed** — don't
    just watch the log. `bootctl install`'s log output claiming it wrote
    the UEFI fallback file (`EFI/BOOT/BOOTX64.EFI`) is not proof that it
-   did; check the mounted ESP directly (`ls`/`sha256sum` against
-   `EFI/systemd/systemd-bootx64.efi`) before pulling the USB stick. This
-   bit us for real on this chassis's first install — see findings #2 and
-   #5. If you need to redeploy onto a disk that already has real data on
-   it (not a from-scratch wipe), do **not** use the default phases —
-   `--phases disko,install --disko-mode mount` mounts the existing,
-   already-partitioned filesystems without touching their contents;
-   plain `--phases install` if something has already mounted the target
-   at `/mnt` for you.
+   did; check it directly over the still-open installer SSH session
+   (`ls`/`sha256sum` against `/mnt/boot/EFI/systemd/systemd-bootx64.efi`)
+   before pulling the USB stick and rebooting by hand (`reboot`, or
+   power-cycle). This bit us for real on this chassis's first install —
+   see findings #2 and #5. If you need to redeploy onto a disk that
+   already has real data on it (not a from-scratch wipe), swap
+   `--phases disko,install` for `--phases disko,install
+   --disko-mode mount`, which mounts the existing, already-partitioned
+   filesystems without touching their contents; plain `--phases install`
+   if something has already mounted the target at `/mnt` for you.
 3. Commit the freshly generated `hardware-configuration.nix` in this
    directory, bump your private flake's pin of this repo to the real
    published rev (replacing the local-path override from step 2 — that

@@ -351,7 +351,7 @@ ad hoc mid-incident.
 
 This is the substrate claim task 0003 exists to check: versioned,
 rollbackable, remotely operable. Run once the machine was up on its own
-Wi-Fi with a working `wesley@` login, from this Mac:
+Wi-Fi with a working `resident@` login, from this Mac:
 
 1. Added `pkgs.htop` to `environment.systemPackages` in
    `hosts/xps9370/default.nix` — a trivial, obviously-reversible
