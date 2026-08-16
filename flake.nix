@@ -58,6 +58,12 @@
         # This project's own development tools (Emacs, git, gh, ripgrep,
         # fd, claude-code) — see docs/tasks/0005-dogfooding-desktop.md.
         dev = ./modules/dev;
+        # The agent layer's CLI and state-dir option — see
+        # docs/architecture.md and docs/tasks/0008-agent-layer-skeleton.md.
+        # Optional, like desktop/dev, and deliberately not imported by
+        # host-vm-test below: the install harness proves the machine
+        # builds and boots with no agent layer at all.
+        agent = ./modules/agent;
         # The agentic installer image (docs/tasks/0006): stock NixOS
         # installer media plus modules/base, so it's SSH-reachable by the
         # same castle.admin.sshKeys key a private layer already supplies
@@ -95,6 +101,9 @@
       # CI proves the whole dogfooding-desktop stack
       # (docs/tasks/0005-dogfooding-desktop.md) composes end to end, the
       # same modules a real private layer assembles for hosts/xps9370 —
+      # plus agent, so CI also proves the agent-layer slot
+      # (docs/tasks/0008-agent-layer-skeleton.md) composes with the rest,
+      # even though hosts/vm-test below deliberately omits it —
       # see docs/private-layer.md. Real configurations live in private
       # layers.
       nixosConfigurations.example = nixpkgs.lib.nixosSystem {
@@ -105,6 +114,7 @@
           self.nixosModules.home
           self.nixosModules.desktop
           self.nixosModules.dev
+          self.nixosModules.agent
           {
             castle.admin = {
               username = "resident";
