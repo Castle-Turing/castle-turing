@@ -164,8 +164,18 @@ fi
 # step (a browser OAuth flow or an API key), and a script silently trying
 # to authenticate on someone's behalf is a credential-handling foot-gun,
 # not a convenience.
+#
+# Every `mktemp` call in this script uses an explicit "$TMPDIR/prefix.XXXXXX"
+# template rather than `-t prefix`, on purpose: BSD/macOS mktemp treats
+# `-t prefix` as a convenience flag, but GNU coreutils mktemp (what a NixOS
+# host — this project's actual deployment target — ships) treats the
+# argument as a template and requires it to contain literal `X`
+# characters, so `-t codex-review-foo` fails outright on Linux. The
+# explicit-template form works identically on both. A Codex CLI review of
+# an earlier version of this script caught this exact bug before it ever
+# shipped.
 
-LOGIN_STATUS_FILE="$(mktemp -t codex-review-login-status)"
+LOGIN_STATUS_FILE="$(mktemp "${TMPDIR:-/tmp}/codex-review-login-status.XXXXXX")"
 if ! codex login status >"$LOGIN_STATUS_FILE" 2>&1; then
   cat >&2 <<EOF
 codex-review: the Codex CLI is installed but not logged in.
@@ -202,6 +212,55 @@ if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
   exit 1
 fi
 
+# CLAUDE.md's rule for /code-review: "Scope every review and diff against
+# origin/main, never a local branch ref... a stale base produces confident
+# findings about code you never touched." A bare local branch name passed
+# to --base is exactly that trap — it can sit arbitrarily far behind the
+# real origin/main with nothing here noticing. This is a warning, not a
+# hard rejection: a full commit SHA never goes stale (it names one
+# immutable commit) and a differently-named remote (upstream/main,
+# fork/main) is a legitimate override this script has no business
+# blocking, so the check only fires on what actually resolves as a local
+# branch. Checked against `refs/heads/` directly rather than guessing from
+# whether `$BASE` contains a slash: this repo's own branch names
+# (`docs/tasks`-style slugs aside, branches like `fix/foo` are a common
+# enough convention elsewhere) can contain slashes too, and a slash-based
+# heuristic would wrongly wave a slash-named *local* branch through as if
+# it were a remote ref. Two rounds of Codex CLI review on this file caught
+# first the missing check, then this exact false negative in the first
+# attempt at it.
+if ! [[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] && git show-ref --verify --quiet "refs/heads/$BASE"; then
+  echo "codex-review: warning — '$BASE' looks like a local branch, not a remote ref. Consider --base origin/$BASE (after \`git fetch origin\`) instead — see CLAUDE.md's review-scoping rule." >&2
+fi
+
+# Staleness nudge — does not fetch, and never silently would (see the
+# header comment's "boring, no surprise network calls" rule), but it costs
+# nothing to check the local clock against .git/FETCH_HEAD and say
+# something if the last fetch looks old. CLAUDE.md's own rule for
+# /code-review is exactly this concern: "a stale base produces confident
+# findings about code you never touched." A Codex CLI review of this
+# script's own diff flagged the earlier version of this file for silently
+# trusting $BASE with no freshness check at all — this is that finding's
+# fix, not a hypothetical.
+FETCH_HEAD_PATH="$(git rev-parse --git-dir)/FETCH_HEAD"
+if [ ! -e "$FETCH_HEAD_PATH" ]; then
+  echo "codex-review: warning — no record this repo has ever been fetched (no .git/FETCH_HEAD). If '$BASE' is a remote ref, run \`git fetch origin\` first, or this review may be scoped against a stale base." >&2
+else
+  # GNU stat (`-c %Y`) must be tried FIRST, not as a fallback: on
+  # Linux/NixOS, `stat -f ...` is a *different, valid* command (filesystem
+  # status, not file status) that exits 0 and prints the mount point
+  # instead of erroring — so a "BSD form first, GNU as fallback" ordering
+  # never reaches the fallback on Linux and instead feeds a path string
+  # into the arithmetic below. `stat -c` has no BSD equivalent and fails
+  # cleanly there, so trying it first is safe on both platforms. Also
+  # caught by a Codex CLI review of an earlier version of this file.
+  FETCH_MTIME="$(stat -c %Y "$FETCH_HEAD_PATH" 2>/dev/null || stat -f %m "$FETCH_HEAD_PATH" 2>/dev/null || echo 0)"
+  FETCH_AGE_SECONDS=$(( $(date +%s) - FETCH_MTIME ))
+  if [ "$FETCH_AGE_SECONDS" -gt 900 ]; then
+    echo "codex-review: warning — last \`git fetch\` was $(( FETCH_AGE_SECONDS / 60 )) minutes ago. If '$BASE' is a remote ref, consider \`git fetch origin\` first." >&2
+  fi
+fi
+
 if git diff --quiet "$BASE"...HEAD 2>/dev/null; then
   cat >&2 <<EOF
 codex-review: no diff between HEAD and '$BASE'. Nothing to review.
@@ -224,8 +283,8 @@ fi
 # debugging this script, not for the PR — only the file this flag writes is
 # "Codex's output" in the sense the verbatim-posting rule means.
 
-OUTPUT_FILE="$(mktemp -t codex-review-output)"
-TRANSCRIPT_FILE="$(mktemp -t codex-review-transcript)"
+OUTPUT_FILE="$(mktemp "${TMPDIR:-/tmp}/codex-review-output.XXXXXX")"
+TRANSCRIPT_FILE="$(mktemp "${TMPDIR:-/tmp}/codex-review-transcript.XXXXXX")"
 trap 'rm -f "$TRANSCRIPT_FILE"' EXIT
 
 echo "codex-review: running \`codex exec review --base $BASE\` — this calls out to your ChatGPT-authenticated Codex session and may take a few minutes." >&2
@@ -296,7 +355,7 @@ EOF
   fi
 fi
 
-POST_FILE="$(mktemp -t codex-review-post)"
+POST_FILE="$(mktemp "${TMPDIR:-/tmp}/codex-review-post.XXXXXX")"
 {
   printf '## Cross-model review — Codex CLI (raw, unfiltered)\n\n'
   printf 'Generated locally via `tools/codex-review.sh` (`codex exec review --base %s`), ' "$BASE"
