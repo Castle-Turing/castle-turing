@@ -167,6 +167,37 @@ grep -q '^fact: scripted-worker-test-fact$' "$MODEL_FILE" || fail "resident-mode
 grep -q "^asked: $QUESTION1\$" "$MODEL_FILE" || fail "resident-model.md entry does not cite the question it was asked from"
 grep -q "^answered: $ANSWER1\$" "$MODEL_FILE" || fail "resident-model.md entry does not cite the answer record that closed it"
 
+log "finding 3 regression (0009 review pass): castle answer must refuse a question id that doesn't resolve, before writing anything"
+JOURNAL_COUNT_BEFORE="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+if "$CASTLE" answer "20260101T000000Z-question-000000" "This should never be written." \
+    >"$WORKDIR/bad-answer-missing-out" 2>"$WORKDIR/bad-answer-missing-err"; then
+  fail "castle answer accepted an answer for a question id that does not exist"
+fi
+grep -q "no such record" "$WORKDIR/bad-answer-missing-err" || fail "castle answer's missing-record rejection message changed unexpectedly"
+JOURNAL_COUNT_AFTER="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER" -eq "$JOURNAL_COUNT_BEFORE" ] || fail "castle answer wrote a journal record even though the question it referenced does not exist"
+
+log "finding 3 regression: castle answer must refuse a refs id that resolves but isn't type=question"
+if "$CASTLE" answer "$REQ1" "This should also never be written." \
+    >"$WORKDIR/bad-answer-wrongtype-out" 2>"$WORKDIR/bad-answer-wrongtype-err"; then
+  fail "castle answer accepted an answer whose id resolved to a non-question record ($REQ1 is a request)"
+fi
+grep -q "not a question record" "$WORKDIR/bad-answer-wrongtype-err" || fail "castle answer's wrong-type rejection message changed unexpectedly"
+JOURNAL_COUNT_AFTER_2="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_2" -eq "$JOURNAL_COUNT_BEFORE" ] || fail "castle answer wrote a journal record even though the id it referenced wasn't a question"
+
+log "finding 3 regression: castle ask --refs must refuse a refs id that doesn't resolve, before writing anything"
+if "$CASTLE" ask --refs "20260101T000000Z-request-000000" "This request should never be filed." \
+    >"$WORKDIR/bad-ask-out" 2>"$WORKDIR/bad-ask-err"; then
+  fail "castle ask accepted --refs pointing at a record that does not exist"
+fi
+grep -q "don't exist" "$WORKDIR/bad-ask-err" || fail "castle ask's --refs rejection message changed unexpectedly"
+JOURNAL_COUNT_AFTER_3="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_3" -eq "$JOURNAL_COUNT_BEFORE" ] || fail "castle ask wrote a journal record even though --refs pointed at nothing"
+
+log "finding 3 regression: the journal must still validate clean after every rejected write above"
+"$CASTLE" validate || fail "journal failed to validate after finding-3's rejected writes — one of them left a partial or corrupt record behind"
+
 log "router bug regression (docs/tasks/0009 item 7): a non-router decision referencing a result must not suppress routing"
 REQ3="$("$CASTLE" ask --provenance initiated "Test errand gamma: only exists to exercise the router-bug regression test.")"
 RES3="$("$CASTLE" record --type result --provenance initiated --seat worker --refs "$REQ3" --body "Errand gamma result, for the regression test only.")"

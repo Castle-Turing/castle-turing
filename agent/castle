@@ -245,6 +245,24 @@ def write_record(
     return record_id
 
 
+def load_journal_record(record_id: str) -> Record | None:
+    """Resolve a record id against the journal, or None if it does not
+    exist there or fails to parse. Callers that are about to write a
+    record whose `refs` will point at `record_id` should call this
+    *before* writing (see cmd_ask, cmd_answer) — the journal is
+    append-only by design (docs/architecture.md), so a `refs` entry
+    pointing at nothing is permanent: `validate` flags it forever, and
+    there is no way to make it go away short of hand-editing history
+    (0009 review pass finding 3)."""
+    path = journal_dir() / f"{record_id}.md"
+    if not path.exists():
+        return None
+    try:
+        return parse_record(path)
+    except RecordError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # The resident model (docs/architecture.md's Proposal 05; format documented
 # in agent/README.md). Not a record type — a single flat file of entries,
@@ -320,12 +338,27 @@ def cmd_ask(args: argparse.Namespace) -> int:
     if not body.strip():
         print("castle ask: refusing to file an empty request", file=sys.stderr)
         return 1
+    refs = split_refs(args.refs or "")
+    # Resolve every ref *before* writing anything (finding 3, 0009
+    # review pass): the journal is append-only, so a request filed with
+    # a `refs` entry that points at nothing corrupts it permanently —
+    # `validate` flags the dangling ref forever, with no way to fix it
+    # short of hand-editing history. Failing here, before write_record
+    # is even called, is what keeps that impossible instead of merely
+    # detectable after the fact.
+    missing = [r for r in refs if load_journal_record(r) is None]
+    if missing:
+        print(
+            f"castle ask: --refs points at record(s) that don't exist: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 1
     record_id = write_record(
         journal_dir(),
         type="request",
         provenance=args.provenance,
         seat="intake",
-        refs=split_refs(args.refs or ""),
+        refs=refs,
         body=body,
     )
     print(record_id)
@@ -336,6 +369,30 @@ def cmd_answer(args: argparse.Namespace) -> int:
     body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
     if not body.strip():
         print("castle answer: refusing to file an empty answer", file=sys.stderr)
+        return 1
+    # Resolve and type-check the question *before* writing the answer
+    # (finding 3, 0009 review pass): the journal is append-only, so an
+    # answer whose `refs` points at a typo'd or otherwise nonexistent
+    # question id corrupts it permanently — `validate` flags the
+    # dangling ref forever, and nothing short of hand-editing history
+    # clears it. The old code wrote the answer unconditionally and only
+    # checked the question's existence afterward (for the resident-model
+    # fact lookup, treating absence as merely "no fact to record" rather
+    # than an error) — so a typo produced no error at the point of
+    # failure, just a silently-broken journal discovered later, if ever,
+    # by `castle validate`. Checking first, and refusing outright when
+    # the id doesn't resolve to an actual `question` record, is what
+    # keeps that impossible instead of merely detectable.
+    question = load_journal_record(args.question_id)
+    if question is None:
+        print(f"castle answer: no such record: {args.question_id}", file=sys.stderr)
+        return 1
+    if question.type != "question":
+        print(
+            f"castle answer: {args.question_id} is not a question record "
+            f"(type={question.type!r})",
+            file=sys.stderr,
+        )
         return 1
     # Answering is also intake: a resident's word entering the system
     # through the CLI surface, same as `ask` — see architecture.md's
@@ -357,20 +414,14 @@ def cmd_answer(args: argparse.Namespace) -> int:
     # an override for a question record that predates this field, or one
     # written by hand. If neither is present, this is just an ordinary
     # answer with no model entry, which is a legitimate outcome: not
-    # every question is eliciting a durable fact.
-    question_path = journal_dir() / f"{args.question_id}.md"
-    question = None
-    if question_path.exists():
-        try:
-            question = parse_record(question_path)
-        except RecordError:
-            question = None
-
-    fact = args.fact or (question.fields.get("fact") if question else None)
+    # every question is eliciting a durable fact. `question` is already
+    # resolved above (and guaranteed to exist and be type=question) —
+    # no need to re-read it here.
+    fact = args.fact or question.fields.get("fact")
     if fact and fact.strip():
         when = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
         entry_lines = []
-        if question is not None and question.body.strip():
+        if question.body.strip():
             entry_lines.append(f"Q: {question.body.strip()}")
         entry_lines.append(f"A: {body.strip()}")
         append_model_entry(
