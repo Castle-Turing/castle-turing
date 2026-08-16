@@ -21,10 +21,18 @@ Subcommands:
             passed with --fact) — the resident-model entry that answer
             elicits (docs/tasks/0009-ambient-intake.md, Proposal 05's
             only write path).
+  correct   intake: write a `correction` record — the resident speaking
+            unbidden about how the system is doing, not asking for
+            anything — stamped with filing-time context, plus the
+            verbatim resident-model entry it elicits
+            (docs/tasks/0010-correction-record.md, Proposal 06's
+            verdict half). Never routed; see `route` below.
   record    generic writer for any record type (what the sugar above,
             and any worker/router seat, calls underneath).
   route     router: append a decision record for every unrouted
             result/question, deciding channel from provenance alone.
+            Corrections are never in that set — resident speech is not
+            addressed to the resident.
   work      worker: run the configured worker-tenant command against a
             request and write back its result (docs/tasks/0009).
   digest    fold the journal into a human-readable report.
@@ -47,13 +55,39 @@ import tempfile
 # Record schema (docs/architecture.md's "Records" section)
 # ---------------------------------------------------------------------------
 
-RECORD_TYPES = ("request", "decision", "result", "question", "answer")
+RECORD_TYPES = ("request", "decision", "result", "question", "answer", "correction")
 PROVENANCE_VALUES = ("requested", "initiated")
+
+# `correction` (docs/tasks/0010-correction-record.md) is the resident
+# speaking unbidden — never asked for, never answering a question — so
+# it takes `provenance: requested` and `seat: intake` unconditionally,
+# the same convention `answer` already uses: provenance's job is
+# routing, and a correction is resident speech entering through intake
+# like any other. It is deliberately absent from the tuple `cmd_route`
+# walks (see the comment there) — the router must never route it.
 
 # Field order matters only for readability of the written file — parsing
 # does not care. Kept stable so `git diff` on journal files stays clean
-# across tool versions.
-FIELD_ORDER = ("id", "type", "provenance", "refs", "seat", "created", "evidence")
+# across tool versions. The four `context-*` fields and `surface` are
+# correction-only (docs/tasks/0010); listing them here just keeps a
+# correction record's frontmatter in one stable, readable order — every
+# other record type simply never has them, and `render_record` already
+# skips any FIELD_ORDER key that isn't present in a given record's
+# fields.
+FIELD_ORDER = (
+    "id",
+    "type",
+    "provenance",
+    "refs",
+    "seat",
+    "created",
+    "surface",
+    "context-local-created",
+    "context-last-notify",
+    "context-notifies-1h",
+    "context-notifies-24h",
+    "evidence",
+)
 
 REQUIRED_FIELDS = ("id", "type", "provenance", "refs", "seat", "created")
 
@@ -292,13 +326,32 @@ def load_journal_record(record_id: str) -> Record | None:
 # The resident model (docs/architecture.md's Proposal 05; format documented
 # in agent/README.md). Not a record type — a single flat file of entries,
 # each in the same fenced-frontmatter style, living beside the journal
-# rather than inside it. This is the *only* write path: it is reachable
-# solely from `cmd_answer`, which only ever runs because a human typed an
-# answer at this CLI. Nothing here is ever called from `cmd_route` or
-# `cmd_work` — inference and workers may raise questions, never close them.
+# rather than inside it.
+#
+# The journal is the source of truth; this file is a derived, regenerable
+# *view* over it — trivially so today, since every entry is a near-copy of
+# the question+answer or correction records it cites. That framing (not
+# "second source of truth") is what makes a future normalization pass
+# legitimate rather than an append-only violation: the file stays
+# append-only in day-to-day operation, but nothing is lost if it is ever
+# rebuilt from the journal by a better judge (docs/tasks/0010-correction-
+# record.md).
+#
+# Two write paths, both narrow by construction: `cmd_answer`, which only
+# ever runs because a human typed an answer at this CLI, and
+# `file_correction`, which only ever runs because a human typed a
+# correction (see below). Nothing here is ever called from `cmd_route` or
+# `cmd_work` — inference and workers may raise questions, never close
+# them, and they certainly never get to speak on the resident's behalf.
 # ---------------------------------------------------------------------------
 
-MODEL_FIELD_ORDER = ("fact", "asked", "answered", "when")
+# `asked`/`answered` (elicited entries) and `provenance`/`stated`
+# (volunteered entries, docs/tasks/0010) are mutually exclusive per
+# entry — absence of `provenance` continues to mean "elicited," so every
+# entry written before this task still parses as exactly what it always
+# was. render_model_entry below only emits a key if it's present in the
+# fields dict, so this one order serves both entry shapes correctly.
+MODEL_FIELD_ORDER = ("fact", "asked", "answered", "provenance", "stated", "when")
 
 
 def resident_model_path() -> pathlib.Path:
@@ -309,7 +362,8 @@ def render_model_entry(fields: dict, body: str) -> str:
     # Same defect, same fix, as write_record's frontmatter (finding 6,
     # 0009 review pass): resident-model.md is append-only for the same
     # reason the journal is, and `fact` in particular can come straight
-    # from an unchecked `castle answer --fact` argument.
+    # from an unchecked `castle answer --fact` argument (or, since
+    # docs/tasks/0010, straight from a correction's own first line).
     _reject_newline_fields(fields, what="resident-model")
     lines = ["---"]
     for key in MODEL_FIELD_ORDER:
@@ -321,19 +375,193 @@ def render_model_entry(fields: dict, body: str) -> str:
     return "\n".join(lines) + ("\n" + body + "\n" if body else "\n")
 
 
-def append_model_entry(*, fact: str, asked: str, answered: str, when: str, body: str) -> None:
+def append_model_entry(
+    *,
+    fact: str,
+    when: str,
+    body: str,
+    asked: str | None = None,
+    answered: str | None = None,
+    provenance: str | None = None,
+    stated: str | None = None,
+) -> None:
     """Append one entry to state/resident-model.md. Never overwrites or
     edits an existing entry — the model is append-only, same as the
-    journal, for the same reason (agent/README.md)."""
+    journal, for the same reason (agent/README.md).
+
+    `asked`/`answered` is Proposal 05's elicited shape (`cmd_answer`);
+    `provenance`/`stated` is docs/tasks/0010's volunteered shape
+    (`file_correction`, below) — a caller passes one pair, never both,
+    and the fields absent from `fields` here simply never appear in the
+    rendered entry (render_model_entry only writes present keys)."""
     path = resident_model_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    entry = render_model_entry(
-        {"fact": fact, "asked": asked, "answered": answered, "when": when}, body
-    )
+    fields = {"fact": fact, "when": when}
+    if asked is not None:
+        fields["asked"] = asked
+    if answered is not None:
+        fields["answered"] = answered
+    if provenance is not None:
+        fields["provenance"] = provenance
+    if stated is not None:
+        fields["stated"] = stated
+    entry = render_model_entry(fields, body)
     existing = path.read_text() if path.exists() else ""
     separator = "\n" if existing.strip() else ""
     with path.open("a") as f:
         f.write(separator + entry)
+
+
+# ---------------------------------------------------------------------------
+# The correction record (docs/tasks/0010-correction-record.md; Proposal
+# 06's verdict half, docs/architecture.md). The resident speaking
+# unbidden — not asking for anything, not answering a question — about
+# how the system is doing. `castle correct` (surface=cli) and
+# castle-modal's compose mode (surface=modal) both call file_correction()
+# below rather than each reimplementing the record-plus-entry write: one
+# shared function is what keeps the modal "castle's functions wearing a
+# different hat," the same pattern every other modal write already
+# follows.
+# ---------------------------------------------------------------------------
+
+# Filing-time context (scope 2): how far back "recently" and "today"
+# reach when a correction is filed. One short window and one day-scale
+# window, per the brief — chosen, not derived, and documented here and
+# in agent/README.md since nothing else records the choice. An hour
+# distinguishes "this is the second notification in the last few
+# minutes" from ordinary spacing; a day catches "today has been a noisy
+# day" even when no single hour looks unusual. Neither claims to be the
+# *right* window for any later judge's purposes — they are cheap,
+# legible facts a later pass can weigh however it decides to.
+NOTIFY_CONTEXT_WINDOWS: dict[str, dt.timedelta] = {
+    "context-notifies-1h": dt.timedelta(hours=1),
+    "context-notifies-24h": dt.timedelta(hours=24),
+}
+
+# Local wall-clock time needs a UTC offset to be worth anything (`created`
+# is always UTC, and time-of-day meaning — evening, morning — cannot be
+# recovered from UTC alone once the machine's timezone history is
+# forgotten). isoformat() with microseconds zeroed gives a value both
+# human-readable and re-parseable with `datetime.strptime(value,
+# LOCAL_CREATED_FMT)` (Python's %z has accepted a colon in the offset
+# since 3.7).
+LOCAL_CREATED_FMT = "%Y-%m-%dT%H:%M:%S%z"
+
+
+def _filing_context() -> dict[str, str]:
+    """A mechanical snapshot of what the journal shows the instant
+    before a correction is appended to it (scope 2). Read from the
+    journal in the *same process* that is about to write to it, before
+    that write happens — which is what makes `context-last-notify`
+    always resolvable by construction: unlike `refs` (resident-supplied,
+    and can point at a typo), nothing here can ever cite a record that
+    doesn't exist.
+
+    These fields make NO CAUSAL CLAIM. They state what the journal
+    contained at filing time — what the system had just done, how
+    recently, how often — and nothing about *why* the resident chose
+    that moment to speak. Asserting "this correction is about that
+    notification" is the one causal claim this format allows, and only
+    the resident may make it, via `--refs`. Honest limit, also recorded
+    in agent/README.md: a notify-channel decision proves a notification
+    was *attempted*, not that it was seen — delivery confirmation is
+    Proposal 06's receipt half, and it waits for a surface that can
+    report reception (docs/architecture.md's sequencing paragraph).
+    """
+    now = dt.datetime.now(dt.timezone.utc)
+    records = load_all(journal_dir())
+    # Only decisions the router itself wrote and routed to notify count
+    # — the same `seat: router` filter cmd_route uses to build
+    # already_routed, for the same reason: nothing else distinguishes
+    # "the router decided this" from "some other record merely mentions
+    # a notification."
+    notify_decisions = [
+        rec
+        for rec in records.values()
+        if rec.type == "decision"
+        and rec.fields.get("seat") == "router"
+        and rec.fields.get("channel") == "notify"
+    ]
+
+    context: dict[str, str] = {}
+    if notify_decisions:
+        # Ids are sortable timestamps (make_id) — the same ordering
+        # cmd_route and cmd_digest already sort by — so the lexically
+        # greatest id is the most recent notify decision.
+        context["context-last-notify"] = max(notify_decisions, key=lambda rec: rec.id).id
+    # No key at all when none exists (not an empty-string value): a
+    # blank frontmatter value and a genuinely absent field read the same
+    # to a human skimming the file, but only "absent" honestly says
+    # "there is nothing to cite" instead of "there is a value and it's
+    # nothing."
+
+    for field, window in NOTIFY_CONTEXT_WINDOWS.items():
+        cutoff = now - window
+        count = 0
+        for rec in notify_decisions:
+            try:
+                created = dt.datetime.strptime(
+                    rec.fields.get("created", ""), CREATED_FMT
+                ).replace(tzinfo=dt.timezone.utc)
+            except ValueError:
+                continue
+            if created >= cutoff:
+                count += 1
+        context[field] = str(count)
+
+    context["context-local-created"] = now.astimezone().replace(microsecond=0).strftime(
+        LOCAL_CREATED_FMT
+    )
+    return context
+
+
+def file_correction(*, body: str, refs: list[str], surface: str) -> str:
+    """The correction write path (scope 3). Writes a `correction` record
+    (`provenance: requested`, `seat: intake` — a correction is resident
+    speech entering through intake, unconditionally, regardless of
+    what's classified; see the RECORD_TYPES comment) stamped with
+    filing-time context, then appends the resident-model entry that is
+    the *only* place a correction's words land twice.
+
+    The transcription here is mechanical and verbatim, on purpose — no
+    seat paraphrases a correction, ever (docs/tasks/0010's load-bearing
+    argument, "Why verbatim"): `fact` is nothing but the correction's
+    own first line, sliced to 80 characters; `body` is passed through
+    unchanged. Nothing here interprets, summarizes, or generalizes a
+    single word the resident typed.
+
+    Both `castle correct` (surface=cli) and castle-modal's compose mode
+    (surface=modal) call this one function — the modal reimplementing
+    this write path in its own words is exactly the erosion this
+    function exists to prevent. Returns the correction record's id.
+    """
+    context = _filing_context()
+    correction_id = write_record(
+        journal_dir(),
+        type="correction",
+        provenance="requested",
+        seat="intake",
+        refs=refs,
+        body=body,
+        extra={"surface": surface, **context},
+    )
+
+    # A second `now()` call, same as cmd_answer's elicited-entry write
+    # below it: the two timestamps can differ by a clock tick in
+    # principle, and that's an accepted, pre-existing cost of the same
+    # "write the record, then append the entry" shape Proposal 05
+    # already uses.
+    when = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+    stripped = body.strip()
+    first_line = stripped.splitlines()[0] if stripped else ""
+    append_model_entry(
+        fact=first_line[:80],
+        provenance="volunteered",
+        stated=correction_id,
+        when=when,
+        body=body,
+    )
+    return correction_id
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +693,35 @@ def cmd_answer(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_correct(args: argparse.Namespace) -> int:
+    """intake: the resident speaking unbidden (scope 3, docs/tasks/0010).
+    Exactly parallel to cmd_ask: body from argv or stdin, refuse empty,
+    resolve every --refs id before writing anything. The actual write
+    — record, filing-time context, and the resident-model entry it
+    elicits — is file_correction(), shared with castle-modal's
+    classification step so there is exactly one implementation of it."""
+    body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
+    if not body.strip():
+        print("castle correct: refusing to file an empty correction", file=sys.stderr)
+        return 1
+    refs = split_refs(args.refs or "")
+    # Resolve every ref *before* writing anything (finding 3, 0009
+    # review pass, reused here for the same reason cmd_ask and
+    # cmd_answer already do this): the journal is append-only, so a
+    # correction filed with a --refs entry that points at nothing
+    # corrupts it permanently.
+    missing = [r for r in refs if load_journal_record(r) is None]
+    if missing:
+        print(
+            f"castle correct: --refs points at record(s) that don't exist: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 1
+    correction_id = file_correction(body=body, refs=refs, surface="cli")
+    print(correction_id)
+    return 0
+
+
 def _provenance_explanation(provenance: str) -> str:
     if provenance == "requested":
         return "the resident asked for this directly, so it interrupts now via the notify channel rather than waiting for a digest"
@@ -531,6 +788,10 @@ def cmd_route(args: argparse.Namespace) -> int:
     is no code path here that decides a channel without also calling
     write_record for it).
 
+    `correction` records are deliberately never in the set this walks —
+    see the comment on `to_route`, below, for why that's load-bearing
+    now rather than incidental.
+
     `already_routed` is built only from decision records whose own
     `seat` is `router` — docs/tasks/0009-ambient-intake.md item 7's bug
     fix. Before this filter, a decision written by *any* seat that
@@ -549,6 +810,19 @@ def cmd_route(args: argparse.Namespace) -> int:
         if rec.type == "decision" and rec.fields.get("seat") == "router":
             already_routed.update(rec.refs)
 
+    # This tuple must never grow to include "correction"
+    # (docs/tasks/0010-correction-record.md scope 4). A `result` or
+    # `question` is addressed *to* the resident — something the system
+    # produced that they need to see. A `correction` is the reverse: the
+    # resident speaking to the system, unbidden, about how it's doing.
+    # Routing one would mean the router deciding when and how to
+    # interrupt the resident with their *own words* — the system
+    # answering back to a judgment about itself, which is exactly what
+    # Proposal 06 exists to prevent ("the system may grade its own
+    # delivery; it may never grade its own judgment"). Pinned by a CI
+    # regression in test/agent-loop/run.sh and check_assertions.py, not
+    # just this comment, because today's silence here (correction simply
+    # isn't in the tuple) is easy to break by accident later without one.
     to_route = [
         rec
         for rec in records.values()
@@ -735,14 +1009,25 @@ def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record
 
 def cmd_digest(args: argparse.Namespace) -> int:
     """Fold the journal into "what happened, and why" (architecture.md's
-    digest surface). Invoked by hand — no scheduling in this skeleton."""
+    digest surface). Invoked by hand — no scheduling in this skeleton.
+
+    Corrections are not errands (no request, no downstream fold — see
+    _errand_state in castle-modal for the same distinction on that
+    surface) but they still need to be part of a "read the journal cold"
+    account, so they get their own section rather than being silently
+    absent (scope 7, docs/tasks/0010): every correction in the period,
+    verbatim first line, created time, and any refs the resident
+    supplied."""
     records = load_all(journal_dir())
     requests = [rec for rec in records.values() if rec.type == "request"]
+    corrections = [rec for rec in records.values() if rec.type == "correction"]
     if args.since:
         requests = [rec for rec in requests if rec.fields.get("created", "") >= args.since]
+        corrections = [rec for rec in corrections if rec.fields.get("created", "") >= args.since]
     requests.sort(key=lambda r: r.id)
+    corrections.sort(key=lambda r: r.id)
 
-    if not requests:
+    if not requests and not corrections:
         print("No errands recorded.")
         return 0
 
@@ -766,6 +1051,25 @@ def cmd_digest(args: argparse.Namespace) -> int:
                 print()
                 print(rec.body.strip())
             print()
+
+    if corrections:
+        print("## Corrections")
+        print()
+        print(
+            "Volunteered, unprompted — the resident's own words about how "
+            "the system is doing (docs/tasks/0010-correction-record.md). "
+            "Not an errand: nothing below is \"in progress\" or \"done,\" "
+            "and none of it was routed."
+        )
+        print()
+        for rec in corrections:
+            body = rec.body.strip()
+            first_line = body.splitlines()[0] if body else "(empty)"
+            refs = rec.fields.get("refs", "")
+            suffix = f" (refs: {refs})" if refs else ""
+            print(f"- {rec.fields.get('created', '?')} — {first_line}{suffix}")
+        print()
+
     return 0
 
 
@@ -872,6 +1176,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_answer.add_argument("text", nargs="*", help="the answer body (or piped on stdin)")
     p_answer.set_defaults(func=cmd_answer)
+
+    p_correct = sub.add_parser(
+        "correct",
+        help="intake: write a correction record — resident speech, unbidden, about how the system is doing",
+    )
+    p_correct.add_argument(
+        "--refs",
+        default="",
+        help=(
+            "comma-separated ids this correction is about — the record's one causal "
+            "claim, resident-supplied only (docs/tasks/0010-correction-record.md)"
+        ),
+    )
+    p_correct.add_argument("text", nargs="*", help="the correction body (or piped on stdin)")
+    p_correct.set_defaults(func=cmd_correct)
 
     p_record = sub.add_parser("record", help="generic record writer (any seat, any type)")
     p_record.add_argument("--type", required=True, choices=RECORD_TYPES)
