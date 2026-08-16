@@ -86,6 +86,26 @@ def main() -> int:
                 f"{r.get('type')} {r.get('id')} was never routed: no decision record references it"
             )
 
+    # docs/tasks/0010-correction-record.md scope 4: resident speech is
+    # never "addressed to the resident," so no decision record may ever
+    # cite a correction — that would be the router routing the
+    # resident's own words back at them. Checked independently of
+    # agent/castle's own cmd_route (same "check the tool from the
+    # outside" reasoning as the rest of this file): a bug that made
+    # cmd_route route corrections would still leave *this* check able to
+    # catch it.
+    correction_ids = {
+        fields.get("id") for fields in records.values() if fields.get("type") == "correction"
+    }
+    for d in decisions:
+        for ref in d.get("refs", "").split(","):
+            ref = ref.strip()
+            if ref and ref in correction_ids:
+                failures.append(
+                    f"decision {d.get('id')} routes correction {ref} — corrections must "
+                    "never be routed (docs/tasks/0010-correction-record.md scope 4)"
+                )
+
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}", file=sys.stderr)
