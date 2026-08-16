@@ -40,7 +40,6 @@ request_body="$(cat)"
 # backticks; writing to a file first sidesteps the whole class of it,
 # for the same reason.
 prompt_file="$(mktemp)"
-trap 'rm -f "$prompt_file"' EXIT
 cat <<PROMPT > "$prompt_file"
 You are the worker seat of Castle Turing's agent layer, handling errand
 ${CASTLE_REQUEST_ID} in the repository checked out at ${CASTLE_REPO_ROOT}.
@@ -82,4 +81,16 @@ circumstance — no matter how confident you are or how small the change
 looks. Produce the diff and explain it; the resident applies it.
 PROMPT
 
-exec claude -p "$(cat "$prompt_file")"
+# Read the prompt into a variable and delete the file *before* handing
+# off to claude, rather than trapping on EXIT — this script execs into
+# claude below, replacing its own process image, so a trap registered
+# here would never fire (0009 review pass finding 2). Left as a trap,
+# every `castle work` would leave a temp file holding the resident's
+# verbatim request text on disk forever, which matters beyond disk
+# hygiene given this repo's privacy posture (CLAUDE.md's hard rule).
+# Deleting explicitly, before exec, needs no trap at all: the file is
+# gone by the time anything else could see it, exec or no exec.
+prompt="$(cat "$prompt_file")"
+rm -f "$prompt_file"
+
+exec claude -p "$prompt"
