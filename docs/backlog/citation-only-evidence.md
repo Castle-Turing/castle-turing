@@ -37,10 +37,16 @@ premise mostly worthless in practice.
 **A related finding already in hand.** Bottou et al. (*JMLR* 2013) show
 that what makes logged interaction data reusable is not raw observation
 but the **considered set and selection propensity**. That is compatible
-with citation-only persistence and is being added to the decision
-record separately — but it sharpens this brief's question, because it
-means the *shape* of what a decider records matters as much as whether
-it records at all.
+with citation-only persistence, and has since landed on the decision
+record separately (`considered`/`confidence`, `agent/castle`'s
+`cmd_route`; see `agent/README.md`'s "The considered set and the
+selection propensity" and `docs/architecture.md`'s Records section) —
+but it sharpens this brief's question rather than answering it, because
+it means the *shape* of what a decider records matters as much as
+whether it records at all. That addition was scoped narrowly (schema
+fields written by today's deterministic router, explicitly not claimed
+to enable off-policy evaluation yet) and does not touch this brief's
+open question about citation-only auditing.
 
 **What would change.** Probably not abandonment — the privacy trade is
 well defended — but bounded compromises: a ring-buffer TTL aligned to

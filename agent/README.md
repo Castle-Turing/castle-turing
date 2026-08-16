@@ -102,7 +102,11 @@ castle show ID
   answering back to a judgment about itself
   (`docs/tasks/0010-correction-record.md` scope 4; pinned by a CI
   regression in `test/agent-loop/run.sh` and `check_assertions.py`, not
-  just this sentence).
+  just this sentence). Every decision it writes also carries
+  `considered` and `confidence` — the channels weighed and the
+  probability of the choice made, for later off-policy evaluation (see
+  "The considered set and the selection propensity," below, for what
+  that does and does not buy today).
 - **`work`** — the worker seat's hands (`docs/tasks/0009`). Reads a
   `request` record, runs `CASTLE_WORKER_COMMAND` (default: a headless
   `claude -p` via `agent/castle-worker-claude`) with the request body
@@ -131,8 +135,15 @@ castle show ID
 - **`validate`** — schema-checks a journal: every required field
   present, `type` and `provenance` in their allowed sets, every
   `decision` record's `evidence` field non-empty, every `refs` entry
-  pointing at a record that actually exists. This is what CI asserts
-  with (`test/agent-loop/run.sh`).
+  pointing at a record that actually exists, and — when present, not
+  required — `confidence` parsing as a float in `[0,1]`, `considered`
+  as a non-empty flat list, and (when both `channel` and `considered`
+  are present) `channel` actually being a member of `considered` — a
+  general invariant ("you can't choose what you didn't consider") kept
+  in the permanent schema gate rather than only in the test harness,
+  since it holds for any future router policy, not just today's
+  two-channel rule. This is what CI asserts with
+  (`test/agent-loop/run.sh`).
 - **`show`** — prints one record verbatim, checking the journal then
   the spool.
 
@@ -257,6 +268,64 @@ Extra fields beyond this minimum set are allowed and ignored by
 `validate` — `castle route` adds a `channel` field (`notify` or
 `digest`) to the decision records it writes, purely so `castle digest`
 doesn't have to re-derive it from prose.
+
+### The considered set and the selection propensity
+
+`castle route` also writes two more fields on every decision it
+appends:
+
+| Field         | Meaning |
+|---------------|---------|
+| `considered`  | The channels the router evaluated before choosing, comma-separated in the same flat-list convention as `refs` (e.g. `notify,digest`). Today this is always both entries in `CHANNELS` (`agent/castle`) — the rule has no early-out, so it genuinely weighs both every time. |
+| `confidence`  | A float in `[0,1]`: the probability this policy would choose the recorded `channel` in this context. Today's rule is a deterministic function of `provenance` alone, so the honest value is `1.0` on every record — there is no other branch it could have taken. |
+
+**Why these exist, stated exactly as far as it goes and no further.**
+Bottou et al., *Counterfactual Reasoning and Learning Systems* (JMLR
+14, 2013), is the argument: what makes logged interaction data reusable
+for *off-policy evaluation* — "would a different routing policy have
+done better last month?" — is not the raw record of what happened, but
+the **considered set** (what alternatives existed) and the **selection
+propensity** (the probability the actual choice was made). Without
+both, importance-sampling estimators can't be built at all; the
+question isn't merely harder, it's unidentified. Records here are
+append-only, and Proposal 04 (`docs/architecture.md`) already discards
+the raw sensor stream that would otherwise substitute — so a field not
+written now can never be reconstructed later, and the loss would be
+silent: nothing would tell a future reader that the corpus was missing
+something, only that off-policy questions about today's decisions
+quietly can't be answered.
+
+**What this does *not* buy today, stated just as plainly.** With a
+deterministic provenance-only rule, `considered` is the same two
+entries and `confidence` is `1.0` on every single decision record.
+Importance-sampling weights computed from constant propensities carry
+no information — there is no variance to explain, nothing to
+reweight against. **The real and sufficient argument for adding these
+fields now is corpus continuity, not present-day analytical power**:
+records written from this point on carry the field, so when the router
+eventually gains a rule with real branches (multiple plausible channels,
+a learned or probabilistic policy), there is no discontinuity in the
+journal — no era of decisions whose `considered`/`confidence` were
+simply never captured and can never be recovered. Claiming more than
+that — that today's fields already let anyone estimate what a
+different policy would have done — would be false, and this document
+says so on purpose rather than implying it by omission.
+
+Like `evidence`, these are decision-only. Unlike `evidence`, they are
+**not required on all decision records** — see the comment in
+`cmd_validate` (`agent/castle`) for why: the journal is append-only, so
+every decision written before this schema addition is already
+permanent, and a validator that started requiring a field no writer at
+the time could have supplied would fail the entire pre-existing journal
+retroactively. `castle validate` instead checks them **when present**:
+`confidence` must parse as a float in `[0,1]`, `considered` must be a
+non-empty flat list, and — when both `channel` and `considered` are on
+the same record — `channel` must actually be a member of `considered`.
+That last check is a general invariant rather than an assumption about
+today's specific two-channel vocabulary, which is why it lives in the
+permanent schema gate and not only in the test harness. A decision
+record from before this change, with none of these fields, still
+validates clean.
 
 ### Corrections and filing-time context
 
@@ -469,7 +538,14 @@ test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin
   and `context-last-notify` is absent); a proof that re-routing after
   filing corrections appends no decisions, cites none of them, and
   fires no new notification; and a check that `castle digest` renders
-  the corrections filed above.
+  the corrections filed above. This task (adding `considered`/
+  `confidence`) added: every decision `castle route` writes carries
+  `considered: notify,digest` and `confidence: 1.0`; a decision written
+  the pre-existing way (via `castle record`, with neither field) still
+  validates clean, proving backward compatibility for real rather than
+  just asserting it; and `castle validate` rejects a hand-planted
+  decision with `confidence` out of `[0,1]`, an empty `considered`, or
+  a `channel` that isn't a member of `considered`.
 - **`tenant-swap.sh`** (also wired into the `agent-loop-test` job) is
   Proposal 03's hardening test, second half: it runs `run.sh` twice —
   once with `scripted-worker.sh` (bash), once with
