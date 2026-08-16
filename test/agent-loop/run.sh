@@ -91,10 +91,18 @@ log "scripted worker seat: request beta (raises a question, then a result)"
 RES2="$("$WORKER" "$CASTLE" "$REQ2")"
 log "  -> $RES2"
 
-QUESTION1="$(grep -l "^refs: $REQ1\$" "$CASTLE_STATE_DIR"/journal/*-question-*.md | head -n1)"
+# `|| true` on every grep-into-a-variable below (finding 7, 0009 review
+# pass): under `set -euo pipefail`, a `grep` that matches nothing exits
+# non-zero, and that failure — piped through `head -n1` or not — kills
+# the script right here, before the `[ -n ... ] || fail "..."` on the
+# next line ever runs. The operator then sees a bare grep error instead
+# of the descriptive diagnostic this script was written to give them.
+# `|| true` lets the assignment fall through to empty, so the actual
+# check on the next line is the thing that fails loudly.
+QUESTION1="$(grep -l "^refs: $REQ1\$" "$CASTLE_STATE_DIR"/journal/*-question-*.md | head -n1 || true)"
 [ -n "$QUESTION1" ] || fail "expected the alpha worker to raise a question referencing $REQ1; none found"
 QUESTION1="$(basename "$QUESTION1" .md)"
-QUESTION2="$(grep -l "^refs: $REQ2\$" "$CASTLE_STATE_DIR"/journal/*-question-*.md | head -n1)"
+QUESTION2="$(grep -l "^refs: $REQ2\$" "$CASTLE_STATE_DIR"/journal/*-question-*.md | head -n1 || true)"
 [ -n "$QUESTION2" ] || fail "expected the beta worker to raise a question referencing $REQ2; none found"
 QUESTION2="$(basename "$QUESTION2" .md)"
 log "  -> question alpha: $QUESTION1, question beta: $QUESTION2"
@@ -134,13 +142,20 @@ echo "$DIGEST_OUT" | grep -q "channel: notify" || fail "digest did not show a 'n
 echo "$DIGEST_OUT" | grep -q "channel: digest" || fail "digest did not show a 'digest'-channel decision anywhere"
 
 log "checking the channel landed on the RIGHT errand, not just present somewhere"
-DECISION_FOR_RES1="$(grep -l "^refs: $RES1\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md)"
+# Same `|| true` reasoning as above (finding 7): each assignment below
+# has no `[ -n ... ]` check of its own, but a `grep -l` that matches
+# nothing would still kill the script via set -e before the `grep -q
+# ... || fail "..."` on the following line ever ran. With `|| true`,
+# a no-match assignment instead leaves the variable empty, `grep -q
+# pattern ""` fails to open a file named "" and returns non-zero, and
+# the intended `fail "..."` diagnostic fires as designed.
+DECISION_FOR_RES1="$(grep -l "^refs: $RES1\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md || true)"
 grep -q '^channel: notify$' "$DECISION_FOR_RES1" || fail "the requested errand's result did not route to 'notify': $DECISION_FOR_RES1"
-DECISION_FOR_RES2="$(grep -l "^refs: $RES2\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md)"
+DECISION_FOR_RES2="$(grep -l "^refs: $RES2\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md || true)"
 grep -q '^channel: digest$' "$DECISION_FOR_RES2" || fail "the initiated errand's result did not route to 'digest': $DECISION_FOR_RES2"
-DECISION_FOR_Q1="$(grep -l "^refs: $QUESTION1\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md)"
+DECISION_FOR_Q1="$(grep -l "^refs: $QUESTION1\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md || true)"
 grep -q '^channel: notify$' "$DECISION_FOR_Q1" || fail "the requested errand's question did not route to 'notify': $DECISION_FOR_Q1"
-DECISION_FOR_Q2="$(grep -l "^refs: $QUESTION2\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md)"
+DECISION_FOR_Q2="$(grep -l "^refs: $QUESTION2\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md || true)"
 grep -q '^channel: digest$' "$DECISION_FOR_Q2" || fail "the initiated errand's question did not route to 'digest': $DECISION_FOR_Q2"
 
 log "resident-model write path (Proposal 05): answering the alpha question, fact name read from the question record itself"
