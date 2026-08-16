@@ -115,17 +115,59 @@
           self.nixosModules.desktop
           self.nixosModules.dev
           self.nixosModules.agent
-          {
-            castle.admin = {
-              username = "resident";
-              sshKeys = [ "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key" ];
-              initialHashedPassword = "REPLACE-WITH-A-REAL-HASH-this-is-a-placeholder-not-a-hash";
-            };
-            castle.person = {
-              gitUserName = "Resident";
-              gitUserEmail = "resident@example.invalid";
-            };
-          }
+          (
+            { config, ... }:
+            {
+              castle.admin = {
+                username = "resident";
+                sshKeys = [
+                  "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key"
+                ];
+                initialHashedPassword = "REPLACE-WITH-A-REAL-HASH-this-is-a-placeholder-not-a-hash";
+              };
+              castle.person = {
+                gitUserName = "Resident";
+                gitUserEmail = "resident@example.invalid";
+              };
+              # Simulates the private layer's own override of the
+              # castle.display slot (docs/tasks/0009-ambient-intake.md
+              # item 1) — the third of its three layers, alongside this
+              # module's own null default and host-xps9370's
+              # lib.mkDefault. Deliberately leaves `scale` untouched so
+              # the assertion below can prove the host's mkDefault
+              # survives when nothing overrides it, while cursorTheme
+              # and terminalFontSize prove an explicit override wins.
+              castle.display = {
+                cursorTheme = "Bibata-Modern-Ice";
+                terminalFontSize = 12;
+              };
+              # A regression test for the three-layer resolution itself,
+              # not just "the flake evaluates": docs/tasks/0009's
+              # verification plan asks for the display-preference
+              # options to evaluate at all three layers in
+              # `nix flake check`, and an assertion that checks the
+              # resolved values is a stronger proof of that than
+              # evaluation succeeding by itself would be.
+              assertions = [
+                {
+                  assertion =
+                    config.castle.display.scale == 2.0
+                    && config.castle.display.cursorTheme == "Bibata-Modern-Ice"
+                    && config.castle.display.cursorSize == 48
+                    && config.castle.display.terminalFontSize == 12;
+                  message = ''
+                    castle.display three-layer resolution regressed in
+                    nixosConfigurations.example: expected hosts/xps9370's
+                    lib.mkDefault values (scale=2.0, cursorSize=48) to
+                    survive untouched since nothing here overrides them,
+                    and this module's own overrides (cursorTheme,
+                    terminalFontSize) to win over both the framework
+                    default and the host default.
+                  '';
+                }
+              ];
+            }
+          )
         ];
       };
 

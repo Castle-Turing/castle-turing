@@ -4,7 +4,7 @@
 # consuming private layer. The nixos-hardware and disko modules this
 # host needs are bound by flake.nix's `nixosModules.host-xps9370`
 # export, which is how this directory should be consumed.
-{ ... }:
+{ lib, options, ... }:
 
 {
   imports = [
@@ -54,4 +54,58 @@
   # First installed from nixos-unstable ahead of the 26.11 release.
   # Never change this after install.
   system.stateVersion = "26.11";
+
+  # This chassis's touchscreen option is the 3840x2160 (4K UHD) panel at
+  # 13.3" — about 331 PPI, roughly double a "normal" ~160 PPI laptop
+  # display (docs/vision.md: "Dell XPS 13 9370 ... touchscreen", which
+  # on this model only ever shipped paired with the 4K panel, never the
+  # 1080p one). Sway's own auto-detection leaves everything at 1x, which
+  # is what task 0008's real errand ("the cursor is too small") actually
+  # was: not a cursor-theme bug, a panel-density fact this host module
+  # is exactly the right layer for (Principle 01 consequence 2 — a
+  # panel's DPI identifies no one). `lib.mkDefault` so a private layer
+  # can still override for taste, per castle.display.scale's own
+  # description in modules/desktop.
+  #
+  # cursorSize is set explicitly alongside scale rather than left to
+  # scale alone: XWayland and some GTK cursor-rendering paths do not
+  # reliably follow Sway's output scale for the pointer glyph itself (a
+  # commonly reported Sway+XWayland gap), so a HiDPI panel can still
+  # show a native-resolution, visually tiny cursor even with `scale`
+  # correctly set — doubling the nominal 24px default is the concrete,
+  # defensible fix for exactly the symptom the real errand reported.
+  #
+  # modules/home only wires home.pointerCursor at all when
+  # castle.display.cursorTheme is non-null (an unset theme name leaves
+  # the whole pointer-cursor slot untouched, by design — see that
+  # option's description in modules/desktop), so cursorSize alone would
+  # otherwise be a silent no-op on this host. modules/desktop ships
+  # pkgs.bibata-cursors specifically so a theme name has something real
+  # to resolve to; naming one of its themes here is an aesthetic
+  # default, not personal data (Principle 01 consequence 2 — nothing
+  # about a cursor theme identifies a resident), and a private layer's
+  # own taste still overrides it.
 }
+// (
+  # castle.display is declared by modules/desktop, which this host does
+  # not import itself and which a private layer is free to skip (a
+  # headless use of this same chassis is a legitimate combination —
+  # docs/private-layer.md: "Optional: skip it on a headless host").
+  # Merging this block in with `//` only when the option actually
+  # exists — checked against `options`, never `config`, since this is a
+  # declare-time question a private layer's own module list answers,
+  # not a value to read — is what keeps this file safe to import
+  # without modules/desktop: an unconditional `castle.display = {...};`
+  # would fail evaluation with "option does not exist" the moment
+  # desktop is absent, exactly the trap Principle 01 consequence 2
+  # warns a host module into ("no hardware assumptions... leaking into
+  # shared modules" cuts both ways — a host also can't assume an
+  # unrelated optional module is present).
+  lib.optionalAttrs (options.castle ? display) {
+    castle.display = {
+      scale = lib.mkDefault 2.0;
+      cursorTheme = lib.mkDefault "Bibata-Modern-Classic";
+      cursorSize = lib.mkDefault 48;
+    };
+  }
+)
