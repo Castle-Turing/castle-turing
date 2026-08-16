@@ -131,16 +131,44 @@ The values this repo may never contain:
 is a bootable NixOS ISO that's immediately SSH-reachable — no fetching a
 key by hand, no reading an IP off a router's admin page — closing
 `docs/tasks/0003-findings.md` finding #3. It needs no new private file
-or format: it reuses the same `castle.admin` values `resident.nix`
-already supplies, the same way `nixosModules.host-xps9370` does. Add a
-second `nixosConfiguration` to your private flake:
+or format: it reuses the same `castle.admin` values you already supply,
+the same way `nixosModules.host-xps9370` does.
+
+**Split your private values across two files first.** An installer needs
+an admin identity — a key to accept, an account to seed — but has no use
+for `castle.person`, and the options for that are defined by
+`nixosModules.home`, which an installer does not import. Passing it a
+file containing `castle.person` fails evaluation with an unhelpful
+"option does not exist" error. So keep `castle.admin` in its own file:
+
+```nix
+# admin.nix — who may log into and operate this machine
+{ ... }:
+{
+  castle.admin = {
+    username = "<your-login>";
+    sshKeys = [ "<your-openssh-public-key>" ];
+    initialHashedPassword = "<your-password-hash>";
+  };
+}
+
+# resident.nix — everything an installed system needs
+{ ... }:
+{
+  imports = [ ./admin.nix ];
+  castle.person = { ... };
+}
+```
+
+Then add a second `nixosConfiguration` to your private flake, importing
+`admin.nix` rather than `resident.nix`:
 
 ```nix
 nixosConfigurations.xps9370-installer = nixpkgs.lib.nixosSystem {
   system = "x86_64-linux";
   modules = [
     castle-turing.nixosModules.installer
-    ./resident.nix
+    ./admin.nix
   ];
 };
 ```
