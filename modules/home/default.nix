@@ -193,8 +193,23 @@ in
         name = displayCfg.cursorTheme;
         package = pkgs.bibata-cursors;
         size = if displayCfg.cursorSize != null then displayCfg.cursorSize else 24;
+        # All three backends, explicitly, because a Wayland pointer is
+        # drawn by whoever owns the surface and there is no single knob
+        # that covers them: gtk writes the gsettings/ini keys GTK apps
+        # read, x11 writes the XCURSOR_* session variables XWayland
+        # clients read, and sway emits `seat * xcursor_theme <name>
+        # <size>` — the compositor's *own* pointer, the one over the
+        # desktop and Wayland-native surfaces. Omitting the last one is
+        # a silent half-fix: GTK and XWayland windows get the requested
+        # size while the pointer you see most of the time stays at the
+        # default, which is exactly the symptom this option exists to
+        # cure (docs/tasks/0008's cursor errand). CI's sway-config-check
+        # job prints the generated config, so the `seat` block landing
+        # is visible evidence rather than an assumption.
+        enable = true;
         gtk.enable = true;
         x11.enable = true;
+        sway.enable = true;
       };
     };
   };
