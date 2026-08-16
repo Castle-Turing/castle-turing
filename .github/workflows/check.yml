@@ -146,6 +146,46 @@ jobs:
           chmod 700 "$XDG_RUNTIME_DIR"
           "$XVFB_RUN" "$SWAY_PKG/bin/sway" --config "$SWAY_CONFIG" --validate --unsupported-gpu
 
+      - name: Assert the generated Sway config still carries the default keybindings
+        run: |
+          # sway --validate (above) only proves the config *parses* — it
+          # is perfectly happy with a config that binds exactly one key,
+          # which is precisely how the 0009 review pass's finding 1
+          # lockout looked: modules/home's own binding, defined at
+          # normal priority, silently discarded home-manager's entire
+          # default keybinding set instead of adding to it (see the long
+          # comment on that option in modules/home/default.nix for the
+          # mechanism). Nothing about --validate would have caught that,
+          # so it can't be trusted alone to guard the regression. This
+          # step grep-asserts that a representative sample of the
+          # defaults home-manager ships (terminal, kill, exit, one
+          # workspace switch) and this repo's own $mod4+Shift+space
+          # binding are all present in the same generated file. It is
+          # deliberately a sample, not an exhaustive re-listing of every
+          # default binding — the point is to fail loudly if the whole
+          # default set goes missing again, not to pin every keybind
+          # home-manager happens to ship today.
+          missing=0
+          for expected in \
+            'bindsym Mod1+Return exec' \
+            'bindsym Mod1+Shift+q kill' \
+            'bindsym Mod1+Shift+e exec swaynag' \
+            'bindsym Mod1+1 workspace number 1' \
+            'bindsym Mod4+Shift+space exec foot --app-id=castle-modal'
+          do
+            if ! grep -qF "$expected" "$SWAY_CONFIG"; then
+              echo "MISSING expected binding: $expected"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more expected Sway keybindings were not found in the generated config."
+            echo "If this is a deliberate rebind, update the expected list above. If it isn't,"
+            echo "this is the finding-1 lockout regressing: a keybindings definition at the"
+            echo "wrong priority is silently discarding home-manager's default bindings again."
+            exit 1
+          fi
+
       - name: Run foot --check-config over the generated config
         run: |
           # foot ships its own config-check mode (-C/--check-config):

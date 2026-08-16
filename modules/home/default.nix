@@ -141,10 +141,45 @@ in
           # `swaymsg floating toggle` still reaches the same action by
           # hand if it's ever missed.
           #
-          # EXPERIMENT (docs/tasks/0009 review pass, finding 1): testing
-          # whether wrapping in lib.mkOptionDefault restores home-manager's
-          # default keybinding set alongside this one. Verifying via CI's
-          # sway-config-check job, which prints the generated config.
+          # MUST be wrapped in lib.mkOptionDefault — the previous version
+          # of this comment claimed the opposite and was wrong (0009
+          # review pass, finding 1). Confirmed against home-manager's
+          # actual module source (modules/services/window-managers/i3-sway/
+          # sway.nix, this flake's pinned rev) and nixpkgs's module-system
+          # source (lib/modules.nix, same pin) rather than assumed:
+          #
+          # home-manager declares its ~50 default bindings as this
+          # option's `default`, each value individually wrapped in
+          # `lib.mkOptionDefault` (priority 1500). `default` is not a
+          # pure fallback used only when nothing else sets the option —
+          # nixpkgs's evalOptionValue splices it into the option's
+          # definitions list unconditionally, at priority 1500, next to
+          # whatever every other module contributes. Before an attrsOf
+          # option's definitions ever reach its per-key merge, though,
+          # mergeDefinitions runs filterOverrides' across the *whole*
+          # option value: it keeps only the definitions at the single
+          # lowest priority number present and drops every other
+          # definition entirely, no matter its keys.
+          #
+          # A plain, unwrapped `keybindings = { ... }` here sits at the
+          # default priority (100) — strictly lower-numbered than home-
+          # manager's spliced-in default (1500) — so filterOverrides'
+          # discarded home-manager's *entire* default-bindings
+          # definition before attrsOf's per-key merge ever ran, leaving
+          # only this module's one binding. That is the lockout CI
+          # actually generated and finding 1 caught. Wrapping this value
+          # in `lib.mkOptionDefault` puts it at the same priority (1500)
+          # as home-manager's defaults, so both definitions survive
+          # filterOverrides' and reach attrsOf's per-key merge — which
+          # unions them by key with no conflict, since this chord shares
+          # no key with any Mod1-prefixed default. (Two same-priority
+          # definitions of the *same* key would still throw the
+          # ambiguous-priority error the old comment warned about — that
+          # risk is real, just per-key, not a reason to avoid
+          # mkOptionDefault altogether.) Confirmed by reading the
+          # generated config CI actually produces: the full default set
+          # (Mod1+Return, Mod1+Shift+q, Mod1+Shift+e, workspace bindings,
+          # the `resize` mode) is present alongside this binding.
           keybindings = lib.mkOptionDefault {
             "Mod4+Shift+space" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
           };
