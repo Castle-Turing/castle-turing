@@ -570,6 +570,27 @@ def file_correction(*, body: str, refs: list[str], surface: str) -> str:
 
 
 def cmd_record(args: argparse.Namespace) -> int:
+    # `correction` is deliberately refused here even though it's a valid
+    # RECORD_TYPES member (code-review finding, correction-record
+    # branch): this is the generic writer any seat can call with
+    # arbitrary --provenance/--seat, and letting it accept --type
+    # correction would let a worker or router fabricate what looks like
+    # verbatim resident speech, with none of file_correction()'s
+    # guarantees — no surface, no filing-time context, and no paired
+    # resident-model entry. "Only the resident may make this record" is
+    # the whole premise of docs/tasks/0010-correction-record.md; the one
+    # path that can honor it is castle correct / castle-modal, both of
+    # which call file_correction() rather than this function.
+    if args.type == "correction":
+        print(
+            "castle record: refusing to write a correction record directly — "
+            "use `castle correct` (or castle-modal's compose mode), which "
+            "stamps filing-time context and the resident-model entry a "
+            "correction requires (docs/tasks/0010-correction-record.md); "
+            "`castle record` bypasses both.",
+            file=sys.stderr,
+        )
+        return 1
     body = args.body
     if args.body_file:
         body = pathlib.Path(args.body_file).read_text()

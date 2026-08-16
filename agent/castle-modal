@@ -109,18 +109,28 @@ def _classify_interactively(out=sys.stdout) -> str:
     human to ask and no tty to read a keypress from, and never reaches
     this function. Bare Enter answers "something to fix" — the common
     case, and the one that shouldn't cost an extra keystroke.
+
+    cbreak is engaged *before* the prompt is printed, not after
+    (code-review finding, correction-record branch): printing is I/O —
+    a syscall reaching the pty — and a keypress landing in the gap
+    between "prompt printed" and "cbreak engaged" is held by the
+    kernel's still-canonical line discipline until a newline arrives,
+    which a bare single-character keypress never sends, hanging this
+    read forever. Entering cbreak first collapses that window to a
+    few bytecode instructions instead of a print() round-trip; output
+    formatting is unaffected, since cbreak only changes how *input* is
+    line-buffered, not how bytes written to the terminal are rendered.
     """
     import termios
     import tty
-
-    print(file=out)
-    print("Is this something to fix, or are you telling me how I'm doing?", file=out)
-    print("[Enter/f] something to fix        [t] telling you how you're doing", file=out)
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
+        print(file=out)
+        print("Is this something to fix, or are you telling me how I'm doing?", file=out)
+        print("[Enter/f] something to fix        [t] telling you how you're doing", file=out)
         answer = sys.stdin.read(1)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
