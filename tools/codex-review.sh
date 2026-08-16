@@ -10,9 +10,13 @@
 # *organization-owned* repo requires a ChatGPT Pro plan, and this resident
 # has Plus. Nothing errored. Nothing warned. Reviews just stopped being
 # attempted, and the only symptom was a greyed-out toggle with the reason in
-# a tooltip. Full diagnosis: docs/backlog/cross-model-review-is-paywalled.md
-# (or, once specced away, whatever superseded it — check git log for that
-# file's history if it's gone).
+# a tooltip. Full diagnosis: PR #28
+# (https://github.com/Castle-Turing/castle-turing/pull/28), branch
+# backlog-codex-paywall, docs/backlog/cross-model-review-is-paywalled.md —
+# linked as a PR rather than a repo-relative path because that file may not
+# exist on whatever branch you're reading this from yet: it lands on `main`
+# only once #28 merges (or, if it's since been specced into a numbered task
+# brief, whatever superseded it — check git log for that file's history).
 #
 # The value of a second reviewer was never "finds more bugs" — it's "finds
 # *different* bugs," because a model reviewing its own family's work shares
@@ -98,21 +102,32 @@ TITLE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)
-      BASE="$2"
-      shift 2
-      ;;
-    --pr)
-      PR="$2"
+    --base|--pr|--title)
+      # A value-taking flag with nothing after it, or with another flag
+      # immediately after it, are both real user mistakes worth a clear
+      # message rather than either of the two bad things that happened
+      # here before this check existed: under `set -u`, `--base` with no
+      # following argument crashed on a raw "$2: unbound variable" instead
+      # of a usage error; and `--base --post` silently consumed "--post"
+      # as --base's *value*, leaving POST unset with no indication why the
+      # post never happened. Caught by a Codex CLI review of an earlier
+      # version of this script.
+      FLAG="$1"
+      if [ $# -lt 2 ] || [[ "$2" == -* ]]; then
+        echo "tools/codex-review.sh: $FLAG requires a value." >&2
+        echo "Run with --help for usage." >&2
+        exit 2
+      fi
+      case "$FLAG" in
+        --base) BASE="$2" ;;
+        --pr) PR="$2" ;;
+        --title) TITLE="$2" ;;
+      esac
       shift 2
       ;;
     --post)
       POST=1
       shift
-      ;;
-    --title)
-      TITLE="$2"
-      shift 2
       ;;
     -h|--help)
       # Print this file's own header comment as the help text, rather than
@@ -221,43 +236,75 @@ fi
 # immutable commit) and a differently-named remote (upstream/main,
 # fork/main) is a legitimate override this script has no business
 # blocking, so the check only fires on what actually resolves as a local
-# branch. Checked against `refs/heads/` directly rather than guessing from
-# whether `$BASE` contains a slash: this repo's own branch names
-# (`docs/tasks`-style slugs aside, branches like `fix/foo` are a common
-# enough convention elsewhere) can contain slashes too, and a slash-based
-# heuristic would wrongly wave a slash-named *local* branch through as if
-# it were a remote ref. Two rounds of Codex CLI review on this file caught
-# first the missing check, then this exact false negative in the first
-# attempt at it.
-if ! [[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] && git show-ref --verify --quiet "refs/heads/$BASE"; then
+# branch — checked directly against `refs/heads/`, before the SHA-shape
+# check below, so a hex-named local branch (`git checkout -b deadbeef`)
+# still gets flagged instead of being waved through because its name
+# happens to look like a commit id.
+IS_LOCAL_BRANCH=0
+if git show-ref --verify --quiet "refs/heads/$BASE"; then
+  IS_LOCAL_BRANCH=1
   echo "codex-review: warning — '$BASE' looks like a local branch, not a remote ref. Consider --base origin/$BASE (after \`git fetch origin\`) instead — see CLAUDE.md's review-scoping rule." >&2
 fi
 
 # Staleness nudge — does not fetch, and never silently would (see the
-# header comment's "boring, no surprise network calls" rule), but it costs
-# nothing to check the local clock against .git/FETCH_HEAD and say
-# something if the last fetch looks old. CLAUDE.md's own rule for
-# /code-review is exactly this concern: "a stale base produces confident
-# findings about code you never touched." A Codex CLI review of this
-# script's own diff flagged the earlier version of this file for silently
-# trusting $BASE with no freshness check at all — this is that finding's
-# fix, not a hypothetical.
-FETCH_HEAD_PATH="$(git rev-parse --git-dir)/FETCH_HEAD"
-if [ ! -e "$FETCH_HEAD_PATH" ]; then
-  echo "codex-review: warning — no record this repo has ever been fetched (no .git/FETCH_HEAD). If '$BASE' is a remote ref, run \`git fetch origin\` first, or this review may be scoped against a stale base." >&2
-else
-  # GNU stat (`-c %Y`) must be tried FIRST, not as a fallback: on
-  # Linux/NixOS, `stat -f ...` is a *different, valid* command (filesystem
-  # status, not file status) that exits 0 and prints the mount point
-  # instead of erroring — so a "BSD form first, GNU as fallback" ordering
-  # never reaches the fallback on Linux and instead feeds a path string
-  # into the arithmetic below. `stat -c` has no BSD equivalent and fails
-  # cleanly there, so trying it first is safe on both platforms. Also
-  # caught by a Codex CLI review of an earlier version of this file.
-  FETCH_MTIME="$(stat -c %Y "$FETCH_HEAD_PATH" 2>/dev/null || stat -f %m "$FETCH_HEAD_PATH" 2>/dev/null || echo 0)"
-  FETCH_AGE_SECONDS=$(( $(date +%s) - FETCH_MTIME ))
-  if [ "$FETCH_AGE_SECONDS" -gt 900 ]; then
-    echo "codex-review: warning — last \`git fetch\` was $(( FETCH_AGE_SECONDS / 60 )) minutes ago. If '$BASE' is a remote ref, consider \`git fetch origin\` first." >&2
+# header comment's "boring, no surprise network calls" rule). Skipped
+# entirely for a bare commit SHA (nothing to go stale: it names one
+# immutable commit forever) — recognized by shape AND by NOT already
+# having resolved as a local branch above, since a hex-named branch must
+# still get checked like any other mutable ref, not waved through by
+# `git show-ref` never firing on refs/remotes/that-hex-name.
+#
+# This does NOT use `.git/FETCH_HEAD`'s mtime, on purpose, after two
+# rounds of dogfooding this script against itself found it wrong twice
+# over: FETCH_HEAD is worktree-local (`git worktree` — the multi-agent
+# setup CLAUDE.md itself mandates — gives each worktree its own, so a
+# freshly-added worktree with a perfectly current origin/main falsely
+# reports "never fetched"), and even where it exists its mtime reflects
+# "was *anything* fetched from this worktree recently," not "is $BASE
+# itself current" (fetching an unrelated branch refreshes it while
+# origin/main sits stale). What actually answers "when was $BASE itself
+# last updated, from any worktree" is $BASE's own reflog — shared across
+# worktrees, like all of refs/ and logs/refs/, and updated only when that
+# specific ref moves.
+LOOKS_LIKE_SHA=0
+if [[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] && [ "$IS_LOCAL_BRANCH" -eq 0 ]; then
+  LOOKS_LIKE_SHA=1
+fi
+if [ "$LOOKS_LIKE_SHA" -eq 0 ]; then
+  # `%ct`/`%cd` (even under `git log -g`) is the *commit object's* own
+  # committer timestamp, not the reflog entry's — a ref fetched five
+  # minutes ago can point at a commit that was authored last week, and
+  # `%ct` reports the week, not the five minutes. `%gd` is the field that
+  # actually carries the reflog entry's own time, and only when combined
+  # with `--date=unix` does it render as `ref@{<unix-timestamp>}` instead
+  # of `ref@{<Nth-entry>}` — hence the grep to pull the number back out.
+  # A Codex CLI review of an earlier version of this script (which used
+  # `%ct`) caught this: it warned on a freshly-fetched-but-old-commit
+  # `origin/main` and would have stayed silent on the opposite case, a
+  # stale ref that happened to point at a recent commit.
+  #
+  # The extraction below pulls the digits out of the `@{...}` braces
+  # *specifically*, not just any digit run in the line: a first attempt at
+  # this used a bare `grep -oE '[0-9]+'`, which also matches digits that
+  # are simply part of the ref's own name (`origin/release/2025` produces
+  # `origin/release/2025@{<timestamp>}`, and that grep returns both "2025"
+  # and the timestamp on separate lines, turning $REF_MTIME into a
+  # multi-line value that breaks the arithmetic below). Also a Codex CLI
+  # finding.
+  # The trailing `|| true` matters under this script's `set -e -o
+  # pipefail`: if `$BASE` has no reflog at all, `git log -g` itself exits
+  # nonzero, and pipefail propagates that through `sed` (which exits 0 on
+  # simply finding no match) to the whole pipeline — which, inside a `$()`
+  # feeding a variable assignment, would otherwise abort the script here
+  # instead of falling through to the "no reflog history" message below.
+  REF_MTIME="$(git log -g -1 --date=unix --format=%gd "$BASE" 2>/dev/null | sed -n 's/.*@{\([0-9]\{1,\}\)}.*/\1/p' || true)"
+  if [ -z "$REF_MTIME" ]; then
+    echo "codex-review: warning — no local reflog history for '$BASE', so its last-updated time can't be determined here. If it's a remote ref, run \`git fetch origin\` first, or this review may be scoped against a stale base." >&2
+  else
+    FETCH_AGE_SECONDS=$(( $(date +%s) - REF_MTIME ))
+    if [ "$FETCH_AGE_SECONDS" -gt 900 ]; then
+      echo "codex-review: warning — '$BASE' was last updated $(( FETCH_AGE_SECONDS / 60 )) minutes ago, per its own reflog. If it's a remote ref, consider \`git fetch origin\` first." >&2
+    fi
   fi
 fi
 
@@ -341,15 +388,52 @@ fi
 # The wrapper below adds attribution and a pointer back to this script and
 # the disposition step that must follow it. It never rewrites, trims, or
 # reflows a single word of $OUTPUT_FILE's contents — everything after the
-# "--- Codex's raw output" line is byte-for-byte what Codex wrote.
+# "---" rule is byte-for-byte what Codex wrote.
+#
+# `gh` gets the same two-stage "is it even here, is it usable" preflight
+# `codex` got above, rather than letting a missing/unauthenticated `gh`
+# surface as a bare "no open PR found" — a diagnosis that's actively wrong
+# (it tells you to push a branch and open a PR that may already exist) and
+# was, before this check existed, indistinguishable from the genuine "no
+# PR yet" case and from an ambiguous head-branch match. All three collapse
+# to one `gh pr view` failure with its stderr discarded; this at least
+# rules the first two causes out explicitly before blaming "no open PR."
+
+if ! command -v gh >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+codex-review: --post was given but the GitHub CLI (`gh`) isn't installed.
+
+Install it (see https://cli.github.com), run `gh auth login`, and re-run
+this script — or drop --post and post the saved review yourself.
+
+Nothing was posted; the review above is still saved to disk.
+EOF
+  exit 1
+fi
+
+if ! gh auth status >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+codex-review: --post was given but `gh` isn't authenticated.
+
+Run `gh auth login`, then re-run this script — or drop --post and post
+the saved review yourself.
+
+Nothing was posted; the review above is still saved to disk.
+EOF
+  exit 1
+fi
 
 if [ -z "$PR" ]; then
   if ! PR="$(gh pr view --json number -q .number 2>/dev/null)"; then
     cat >&2 <<'EOF'
 codex-review: --post was given but no open PR was found for the current
-branch (and no --pr N was given). Push the branch and open the PR first,
-or pass --pr N explicitly. Nothing was posted; the review above is still
-saved to disk if you want to post it by hand later.
+branch (and no --pr N was given). This can also mean the current branch's
+head matches more than one open PR, which `gh pr view` refuses to
+disambiguate — pass --pr N explicitly in that case. Push the branch and
+open the PR first if it doesn't exist yet.
+
+Nothing was posted; the review above is still saved to disk if you want
+to post it by hand later.
 EOF
     exit 1
   fi
@@ -359,16 +443,37 @@ POST_FILE="$(mktemp "${TMPDIR:-/tmp}/codex-review-post.XXXXXX")"
 {
   printf '## Cross-model review — Codex CLI (raw, unfiltered)\n\n'
   printf 'Generated locally via `tools/codex-review.sh` (`codex exec review --base %s`), ' "$BASE"
-  printf 'not GitHub'"'"'s Codex integration — see docs/backlog/cross-model-review-is-paywalled.md '
-  printf '(or its successor once specced) for why that integration stopped running. '
+  printf "not GitHub's Codex integration — see PR #28 "
+  printf '(https://github.com/Castle-Turing/castle-turing/pull/28, '
+  printf 'docs/backlog/cross-model-review-is-paywalled.md) for why that integration stopped running. '
   printf 'Everything below the rule is Codex'"'"'s own output, unedited by any other model. '
   printf "Claude's disposition of each finding — agreed and fixed, or disagreed and why — follows as a separate comment underneath.\n\n"
   printf -- '---\n\n'
   cat "$OUTPUT_FILE"
 } >"$POST_FILE"
 
-gh pr comment "$PR" --body-file "$POST_FILE"
+# `set -e` would otherwise kill the script mid-post with a bare `gh`
+# stderr and no explanation — and, worse, skip the cleanup below, leaving
+# a stray file holding the full review text sitting in $TMPDIR. Capturing
+# the exit code explicitly avoids both: a clear message either way, and
+# $POST_FILE is always removed once we've decided what to tell the user.
+POST_EXIT=0
+gh pr comment "$PR" --body-file "$POST_FILE" || POST_EXIT=$?
 rm -f "$POST_FILE"
+
+if [ "$POST_EXIT" -ne 0 ]; then
+  cat >&2 <<EOF
+codex-review: \`gh pr comment\` failed (exit $POST_EXIT) while posting to
+PR #$PR. Common causes: the PR was closed or merged since --pr/auto-detect
+ran, the auth token expired mid-run, or a network error. The review text
+itself is unaffected and still saved at: $OUTPUT_FILE — post it by hand
+once the underlying problem is fixed:
+    gh pr comment $PR --body-file '$OUTPUT_FILE'
+(note: that command posts the raw review with no attribution wrapper;
+re-run this script with --post to get the wrapped version instead.)
+EOF
+  exit 1
+fi
 
 echo "codex-review: posted to PR #$PR." >&2
 echo "codex-review: next step — read the comment just posted, then reply with Claude's disposition of each finding as a SEPARATE comment underneath (agreed+fixed, or disagreed+why). Do not edit the comment just posted." >&2

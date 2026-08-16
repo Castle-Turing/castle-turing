@@ -43,9 +43,19 @@ exists (Codex needs something to diff against and somewhere to post to):
    Claude's disposition of each finding — agreed and fixed (with the fix
    commit), or disagreed and why. Never silently skip a finding, and never
    edit the comment Codex's output landed in — the human needs to see both
-   the original finding and the response to it, the same way
-   `.github/workflows/claude-codex-followup.yml` already does for
-   GitHub-integrated Codex reviews on the branches that still get one.
+   the original finding and the response to it.
+
+   **This step is manual — nothing automates it for CLI-posted reviews.**
+   `.github/workflows/claude-codex-followup.yml` triggers only on a
+   `pull_request_review` event authored by the `chatgpt-codex-connector[bot]`
+   GitHub App — the *integrated* review this tool replaces. `gh pr comment`
+   (what `tools/codex-review.sh --post` uses) creates a plain issue
+   comment from the human's own `gh` identity, which is neither of those
+   things, so that workflow never fires on it. Step 4 above is the
+   substitute: a human or an agent session doing by hand what that
+   workflow does automatically for the App-integrated flow. See "Why a
+   script instead of a GitHub Action," below, for why this wasn't wired up
+   the same way.
 
 ### Why a script instead of a GitHub Action
 
