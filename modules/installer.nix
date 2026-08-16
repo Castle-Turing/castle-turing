@@ -139,7 +139,16 @@ let
  (Esc) to return here.
 ======================================================================
 BANNER
-          timeout 300 nmtui || true
+          # --foreground is load-bearing, not a style choice: without it
+          # `timeout` runs nmtui in its own process group, which is not
+          # the terminal's foreground group. nmtui still *renders*
+          # (writing to the tty is allowed) but every attempt to *read*
+          # the keyboard raises SIGTTIN and stops it -- so the operator
+          # sees a perfectly drawn menu that ignores every keypress,
+          # with no error anywhere. Observed on real hardware, and
+          # invisible to the CI harness, which has nobody at the
+          # keyboard to notice.
+          timeout --foreground 300 nmtui || true
           sleep 2
           continue
         fi
