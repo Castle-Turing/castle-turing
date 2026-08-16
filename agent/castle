@@ -16,11 +16,17 @@ also decide by hand-writing the same record — that's the point
 
 Subcommands:
   ask       intake: write a `request` record.
-  answer    intake: write an `answer` record for a `question`.
+  answer    intake: write an `answer` record for a `question`, and — if
+            the question carries a resident-model `fact` (or one is
+            passed with --fact) — the resident-model entry that answer
+            elicits (docs/tasks/0009-ambient-intake.md, Proposal 05's
+            only write path).
   record    generic writer for any record type (what the sugar above,
             and any worker/router seat, calls underneath).
   route     router: append a decision record for every unrouted
             result/question, deciding channel from provenance alone.
+  work      worker: run the configured worker-tenant command against a
+            request and write back its result (docs/tasks/0009).
   digest    fold the journal into a human-readable report.
   validate  schema-check a journal (this is what CI asserts with).
   show      print one record, journal or spool.
@@ -32,7 +38,10 @@ import argparse
 import datetime as dt
 import os
 import pathlib
+import shlex
+import subprocess
 import sys
+import tempfile
 
 # ---------------------------------------------------------------------------
 # Record schema (docs/architecture.md's "Records" section)
@@ -237,6 +246,49 @@ def write_record(
 
 
 # ---------------------------------------------------------------------------
+# The resident model (docs/architecture.md's Proposal 05; format documented
+# in agent/README.md). Not a record type — a single flat file of entries,
+# each in the same fenced-frontmatter style, living beside the journal
+# rather than inside it. This is the *only* write path: it is reachable
+# solely from `cmd_answer`, which only ever runs because a human typed an
+# answer at this CLI. Nothing here is ever called from `cmd_route` or
+# `cmd_work` — inference and workers may raise questions, never close them.
+# ---------------------------------------------------------------------------
+
+MODEL_FIELD_ORDER = ("fact", "asked", "answered", "when")
+
+
+def resident_model_path() -> pathlib.Path:
+    return state_dir() / "resident-model.md"
+
+
+def render_model_entry(fields: dict, body: str) -> str:
+    lines = ["---"]
+    for key in MODEL_FIELD_ORDER:
+        if key in fields:
+            lines.append(f"{key}: {fields[key]}")
+    lines.append("---")
+    lines.append("")
+    body = body.rstrip("\n")
+    return "\n".join(lines) + ("\n" + body + "\n" if body else "\n")
+
+
+def append_model_entry(*, fact: str, asked: str, answered: str, when: str, body: str) -> None:
+    """Append one entry to state/resident-model.md. Never overwrites or
+    edits an existing entry — the model is append-only, same as the
+    journal, for the same reason (agent/README.md)."""
+    path = resident_model_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = render_model_entry(
+        {"fact": fact, "asked": asked, "answered": answered, "when": when}, body
+    )
+    existing = path.read_text() if path.exists() else ""
+    separator = "\n" if existing.strip() else ""
+    with path.open("a") as f:
+        f.write(separator + entry)
+
+
+# ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
 
@@ -248,6 +300,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     elif body is None and not sys.stdin.isatty():
         body = sys.stdin.read()
     target = spool_dir() if args.spool else journal_dir()
+    extra = {"fact": args.fact} if getattr(args, "fact", None) else None
     record_id = write_record(
         target,
         type=args.type,
@@ -256,6 +309,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         refs=split_refs(args.refs or ""),
         evidence=args.evidence,
         body=body or "",
+        extra=extra,
     )
     print(record_id)
     return 0
@@ -295,13 +349,77 @@ def cmd_answer(args: argparse.Namespace) -> int:
         body=body,
     )
     print(record_id)
+
+    # Proposal 05's write path: an explicit resident answer, and only
+    # that, may write a resident-model entry. The fact name normally
+    # comes from the question record itself (the seat that raised the
+    # question is the one that knows what it's eliciting) — `--fact` is
+    # an override for a question record that predates this field, or one
+    # written by hand. If neither is present, this is just an ordinary
+    # answer with no model entry, which is a legitimate outcome: not
+    # every question is eliciting a durable fact.
+    question_path = journal_dir() / f"{args.question_id}.md"
+    question = None
+    if question_path.exists():
+        try:
+            question = parse_record(question_path)
+        except RecordError:
+            question = None
+
+    fact = args.fact or (question.fields.get("fact") if question else None)
+    if fact and fact.strip():
+        when = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+        entry_lines = []
+        if question is not None and question.body.strip():
+            entry_lines.append(f"Q: {question.body.strip()}")
+        entry_lines.append(f"A: {body.strip()}")
+        append_model_entry(
+            fact=fact.strip(),
+            asked=args.question_id,
+            answered=record_id,
+            when=when,
+            body="\n".join(entry_lines),
+        )
+        print(f"answer: recorded resident-model entry for fact '{fact.strip()}'", file=sys.stderr)
     return 0
 
 
 def _provenance_explanation(provenance: str) -> str:
     if provenance == "requested":
-        return "the resident asked for this directly, so it surfaces now rather than waiting for a digest"
+        return "the resident asked for this directly, so it interrupts now via the notify channel rather than waiting for a digest"
     return "the system undertook this on its own initiative, so it defaults to the digest rather than an interruption"
+
+
+def _fire_notification(title: str, body: str) -> None:
+    """Best-effort delivery on the router's `notify` channel
+    (docs/tasks/0009-ambient-intake.md item 5). Never raises: a failed
+    or missing notification daemon must not corrupt or block routing —
+    the decision record is already durable by the time this runs, so
+    the worst case is a silent (or, below, warned-about) missed ping,
+    never a bad journal.
+
+    CASTLE_NOTIFY_COMMAND, unset, defaults to plain `notify-send` on
+    $PATH — real on a desktop that imported modules/desktop (which
+    installs mako + libnotify), a harmless failed exec anywhere else.
+    Set explicitly to an empty string to no-op silently (a headless
+    host's way of saying "don't even try"); modules/agent wires
+    castle.agent.notify.command into this same variable — see
+    modules/agent/default.nix.
+    """
+    raw = os.environ.get("CASTLE_NOTIFY_COMMAND")
+    if raw is None:
+        raw = "notify-send"
+    if not raw.strip():
+        return
+    try:
+        argv = shlex.split(raw) + [title, body]
+    except ValueError as exc:
+        print(f"castle route: could not parse CASTLE_NOTIFY_COMMAND ({raw!r}): {exc}", file=sys.stderr)
+        return
+    try:
+        subprocess.run(argv, check=False, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"castle route: notify command {raw!r} failed (non-fatal): {exc}", file=sys.stderr)
 
 
 def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None:
@@ -324,19 +442,30 @@ def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None
 def cmd_route(args: argparse.Namespace) -> int:
     """The router's first rule set: provenance alone (docs/architecture.md).
 
-    `requested` -> surface now. `initiated` -> digest. Question records
-    route the same way results do — both are "addressed to the
-    resident." Every routing action appends exactly one decision record
-    citing the provenance fact as evidence; nothing is ever routed
-    without one, by construction (there is no code path here that
-    decides a channel without also calling write_record for it).
+    `requested` -> notify (a real interruption, docs/tasks/0009 item 5).
+    `initiated` -> digest. Question records route the same way results
+    do — both are "addressed to the resident." Every routing action
+    appends exactly one decision record citing the provenance fact as
+    evidence; nothing is ever routed without one, by construction (there
+    is no code path here that decides a channel without also calling
+    write_record for it).
+
+    `already_routed` is built only from decision records whose own
+    `seat` is `router` — docs/tasks/0009-ambient-intake.md item 7's bug
+    fix. Before this filter, a decision written by *any* seat that
+    happened to reference a result (an audit note, a future seat's own
+    bookkeeping) would permanently and silently suppress that result's
+    routing, since nothing distinguished "the router looked at this and
+    decided" from "some record merely points at this." Not triggered
+    today because only the router writes decisions, but the bug was
+    real and waiting — see test/agent-loop/run.sh's regression test.
     """
     jdir = journal_dir()
     records = load_all(jdir)
 
     already_routed: set[str] = set()
     for rec in records.values():
-        if rec.type == "decision":
+        if rec.type == "decision" and rec.fields.get("seat") == "router":
             already_routed.update(rec.refs)
 
     to_route = [
@@ -349,7 +478,7 @@ def cmd_route(args: argparse.Namespace) -> int:
     appended = []
     for rec in to_route:
         provenance = rec.fields.get("provenance", "")
-        channel = "now" if provenance == "requested" else "digest"
+        channel = "notify" if provenance == "requested" else "digest"
         root = _find_root_request(records, rec)
         evidence = (
             f"{rec.type} {rec.id} carries provenance={provenance}"
@@ -360,7 +489,7 @@ def cmd_route(args: argparse.Namespace) -> int:
             f"Routing `{rec.type}` `{rec.id}` to channel **{channel}**.",
             "",
             f"Rule applied: provenance={provenance} -> {channel} "
-            "(docs/architecture.md: \"requested -> surface to the resident now; "
+            "(docs/architecture.md: \"requested -> surface to the resident now via notify; "
             "initiated -> digest\").",
         ]
         decision_id = write_record(
@@ -374,6 +503,9 @@ def cmd_route(args: argparse.Namespace) -> int:
             extra={"channel": channel},
         )
         appended.append((decision_id, rec.id, channel))
+        if channel == "notify":
+            summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
+            _fire_notification(f"Castle Turing — {rec.type}", summary[:200])
 
     if not appended:
         print("route: nothing unrouted; no decision records appended")
@@ -381,6 +513,126 @@ def cmd_route(args: argparse.Namespace) -> int:
         for decision_id, ref_id, channel in appended:
             print(f"route: {decision_id} routes {ref_id} -> {channel}")
     return 0
+
+
+DEFAULT_WORKER_COMMAND = "claude -p"
+
+
+def cmd_work(args: argparse.Namespace) -> int:
+    """The worker seat's hands (docs/tasks/0009-ambient-intake.md item 4).
+
+    The contract sits at the errand boundary, not the model-call
+    boundary (Proposal 03): a request record in, a result record out.
+    What runs in between is `castle.agent.worker.command` — CI overrides
+    it with a scripted stand-in; a real deployment defaults to
+    agent/castle-worker-claude, a thin wrapper around a headless
+    `claude -p` that this function knows nothing about beyond its
+    contract: read the request body on stdin, write reasoning to
+    stdout, write a diff (or nothing) to $CASTLE_DIFF_FILE, and — this
+    is a hard product decision, not a nicety — never deploy anything.
+
+    THE WORKER MUST NOT DEPLOY. This function never runs nixos-rebuild,
+    never commits, never applies the diff it collects; it only ever
+    folds that diff into a result record for the resident to review.
+    """
+    jdir = journal_dir()
+    request_path = jdir / f"{args.request_id}.md"
+    if not request_path.exists():
+        print(f"castle work: no such request: {args.request_id}", file=sys.stderr)
+        return 1
+    try:
+        request = parse_record(request_path)
+    except RecordError as exc:
+        print(f"castle work: {exc}", file=sys.stderr)
+        return 1
+    if request.type != "request":
+        print(f"castle work: {args.request_id} is not a request record (type={request.type!r})", file=sys.stderr)
+        return 1
+
+    command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
+    if not command.strip():
+        print("castle work: no worker command configured (CASTLE_WORKER_COMMAND is empty)", file=sys.stderr)
+        return 1
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        print(f"castle work: could not parse CASTLE_WORKER_COMMAND ({command!r}): {exc}", file=sys.stderr)
+        return 1
+
+    diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
+    os.close(diff_fd)
+    diff_path = pathlib.Path(diff_path_str)
+    try:
+        env = dict(os.environ)
+        env["CASTLE_REQUEST_ID"] = request.id
+        env["CASTLE_REQUEST_BODY"] = request.body
+        env["CASTLE_DIFF_FILE"] = str(diff_path)
+        env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
+
+        try:
+            proc = subprocess.run(
+                argv,
+                input=request.body,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        except OSError as exc:
+            print(f"castle work: could not run worker command {command!r}: {exc}", file=sys.stderr)
+            return 1
+
+        diff_text = ""
+        try:
+            diff_text = diff_path.read_text().strip()
+        except OSError:
+            diff_text = ""
+    finally:
+        try:
+            diff_path.unlink()
+        except OSError:
+            pass
+
+    ok = proc.returncode == 0
+    reasoning = proc.stdout.strip()
+
+    body_lines = []
+    if ok:
+        body_lines.append(f"Errand `{request.id}` completed by worker tenant `{command}`.")
+    else:
+        body_lines.append(
+            f"Errand `{request.id}` FAILED in worker tenant `{command}` (exit {proc.returncode})."
+        )
+    body_lines.append("")
+    if reasoning:
+        body_lines.append(reasoning)
+        body_lines.append("")
+    if not ok and proc.stderr.strip():
+        body_lines += ["stderr:", "```", proc.stderr.strip(), "```", ""]
+    if diff_text:
+        body_lines += ["```diff", diff_text, "```"]
+    else:
+        body_lines.append(
+            "(no diff produced — either no change was proposed, or the worker "
+            "tenant did not write one to $CASTLE_DIFF_FILE)"
+        )
+    body_lines.append("")
+    body_lines.append(
+        "This result was produced by the worker seat. Per "
+        "docs/tasks/0009-ambient-intake.md's non-goals, the worker "
+        "proposes; it does not deploy — nothing above was applied to any "
+        "running system or committed to any repo by this seat."
+    )
+
+    record_id = write_record(
+        jdir,
+        type="result",
+        provenance=request.fields.get("provenance", "requested"),
+        seat="worker",
+        refs=[request.id],
+        body="\n".join(body_lines),
+    )
+    print(record_id)
+    return 0 if ok else 1
 
 
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
@@ -528,6 +780,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_answer = sub.add_parser("answer", help="intake: write an answer record for a question")
     p_answer.add_argument("question_id", help="id of the question record being answered")
+    p_answer.add_argument(
+        "--fact",
+        default=None,
+        help=(
+            "resident-model fact name this answer elicits (Proposal 05's write path). "
+            "Normally read from the question record's own 'fact' field; pass this to "
+            "override, or to supply one for a question that didn't carry it."
+        ),
+    )
     p_answer.add_argument("text", nargs="*", help="the answer body (or piped on stdin)")
     p_answer.set_defaults(func=cmd_answer)
 
@@ -537,6 +798,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_record.add_argument("--seat", required=True, help="which seat is writing this record")
     p_record.add_argument("--refs", default="", help="comma-separated ids this record responds to")
     p_record.add_argument("--evidence", default=None, help="required in spirit on decision records")
+    p_record.add_argument(
+        "--fact",
+        default=None,
+        help="resident-model fact name (question records only, by convention) — see 'castle answer'",
+    )
     p_record.add_argument("--body", default=None, help="record body text")
     p_record.add_argument("--body-file", default=None, help="read the body from this file instead")
     p_record.add_argument(
@@ -546,6 +812,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_route = sub.add_parser("route", help="router: append decision records for unrouted records")
     p_route.set_defaults(func=cmd_route)
+
+    p_work = sub.add_parser("work", help="worker: run the configured tenant against a request")
+    p_work.add_argument("request_id", help="id of the request record to work")
+    p_work.set_defaults(func=cmd_work)
 
     p_digest = sub.add_parser("digest", help="fold the journal into a report")
     p_digest.add_argument("--since", default=None, help="only errands created at/after this timestamp")
