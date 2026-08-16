@@ -8,7 +8,9 @@ tested by implementation before formal adoption. Per CLAUDE.md, drafts
 never enter `docs/principles/`; a principle doc is a commitment. A
 proposal is promoted to a numbered principle only after implementation
 has leaned on it and it held, and each proposal below states the
-hardening test that decides that. Proposed with task 0008.*
+hardening test that decides that. Proposals 03–05 were proposed with
+task 0008; Proposal 06 came out of asking what an outcome actually is,
+and is not yet implemented by anything.*
 
 ## The layer in one paragraph
 
@@ -267,6 +269,101 @@ trustable in year five.
 traces to an explicit exchange, and the audit shows question frequency
 declining while decision accuracy holds. If accuracy can only be
 bought by silently learning from behavior, the proposal failed.
+
+### Proposal 06 — The system may grade its own delivery; it may never grade its own judgment
+
+**Statement.** An outcome comes in two kinds, with unequal authority. A
+**receipt** is the reception of an intervention — dismissed, acted on,
+left untouched — observed only through the surface that delivered it,
+within a window the deciding record declared in advance. A **verdict**
+is a resident-authored judgment: an audit answer, a volunteered
+correction, a keep-or-rollback. Receipts may inform; only verdicts may
+settle. The system may grade how well it delivered; it may never grade
+whether it was right.
+
+**Why the split is the whole point.** Receipts are cheap, continuous,
+and machine-observable; verdicts are expensive, sparse, and
+authoritative. Every system that has gone wrong here went wrong the same
+way: it promoted receipts to verdicts, because receipts were the ones it
+could get for free. That promotion *is* the mechanism of the feed
+algorithm — revealed behavior, harvested continuously, treated as ground
+truth. The design problem was never "how do we get labels." It is "how
+do we keep the two kinds from contaminating each other."
+
+**Teeth.**
+
+- **Decisions declare a falsifier, not a metric.** Every decision record
+  carries one line stating what would make it wrong, mechanically
+  checked for non-emptiness the way `evidence` already is.
+  `unobservable — audit only` is a valid value; blank is not. Requiring
+  a *measurement* instead would force one of two bad moves: building
+  instruments (surveillance) or inventing metrics that measure nothing
+  (engagement theater). Falsifiability gets the discipline — a seat must
+  articulate its own failure condition at write time — without either.
+- **An intervention may watch its own splash; it may never leave a tap
+  running.** Observing the response to a notification the system itself
+  rendered is not surveillance: it is the return half of a round trip
+  the system started. Anything beyond that surface and that window must
+  be declared in the decision record *before* acting. Undeclared or
+  unbounded post-intervention observation is a violation. Sensors answer
+  "may I interrupt"; they are never outcome instruments.
+- **Receipts accumulate into questions and nothing else.** They never
+  write the resident model, never mark a decision right or wrong, never
+  create or remove a rule about whether something is communicated. Four
+  dismissed morning digests earn the system a question ("move it to
+  evening?"), never a silent adjustment. This is Proposal 05's grammar
+  extended from the model to the router: inference opens, the resident
+  closes.
+- **Missing labels degrade the router toward conservatism** — interrupt
+  less, ask smaller — never toward learning from receipts instead.
+
+**On the clause deliberately left out.** An earlier draft let receipts
+tune "salience-neutral delivery mechanics" — batching, timing within an
+already-granted window. It is cut. The line between *how* something
+lands and *whether* it lands is not crisp: a notification batched into
+tomorrow's digest was, functionally, not communicated today. Every other
+proposal here was written strict and can be loosened once lived use
+argues for it; this one starts at receipts-inform-questions-only and the
+mechanics clause has to earn its way in.
+
+**Cost, stated honestly.** The system stays miscalibrated between
+audits, and learning is bottlenecked on the resident's audit attention:
+skip the audits and it does not quietly degrade into a behavioral
+learner, it simply stops learning. Most decisions will die unlabeled —
+and note the cruel structural fact underneath that, which this
+architecture cannot engineer away: this system's *best* outcomes look
+like nothing, and being ignored also looks like nothing. Ambient
+measurement is weakest for exactly the decisions this system most makes.
+A competitor optimizing on receipts calibrates in a week.
+
+**Sequencing.** The two halves are not equally ready. Verdicts are
+buildable now — the `correction` record needs no new machinery, since
+intake already takes free text (see
+`docs/backlog/resident-cannot-speak-unbidden.md`, the resident-authored
+half of this proposal). Receipts need a delivery surface that can
+actually report reception, which mako notifications cannot today
+(dismissed and expired are indistinguishable). Build the verdict half;
+let the receipt half wait for a surface that can produce one, rather
+than shipping speculative infrastructure for sensors that do not exist.
+
+**Hardening test.** After a quarter of lived use: every change in
+routing behavior traces to a verdict or an explicit answer, none to
+receipts alone; the audit runs mechanically off sampled falsifiers in
+under ten minutes; and at least one volunteered correction has traversed
+correction → model entry → visibly changed routing, cited end to end. If
+calibration demonstrably cannot be bought without promoting receipts to
+verdicts, the proposal was wrong, and this paragraph says where.
+
+**Known weak point.** The falsifier requirement is the part of this that
+is schema discipline rather than principle, and it is bundled here
+because it is what makes the audit affordable. It also does not yet earn
+its keep: the router's current rule set is provenance alone, so every
+falsifier it writes would be the same sentence, and a required field
+that is always identical is a ritual rather than a check. That may be an
+argument for falsifiers arriving with the router's second rule, or an
+argument that the router presently writes too many decisions — one per
+routed record — where it should write fewer and coarser ones. Unresolved
+on purpose.
 
 ## Relation to the vision
 
