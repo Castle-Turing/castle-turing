@@ -75,22 +75,30 @@ a gigabyte of progress ticks.
 ## Seats
 
 **Intake** (a surface). Turns a resident's request into a `request`
-record. The first intake is a CLI; a compositor keybinding opening a
-modal, and eventually mail or calendar, are later intakes. An intake
+record. The first intake was a CLI (`castle ask`); a compositor
+keybinding opening a modal — `agent/castle-modal`, bound to
+`$mod+Shift+space` in `modules/home`'s Sway config, docs/tasks/0009 —
+is the second, and eventually mail or calendar will be later ones. The
+modal doubles as the "come back and check in later" surface: its status
+mode folds recent errands from the journal, the same fold `castle
+digest` does, without waiting for a digest period to end. An intake
 adds no judgment — it captures the request and its provenance.
 
 **Router.** The seat the vision calls a core competence: "the
 interruption medium is itself a decision the AI makes." The router
 reads records addressed to the resident — results, questions from any
 seat, anything initiated — together with the resident model and (later)
-sensors, and decides *channel and timing*: interrupt now, defer to a
-visible moment, fold into the digest, stay silent. Its one hard
-obligation: **no routing without an appended decision record citing
-its evidence.** A worker that needs the resident's input mid-errand
-does not get to interrupt either — it appends a `question` record, and
-the router decides when and how that question reaches a human. The
-question economy is a property of the plumbing, not a policy anyone
-must remember.
+sensors, and decides *channel and timing*. Two channels exist today:
+**notify** — a real interruption, `notify-send` through mako
+(`modules/desktop`), for `requested` work — and **digest** — folded
+into the next digest read, for `initiated` work (see Provenance,
+below). Its one hard obligation: **no routing without an appended
+decision record citing its evidence.** A worker that needs the
+resident's input mid-errand does not get to interrupt either — it
+appends a `question` record, and the router decides when and how that
+question reaches a human, through the same two channels. The question
+economy is a property of the plumbing, not a policy anyone must
+remember.
 
 **Worker.** Executes errands. Its contract sits at the *errand
 boundary*, never the model-call boundary: a `request` record in; a
@@ -98,6 +106,14 @@ boundary*, never the model-call boundary: a `request` record in; a
 out. Inside the seat the harness is free — which is what lets a human
 drive the seat manually before any harness exists, and lets the
 harness be replaced without the structure noticing.
+`castle.agent.worker.command` (`modules/agent`) names whatever holds
+this seat — a headless `claude -p` by default (`agent/castle-worker-claude`,
+docs/tasks/0009). One product-level constraint holds regardless of
+tenant: **the worker proposes a diff; it never deploys.** No
+`nixos-rebuild`, no `git commit`, no applying anything to a running
+system, from this seat, in this slice — applying a reviewed diff stays
+a resident action. Autonomous deployment is a real authority-taxonomy
+question for a later task, not a side effect of this one.
 
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers

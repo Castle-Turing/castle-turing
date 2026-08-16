@@ -65,20 +65,31 @@ The exported modules:
   bound, plus your git commit identity from `castle.person.*`. Optional:
   a headless host has no use for a per-user environment.
 - `nixosModules.desktop` — the graphical session: Sway (with its IPC
-  socket as the documented control surface a future agent layer will
-  drive), foot, fonts, XDG portals, PipeWire, Firefox, and greetd +
-  tuigreet for login. Deliberately no auto-login — see the module's own
-  comments for why. Asserts `castle.admin.initialHashedPassword` is set,
-  since a login prompt with no password behind it is a lockout, not
-  security. Optional: skip it on a headless host.
+  socket as the documented control surface the agent layer drives —
+  `modules/home`'s Sway config is the first thing that actually drives
+  it, docs/tasks/0009), foot, fonts, XDG portals, PipeWire, Firefox,
+  mako (the notification daemon behind the agent layer's `notify`
+  channel) + libnotify, a cursor theme package, and greetd + tuigreet
+  for login. Also declares the `castle.display.*` options — see "The
+  display-preference slot" below. Deliberately no auto-login — see the
+  module's own comments for why. Asserts `castle.admin.initialHashedPassword`
+  is set, since a login prompt with no password behind it is a lockout,
+  not security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
   gh, ripgrep, fd, claude-code). No private data, no assertions.
-- `nixosModules.agent` — the agent layer's CLI (`castle`) and the
-  `castle.agent.stateDir` option, wired into `CASTLE_STATE_DIR`. See
-  "The agent's state" below and `agent/README.md`. No assertions: an
-  unset `stateDir` just falls back to a per-user default rather than
-  failing evaluation, since the agent layer is optional the way
-  `desktop`/`dev` are.
+- `nixosModules.agent` — the agent layer's CLI (`castle`, plus
+  `castle-modal` and the default `castle-worker-claude` worker tenant)
+  and three options: `castle.agent.stateDir` (wired into
+  `CASTLE_STATE_DIR`), `castle.agent.worker.command` (wired into
+  `CASTLE_WORKER_COMMAND` — which tenant holds the worker seat), and
+  `castle.agent.notify.command` (wired into `CASTLE_NOTIFY_COMMAND` —
+  what the router's `notify` channel actually runs). See "The agent's
+  state" below and `agent/README.md`. No assertions: an unset
+  `stateDir`/`notify.command` just falls back to a per-user or built-in
+  default rather than failing evaluation, since the agent layer is
+  optional the way `desktop`/`dev` are; `worker.command` always has a
+  runnable default (a headless `claude -p`) since the worker seat needs
+  *something* to default to.
 - `nixosModules.installer` — the agentic installer image: bootable NixOS
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
@@ -115,6 +126,25 @@ The values this repo may never contain:
   # a per-user default under $XDG_STATE_HOME — see "The agent's state"
   # below.
   castle.agent.stateDir = "/home/<your-login>/private/state";
+
+  # Optional — override the worker tenant (default: a headless
+  # `claude -p`, see agent/castle-worker-claude) or the router's notify
+  # command (default: notify-send on $PATH). Most residents on
+  # nixosModules.desktop need neither.
+  # castle.agent.worker.command = "/path/to/your/own/worker/tenant";
+  # castle.agent.notify.command = "";  # e.g. to no-op on a headless host
+
+  # Optional — taste, only meaningful if you use nixosModules.desktop.
+  # hosts/xps9370 already supplies hardware-derived scale/cursor
+  # defaults for that chassis; override any of the four here to your
+  # own preference regardless of host — see "The display-preference
+  # slot" below.
+  castle.display = {
+    # scale = 1.5;
+    # cursorTheme = "Bibata-Modern-Ice";  # or your own cursor package
+    # cursorSize = 32;
+    # terminalFontSize = 11;
+  };
 }
 ```
 
@@ -143,6 +173,50 @@ The values this repo may never contain:
   `$XDG_STATE_HOME/castle`, a reasonable per-user default but not the
   durable, git-tracked location the architecture calls for. See "The
   agent's state" below.
+- `castle.agent.worker.command` — which tenant holds the worker seat
+  (docs/architecture.md's Proposal 03). Defaults to a headless
+  `claude -p` (`agent/castle-worker-claude`); override only if you're
+  running a different tenant. Whatever holds this seat, it never
+  deploys — see `agent/README.md`.
+- `castle.agent.notify.command` — what the router's `notify` channel
+  actually runs (docs/architecture.md). Defaults to plain `notify-send`
+  on `$PATH`, which is real once `nixosModules.desktop` is imported
+  (it installs mako + libnotify); set to `""` on a headless host to
+  no-op the attempt outright.
+- `castle.display.{scale,cursorTheme,cursorSize,terminalFontSize}` —
+  taste, only meaningful with `nixosModules.desktop`. See "The
+  display-preference slot" below.
+
+## The display-preference slot
+
+`modules/desktop` declares four options — `castle.display.scale`,
+`.cursorTheme`, `.cursorSize`, `.terminalFontSize` — all `nullOr`,
+defaulting to `null` ("framework default": leave that setting alone
+entirely). Three layers can resolve a value, in ascending priority:
+this module's `null` default; a host module's hardware-derived default
+via `lib.mkDefault` (`hosts/xps9370` sets `scale`, `cursorTheme`, and
+`cursorSize` this way, since a panel's physical DPI is a machine fact —
+Principle 01 consequence 2, "hosts are modules"); and your own
+`resident.nix`, which overrides outright and always wins. `nix flake
+check` proves all three layers resolve correctly via an assertion in
+this repo's `nixosConfigurations.example` (`flake.nix`) — read it if
+you want to see the exact resolution the layering guarantees.
+
+Two of the four are simple values (`cursorSize`, `terminalFontSize` are
+plain integers; `scale` is a float — Sway's own output-scale unit).
+`cursorTheme` is a *name*, and it only means something paired with a
+package that ships a theme by that name: `modules/desktop` installs
+`pkgs.bibata-cursors` so the option has something real to point at out
+of the box (`hosts/xps9370` defaults to its `"Bibata-Modern-Classic"`
+theme) — if you want a different cursor theme, add its package to your
+own private-layer config and set `cursorTheme` to one of *its* theme
+names. Note the dependency this creates: `cursorSize` only takes effect
+once `cursorTheme` is non-null anywhere in the stack (an unset theme
+leaves the whole `home.pointerCursor` slot untouched, by design — see
+`modules/desktop`'s option description) — on `hosts/xps9370` that's
+already satisfied by the host's own default, but if you override
+`cursorTheme` to `null` explicitly to opt back out of a managed cursor
+theme, `cursorSize` goes inert with it.
 
 ## The agent's state
 
