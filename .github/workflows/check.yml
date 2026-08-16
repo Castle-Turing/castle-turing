@@ -46,3 +46,111 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: test/agent-loop/modal-headless-test.sh
+
+  # docs/tasks/0009 gave this repo its first managed Sway config
+  # (modules/home's wayland.windowManager.sway) and a foot config
+  # alongside it, but flake-check above only proves the *Nix options*
+  # evaluate — it never asks Sway's or foot's own parser to look at
+  # the file they actually produce. That gap matters more than usual
+  # here: modules/desktop deliberately runs no auto-login
+  # (greetd+tuigreet — see that module's header comment and
+  # docs/tasks/0003-findings.md finding #1), so a Sway config that
+  # fails to parse turns into a resident stuck at a login prompt that
+  # can never produce a session — the exact lockout class this project
+  # has scar tissue about. This job closes that gap directly.
+  #
+  # It deliberately does NOT lean on home-manager's own
+  # `wayland.windowManager.sway.checkConfig` option, even though that
+  # option defaults to true today and (per modules/services/window-
+  # managers/i3-sway/sway.nix at this flake's pinned home-manager rev,
+  # see flake.lock) already runs an equivalent check as a side effect
+  # of *building* the generated config's derivation. checkConfig is
+  # just another Nix option — something could flip it false for an
+  # unrelated reason later and silently reopen this exact hole. This
+  # job builds the config/package store paths itself and runs each
+  # program's real parser over the real file, independent of that
+  # upstream default.
+  sway-config-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Build the generated configs and the packages that read them
+        run: |
+          # Attribute paths below were confirmed by reading
+          # home-manager's actual module source at this flake's pinned
+          # rev (flake.lock: home-manager rev
+          # c8058ecc1329a71a3c99c4d0353dba4009a66152) — not guessed:
+          #   * modules/services/window-managers/i3-sway/sway.nix
+          #     writes the rendered Sway config as the derivation at
+          #     `xdg.configFile."sway/config".source` (a
+          #     pkgs.writeTextFile home-manager names "sway.conf"),
+          #     and wires up `wayland.windowManager.sway.package`
+          #     (pkgs.sway.override { wrapperFeatures.gtk = true; ...}
+          #     per modules/home — not bare pkgs.sway, which may carry
+          #     different wrapper flags) as the binary that reads it.
+          #   * modules/programs/foot.nix does the same for foot:
+          #     `xdg.configFile."foot/foot.ini".source` (present only
+          #     when programs.foot.settings is non-empty, which it is
+          #     here via nixosConfigurations.example's
+          #     terminalFontSize override) and `programs.foot.package`.
+          # Both live under `config.home-manager.users.resident`
+          # because nixosConfigurations.example wires modules/home's
+          # home-manager.users.${castle.admin.username}, and that
+          # flake sets castle.admin.username = "resident" as its
+          # placeholder resident.
+          HM='.#nixosConfigurations.example.config.home-manager.users.resident'
+
+          SWAY_CONFIG=$(nix build --no-link --print-out-paths "$HM.xdg.configFile.\"sway/config\".source")
+          SWAY_PKG=$(nix build --no-link --print-out-paths "$HM.wayland.windowManager.sway.package")
+          FOOT_CONFIG=$(nix build --no-link --print-out-paths "$HM.xdg.configFile.\"foot/foot.ini\".source")
+          FOOT_PKG=$(nix build --no-link --print-out-paths "$HM.programs.foot.package")
+          # xvfb-run pulled from the exact same nixpkgs instance this
+          # system uses (nixosSystem exposes `pkgs` alongside `config`
+          # at the top level) so it can't drift from the pin above.
+          XVFB_RUN=$(nix build --no-link --print-out-paths '.#nixosConfigurations.example.pkgs.xvfb-run')/bin/xvfb-run
+
+          {
+            echo "SWAY_CONFIG=$SWAY_CONFIG"
+            echo "SWAY_PKG=$SWAY_PKG"
+            echo "FOOT_CONFIG=$FOOT_CONFIG"
+            echo "FOOT_PKG=$FOOT_PKG"
+            echo "XVFB_RUN=$XVFB_RUN"
+          } >> "$GITHUB_ENV"
+
+          echo "--- generated sway config ($SWAY_CONFIG) ---"
+          cat "$SWAY_CONFIG"
+          echo "--- generated foot config ($FOOT_CONFIG) ---"
+          cat "$FOOT_CONFIG"
+
+      - name: Run sway --validate over the generated config
+        run: |
+          # --validate parses the config and exits without starting a
+          # real session, but Sway still does some startup probing
+          # even in validate mode (swaywm/sway#4691), so it needs
+          # *something* to attach to and a GPU it's willing to run on
+          # even headlessly: xvfb-run supplies a throwaway X server
+          # for that, and --unsupported-gpu waives the GPU check. This
+          # is the identical flag combination home-manager's own
+          # checkPhase uses (see the previous step's comment) — copied
+          # here deliberately so this check keeps working even if this
+          # repo ever turns checkConfig off. DBUS_SESSION_BUS_ADDRESS
+          # and a scratch, private XDG_RUNTIME_DIR keep Sway from
+          # reaching for a real session bus or runtime dir that
+          # doesn't exist on this runner — this is a validate run, not
+          # a real session, so no seat and no compositor are needed or
+          # provided.
+          export DBUS_SESSION_BUS_ADDRESS=/dev/null
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          chmod 700 "$XDG_RUNTIME_DIR"
+          "$XVFB_RUN" "$SWAY_PKG/bin/sway" --config "$SWAY_CONFIG" --validate --unsupported-gpu
+
+      - name: Run foot --check-config over the generated config
+        run: |
+          # foot ships its own config-check mode (-C/--check-config):
+          # parses the file and exits 0 (ok) or 230 (invalid), with no
+          # Wayland connection needed — it exists for exactly this,
+          # validating a config without opening a terminal. No xvfb
+          # needed here, unlike Sway above.
+          "$FOOT_PKG/bin/foot" --check-config --config "$FOOT_CONFIG"
