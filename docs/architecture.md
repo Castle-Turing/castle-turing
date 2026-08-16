@@ -39,7 +39,8 @@ referencing the old one.
 Frontmatter fields, minimum set:
 
 - `id` — unique, sortable (timestamp-prefixed).
-- `type` — `request`, `decision`, `result`, `question`, `answer`.
+- `type` — `request`, `decision`, `result`, `question`, `answer`,
+  `correction`.
 - `provenance` — `requested` (the resident asked for this) or
   `initiated` (the system undertook it on its own). See below.
 - `refs` — ids of the records this one responds to.
@@ -49,6 +50,18 @@ Frontmatter fields, minimum set:
 Decision records carry one more required field: `evidence` (see
 Proposal 04). The body carries the prose — a request's description, a
 diagnosis, a decision's rationale.
+
+A `correction` (docs/tasks/0010-correction-record.md) is the resident
+speaking unbidden — not asking for anything, not answering a question
+the system posed, but volunteering a judgment about how the system is
+doing. It carries `provenance: requested` and `seat: intake` like any
+other resident word entering through that seat, plus one mechanical
+field, `surface` (`cli` or `modal`), and a handful of `context-*`
+fields stamped at write time from what the journal showed at that
+instant — never a causal claim, only what was true then (see
+`agent/README.md` for the exact fields). It is the durable half of
+Proposal 06's verdict; the resident-model entry it also produces is the
+half the router actually reads.
 
 The exact schema is versioned with the tooling in `agent/`; this
 document fixes only the commitments above.
@@ -85,6 +98,15 @@ modal doubles as the "come back and check in later" surface: its status
 mode folds recent errands from the journal, the same fold `castle
 digest` does, without waiting for a digest period to end. An intake
 adds no judgment — it captures the request and its provenance.
+
+The same surfaces also take a second kind of speech: a `correction`,
+the resident volunteering how the system is doing rather than asking
+for anything (`castle correct`; the modal's compose mode, after one
+plain-language keypress — docs/tasks/0010-correction-record.md). Intake
+stays judgment-free either way — the resident classifies which kind of
+speech this is, the surface never guesses — and transcription is
+mechanical and verbatim: no seat paraphrases a correction, at write
+time or ever.
 
 **Router.** The seat the vision calls a core competence: "the
 interruption medium is itself a decision the AI makes." The router
