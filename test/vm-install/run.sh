@@ -32,6 +32,7 @@ SSH_PORT="${CASTLE_HARNESS_SSH_PORT:-10222}"
 BOOT_TIMEOUT="${CASTLE_HARNESS_BOOT_TIMEOUT:-180}"
 
 QEMU_PID=""
+SUCCESS=""
 
 log() { printf '>>> %s\n' "$*"; }
 fail() {
@@ -51,6 +52,21 @@ cleanup() {
     kill -9 "$QEMU_PID" 2>/dev/null || true
     wait "$QEMU_PID" 2>/dev/null || true
   fi
+  if [ -n "$SUCCESS" ]; then
+    # Success: the harness is done with the heavy state, so drop the 8G
+    # disk image, the mutable NVRAM copy, and the throwaway keys —
+    # repeated local runs would otherwise accumulate disk images.
+    # Logs always survive: fail() and the runbook both point at
+    # $LOG_DIR. When the log dir lives outside the workdir (CI always
+    # sets CASTLE_HARNESS_LOG_DIR to a workspace path), the workdir has
+    # nothing worth keeping and goes wholesale; when the logs live
+    # inside it (the local default), keep the directory.
+    rm -f "$DISK" "$OVMF_VARS" "$ADMIN_KEY" "$ADMIN_PUB"
+    case "$LOG_DIR/" in
+      "$WORKDIR"/*) ;;
+      *) rm -rf "$WORKDIR" ;;
+    esac
+  fi
 }
 trap cleanup EXIT
 
@@ -64,20 +80,20 @@ build_expr() {
   # breaking the single-path assumption every caller here makes.
   nix build --impure "${NIX_BUILD_ARGS[@]}" --expr "$1" | head -n1
 }
-build_pkg() {
-  # Caller supplies the exact attribute path, including any output
-  # selector needed (e.g. "openssh.out", or plain "OVMF.fd" — OVMF.fd is
-  # already a specific output of the OVMF derivation, and appending
-  # ".out" to it re-selects OVMF's plain "out" output instead, discarding
-  # the ".fd" narrowing).
-  build_expr "(import \"$HARNESS_DIR/pkgs.nix\").$1"
-}
 
 log "Building harness tooling (qemu, OVMF, nixos-anywhere, openssh) from this flake's pinned nixpkgs..."
-QEMU=$(build_pkg qemu.out)
-OVMF=$(build_pkg OVMF.fd)
-NIXOS_ANYWHERE=$(build_pkg nixos-anywhere.out)
-OPENSSH=$(build_pkg openssh.out)
+# One linkFarm build, not four sequential `nix build --impure --expr`
+# calls: this evaluates pkgs.nix once and builds the four derivations in
+# parallel inside a single nix invocation, turning a sum of build times
+# into a max. The output selectors are the same attribute accesses the
+# per-package calls used ("OVMF.fd" is already a specific output of the
+# OVMF derivation — appending ".out" to it would re-select OVMF's plain
+# "out" output instead, discarding the ".fd" narrowing).
+TOOLS=$(build_expr "let pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"harness-tools\" { qemu = pkgs.qemu.out; \"OVMF.fd\" = pkgs.OVMF.fd; nixos-anywhere = pkgs.nixos-anywhere.out; openssh = pkgs.openssh.out; }")
+QEMU=$(readlink -f "$TOOLS/qemu")
+OVMF=$(readlink -f "$TOOLS/OVMF.fd")
+NIXOS_ANYWHERE=$(readlink -f "$TOOLS/nixos-anywhere")
+OPENSSH=$(readlink -f "$TOOLS/openssh")
 
 QEMU_BIN="$QEMU/bin/qemu-system-x86_64"
 QEMU_IMG_BIN="$QEMU/bin/qemu-img"
@@ -93,22 +109,37 @@ ADMIN_KEY="$WORKDIR/admin_key"
 "$SSH_KEYGEN_BIN" -q -t ed25519 -N "" -C "castle-turing-harness" -f "$ADMIN_KEY"
 ADMIN_PUB="$ADMIN_KEY.pub"
 
-log "Building the installer image (flake.nixosModules.installer, docs/tasks/0006)..."
-ISO_OUT=$(build_expr "(import \"$HARNESS_DIR/installer.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.isoImage")
+log "Building the installer image (flake.nixosModules.installer, docs/tasks/0006) and the target system (hosts/vm-test + a throwaway admin key) in parallel..."
+# Two independent evaluations, so one backgrounded nix invocation each,
+# then wait — the sum becomes a max. The two artifacts of the target
+# system (TOPLEVEL and DISKO_SCRIPT) come from a single linkFarm
+# expression: they used to come from two separate `nix build --impure
+# --expr` calls that each independently imported vm-test-system.nix, so
+# the full nixosSystem evaluation (including its self-referential
+# getFlake) ran twice per harness run — docs/tasks/0006-installer-
+# image.md's parked-cleanup item. The linkFarm evaluates
+# vm-test-system.nix exactly once and exposes both outputs as named
+# symlinks in one derivation; the artifacts are then resolved to their
+# real store paths (readlink -f) rather than passed to nixos-anywhere as
+# symlinks living inside the linkFarm's own output.
+ISO_OUT_FILE="$WORKDIR/iso-out.txt"
+ARTIFACTS_FILE="$WORKDIR/artifacts-out.txt"
+build_expr "(import \"$HARNESS_DIR/installer.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.isoImage" >"$ISO_OUT_FILE" &
+ISO_BUILD_PID=$!
+build_expr "let system = import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }; pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"vm-test-artifacts\" { toplevel = system.config.system.build.toplevel; diskoScript = system.config.system.build.diskoScript; }" >"$ARTIFACTS_FILE" &
+ARTIFACTS_BUILD_PID=$!
+ISO_STATUS=0
+ARTIFACTS_STATUS=0
+wait "$ISO_BUILD_PID" || ISO_STATUS=$?
+wait "$ARTIFACTS_BUILD_PID" || ARTIFACTS_STATUS=$?
+# On failure the build's stderr is already on the terminal; name which
+# one died rather than letting the exit status alone tell the story.
+[ "$ISO_STATUS" -eq 0 ] || fail "installer ISO build failed (see output above)"
+[ "$ARTIFACTS_STATUS" -eq 0 ] || fail "target system build failed (see output above)"
+ISO_OUT=$(head -n1 "$ISO_OUT_FILE")
 ISO_PATH=$(find "$ISO_OUT/iso" -maxdepth 1 -name '*.iso' | head -n1)
 [ -n "$ISO_PATH" ] || fail "installer ISO build produced no .iso file"
-
-log "Building the target system (hosts/vm-test + a throwaway admin key)..."
-# One nix build, not two: TOPLEVEL and DISKO_SCRIPT used to come from two
-# separate `nix build --impure --expr` calls that each independently
-# imported vm-test-system.nix, so the full nixosSystem evaluation
-# (including its self-referential getFlake) ran twice per harness run —
-# docs/tasks/0006-installer-image.md's parked-cleanup item. A linkFarm
-# evaluates vm-test-system.nix exactly once and exposes both outputs as
-# named symlinks in one derivation; the two artifacts are then resolved
-# to their real store paths (readlink -f) rather than passed to
-# nixos-anywhere as symlinks living inside the linkFarm's own output.
-ARTIFACTS=$(build_expr "let system = import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }; pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"vm-test-artifacts\" { toplevel = system.config.system.build.toplevel; diskoScript = system.config.system.build.diskoScript; }")
+ARTIFACTS=$(head -n1 "$ARTIFACTS_FILE")
 TOPLEVEL=$(readlink -f "$ARTIFACTS/toplevel")
 DISKO_SCRIPT=$(readlink -f "$ARTIFACTS/diskoScript")
 
@@ -178,26 +209,49 @@ stop_qemu_hard() {
   sleep 1
 }
 
-# wait_for_ssh <user> <timeout-seconds>
+# wait_for_ssh <user> <timeout-seconds> <serial-log>
+# Polls SSH by key until it answers or the deadline passes. The SSH
+# attempt itself is the only signal that counts; the phase's serial log
+# (already being captured by qemu) is watched to pace the polling —
+# once getty prints its login prompt the boot has progressed far enough
+# that sshd can be up, so poll tightly; before that, poll loosely.
 wait_for_ssh() {
-  local user="$1" timeout="$2"
+  local user="$1" timeout="$2" serial_log="$3"
   local deadline=$((SECONDS + timeout))
   while (( SECONDS < deadline )); do
     if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" "$user@127.0.0.1" true 2>/dev/null; then
       return 0
     fi
-    sleep 3
+    if [ -f "$serial_log" ] && grep -q "login:" "$serial_log"; then
+      sleep 0.5
+    else
+      sleep 1
+    fi
   done
   return 1
 }
 
+# assert_boots <phase> <user> <fail-message> <pass-message> [qemu args...]
+# The shared shape of every boot assertion: start QEMU for the phase,
+# wait for SSH by key, fail with the caller's message or log its PASS.
+# Callers that must stop the previous boot first (phases 3 and 4) do
+# that themselves before calling.
+assert_boots() {
+  local phase="$1" user="$2" msg="$3" passmsg="$4"
+  shift 4
+  start_qemu "$phase" "$@"
+  if ! wait_for_ssh "$user" "$BOOT_TIMEOUT" "$LOG_DIR/$phase.serial.log"; then
+    fail "$msg"
+  fi
+  log "[$phase] PASS: $passmsg"
+}
+
 # --- Phase 1: boot the installer, run the real install path ---------------
 log "[phase1] Booting installer image..."
-start_qemu phase1-installer -cdrom "$ISO_PATH" -boot order=d
-if ! wait_for_ssh root "$BOOT_TIMEOUT"; then
-  fail "assertion failed: the installer image is SSH-reachable by key with zero console interaction within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0003-findings.md finding #3, closed by docs/tasks/0006-installer-image.md"
-fi
-log "[phase1] PASS: installer SSH-reachable by key with zero console interaction."
+assert_boots phase1-installer root \
+  "assertion failed: the installer image is SSH-reachable by key with zero console interaction within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0003-findings.md finding #3, closed by docs/tasks/0006-installer-image.md" \
+  "installer SSH-reachable by key with zero console interaction." \
+  -cdrom "$ISO_PATH" -boot order=d
 log "[phase1] Running nixos-anywhere (disko + install)..."
 if ! "$NIXOS_ANYWHERE_BIN" \
     --store-paths "$DISKO_SCRIPT" "$TOPLEVEL" \
@@ -259,11 +313,10 @@ stop_qemu_hard
 
 # --- Phase 2: first real boot, installer detached, zero console interaction
 log "[phase2] Booting from the installed disk only (no installer media attached)..."
-start_qemu phase2-first-boot -boot order=c
-if ! wait_for_ssh harness "$BOOT_TIMEOUT"; then
-  fail "assertion failed: SSH as admin, by key, with zero console interaction (first-boot lockout regression — see $LOG_DIR/phase2-first-boot.serial.log)"
-fi
-log "[phase2] PASS: SSH as admin came up with zero console interaction, installer detached."
+assert_boots phase2-first-boot harness \
+  "assertion failed: SSH as admin, by key, with zero console interaction (first-boot lockout regression — see $LOG_DIR/phase2-first-boot.serial.log)" \
+  "SSH as admin came up with zero console interaction, installer detached." \
+  -boot order=c
 
 # --- Phase 2b: graphical target reached, Sway IPC socket present ----------
 # A GUI can't be driven headlessly, but "the compositor started and is
@@ -282,7 +335,7 @@ while (( SECONDS < GRAPHICAL_DEADLINE )); do
     GRAPHICAL_OK=1
     break
   fi
-  sleep 3
+  sleep 1
 done
 [ -n "$GRAPHICAL_OK" ] || fail "assertion failed: graphical.target was not reached within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase2-first-boot.serial.log)"
 log "[phase2b] PASS: graphical.target reached."
@@ -303,22 +356,21 @@ log "[phase2b] PASS: Sway IPC socket present and answered swaymsg."
 # --- Phase 3: power-cycle (hard stop + restart), NVRAM intact -------------
 log "[phase3] Power-cycling (hard stop, then restart with NVRAM intact)..."
 stop_qemu_hard
-start_qemu phase3-power-cycle -boot order=c
-if ! wait_for_ssh harness "$BOOT_TIMEOUT"; then
-  fail "assertion failed: survive a power-cycle (see $LOG_DIR/phase3-power-cycle.serial.log)"
-fi
-log "[phase3] PASS: survived a hard stop and restart."
+assert_boots phase3-power-cycle harness \
+  "assertion failed: survive a power-cycle (see $LOG_DIR/phase3-power-cycle.serial.log)" \
+  "survived a hard stop and restart." \
+  -boot order=c
 
 # --- Phase 4: NVRAM wipe, forcing the ESP fallback boot path --------------
 log "[phase4] Wiping NVRAM (fresh OVMF vars) and restarting — firmware must fall back to EFI/BOOT/BOOTX64.EFI..."
 stop_qemu_hard
 cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS"
 chmod u+w "$OVMF_VARS"
-start_qemu phase4-nvram-wipe -boot order=c
-if ! wait_for_ssh harness "$BOOT_TIMEOUT"; then
-  fail "assertion failed: survive an NVRAM wipe via the ESP fallback path (see $LOG_DIR/phase4-nvram-wipe.serial.log) — this is the dead-CMOS regression docs/tasks/0003-findings.md #2/#5 describes"
-fi
-log "[phase4] PASS: survived an NVRAM wipe via the ESP fallback path."
+assert_boots phase4-nvram-wipe harness \
+  "assertion failed: survive an NVRAM wipe via the ESP fallback path (see $LOG_DIR/phase4-nvram-wipe.serial.log) — this is the dead-CMOS regression docs/tasks/0003-findings.md #2/#5 describes" \
+  "survived an NVRAM wipe via the ESP fallback path." \
+  -boot order=c
 
 stop_qemu_hard
+SUCCESS=1
 log "All assertions passed. Logs: $LOG_DIR"

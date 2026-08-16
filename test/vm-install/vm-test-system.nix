@@ -28,7 +28,7 @@
 let
   flake = builtins.getFlake (toString ../..);
   lib = flake.inputs.nixpkgs.lib;
-  pubkey = lib.removeSuffix "\n" (builtins.readFile pubkeyFile);
+  pubkey = lib.fileContents pubkeyFile;
 in
 flake.inputs.nixpkgs.lib.nixosSystem {
   system = "x86_64-linux";

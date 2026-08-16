@@ -4,8 +4,27 @@ name: vm-install-test
 # nixos-anywhere install path against a QEMU/OVMF VM and goes red when the
 # mechanism regresses. Only runs when something that could plausibly
 # affect it changes — it's the slowest job in the repo by a wide margin.
+#
+# Runs on PRs (the gate) and on merges to main. The main runs are not a
+# second gate — they exist so the Nix store cache below lands in a scope
+# other PRs can read. Actions caches written by a PR run are scoped to
+# that PR's own ref; only caches written on the default branch are
+# readable repo-wide. Without the push trigger the cache warms nothing
+# but re-pushes to the same PR. Paths are duplicated rather than shared
+# via a YAML anchor: GitHub Actions does not expand anchors in workflow
+# files.
 on:
   pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "modules/**"
+      - "hosts/**"
+      - "test/vm-install/**"
+      - ".github/workflows/vm-install-test.yml"
+  push:
+    branches:
+      - main
     paths:
       - "flake.nix"
       - "flake.lock"
@@ -17,6 +36,10 @@ on:
 jobs:
   vm-install-test:
     runs-on: ubuntu-latest
+    # magic-nix-cache-action authenticates to the cache via OIDC.
+    permissions:
+      contents: read
+      id-token: write
     # Bumped from 25: docs/tasks/0005 added modules/desktop (Sway, Firefox,
     # fonts, portals, PipeWire) to the system under test, a meaningfully
     # bigger closure than modules/base alone, even mostly cache-substituted.
@@ -25,6 +48,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: DeterminateSystems/nix-installer-action@v22
+
+      # The dominant CI cost is re-substituting QEMU, OVMF, nixos-anywhere
+      # and the full system closure on every run. magic-nix-cache-action
+      # backs the store with GitHub's Actions cache, invalidating
+      # fine-grained by store path (not by flake.lock hash). Same vendor
+      # as the installer action above.
+      #
+      # Expect partial warmth, not a cold-start elimination: GitHub caps
+      # the Actions cache at 10 GB per repository and this job's closures
+      # (desktop system + installer ISO + QEMU/OVMF) are large enough to
+      # push entries out by LRU. The first run under this action logged
+      # ~140 "rate limit exceeded"/"throttled Magic Nix Cache" responses,
+      # so measure the runtime delta — including the post-job upload,
+      # which counts against timeout-minutes below — before claiming a win.
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
 
       # GitHub's hosted Ubuntu runners support nested virtualization, but
       # /dev/kvm isn't group-writable by default — this is the standard
