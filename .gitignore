@@ -3,3 +3,7 @@ result-*
 .direnv/
 .DS_Store
 test/vm-install/harness-logs/
+
+# Claude Code local state: machine-specific permissions, not shared config.
+# The project skill in .claude/skills/ IS committed and travels with the repo.
+.claude/settings.local.json
