@@ -312,6 +312,18 @@ echo "$DIGEST_OUT_2" | grep -q "Filing-time context test: you pinged me right af
 CORRECTION1_CREATED="$(sed -n 's/^created: //p' "$CORRECTION1_FILE")"
 echo "$DIGEST_OUT_2" | grep -q "$CORRECTION1_CREATED" || fail "digest did not render correction $CORRECTION1's created time"
 
+# A correction is rendered in exactly ONE place — its own section, never
+# the errand fold. $CORRECTION_WITH_REFS was filed with --refs $REQ1, which
+# is legal, so _collect_downstream's refs walk reaches it from that errand;
+# without an explicit type filter it printed twice, contradicting both the
+# Corrections preamble ("Not an errand") and cmd_digest's own docstring.
+# Asserting only "the text appears somewhere" is what let that through, so
+# assert the count and the section it lands in.
+CORRECTION_WITH_REFS_HEADINGS="$(echo "$DIGEST_OUT_2" | grep -c "### correction $CORRECTION_WITH_REFS" || true)"
+[ "$CORRECTION_WITH_REFS_HEADINGS" -eq 0 ] || fail "correction $CORRECTION_WITH_REFS (filed with --refs $REQ1) was folded into an errand as '### correction ...'; corrections belong only in the Corrections section"
+CORRECTION_WITH_REFS_LINES="$(echo "$DIGEST_OUT_2" | grep -c "Round-trip check: this correction is about request" || true)"
+[ "$CORRECTION_WITH_REFS_LINES" -eq 1 ] || fail "correction $CORRECTION_WITH_REFS rendered $CORRECTION_WITH_REFS_LINES times in the digest, expected exactly 1"
+
 log "independent structural assertions, re-run over the final journal (evidence non-empty, nothing routed silently, no decision routes a correction)"
 "$CHECK" "$CASTLE_STATE_DIR/journal"
 

@@ -1061,7 +1061,19 @@ def cmd_digest(args: argparse.Namespace) -> int:
         if req.body.strip():
             print(req.body.strip())
             print()
-        downstream = _collect_downstream(records, req.id)
+        # Corrections are filtered out of the errand fold on purpose, and
+        # this is the only place that filtering can happen:
+        # `_collect_downstream` walks `refs` chains over every record type,
+        # and `castle correct --refs <request-id>` is legal (cmd_correct
+        # validates that a ref resolves, not what type it resolves to). So
+        # a correction that cites the errand it was provoked by would
+        # otherwise be swept into this fold *and* printed again in the
+        # Corrections section below — contradicting both this function's
+        # docstring and that section's own preamble ("Not an errand").
+        # Corrections render in exactly one place: their own section.
+        downstream = [
+            rec for rec in _collect_downstream(records, req.id) if rec.type != "correction"
+        ]
         downstream.sort(key=lambda r: r.id)
         for rec in downstream:
             print(f"### {rec.type} {rec.id} (seat: {rec.fields.get('seat')})")
