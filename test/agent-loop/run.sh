@@ -158,7 +158,7 @@ grep -q '^channel: notify$' "$DECISION_FOR_Q1" || fail "the requested errand's q
 DECISION_FOR_Q2="$(grep -l "^refs: $QUESTION2\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md || true)"
 grep -q '^channel: digest$' "$DECISION_FOR_Q2" || fail "the initiated errand's question did not route to 'digest': $DECISION_FOR_Q2"
 
-log "propensity fields: every decision castle route writes must carry considered + confidence, well-formed"
+log "propensity fields: every decision castle route writes must carry considered + propensity, well-formed"
 # Bottou et al. (JMLR 14, 2013): off-policy evaluation needs the
 # considered set and the selection propensity on every logged decision.
 # Checked on all four decisions from this pass (two results, two
@@ -167,7 +167,7 @@ log "propensity fields: every decision castle route writes must carry considered
 # that only showed up on, say, the digest-channel branch.
 for DECISION_FILE in "$DECISION_FOR_RES1" "$DECISION_FOR_RES2" "$DECISION_FOR_Q1" "$DECISION_FOR_Q2"; do
   grep -q '^considered: notify,digest$' "$DECISION_FILE" || fail "$DECISION_FILE: expected considered=notify,digest (today's router always weighs both channels)"
-  grep -q '^confidence: 1\.0$' "$DECISION_FILE" || fail "$DECISION_FILE: expected confidence=1.0 (today's rule is deterministic — see agent/README.md)"
+  grep -q '^propensity: 1\.0$' "$DECISION_FILE" || fail "$DECISION_FILE: expected propensity=1.0 (today's rule is deterministic — see agent/README.md)"
 done
 
 log "resident-model write path (Proposal 05): answering the alpha question, fact name read from the question record itself"
@@ -222,29 +222,29 @@ JOURNAL_COUNT_AFTER_NL="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l 
 [ "$JOURNAL_COUNT_AFTER_NL" -eq "$JOURNAL_COUNT_BEFORE_NL" ] || fail "castle record wrote a journal file despite rejecting the newline-bearing value"
 "$CASTLE" validate || fail "journal failed to validate after the rejected newline write — a partial file may have been left behind"
 
-log "propensity fields: backward compatibility — a decision record written with neither considered nor confidence must still validate"
+log "propensity fields: backward compatibility — a decision record written with neither considered nor propensity must still validate"
 # The journal is append-only, so every decision record written before
 # this schema addition existed is permanent and must stay valid
 # forever (agent/README.md's "why these are optional, not required").
-# castle record (unlike castle route) never sets considered/confidence
+# castle record (unlike castle route) never sets considered/propensity
 # on its own, so this is exactly that pre-existing shape, produced for
 # real rather than hand-written as a fixture.
 OLD_STYLE_DECISION="$("$CASTLE" record --type decision --provenance initiated --seat router --refs "$REQ1" \
-  --evidence "backward-compatibility fixture: a decision with no considered/confidence fields, the pre-schema-addition shape")"
+  --evidence "backward-compatibility fixture: a decision with no considered/propensity fields, the pre-schema-addition shape")"
 OLD_STYLE_DECISION_FILE="$CASTLE_STATE_DIR/journal/$OLD_STYLE_DECISION.md"
 grep -q '^considered:' "$OLD_STYLE_DECISION_FILE" && fail "$OLD_STYLE_DECISION_FILE unexpectedly has a considered field — this fixture is supposed to lack one"
-grep -q '^confidence:' "$OLD_STYLE_DECISION_FILE" && fail "$OLD_STYLE_DECISION_FILE unexpectedly has a confidence field — this fixture is supposed to lack one"
-"$CASTLE" validate || fail "a decision record with neither considered nor confidence failed to validate — backward compatibility is broken"
+grep -q '^propensity:' "$OLD_STYLE_DECISION_FILE" && fail "$OLD_STYLE_DECISION_FILE unexpectedly has a propensity field — this fixture is supposed to lack one"
+"$CASTLE" validate || fail "a decision record with neither considered nor propensity failed to validate — backward compatibility is broken"
 
-log "propensity fields: validate must reject a present-but-malformed confidence, considered, or channel-not-in-considered value"
+log "propensity fields: validate must reject a present-but-malformed propensity, considered, or channel-not-in-considered value"
 JOURNAL_COUNT_BEFORE_PROPENSITY="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
-# castle record has no --considered/--confidence flags (only castle
+# castle record has no --considered/--propensity flags (only castle
 # route writes them), so a malformed value is planted by hand-writing a
 # journal file directly — the same technique the router-bug regression
 # above uses for FAKE_DECISION. validate must catch it independent of
 # which code path produced the bad file.
-BAD_CONFIDENCE_FILE="$CASTLE_STATE_DIR/journal/20260101T000000Z-decision-bad0c1.md"
-cat > "$BAD_CONFIDENCE_FILE" <<EOF
+BAD_PROPENSITY_FILE="$CASTLE_STATE_DIR/journal/20260101T000000Z-decision-bad0c1.md"
+cat > "$BAD_PROPENSITY_FILE" <<EOF
 ---
 id: 20260101T000000Z-decision-bad0c1
 type: decision
@@ -252,18 +252,18 @@ provenance: initiated
 refs: $REQ1
 seat: router
 created: 2026-01-01T00:00:00Z
-evidence: propensity malformed-value regression fixture (confidence out of range)
+evidence: propensity malformed-value regression fixture (propensity out of range)
 considered: notify,digest
-confidence: 1.5
+propensity: 1.5
 ---
 
-Malformed confidence fixture: 1.5 is not in [0,1].
+Malformed propensity fixture: 1.5 is not in [0,1].
 EOF
-if "$CASTLE" validate >"$WORKDIR/bad-confidence-out" 2>"$WORKDIR/bad-confidence-err"; then
-  fail "castle validate accepted a decision record with confidence=1.5 (out of [0,1])"
+if "$CASTLE" validate >"$WORKDIR/bad-propensity-out" 2>"$WORKDIR/bad-propensity-err"; then
+  fail "castle validate accepted a decision record with propensity=1.5 (out of [0,1])"
 fi
-grep -q "confidence" "$WORKDIR/bad-confidence-err" || fail "castle validate's confidence-range rejection message changed unexpectedly"
-rm -f "$BAD_CONFIDENCE_FILE"
+grep -q "propensity" "$WORKDIR/bad-propensity-err" || fail "castle validate's propensity-range rejection message changed unexpectedly"
+rm -f "$BAD_PROPENSITY_FILE"
 
 BAD_CONSIDERED_FILE="$CASTLE_STATE_DIR/journal/20260101T000000Z-decision-bad0c2.md"
 cat > "$BAD_CONSIDERED_FILE" <<EOF
@@ -276,7 +276,7 @@ seat: router
 created: 2026-01-01T00:00:00Z
 evidence: propensity malformed-value regression fixture (considered empty)
 considered:
-confidence: 1.0
+propensity: 1.0
 ---
 
 Malformed considered fixture: present but empty, not a non-empty flat list.
@@ -298,7 +298,7 @@ seat: router
 created: 2026-01-01T00:00:00Z
 evidence: propensity malformed-value regression fixture (channel not in considered)
 considered: digest
-confidence: 1.0
+propensity: 1.0
 channel: notify
 ---
 

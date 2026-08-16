@@ -103,7 +103,7 @@ castle show ID
   (`docs/tasks/0010-correction-record.md` scope 4; pinned by a CI
   regression in `test/agent-loop/run.sh` and `check_assertions.py`, not
   just this sentence). Every decision it writes also carries
-  `considered` and `confidence` — the channels weighed and the
+  `considered` and `propensity` — the channels weighed and the
   probability of the choice made, for later off-policy evaluation (see
   "The considered set and the selection propensity," below, for what
   that does and does not buy today).
@@ -136,7 +136,7 @@ castle show ID
   present, `type` and `provenance` in their allowed sets, every
   `decision` record's `evidence` field non-empty, every `refs` entry
   pointing at a record that actually exists, and — when present, not
-  required — `confidence` parsing as a float in `[0,1]`, `considered`
+  required — `propensity` parsing as a float in `[0,1]`, `considered`
   as a non-empty flat list, and (when both `channel` and `considered`
   are present) `channel` actually being a member of `considered` — a
   general invariant ("you can't choose what you didn't consider") kept
@@ -277,7 +277,7 @@ appends:
 | Field         | Meaning |
 |---------------|---------|
 | `considered`  | The channels the router evaluated before choosing, comma-separated in the same flat-list convention as `refs` (e.g. `notify,digest`). Today this is always both entries in `CHANNELS` (`agent/castle`) — the rule has no early-out, so it genuinely weighs both every time. |
-| `confidence`  | A float in `[0,1]`: the probability this policy would choose the recorded `channel` in this context. Today's rule is a deterministic function of `provenance` alone, so the honest value is `1.0` on every record — there is no other branch it could have taken. |
+| `propensity`  | A float in `[0,1]`: the probability this policy would choose the recorded `channel` in this context — how likely the policy was to make this choice, **not** how sure anyone is that the choice was right. Today's rule is a deterministic function of `provenance` alone, so the honest value is `1.0` on every record — there is no other branch it could have taken. |
 
 **Why these exist, stated exactly as far as it goes and no further.**
 Bottou et al., *Counterfactual Reasoning and Learning Systems* (JMLR
@@ -297,7 +297,7 @@ quietly can't be answered.
 
 **What this does *not* buy today, stated just as plainly.** With a
 deterministic provenance-only rule, `considered` is the same two
-entries and `confidence` is `1.0` on every single decision record.
+entries and `propensity` is `1.0` on every single decision record.
 Importance-sampling weights computed from constant propensities carry
 no information — there is no variance to explain, nothing to
 reweight against. **The real and sufficient argument for adding these
@@ -305,7 +305,7 @@ fields now is corpus continuity, not present-day analytical power**:
 records written from this point on carry the field, so when the router
 eventually gains a rule with real branches (multiple plausible channels,
 a learned or probabilistic policy), there is no discontinuity in the
-journal — no era of decisions whose `considered`/`confidence` were
+journal — no era of decisions whose `considered`/`propensity` were
 simply never captured and can never be recovered. Claiming more than
 that — that today's fields already let anyone estimate what a
 different policy would have done — would be false, and this document
@@ -318,7 +318,7 @@ every decision written before this schema addition is already
 permanent, and a validator that started requiring a field no writer at
 the time could have supplied would fail the entire pre-existing journal
 retroactively. `castle validate` instead checks them **when present**:
-`confidence` must parse as a float in `[0,1]`, `considered` must be a
+`propensity` must parse as a float in `[0,1]`, `considered` must be a
 non-empty flat list, and — when both `channel` and `considered` are on
 the same record — `channel` must actually be a member of `considered`.
 That last check is a general invariant rather than an assumption about
@@ -539,12 +539,12 @@ test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin
   filing corrections appends no decisions, cites none of them, and
   fires no new notification; and a check that `castle digest` renders
   the corrections filed above. This task (adding `considered`/
-  `confidence`) added: every decision `castle route` writes carries
-  `considered: notify,digest` and `confidence: 1.0`; a decision written
+  `propensity`) added: every decision `castle route` writes carries
+  `considered: notify,digest` and `propensity: 1.0`; a decision written
   the pre-existing way (via `castle record`, with neither field) still
   validates clean, proving backward compatibility for real rather than
   just asserting it; and `castle validate` rejects a hand-planted
-  decision with `confidence` out of `[0,1]`, an empty `considered`, or
+  decision with `propensity` out of `[0,1]`, an empty `considered`, or
   a `channel` that isn't a member of `considered`.
 - **`tenant-swap.sh`** (also wired into the `agent-loop-test` job) is
   Proposal 03's hardening test, second half: it runs `run.sh` twice —

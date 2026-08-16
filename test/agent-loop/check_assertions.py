@@ -95,7 +95,7 @@ def main() -> int:
     # router-written decision" (agent/README.md: "castle route adds a
     # channel field... to the decision records it writes"), and this
     # harness also plants hand-written decision records without
-    # considered/confidence on purpose (the backward-compatibility
+    # considered/propensity on purpose (the backward-compatibility
     # fixture in run.sh), which must NOT be flagged here.
     for d in decisions:
         if "channel" not in d:
@@ -113,18 +113,18 @@ def main() -> int:
                 f"decision {d.get('id')} chose channel={channel!r}, which is not "
                 f"among the channels it claims to have considered: {considered_raw!r}"
             )
-        confidence_raw = d.get("confidence", "")
+        propensity_raw = d.get("propensity", "")
         try:
-            confidence = float(confidence_raw)
+            propensity = float(propensity_raw)
         except ValueError:
             failures.append(
-                f"decision {d.get('id')} has channel={channel!r} but 'confidence' "
-                f"({confidence_raw!r}) does not parse as a float"
+                f"decision {d.get('id')} has channel={channel!r} but 'propensity' "
+                f"({propensity_raw!r}) does not parse as a float"
             )
         else:
-            if not (0.0 <= confidence <= 1.0):
+            if not (0.0 <= propensity <= 1.0):
                 failures.append(
-                    f"decision {d.get('id')}'s confidence ({confidence_raw!r}) is not in [0,1]"
+                    f"decision {d.get('id')}'s propensity ({propensity_raw!r}) is not in [0,1]"
                 )
 
     # docs/tasks/0010-correction-record.md scope 4: resident speech is
