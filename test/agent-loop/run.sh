@@ -210,6 +210,32 @@ JOURNAL_COUNT_AFTER_NL="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l 
 [ "$JOURNAL_COUNT_AFTER_NL" -eq "$JOURNAL_COUNT_BEFORE_NL" ] || fail "castle record wrote a journal file despite rejecting the newline-bearing value"
 "$CASTLE" validate || fail "journal failed to validate after the rejected newline write — a partial file may have been left behind"
 
+log "castle correct: write-path discipline, the same finding-3 regressions cmd_ask/cmd_answer already guard against (docs/tasks/0010-correction-record.md)"
+JOURNAL_COUNT_BEFORE_CORRECT="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+if "$CASTLE" correct "" >"$WORKDIR/bad-correct-empty-out" 2>"$WORKDIR/bad-correct-empty-err"; then
+  fail "castle correct accepted an empty body"
+fi
+grep -q "empty correction" "$WORKDIR/bad-correct-empty-err" || fail "castle correct's empty-body rejection message changed unexpectedly"
+JOURNAL_COUNT_AFTER_CORRECT_EMPTY="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_CORRECT_EMPTY" -eq "$JOURNAL_COUNT_BEFORE_CORRECT" ] || fail "castle correct wrote a journal record despite an empty body"
+
+if "$CASTLE" correct --refs "20260101T000000Z-request-000000" "This correction should never be filed." \
+    >"$WORKDIR/bad-correct-refs-out" 2>"$WORKDIR/bad-correct-refs-err"; then
+  fail "castle correct accepted --refs pointing at a record that does not exist"
+fi
+grep -q "don't exist" "$WORKDIR/bad-correct-refs-err" || fail "castle correct's --refs rejection message changed unexpectedly"
+JOURNAL_COUNT_AFTER_CORRECT_REFS="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_CORRECT_REFS" -eq "$JOURNAL_COUNT_BEFORE_CORRECT" ] || fail "castle correct wrote a journal record even though --refs pointed at nothing"
+
+"$CASTLE" validate || fail "journal failed to validate after castle correct's rejected writes"
+
+log "castle correct: --refs pointing at a real record is accepted and survives round-trip"
+CORRECTION_WITH_REFS="$("$CASTLE" correct --refs "$REQ1" "Round-trip check: this correction is about request $REQ1.")"
+CORRECTION_WITH_REFS_FILE="$CASTLE_STATE_DIR/journal/$CORRECTION_WITH_REFS.md"
+[ -f "$CORRECTION_WITH_REFS_FILE" ] || fail "castle correct --refs $REQ1 produced no journal record"
+grep -q "^refs: $REQ1\$" "$CORRECTION_WITH_REFS_FILE" || fail "$CORRECTION_WITH_REFS_FILE did not carry the --refs id through to the written record"
+"$CASTLE" validate || fail "journal failed to validate after a correction with a real --refs id"
+
 log "router bug regression (docs/tasks/0009 item 7): a non-router decision referencing a result must not suppress routing"
 REQ3="$("$CASTLE" ask --provenance initiated "Test errand gamma: only exists to exercise the router-bug regression test.")"
 RES3="$("$CASTLE" record --type result --provenance initiated --seat worker --refs "$REQ3" --body "Errand gamma result, for the regression test only.")"
@@ -219,6 +245,87 @@ log "  -> a decision from seat=worker (not router) now references $RES3: $FAKE_D
 ROUTER_DECISIONS_FOR_RES3="$(grep -l "^refs: $RES3\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md | xargs grep -l '^seat: router$' || true)"
 [ -n "$ROUTER_DECISIONS_FOR_RES3" ] || fail "router bug regressed: a non-router decision referencing $RES3 suppressed its routing — no router decision was appended for it"
 grep -q '^channel: digest$' "$ROUTER_DECISIONS_FOR_RES3" || fail "errand gamma's result did not route to 'digest' (provenance=initiated): $ROUTER_DECISIONS_FOR_RES3"
+
+log "filing-time context capture (docs/tasks/0010-correction-record.md scope 2), populated branch: a fresh notify-channel decision, then a correction citing it"
+REQ4="$("$CASTLE" ask "Test errand delta: only exists to exercise filing-time context capture.")"
+RES4="$("$CASTLE" record --type result --provenance requested --seat worker --refs "$REQ4" --body "Errand delta result, for the context-capture test only.")"
+"$CASTLE" route
+DECISION_FOR_RES4="$(grep -l "^refs: $RES4\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md | xargs grep -l '^channel: notify$' || true)"
+[ -n "$DECISION_FOR_RES4" ] || fail "expected errand delta's result to route to notify (provenance=requested)"
+DECISION_FOR_RES4_ID="$(basename "$DECISION_FOR_RES4" .md)"
+
+CORRECTION1="$("$CASTLE" correct "Filing-time context test: you pinged me right after that last notification.")"
+CORRECTION1_FILE="$CASTLE_STATE_DIR/journal/$CORRECTION1.md"
+[ -f "$CORRECTION1_FILE" ] || fail "castle correct printed an id with no journal record at $CORRECTION1_FILE"
+grep -q '^type: correction$' "$CORRECTION1_FILE" || fail "$CORRECTION1_FILE is not a correction record"
+grep -q '^seat: intake$' "$CORRECTION1_FILE" || fail "$CORRECTION1_FILE should carry seat=intake, same as every other intake write"
+grep -q '^provenance: requested$' "$CORRECTION1_FILE" || fail "$CORRECTION1_FILE should carry provenance=requested — a correction is resident speech through intake"
+grep -q '^surface: cli$' "$CORRECTION1_FILE" || fail "$CORRECTION1_FILE should carry surface=cli"
+# The most recent notify decision in the journal is, by construction,
+# the one this correction's context should cite: ids are sortable
+# timestamps, and DECISION_FOR_RES4 was just appended, so nothing
+# newer exists yet.
+grep -q "^context-last-notify: $DECISION_FOR_RES4_ID\$" "$CORRECTION1_FILE" || fail "$CORRECTION1_FILE's context-last-notify did not cite the freshest notify-channel decision ($DECISION_FOR_RES4_ID)"
+NOTIFIES_1H="$(sed -n 's/^context-notifies-1h: //p' "$CORRECTION1_FILE")"
+[ "${NOTIFIES_1H:-0}" -ge 1 ] || fail "$CORRECTION1_FILE's context-notifies-1h should be >= 1 (a notify decision was just filed), got '${NOTIFIES_1H:-}'"
+NOTIFIES_24H="$(sed -n 's/^context-notifies-24h: //p' "$CORRECTION1_FILE")"
+[ "${NOTIFIES_24H:-0}" -ge 1 ] || fail "$CORRECTION1_FILE's context-notifies-24h should be >= 1, got '${NOTIFIES_24H:-}'"
+LOCAL_CREATED="$(sed -n 's/^context-local-created: //p' "$CORRECTION1_FILE")"
+python3 -c "import datetime, sys; datetime.datetime.strptime(sys.argv[1], '%Y-%m-%dT%H:%M:%S%z')" "$LOCAL_CREATED" \
+  || fail "$CORRECTION1_FILE's context-local-created ('$LOCAL_CREATED') does not parse as a timestamp carrying a UTC offset"
+grep -q "^stated: $CORRECTION1\$" "$MODEL_FILE" || fail "resident-model.md is missing a volunteered entry citing correction $CORRECTION1"
+grep -q '^provenance: volunteered$' "$MODEL_FILE" || fail "resident-model.md is missing a provenance: volunteered entry"
+
+log "filing-time context capture, empty-journal branch: a correction filed where no router decision has ever existed"
+EMPTY_CONTEXT_STATE="$(mktemp -d)"
+EMPTY_CORRECTION="$(CASTLE_STATE_DIR="$EMPTY_CONTEXT_STATE" "$CASTLE" correct "Empty-journal context test: nothing has happened yet.")"
+EMPTY_CORRECTION_FILE="$EMPTY_CONTEXT_STATE/journal/$EMPTY_CORRECTION.md"
+[ -f "$EMPTY_CORRECTION_FILE" ] || fail "castle correct against an empty journal produced no record at $EMPTY_CORRECTION_FILE"
+grep -q '^context-last-notify:' "$EMPTY_CORRECTION_FILE" && fail "$EMPTY_CORRECTION_FILE should carry no context-last-notify field at all when no notify decision exists"
+grep -q '^context-notifies-1h: 0$' "$EMPTY_CORRECTION_FILE" || fail "$EMPTY_CORRECTION_FILE's context-notifies-1h should be 0 against an empty journal"
+grep -q '^context-notifies-24h: 0$' "$EMPTY_CORRECTION_FILE" || fail "$EMPTY_CORRECTION_FILE's context-notifies-24h should be 0 against an empty journal"
+CASTLE_STATE_DIR="$EMPTY_CONTEXT_STATE" "$CASTLE" validate || fail "the empty-journal correction did not validate cleanly"
+rm -rf "$EMPTY_CONTEXT_STATE"
+
+log "the router must never route a correction (docs/tasks/0010-correction-record.md scope 4): re-routing must leave $CORRECTION1 and $CORRECTION_WITH_REFS untouched"
+NOTIFY_COUNT_BEFORE_CORRECTION_ROUTE="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
+DECISION_COUNT_BEFORE_CORRECTION_ROUTE="$(find "$CASTLE_STATE_DIR/journal" -name '*-decision-*.md' | wc -l | tr -d ' ')"
+ROUTE_AFTER_CORRECTIONS_OUT="$("$CASTLE" route)"
+echo "$ROUTE_AFTER_CORRECTIONS_OUT"
+case "$ROUTE_AFTER_CORRECTIONS_OUT" in
+  *"nothing unrouted"*) ;;
+  *) fail "castle route routed something after only corrections were left unrouted: $ROUTE_AFTER_CORRECTIONS_OUT" ;;
+esac
+DECISION_COUNT_AFTER_CORRECTION_ROUTE="$(find "$CASTLE_STATE_DIR/journal" -name '*-decision-*.md' | wc -l | tr -d ' ')"
+[ "$DECISION_COUNT_AFTER_CORRECTION_ROUTE" -eq "$DECISION_COUNT_BEFORE_CORRECTION_ROUTE" ] || fail "castle route appended a decision record after only corrections were unrouted — corrections must never be routed"
+for CID in "$CORRECTION1" "$CORRECTION_WITH_REFS"; do
+  DECISIONS_REFERENCING_CORRECTION="$(grep -l "^refs: $CID\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md 2>/dev/null || true)"
+  [ -z "$DECISIONS_REFERENCING_CORRECTION" ] || fail "a decision record references correction $CID: $DECISIONS_REFERENCING_CORRECTION — corrections must never be routed"
+done
+NOTIFY_COUNT_AFTER_CORRECTION_ROUTE="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
+[ "$NOTIFY_COUNT_AFTER_CORRECTION_ROUTE" -eq "$NOTIFY_COUNT_BEFORE_CORRECTION_ROUTE" ] || fail "the notify stub fired again after filing corrections and re-routing — corrections must never trigger a notification"
+
+log "digest: renders corrections too (scope 7) — verbatim first line and created time, at minimum"
+DIGEST_OUT_2="$("$CASTLE" digest)"
+echo "$DIGEST_OUT_2" | grep -q "## Corrections" || fail "digest output has no Corrections section even though corrections exist in the journal"
+echo "$DIGEST_OUT_2" | grep -q "Filing-time context test: you pinged me right after that last notification." || fail "digest did not render correction $CORRECTION1's verbatim first line"
+CORRECTION1_CREATED="$(sed -n 's/^created: //p' "$CORRECTION1_FILE")"
+echo "$DIGEST_OUT_2" | grep -q "$CORRECTION1_CREATED" || fail "digest did not render correction $CORRECTION1's created time"
+
+# A correction is rendered in exactly ONE place — its own section, never
+# the errand fold. $CORRECTION_WITH_REFS was filed with --refs $REQ1, which
+# is legal, so _collect_downstream's refs walk reaches it from that errand;
+# without an explicit type filter it printed twice, contradicting both the
+# Corrections preamble ("Not an errand") and cmd_digest's own docstring.
+# Asserting only "the text appears somewhere" is what let that through, so
+# assert the count and the section it lands in.
+CORRECTION_WITH_REFS_HEADINGS="$(echo "$DIGEST_OUT_2" | grep -c "### correction $CORRECTION_WITH_REFS" || true)"
+[ "$CORRECTION_WITH_REFS_HEADINGS" -eq 0 ] || fail "correction $CORRECTION_WITH_REFS (filed with --refs $REQ1) was folded into an errand as '### correction ...'; corrections belong only in the Corrections section"
+CORRECTION_WITH_REFS_LINES="$(echo "$DIGEST_OUT_2" | grep -c "Round-trip check: this correction is about request" || true)"
+[ "$CORRECTION_WITH_REFS_LINES" -eq 1 ] || fail "correction $CORRECTION_WITH_REFS rendered $CORRECTION_WITH_REFS_LINES times in the digest, expected exactly 1"
+
+log "independent structural assertions, re-run over the final journal (evidence non-empty, nothing routed silently, no decision routes a correction)"
+"$CHECK" "$CASTLE_STATE_DIR/journal"
 
 if [ -n "${CASTLE_AGENT_LOOP_SUMMARY_OUT:-}" ]; then
   log "writing normalized journal summary to $CASTLE_AGENT_LOOP_SUMMARY_OUT (test/agent-loop/tenant-swap.sh)"

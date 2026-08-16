@@ -19,10 +19,18 @@ exactly like `castle ask`/`castle digest` add none (Proposal 03):
            write_record() call `castle ask` uses; the modal is just
            another intake surface (docs/architecture.md: "the first
            intake is a CLI; a compositor keybinding opening a modal...
-           are later intakes").
+           are later intakes"). An interactive session is then asked
+           one plain-language question — something to fix, or telling
+           the system how it's doing — and the second answer routes
+           the same body through castle's file_correction() instead
+           (docs/tasks/0010-correction-record.md); intake itself still
+           adds no judgment, since the resident is the one classifying,
+           not the tool.
   status   A compact fold of recent errands: what was asked, what
            state it's in, what the system last decided and why. The
-           "come back and check in later" surface.
+           "come back and check in later" surface. Corrections never
+           appear here — they aren't errands, and there's nothing for
+           the resident to check back on.
 
 Headless by construction, not by special-casing: both modes read
 stdin and write stdout/stderr with no dependency on a terminal at all.
@@ -87,7 +95,50 @@ def _pause_for_dismissal(out=sys.stdout) -> None:
         pass
 
 
-def run_compose(castle, out=sys.stdout) -> int:
+def _classify_interactively(out=sys.stdout) -> str:
+    """One plain-language question, answered with one keypress
+    (docs/tasks/0010-correction-record.md scope 6): is what was just
+    typed something to fix, or is the resident telling the system how
+    it's doing? Intake stays judgment-free — the resident classifies,
+    the tool never guesses — and the words "correction record" never
+    appear here or anywhere else this surface shows the resident;
+    that vocabulary is for scripts and CI only (see --kind, below).
+
+    termios cbreak, gated on isatty() by the same reasoning as every
+    other cosmetic prompt in this file: a piped-stdin caller has no
+    human to ask and no tty to read a keypress from, and never reaches
+    this function. Bare Enter answers "something to fix" — the common
+    case, and the one that shouldn't cost an extra keystroke.
+
+    cbreak is engaged *before* the prompt is printed, not after
+    (code-review finding, correction-record branch): printing is I/O —
+    a syscall reaching the pty — and a keypress landing in the gap
+    between "prompt printed" and "cbreak engaged" is held by the
+    kernel's still-canonical line discipline until a newline arrives,
+    which a bare single-character keypress never sends, hanging this
+    read forever. Entering cbreak first collapses that window to a
+    few bytecode instructions instead of a print() round-trip; output
+    formatting is unaffected, since cbreak only changes how *input* is
+    line-buffered, not how bytes written to the terminal are rendered.
+    """
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        print(file=out)
+        print("Is this something to fix, or are you telling me how I'm doing?", file=out)
+        print("[Enter/f] something to fix        [t] telling you how you're doing", file=out)
+        answer = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    print(file=out)
+    return "correction" if answer.lower() == "t" else "request"
+
+
+def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
     interactive = sys.stdin.isatty()
     if interactive:
         print("Describe the problem in your own words.", file=out)
@@ -107,16 +158,29 @@ def run_compose(castle, out=sys.stdout) -> int:
         _pause_for_dismissal(out)
         return 1
 
-    record_id = castle.write_record(
-        castle.journal_dir(),
-        type="request",
-        provenance="requested",
-        seat="intake",
-        body=body,
-    )
-    print(record_id, file=out)
+    # An interactive session is always asked, regardless of --kind (that
+    # flag exists for non-interactive callers, who have no keyboard to
+    # ask); a piped session keeps whatever --kind supplied (default
+    # "request", so every existing piped caller is unchanged).
     if interactive:
-        print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+        kind = _classify_interactively(out)
+
+    if kind == "correction":
+        record_id = castle.file_correction(body=body, refs=[], surface="modal")
+        print(record_id, file=out)
+        if interactive:
+            print(f"Filed as {record_id}. Thanks — noted.", file=out)
+    else:
+        record_id = castle.write_record(
+            castle.journal_dir(),
+            type="request",
+            provenance="requested",
+            seat="intake",
+            body=body,
+        )
+        print(record_id, file=out)
+        if interactive:
+            print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
     _pause_for_dismissal(out)
     return 0
 
@@ -188,6 +252,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="status mode: how many recent errands to show (default: 10)",
     )
+    parser.add_argument(
+        "--kind",
+        choices=("request", "correction"),
+        default="request",
+        help=(
+            "compose mode, non-interactive callers only: file the composed text as "
+            "something to fix (request, the default — every existing piped caller "
+            "is unaffected) or as unprompted feedback about how the system is doing "
+            "(correction). An interactive session ignores this flag and asks in "
+            "plain language instead; this name is for scripts and CI, never shown "
+            "to the resident (docs/tasks/0010-correction-record.md scope 6)."
+        ),
+    )
     return parser
 
 
@@ -195,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     castle = _load_castle_module()
     if args.mode == "compose":
-        return run_compose(castle)
+        return run_compose(castle, kind=args.kind)
     return run_status(castle, args.limit)
 
 

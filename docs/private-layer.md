@@ -234,14 +234,20 @@ create:
 ```
 state/
   journal/            One file per record — requests, decisions,
-                       results, questions, answers. Append-only in
-                       spirit: nothing is ever edited, only added to.
-  resident-model.md    Accumulated facts about you, one entry per
-                       fact, each carrying its own provenance (question
-                       asked, answer given, when). See agent/README.md
-                       for the entry format and a worked (fake)
-                       example. Starts empty, or absent entirely, until
-                       the first elicited answer.
+                       results, questions, answers, and corrections (the
+                       resident volunteering how the system is doing,
+                       unprompted — docs/tasks/0010-correction-record.md).
+                       Append-only in spirit: nothing is ever edited,
+                       only added to.
+  resident-model.md    A derived, regenerable view over the journal, not
+                       a second source of truth: one entry per fact,
+                       each carrying its own provenance — either
+                       elicited (question asked, answer given, when) or
+                       volunteered (which correction it came from,
+                       when). See agent/README.md for the entry formats
+                       and worked (fake) examples. Starts empty, or
+                       absent entirely, until the first elicited answer
+                       or volunteered correction.
 ```
 
 Point `castle.agent.stateDir` at this directory (an absolute path,
