@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""castle-modal — the ambient-intake surface (docs/tasks/0009-ambient-intake.md).
+
+The keybinding ($mod+Shift+space, see modules/home) opens a floating
+`foot` terminal running this script. Stdlib Python only, same
+constraint as agent/castle (agent/README.md) — and for the same reason:
+this has to keep working with nothing installed beyond a python3
+binary. It is deliberately NOT a GTK app, a wofi/fuzzel script, or
+written in a second language; it's a terminal program because the
+terminal is already the substrate this whole project is built on.
+
+Two modes, both just callers of agent/castle's own record-writing and
+record-reading functions — this file adds no judgment of its own,
+exactly like `castle ask`/`castle digest` add none (Proposal 03):
+
+  compose  Multi-line free text describing a problem, nothing else — no
+           category picker, no priority dropdown. Ends on a lone '.'
+           line or EOF. Becomes a `request` record via the same
+           write_record() call `castle ask` uses; the modal is just
+           another intake surface (docs/architecture.md: "the first
+           intake is a CLI; a compositor keybinding opening a modal...
+           are later intakes").
+  status   A compact fold of recent errands: what was asked, what
+           state it's in, what the system last decided and why. The
+           "come back and check in later" surface.
+
+Headless by construction, not by special-casing: both modes read
+stdin and write stdout/stderr with no dependency on a terminal at all.
+Nothing here calls `curses` or emits raw ANSI codes except a couple of
+purely cosmetic prompts guarded by `sys.stdin.isatty()` — delete those
+lines and the program still does exactly the same work, which is the
+property that lets CI pipe canned input at it with no compositor,
+no foot, and no Sway involved (docs/tasks/0009's verification plan).
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import pathlib
+import sys
+
+
+def _load_castle_module():
+    """Import agent/castle (no .py extension, colocated in this same
+    directory) as a library rather than shelling out to it — this
+    script and `castle` are the same tool wearing two hats, so sharing
+    the parser/writer in-process avoids re-implementing (and
+    re-diverging from) the record format a second time.
+
+    `spec_from_file_location` can't infer a loader from an extensionless
+    filename, so the SourceFileLoader is constructed explicitly rather
+    than relying on that inference.
+    """
+    castle_path = pathlib.Path(__file__).resolve().parent / "castle"
+    loader = importlib.machinery.SourceFileLoader("castle_lib", str(castle_path))
+    spec = importlib.util.spec_from_file_location("castle_lib", castle_path, loader=loader)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {castle_path} as a module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_compose(castle, out=sys.stdout) -> int:
+    interactive = sys.stdin.isatty()
+    if interactive:
+        print("Describe the problem in your own words.", file=out)
+        print("End with a line containing just '.' (or Ctrl-D).", file=out)
+        print(file=out)
+
+    lines: list[str] = []
+    for raw_line in sys.stdin:
+        line = raw_line.rstrip("\n")
+        if line.strip() == ".":
+            break
+        lines.append(line)
+    body = "\n".join(lines).strip()
+
+    if not body:
+        print("castle-modal: empty request, nothing filed.", file=sys.stderr)
+        return 1
+
+    record_id = castle.write_record(
+        castle.journal_dir(),
+        type="request",
+        provenance="requested",
+        seat="intake",
+        body=body,
+    )
+    print(record_id, file=out)
+    if interactive:
+        print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    return 0
+
+
+def _errand_state(downstream: list) -> str:
+    types = {rec.type for rec in downstream}
+    if "result" in types:
+        return "done"
+    if "question" in types and "answer" not in types:
+        return "waiting on you"
+    return "in progress"
+
+
+def run_status(castle, limit: int, out=sys.stdout) -> int:
+    records = castle.load_all(castle.journal_dir())
+    requests = sorted(
+        (rec for rec in records.values() if rec.type == "request"),
+        key=lambda rec: rec.id,
+        reverse=True,
+    )[:limit]
+
+    if not requests:
+        print("No errands yet. Press $mod+Shift+space and describe one.", file=out)
+        return 0
+
+    for req in requests:
+        downstream = castle._collect_downstream(records, req.id)
+        state = _errand_state(downstream)
+        first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
+        print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
+        print(f"    asked: {first_line}", file=out)
+        decisions = sorted(
+            (rec for rec in downstream if rec.type == "decision"),
+            key=lambda rec: rec.id,
+        )
+        for decision in decisions:
+            channel = decision.fields.get("channel", "?")
+            evidence = decision.fields.get("evidence", "")
+            print(f"    decided -> {channel}: {evidence}", file=out)
+        print(file=out)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="castle-modal", description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=("compose", "status"),
+        default="compose",
+        help="compose a new request, or fold recent errands (default: compose)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="status mode: how many recent errands to show (default: 10)",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    castle = _load_castle_module()
+    if args.mode == "compose":
+        return run_compose(castle)
+    return run_status(castle, args.limit)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
