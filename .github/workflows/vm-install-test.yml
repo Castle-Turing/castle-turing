@@ -26,6 +26,14 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v22
 
+      # The dominant CI cost is re-substituting QEMU, OVMF, nixos-anywhere
+      # and the full system closure on every run. magic-nix-cache-action
+      # backs the store with GitHub's Actions cache, invalidating
+      # fine-grained by store path (not by flake.lock hash), so runs that
+      # don't move nixpkgs start with a warm store. Same vendor as the
+      # installer action above.
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+
       # GitHub's hosted Ubuntu runners support nested virtualization, but
       # /dev/kvm isn't group-writable by default — this is the standard
       # fix (used by e.g. android-emulator-runner).
