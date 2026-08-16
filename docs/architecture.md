@@ -339,8 +339,8 @@ A competitor optimizing on receipts calibrates in a week.
 **Sequencing.** The two halves are not equally ready. Verdicts are
 buildable now — the `correction` record needs no new machinery, since
 intake already takes free text (see
-`docs/backlog/resident-cannot-speak-unbidden.md`, the resident-authored
-half of this proposal). Receipts need a delivery surface that can
+`docs/tasks/0010-correction-record.md`, the resident-authored half of
+this proposal). Receipts need a delivery surface that can
 actually report reception, which mako notifications cannot today
 (dismissed and expired are indistinguishable). Build the verdict half;
 let the receipt half wait for a surface that can produce one, rather
