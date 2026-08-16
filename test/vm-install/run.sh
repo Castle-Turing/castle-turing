@@ -223,9 +223,9 @@ wait_for_ssh() {
       return 0
     fi
     if [ -f "$serial_log" ] && grep -q "login:" "$serial_log"; then
-      sleep 1
-    else
       sleep 0.5
+    else
+      sleep 1
     fi
   done
   return 1
