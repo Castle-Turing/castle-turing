@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""castle — the agent-layer CLI (docs/architecture.md, docs/tasks/0008).
+
+Standard library only, deliberately: this tool has to outlive whatever
+harness is fashionable when it's run, and a stdlib script is the one
+artifact format that needs nothing installed to stay readable. See
+agent/README.md for the record format this implements and why it is a
+strict, hand-parseable subset rather than real YAML.
+
+Every subcommand is a seat's hands, not the seat's judgment: `ask` is
+what the intake surface does with a request, `route` is what the
+router does with provenance, `digest` is what the digest surface does
+with a fold. None of them decide anything a human or a model couldn't
+also decide by hand-writing the same record — that's the point
+(Proposal 03: intelligence is a tenant, the structure is plain text).
+
+Subcommands:
+  ask       intake: write a `request` record.
+  answer    intake: write an `answer` record for a `question`.
+  record    generic writer for any record type (what the sugar above,
+            and any worker/router seat, calls underneath).
+  route     router: append a decision record for every unrouted
+            result/question, deciding channel from provenance alone.
+  digest    fold the journal into a human-readable report.
+  validate  schema-check a journal (this is what CI asserts with).
+  show      print one record, journal or spool.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+import pathlib
+import sys
+
+# ---------------------------------------------------------------------------
+# Record schema (docs/architecture.md's "Records" section)
+# ---------------------------------------------------------------------------
+
+RECORD_TYPES = ("request", "decision", "result", "question", "answer")
+PROVENANCE_VALUES = ("requested", "initiated")
+
+# Field order matters only for readability of the written file — parsing
+# does not care. Kept stable so `git diff` on journal files stays clean
+# across tool versions.
+FIELD_ORDER = ("id", "type", "provenance", "refs", "seat", "created", "evidence")
+
+REQUIRED_FIELDS = ("id", "type", "provenance", "refs", "seat", "created")
+
+ID_TIMESTAMP_FMT = "%Y%m%dT%H%M%SZ"
+CREATED_FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+class RecordError(Exception):
+    """A record file did not parse as the strict frontmatter subset."""
+
+
+class Record:
+    """One parsed record: its frontmatter fields and its markdown body."""
+
+    def __init__(self, fields: dict, body: str, path: pathlib.Path | None = None):
+        self.fields = fields
+        self.body = body
+        self.path = path
+
+    @property
+    def id(self) -> str:
+        return self.fields.get("id", "")
+
+    @property
+    def type(self) -> str:
+        return self.fields.get("type", "")
+
+    @property
+    def refs(self) -> list[str]:
+        return split_refs(self.fields.get("refs", ""))
+
+
+def split_refs(value: str) -> list[str]:
+    """Parse the comma-separated-on-one-line list convention (see README)."""
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def parse_record(path: pathlib.Path) -> Record:
+    """Parse the strict flat frontmatter subset documented in agent/README.md.
+
+    Deliberately not a YAML parser: no nesting, no anchors, no multi-line
+    values, one `key: value` per line. This is what keeps the whole thing
+    readable in ~150 lines of stdlib instead of a PyYAML dependency, and
+    keeps `grep '^type: decision'` a valid way to query the journal.
+    """
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        raise RecordError(f"cannot read {path}: {exc}") from exc
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise RecordError(f"{path}: does not start with a '---' frontmatter fence")
+
+    fields: dict[str, str] = {}
+    i = 1
+    while i < len(lines) and lines[i].strip() != "---":
+        line = lines[i]
+        if line.strip():
+            if ":" not in line:
+                raise RecordError(f"{path}: line {i + 1} is not 'key: value': {line!r}")
+            key, _, value = line.partition(":")
+            key = key.strip()
+            if not key:
+                raise RecordError(f"{path}: line {i + 1} has an empty key: {line!r}")
+            fields[key] = value.strip()
+        i += 1
+    if i >= len(lines):
+        raise RecordError(f"{path}: frontmatter never closed with a second '---'")
+
+    body = "\n".join(lines[i + 1 :])
+    # Exactly one blank line is the convention after the closing fence;
+    # strip only the leading blank so a body that starts with real
+    # whitespace-sensitive markdown (a code block) is not mangled.
+    if body.startswith("\n"):
+        body = body[1:]
+    return Record(fields=fields, body=body, path=path)
+
+
+def render_record(fields: dict, body: str) -> str:
+    lines = ["---"]
+    seen = set()
+    for key in FIELD_ORDER:
+        if key in fields:
+            lines.append(f"{key}: {fields[key]}")
+            seen.add(key)
+    for key in sorted(set(fields) - seen):
+        lines.append(f"{key}: {fields[key]}")
+    lines.append("---")
+    lines.append("")
+    body = body.rstrip("\n")
+    return "\n".join(lines) + ("\n" + body + "\n" if body else "\n")
+
+
+def make_id(record_type: str, now: dt.datetime | None = None) -> str:
+    """`YYYYMMDDTHHMMSSZ-<type>-<6 hex chars>` — sortable, greppable,
+    collision-safe enough (docs/tasks/0008 pre-made decision)."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    ts = now.strftime(ID_TIMESTAMP_FMT)
+    suffix = os.urandom(3).hex()
+    return f"{ts}-{record_type}-{suffix}"
+
+
+# ---------------------------------------------------------------------------
+# Where records live (docs/architecture.md's "journal and the spool")
+# ---------------------------------------------------------------------------
+
+
+def state_dir() -> pathlib.Path:
+    """CASTLE_STATE_DIR, then XDG_STATE_HOME/castle, then ~/.local/state/castle.
+
+    CASTLE_STATE_DIR is what makes the CI harness possible: it points a
+    throwaway journal at a temp directory without touching a real
+    resident's state. The Nix module (modules/agent) wires
+    castle.agent.stateDir into this same environment variable.
+    """
+    env = os.environ.get("CASTLE_STATE_DIR")
+    if env:
+        return pathlib.Path(env)
+    xdg = os.environ.get("XDG_STATE_HOME")
+    if xdg:
+        return pathlib.Path(xdg) / "castle"
+    return pathlib.Path.home() / ".local" / "state" / "castle"
+
+
+def journal_dir() -> pathlib.Path:
+    d = state_dir() / "journal"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def spool_dir() -> pathlib.Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        d = pathlib.Path(runtime) / "castle" / "spool"
+    else:
+        d = pathlib.Path(f"/tmp/castle-{os.getuid()}") / "spool"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def load_all(directory: pathlib.Path) -> dict[str, Record]:
+    """Load every record in a flat directory, keyed by id.
+
+    Malformed files are skipped here rather than raising — `validate` is
+    the command whose job is to complain about those; `route` and
+    `digest` should keep working over a journal that has one bad file in
+    it rather than refusing to touch anything else in the errand.
+    """
+    records: dict[str, Record] = {}
+    for path in sorted(directory.glob("*.md")):
+        try:
+            rec = parse_record(path)
+        except RecordError:
+            continue
+        if rec.id:
+            records[rec.id] = rec
+    return records
+
+
+def write_record(
+    target_dir: pathlib.Path,
+    *,
+    type: str,
+    provenance: str,
+    seat: str,
+    refs: list[str] | None = None,
+    evidence: str | None = None,
+    body: str = "",
+    extra: dict | None = None,
+) -> str:
+    record_id = make_id(type)
+    created = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+    fields = {
+        "id": record_id,
+        "type": type,
+        "provenance": provenance,
+        "refs": ",".join(refs or []),
+        "seat": seat,
+        "created": created,
+    }
+    if evidence is not None:
+        fields["evidence"] = evidence
+    if extra:
+        fields.update(extra)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{record_id}.md"
+    path.write_text(render_record(fields, body))
+    return record_id
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    body = args.body
+    if args.body_file:
+        body = pathlib.Path(args.body_file).read_text()
+    elif body is None and not sys.stdin.isatty():
+        body = sys.stdin.read()
+    target = spool_dir() if args.spool else journal_dir()
+    record_id = write_record(
+        target,
+        type=args.type,
+        provenance=args.provenance,
+        seat=args.seat,
+        refs=split_refs(args.refs or ""),
+        evidence=args.evidence,
+        body=body or "",
+    )
+    print(record_id)
+    return 0
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
+    if not body.strip():
+        print("castle ask: refusing to file an empty request", file=sys.stderr)
+        return 1
+    record_id = write_record(
+        journal_dir(),
+        type="request",
+        provenance=args.provenance,
+        seat="intake",
+        refs=split_refs(args.refs or ""),
+        body=body,
+    )
+    print(record_id)
+    return 0
+
+
+def cmd_answer(args: argparse.Namespace) -> int:
+    body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
+    if not body.strip():
+        print("castle answer: refusing to file an empty answer", file=sys.stderr)
+        return 1
+    # Answering is also intake: a resident's word entering the system
+    # through the CLI surface, same as `ask` — see architecture.md's
+    # description of intake as "no judgment, just capture."
+    record_id = write_record(
+        journal_dir(),
+        type="answer",
+        provenance="requested",
+        seat="intake",
+        refs=[args.question_id],
+        body=body,
+    )
+    print(record_id)
+    return 0
+
+
+def _provenance_explanation(provenance: str) -> str:
+    if provenance == "requested":
+        return "the resident asked for this directly, so it surfaces now rather than waiting for a digest"
+    return "the system undertook this on its own initiative, so it defaults to the digest rather than an interruption"
+
+
+def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None:
+    """Walk `refs` back to the originating `request`, if any is reachable."""
+    seen: set[str] = set()
+    current = rec
+    while True:
+        if current.type == "request":
+            return current
+        refs = current.refs
+        if not refs:
+            return None
+        nxt_id = refs[0]
+        if nxt_id in seen or nxt_id not in records:
+            return None
+        seen.add(nxt_id)
+        current = records[nxt_id]
+
+
+def cmd_route(args: argparse.Namespace) -> int:
+    """The router's first rule set: provenance alone (docs/architecture.md).
+
+    `requested` -> surface now. `initiated` -> digest. Question records
+    route the same way results do — both are "addressed to the
+    resident." Every routing action appends exactly one decision record
+    citing the provenance fact as evidence; nothing is ever routed
+    without one, by construction (there is no code path here that
+    decides a channel without also calling write_record for it).
+    """
+    jdir = journal_dir()
+    records = load_all(jdir)
+
+    already_routed: set[str] = set()
+    for rec in records.values():
+        if rec.type == "decision":
+            already_routed.update(rec.refs)
+
+    to_route = [
+        rec
+        for rec in records.values()
+        if rec.type in ("result", "question") and rec.id not in already_routed
+    ]
+    to_route.sort(key=lambda r: r.id)
+
+    appended = []
+    for rec in to_route:
+        provenance = rec.fields.get("provenance", "")
+        channel = "now" if provenance == "requested" else "digest"
+        root = _find_root_request(records, rec)
+        evidence = (
+            f"{rec.type} {rec.id} carries provenance={provenance}"
+            + (f", inherited from originating request {root.id}" if root else "")
+            + f": {_provenance_explanation(provenance)}."
+        )
+        body_lines = [
+            f"Routing `{rec.type}` `{rec.id}` to channel **{channel}**.",
+            "",
+            f"Rule applied: provenance={provenance} -> {channel} "
+            "(docs/architecture.md: \"requested -> surface to the resident now; "
+            "initiated -> digest\").",
+        ]
+        decision_id = write_record(
+            jdir,
+            type="decision",
+            provenance="initiated",
+            seat="router",
+            refs=[rec.id],
+            evidence=evidence,
+            body="\n".join(body_lines),
+            extra={"channel": channel},
+        )
+        appended.append((decision_id, rec.id, channel))
+
+    if not appended:
+        print("route: nothing unrouted; no decision records appended")
+    else:
+        for decision_id, ref_id, channel in appended:
+            print(f"route: {decision_id} routes {ref_id} -> {channel}")
+    return 0
+
+
+def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
+    """Every record transitively reachable from `root_id` via `refs`."""
+    collected: list[Record] = []
+    seen = {root_id}
+    changed = True
+    while changed:
+        changed = False
+        for rec in records.values():
+            if rec.id in seen:
+                continue
+            if any(ref in seen for ref in rec.refs):
+                collected.append(rec)
+                seen.add(rec.id)
+                changed = True
+    return collected
+
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    """Fold the journal into "what happened, and why" (architecture.md's
+    digest surface). Invoked by hand — no scheduling in this skeleton."""
+    records = load_all(journal_dir())
+    requests = [rec for rec in records.values() if rec.type == "request"]
+    if args.since:
+        requests = [rec for rec in requests if rec.fields.get("created", "") >= args.since]
+    requests.sort(key=lambda r: r.id)
+
+    if not requests:
+        print("No errands recorded.")
+        return 0
+
+    for req in requests:
+        print(f"## Errand {req.id}")
+        print(f"- provenance: {req.fields.get('provenance')}")
+        print(f"- seat: {req.fields.get('seat')}")
+        print(f"- created: {req.fields.get('created')}")
+        print()
+        if req.body.strip():
+            print(req.body.strip())
+            print()
+        downstream = _collect_downstream(records, req.id)
+        downstream.sort(key=lambda r: r.id)
+        for rec in downstream:
+            print(f"### {rec.type} {rec.id} (seat: {rec.fields.get('seat')})")
+            if rec.type == "decision":
+                print(f"- channel: {rec.fields.get('channel', '?')}")
+                print(f"- evidence: {rec.fields.get('evidence', '')}")
+            if rec.body.strip():
+                print()
+                print(rec.body.strip())
+            print()
+    return 0
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Schema-check a journal. This is what CI asserts with (task 0008)."""
+    jdir = pathlib.Path(args.journal) if args.journal else journal_dir()
+    files = sorted(jdir.glob("*.md"))
+    errors: list[str] = []
+    records: dict[str, Record] = {}
+
+    for path in files:
+        try:
+            rec = parse_record(path)
+        except RecordError as exc:
+            errors.append(str(exc))
+            continue
+
+        if rec.id:
+            records[rec.id] = rec
+
+        for field in REQUIRED_FIELDS:
+            if field not in rec.fields:
+                errors.append(f"{path.name}: missing required field '{field}'")
+
+        if rec.fields.get("id") and rec.fields["id"] != path.stem:
+            errors.append(
+                f"{path.name}: id field {rec.fields['id']!r} does not match filename"
+            )
+
+        rtype = rec.fields.get("type")
+        if rtype not in RECORD_TYPES:
+            errors.append(f"{path.name}: invalid type {rtype!r}")
+
+        provenance = rec.fields.get("provenance")
+        if provenance not in PROVENANCE_VALUES:
+            errors.append(f"{path.name}: invalid provenance {provenance!r}")
+
+        # Proposal 04 given teeth: a decision without evidence doesn't
+        # validate, full stop.
+        if rtype == "decision" and not rec.fields.get("evidence", "").strip():
+            errors.append(f"{path.name}: decision record missing non-empty 'evidence'")
+
+        created = rec.fields.get("created", "")
+        try:
+            dt.datetime.strptime(created, CREATED_FMT)
+        except ValueError:
+            errors.append(f"{path.name}: 'created' ({created!r}) is not a valid UTC timestamp")
+
+    for rec in records.values():
+        for ref in rec.refs:
+            if ref not in records:
+                errors.append(f"{rec.path.name}: refs unknown record '{ref}'")
+
+    if errors:
+        for err in errors:
+            print(f"INVALID: {err}", file=sys.stderr)
+        print(f"{len(errors)} error(s) across {len(files)} record(s) in {jdir}", file=sys.stderr)
+        return 1
+
+    print(f"OK: {len(files)} record(s) valid in {jdir}")
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    for directory in (journal_dir(), spool_dir()):
+        path = directory / f"{args.id}.md"
+        if path.exists():
+            print(path.read_text(), end="")
+            return 0
+    print(f"castle show: no such record: {args.id}", file=sys.stderr)
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# argparse wiring
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="castle", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_ask = sub.add_parser("ask", help="intake: write a request record")
+    p_ask.add_argument(
+        "--provenance",
+        choices=PROVENANCE_VALUES,
+        default="requested",
+        help="default 'requested': intake normally captures the resident asking directly",
+    )
+    p_ask.add_argument("--refs", default="", help="comma-separated ids this request responds to")
+    p_ask.add_argument("text", nargs="*", help="the request body (or piped on stdin)")
+    p_ask.set_defaults(func=cmd_ask)
+
+    p_answer = sub.add_parser("answer", help="intake: write an answer record for a question")
+    p_answer.add_argument("question_id", help="id of the question record being answered")
+    p_answer.add_argument("text", nargs="*", help="the answer body (or piped on stdin)")
+    p_answer.set_defaults(func=cmd_answer)
+
+    p_record = sub.add_parser("record", help="generic record writer (any seat, any type)")
+    p_record.add_argument("--type", required=True, choices=RECORD_TYPES)
+    p_record.add_argument("--provenance", required=True, choices=PROVENANCE_VALUES)
+    p_record.add_argument("--seat", required=True, help="which seat is writing this record")
+    p_record.add_argument("--refs", default="", help="comma-separated ids this record responds to")
+    p_record.add_argument("--evidence", default=None, help="required in spirit on decision records")
+    p_record.add_argument("--body", default=None, help="record body text")
+    p_record.add_argument("--body-file", default=None, help="read the body from this file instead")
+    p_record.add_argument(
+        "--spool", action="store_true", help="write to the ephemeral spool instead of the journal"
+    )
+    p_record.set_defaults(func=cmd_record)
+
+    p_route = sub.add_parser("route", help="router: append decision records for unrouted records")
+    p_route.set_defaults(func=cmd_route)
+
+    p_digest = sub.add_parser("digest", help="fold the journal into a report")
+    p_digest.add_argument("--since", default=None, help="only errands created at/after this timestamp")
+    p_digest.set_defaults(func=cmd_digest)
+
+    p_validate = sub.add_parser("validate", help="schema-check a journal")
+    p_validate.add_argument("--journal", default=None, help="journal directory (default: the configured state dir)")
+    p_validate.set_defaults(func=cmd_validate)
+
+    p_show = sub.add_parser("show", help="print one record")
+    p_show.add_argument("id", help="record id")
+    p_show.set_defaults(func=cmd_show)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
