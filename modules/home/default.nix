@@ -141,14 +141,11 @@ in
           # `swaymsg floating toggle` still reaches the same action by
           # hand if it's ever missed.
           #
-          # Deliberately NOT wrapped in lib.mkOptionDefault: this repo's
-          # binding is meant to win outright over whatever
-          # home-manager's own stock Sway config defaults that same
-          # chord to, at normal definition priority — mkOptionDefault
-          # would instead put it at the *same* low priority as that
-          # stock default, risking an ambiguous-priority eval error on
-          # exactly the key this comment is about.
-          keybindings = {
+          # EXPERIMENT (docs/tasks/0009 review pass, finding 1): testing
+          # whether wrapping in lib.mkOptionDefault restores home-manager's
+          # default keybinding set alongside this one. Verifying via CI's
+          # sway-config-check job, which prints the generated config.
+          keybindings = lib.mkOptionDefault {
             "Mod4+Shift+space" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
           };
 
