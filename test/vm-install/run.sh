@@ -91,7 +91,7 @@ log "Building harness tooling (qemu, OVMF, nixos-anywhere, openssh) from this fl
 # "out" output instead, discarding the ".fd" narrowing).
 TOOLS=$(build_expr "let pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"harness-tools\" { qemu = pkgs.qemu.out; \"OVMF.fd\" = pkgs.OVMF.fd; nixos-anywhere = pkgs.nixos-anywhere.out; openssh = pkgs.openssh.out; }")
 QEMU=$(readlink -f "$TOOLS/qemu")
-OVMF=$(readlink -f "$TOOLS/OVMF")
+OVMF=$(readlink -f "$TOOLS/OVMF.fd")
 NIXOS_ANYWHERE=$(readlink -f "$TOOLS/nixos-anywhere")
 OPENSSH=$(readlink -f "$TOOLS/openssh")
 
