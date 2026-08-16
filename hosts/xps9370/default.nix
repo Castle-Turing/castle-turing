@@ -4,7 +4,7 @@
 # consuming private layer. The nixos-hardware and disko modules this
 # host needs are bound by flake.nix's `nixosModules.host-xps9370`
 # export, which is how this directory should be consumed.
-{ lib, options, ... }:
+{ lib, ... }:
 
 {
   imports = [
@@ -85,27 +85,26 @@
   # default, not personal data (Principle 01 consequence 2 — nothing
   # about a cursor theme identifies a resident), and a private layer's
   # own taste still overrides it.
+  #
+  # castle.display is declared by modules/desktop, not by this file —
+  # this host module assumes any consumer pairing it with
+  # nixosModules.host-xps9370 also imports nixosModules.desktop, the way
+  # every nixosConfiguration in this repo's own flake.nix does. An
+  # earlier version of this block tried to guard that assumption away
+  # with `lib.optionalAttrs (options.castle ? display) { ... }`, so a
+  # from-scratch headless pairing of this host without desktop would
+  # still evaluate — but reading the `options` module argument to decide
+  # which keys *this same module* returns is a real infinite-recursion
+  # trap in Nix's module system (config for a still-being-assembled
+  # module set depending on the fully-assembled options tree), not
+  # just an edge case; `nix flake check` caught it immediately. Reverted
+  # in favor of this honest, documented coupling instead: if you ever
+  # write a private layer that imports host-xps9370 without desktop,
+  # override castle.display back out (or drop this whole block) in your
+  # own resident.nix.
+  castle.display = {
+    scale = lib.mkDefault 2.0;
+    cursorTheme = lib.mkDefault "Bibata-Modern-Classic";
+    cursorSize = lib.mkDefault 48;
+  };
 }
-// (
-  # castle.display is declared by modules/desktop, which this host does
-  # not import itself and which a private layer is free to skip (a
-  # headless use of this same chassis is a legitimate combination —
-  # docs/private-layer.md: "Optional: skip it on a headless host").
-  # Merging this block in with `//` only when the option actually
-  # exists — checked against `options`, never `config`, since this is a
-  # declare-time question a private layer's own module list answers,
-  # not a value to read — is what keeps this file safe to import
-  # without modules/desktop: an unconditional `castle.display = {...};`
-  # would fail evaluation with "option does not exist" the moment
-  # desktop is absent, exactly the trap Principle 01 consequence 2
-  # warns a host module into ("no hardware assumptions... leaking into
-  # shared modules" cuts both ways — a host also can't assume an
-  # unrelated optional module is present).
-  lib.optionalAttrs (options.castle ? display) {
-    castle.display = {
-      scale = lib.mkDefault 2.0;
-      cursorTheme = lib.mkDefault "Bibata-Modern-Classic";
-      cursorSize = lib.mkDefault 48;
-    };
-  }
-)
