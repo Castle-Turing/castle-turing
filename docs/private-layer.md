@@ -246,8 +246,8 @@ state/
                        volunteered (which correction it came from,
                        when). See agent/README.md for the entry formats
                        and worked (fake) examples. Starts empty, or
-                       absent entirely, until
-                       the first elicited answer.
+                       absent entirely, until the first elicited answer
+                       or volunteered correction.
 ```
 
 Point `castle.agent.stateDir` at this directory (an absolute path,
