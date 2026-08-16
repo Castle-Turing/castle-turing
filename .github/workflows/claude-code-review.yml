@@ -3,12 +3,27 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    # Documentation-only PRs are reviewed by the human, not by a model.
+    # This is the only workflow in the repo that spends model tokens on
+    # every PR, and a large share of this repo's PRs are pure prose —
+    # design principles, task briefs, backlog entries — where the review
+    # a model gives is worth less than it costs and the human is reading
+    # the text closely anyway.
+    #
+    # paths-ignore is the right operator rather than paths: the job runs
+    # whenever a PR touches *anything* outside this list, so a change
+    # that mixes code and docs is still reviewed in full. Only a PR whose
+    # every changed file matches is skipped.
+    #
+    # Note this deliberately does NOT filter check.yml (flake-check,
+    # agent-loop-test, modal-headless-test, sway-config-check). Those
+    # spend no model tokens, finish in under a minute, and are the gate —
+    # path-filtering a would-be required check is how a docs PR ends up
+    # blocked forever on a status that never reports.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
 
 jobs:
   claude-review:
