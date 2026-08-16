@@ -42,6 +42,7 @@ its exported modules:
           castle-turing.nixosModules.home # optional: home-manager + git identity
           castle-turing.nixosModules.desktop # optional: Sway desktop session
           castle-turing.nixosModules.dev # optional: Emacs, git, gh, ripgrep, fd, claude-code
+          castle-turing.nixosModules.agent # optional: the agent-layer CLI + state dir
           ./resident.nix
         ];
       };
@@ -72,6 +73,12 @@ The exported modules:
   security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
   gh, ripgrep, fd, claude-code). No private data, no assertions.
+- `nixosModules.agent` — the agent layer's CLI (`castle`) and the
+  `castle.agent.stateDir` option, wired into `CASTLE_STATE_DIR`. See
+  "The agent's state" below and `agent/README.md`. No assertions: an
+  unset `stateDir` just falls back to a per-user default rather than
+  failing evaluation, since the agent layer is optional the way
+  `desktop`/`dev` are.
 - `nixosModules.installer` — the agentic installer image: bootable NixOS
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
@@ -102,6 +109,12 @@ The values this repo may never contain:
     gitUserName = "<your-name>";
     gitUserEmail = "<your-email>";
   };
+
+  # Optional — only meaningful if you use nixosModules.agent. Points the
+  # `castle` CLI at this private repo's own state/ directory rather than
+  # a per-user default under $XDG_STATE_HOME — see "The agent's state"
+  # below.
+  castle.agent.stateDir = "/home/<your-login>/private/state";
 }
 ```
 
@@ -124,6 +137,55 @@ The values this repo may never contain:
   commit identity, wired into home-manager's `programs.git`. Only
   required if you import `nixosModules.home`, which asserts both are
   set.
+- `castle.agent.stateDir` — where the `castle` CLI's journal (and the
+  resident model) live. Optional even if you import
+  `nixosModules.agent`: unset, the CLI falls back to
+  `$XDG_STATE_HOME/castle`, a reasonable per-user default but not the
+  durable, git-tracked location the architecture calls for. See "The
+  agent's state" below.
+
+## The agent's state
+
+`docs/architecture.md` and `agent/README.md` (the mechanism itself)
+are the full spec; this section is the private-layer half of it — what
+you actually add to make the "agent's model of you" slot real instead
+of a placeholder.
+
+`nixosModules.agent` installs the `castle` CLI but creates no state
+anywhere — Principle 02 again: a rebuild never contains a person, so
+the journal and resident model can't live in the derivation path. They
+live in this repo, your private one, under a `state/` directory you
+create:
+
+```
+state/
+  journal/            One file per record — requests, decisions,
+                       results, questions, answers. Append-only in
+                       spirit: nothing is ever edited, only added to.
+  resident-model.md    Accumulated facts about you, one entry per
+                       fact, each carrying its own provenance (question
+                       asked, answer given, when). See agent/README.md
+                       for the entry format and a worked (fake)
+                       example. Starts empty, or absent entirely, until
+                       the first elicited answer.
+```
+
+Point `castle.agent.stateDir` at this directory (an absolute path,
+since it's wired straight into an environment variable — see
+`resident.nix` above) and every `castle` invocation in your session
+reads and writes there instead of a throwaway per-user default.
+Because it's an ordinary directory in a git repo you already commit
+and control, it survives a reinstall, a move to new hardware, and a
+change of which model or harness holds the worker seat — which is the
+entire point (`docs/architecture.md`'s "Where runtime state lives").
+
+Two things `docs/architecture.md` is explicit about and worth
+repeating here: committing to this directory is a standing,
+made-then-reported authority — the diff is the audit trail, not a
+thing to approve in advance — and **pushing stays manual** until
+secrets tooling gives this repo a credential story for doing it
+unattended. Don't wire a cron job or a service to `git push` this
+repo's state until that lands.
 
 ## The installer image (optional, per host)
 
@@ -225,8 +287,10 @@ the space, do not invent formats yet:
   public flake. Until then: **no plaintext credentials anywhere**, the
   private repo included. A private repo is access control, not
   encryption.
-- **The agent's model of you** — accumulated context and the decision
-  journal. Shape arrives with the agent tooling.
+
+The agent's model of you is no longer on this list — its shape landed
+with `docs/tasks/0008-agent-layer-skeleton.md`. See "The agent's
+state" above.
 
 ## Test
 
