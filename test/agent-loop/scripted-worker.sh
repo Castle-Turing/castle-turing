@@ -8,9 +8,21 @@
 # models, zero network, per docs/tasks/0008), and writes back a `result`
 # record whose body clearly says the diff inside it is synthetic. What it
 # does exercise for real: reading the request's own provenance and
-# propagating it onto the result, which is what lets the router's
-# provenance-alone rule produce a different channel for each of the two
-# canned errands in run.sh.
+# propagating it onto everything it writes, which is what lets the
+# router's provenance-alone rule produce a different channel for each of
+# the two canned errands in run.sh.
+#
+# docs/tasks/0009-ambient-intake.md item 7's third gap: nothing in CI
+# ever produced a `question` record, even though worker-questions-route-
+# through-the-router is a central claim of the architecture. This
+# script now raises one, unconditionally, before its result — every
+# scripted worker in this harness does the same regardless of the
+# request's own content, deliberately, because tenant-swap.sh
+# (docs/tasks/0009) diffs this script's structural output against
+# scripted-worker-alt.py's and the comparison only means something if
+# both behave identically regardless of which request they're handed.
+# A real worker decides case by case whether a question is warranted;
+# this harness has no judgment to decide with, on purpose.
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
@@ -29,6 +41,15 @@ if [ -z "$provenance" ]; then
   echo "scripted-worker: could not read provenance from $REQUEST_ID" >&2
   exit 1
 fi
+
+question_id="$("$CASTLE" record \
+  --type question \
+  --provenance "$provenance" \
+  --seat worker \
+  --refs "$REQUEST_ID" \
+  --fact scripted-worker-test-fact \
+  --body "Scripted posture question for $REQUEST_ID: fix it and tell you, or explain first?")"
+echo "scripted-worker: raised question $question_id for $REQUEST_ID" >&2
 
 # A quoted heredoc (no expansion at all) written straight to a temp
 # file, rather than captured via $(cat <<'EOF' ... ) — bash tracks

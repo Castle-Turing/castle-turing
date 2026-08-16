@@ -29,3 +29,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: test/agent-loop/run.sh
+      # Proposal 03's hardening test, second half
+      # (docs/tasks/0009-ambient-intake.md): the worker seat re-tenanted
+      # with no structural change, proven by running the same loop
+      # twice with two differently-shaped scripted workers and diffing
+      # a normalized summary of the outcomes. Same runner, no Nix,
+      # same reason as the job above.
+      - run: test/agent-loop/tenant-swap.sh
+
+  # The modal's logic (agent/castle-modal), driven headlessly: canned
+  # stdin piped at it, asserting on the request record it produces and
+  # the status fold it renders — no compositor, no foot, no Sway
+  # involved (docs/tasks/0009-ambient-intake.md's verification plan).
+  modal-headless-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test/agent-loop/modal-headless-test.sh
