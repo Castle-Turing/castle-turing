@@ -32,6 +32,12 @@ on:
       - "hosts/**"
       - "test/vm-install/**"
       - ".github/workflows/vm-install-test.yml"
+  # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
+  # via `gh workflow run` — needed to get a real run of the anti-bricking
+  # regression test (docs/tasks/0008: vm-test must stay green with no
+  # agent module imported) while iterating on a feature branch, without
+  # opening a PR just to get CI to fire.
+  workflow_dispatch: {}
 
 jobs:
   vm-install-test:
