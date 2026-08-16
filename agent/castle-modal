@@ -63,6 +63,30 @@ def _load_castle_module():
     return module
 
 
+def _pause_for_dismissal(out=sys.stdout) -> None:
+    """The keybinding (modules/home) opens a floating `foot` running this
+    script as its sole command, and foot closes the instant that process
+    exits — so without this, both the "Filed as <id>..." confirmation
+    and the "empty request, nothing filed" refusal flash for zero
+    human-perceptible frames (0009 review pass finding 5), on a surface
+    whose entire premise is "describe it and walk away." Blocking on a
+    keypress here — in the one process foot is running, rather than
+    threading a shell wrapper's quoting through the Sway keybinding
+    string — is what holds the window open until a human dismisses it.
+    Gated on isatty() for the same reason compose mode's cosmetic
+    prompts are: a piped-stdin run (CI, or `castle-modal` in a script)
+    has no human to wait for and no tty to read a keypress from.
+    """
+    if not sys.stdin.isatty():
+        return
+    print(file=out)
+    print("Press Enter to close.", file=out)
+    try:
+        input()
+    except EOFError:
+        pass
+
+
 def run_compose(castle, out=sys.stdout) -> int:
     interactive = sys.stdin.isatty()
     if interactive:
@@ -80,6 +104,7 @@ def run_compose(castle, out=sys.stdout) -> int:
 
     if not body:
         print("castle-modal: empty request, nothing filed.", file=sys.stderr)
+        _pause_for_dismissal(out)
         return 1
 
     record_id = castle.write_record(
@@ -92,6 +117,7 @@ def run_compose(castle, out=sys.stdout) -> int:
     print(record_id, file=out)
     if interactive:
         print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    _pause_for_dismissal(out)
     return 0
 
 

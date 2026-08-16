@@ -70,4 +70,76 @@ EMPTY_STATE="$(mktemp -d)"
 CASTLE_STATE_DIR="$EMPTY_STATE" "$MODAL" --mode status | grep -q "No errands yet" || fail "empty-journal status mode did not print the expected message"
 rm -rf "$EMPTY_STATE"
 
+log "compose mode: an interactive session must hold the window open until dismissed (0009 review pass finding 5)"
+log "  -- foot closes the instant this process exits, so the confirmation must not flash for zero frames; a real pty (stdlib 'pty') stands in for foot here, not a piped stdin"
+if ! python3 - "$MODAL" "$CASTLE_STATE_DIR" "$XDG_RUNTIME_DIR" <<'PYEOF'
+import os
+import pty
+import select
+import subprocess
+import sys
+import time
+
+modal, state_dir, runtime_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+env = dict(os.environ)
+env["CASTLE_STATE_DIR"] = state_dir
+env["XDG_RUNTIME_DIR"] = runtime_dir
+
+main_fd, sub_fd = pty.openpty()
+proc = subprocess.Popen(
+    [modal, "--mode", "compose"],
+    stdin=sub_fd, stdout=sub_fd, stderr=sub_fd,
+    env=env, close_fds=True,
+)
+os.close(sub_fd)
+
+
+def read_available(timeout=3.0):
+    data = b""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        ready, _, _ = select.select([main_fd], [], [], 0.2)
+        if main_fd in ready:
+            try:
+                chunk = os.read(main_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            data += chunk
+        elif data:
+            break
+    return data
+
+
+os.write(main_fd, b"Testing the pause-on-dismissal fix.\n.\n")
+out = read_available()
+
+if proc.poll() is not None:
+    print("FAIL: castle-modal exited before it was dismissed with Enter", file=sys.stderr)
+    sys.exit(1)
+if b"Filed as" not in out:
+    print(f"FAIL: no readable confirmation (with record id) before the pause: {out!r}", file=sys.stderr)
+    sys.exit(1)
+if b"Press Enter to close" not in out:
+    print(f"FAIL: no dismissal prompt seen — window would close unattended: {out!r}", file=sys.stderr)
+    sys.exit(1)
+
+os.write(main_fd, b"\n")
+try:
+    returncode = proc.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    print("FAIL: castle-modal did not exit after Enter was sent to dismiss it", file=sys.stderr)
+    sys.exit(1)
+if returncode != 0:
+    print(f"FAIL: castle-modal exited {returncode} after dismissal, expected 0", file=sys.stderr)
+    sys.exit(1)
+
+print("OK: interactive compose mode held the window open until dismissed, then exited cleanly")
+PYEOF
+then
+  fail "interactive dismissal-hold regression test failed (see output above)"
+fi
+
 log "all assertions passed"
