@@ -24,9 +24,72 @@
 # impossible on a Wi-Fi-only machine that also couldn't be reached over
 # SSH yet. The assertion below closes that loop — see
 # castle.admin.initialHashedPassword in modules/base.
-{ config, pkgs, ... }:
+{ config, lib, pkgs, ... }:
 
 {
+  options.castle.display = {
+    scale = lib.mkOption {
+      type = lib.types.nullOr lib.types.float;
+      default = null;
+      description = ''
+        Sway output scale (a float — `2.0` doubles logical pixel
+        density). `null` means "framework default": no output scale is
+        set at all, and Sway's own auto-detection applies. Three layers
+        can supply a value, in ascending priority: this module's `null`
+        default; a host module (`hosts/<name>/default.nix`) supplying a
+        hardware-derived value with `lib.mkDefault`, since a panel's
+        physical DPI is a machine fact, not personal data
+        (Principle 01 consequence 2) — see hosts/xps9370 for a worked
+        example; and the private layer, which may override outright for
+        taste. Consumed by modules/home's `wayland.windowManager.sway`
+        (docs/tasks/0009-ambient-intake.md item 1).
+      '';
+    };
+    cursorTheme = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Name of an X cursor theme (e.g. `"Bibata-Modern-Classic"`),
+        wired into home-manager's `home.pointerCursor.name` — one
+        option that covers Sway's own seat, GTK, and XWayland
+        coherently, since all three read the same `XCURSOR_THEME`/
+        `XCURSOR_SIZE` session variables that option sets. `null` means
+        "framework default": home.pointerCursor is left unset, so
+        whatever the cursor theme package (or GTK) defaults to applies.
+        modules/desktop ships `pkgs.bibata-cursors` so this option has
+        something real to point at — set it to one of that package's
+        theme names (e.g. `Bibata-Modern-Classic`,
+        `Bibata-Modern-Ice`) unless a private layer supplies its own
+        cursor theme package too.
+      '';
+    };
+    cursorSize = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        Cursor size in (unscaled) pixels, wired into
+        `home.pointerCursor.size`. `null` means "framework default"
+        (currently 24, home-manager's own default, applied only when
+        `cursorTheme` is also set — an unset theme leaves the whole
+        pointer-cursor slot alone). A HiDPI panel is the concrete
+        motivating case (docs/tasks/0008's cursor errand): XWayland and
+        some GTK cursor rendering paths do not reliably follow Sway's
+        own output scale, so an explicit larger size is sometimes the
+        actual fix rather than `scale` alone — see hosts/xps9370 for a
+        hardware-derived default.
+      '';
+    };
+    terminalFontSize = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        foot's font point size, wired into home-manager's
+        `programs.foot.settings.main.font`. `null` means "framework
+        default": foot's own built-in size applies.
+      '';
+    };
+  };
+
   config = {
     assertions = [
       {
@@ -51,6 +114,18 @@
     environment.systemPackages = [
       pkgs.foot
       pkgs.firefox
+      # The router's real interruption channel (docs/tasks/0009 item 5):
+      # mako is the notification daemon that actually renders a
+      # notify-send call on screen, and libnotify is what provides the
+      # notify-send binary itself. modules/agent's
+      # castle.agent.notify.command defaults to plain `notify-send` on
+      # $PATH, which is what installing it here makes real; a private
+      # layer or CI stub can still override the command entirely.
+      pkgs.mako
+      pkgs.libnotify
+      # Gives castle.display.cursorTheme something real to name — see
+      # that option's description above.
+      pkgs.bibata-cursors
     ];
 
     fonts.packages = with pkgs; [

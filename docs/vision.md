@@ -50,7 +50,7 @@ Open loops are swept. A recurring pass across mail and messages tracks what was 
 
 ## Architecture in one paragraph
 
-NixOS is the declarative substrate the agent can safely modify. Text-native tools (maildir/notmuch for mail, direct APIs for Slack and calendar) are the interfaces it operates fluently. A tiling window manager driven over IPC is its display surface. Claude Code is the acting layer. A decision journal is the trust mechanism. Graduated intervention channels — note, ambient cue, nudge, modal, forced context switch — form the interaction grammar, expanded as trust accrues. The repo versions all of it together: system config, glue scripts, and these design documents.
+NixOS is the declarative substrate the agent can safely modify. Text-native tools (maildir/notmuch for mail, direct APIs for Slack and calendar) are the interfaces it operates fluently. A tiling window manager driven over IPC is its display surface. The acting layer is a set of seats held by replaceable intelligences — Claude Code is the current tenant, never a structural member (see `docs/architecture.md`). A decision journal is the trust mechanism. Graduated intervention channels — note, ambient cue, nudge, modal, forced context switch — form the interaction grammar, expanded as trust accrues. The repo versions all of it together: system config, glue scripts, and these design documents.
 
 ## Starting point
 

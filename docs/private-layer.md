@@ -42,6 +42,7 @@ its exported modules:
           castle-turing.nixosModules.home # optional: home-manager + git identity
           castle-turing.nixosModules.desktop # optional: Sway desktop session
           castle-turing.nixosModules.dev # optional: Emacs, git, gh, ripgrep, fd, claude-code
+          castle-turing.nixosModules.agent # optional: the agent-layer CLI + state dir
           ./resident.nix
         ];
       };
@@ -64,14 +65,31 @@ The exported modules:
   bound, plus your git commit identity from `castle.person.*`. Optional:
   a headless host has no use for a per-user environment.
 - `nixosModules.desktop` — the graphical session: Sway (with its IPC
-  socket as the documented control surface a future agent layer will
-  drive), foot, fonts, XDG portals, PipeWire, Firefox, and greetd +
-  tuigreet for login. Deliberately no auto-login — see the module's own
-  comments for why. Asserts `castle.admin.initialHashedPassword` is set,
-  since a login prompt with no password behind it is a lockout, not
-  security. Optional: skip it on a headless host.
+  socket as the documented control surface the agent layer drives —
+  `modules/home`'s Sway config is the first thing that actually drives
+  it, docs/tasks/0009), foot, fonts, XDG portals, PipeWire, Firefox,
+  mako (the notification daemon behind the agent layer's `notify`
+  channel) + libnotify, a cursor theme package, and greetd + tuigreet
+  for login. Also declares the `castle.display.*` options — see "The
+  display-preference slot" below. Deliberately no auto-login — see the
+  module's own comments for why. Asserts `castle.admin.initialHashedPassword`
+  is set, since a login prompt with no password behind it is a lockout,
+  not security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
   gh, ripgrep, fd, claude-code). No private data, no assertions.
+- `nixosModules.agent` — the agent layer's CLI (`castle`, plus
+  `castle-modal` and the default `castle-worker-claude` worker tenant)
+  and three options: `castle.agent.stateDir` (wired into
+  `CASTLE_STATE_DIR`), `castle.agent.worker.command` (wired into
+  `CASTLE_WORKER_COMMAND` — which tenant holds the worker seat), and
+  `castle.agent.notify.command` (wired into `CASTLE_NOTIFY_COMMAND` —
+  what the router's `notify` channel actually runs). See "The agent's
+  state" below and `agent/README.md`. No assertions: an unset
+  `stateDir`/`notify.command` just falls back to a per-user or built-in
+  default rather than failing evaluation, since the agent layer is
+  optional the way `desktop`/`dev` are; `worker.command` always has a
+  runnable default (a headless `claude -p`) since the worker seat needs
+  *something* to default to.
 - `nixosModules.installer` — the agentic installer image: bootable NixOS
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
@@ -102,6 +120,31 @@ The values this repo may never contain:
     gitUserName = "<your-name>";
     gitUserEmail = "<your-email>";
   };
+
+  # Optional — only meaningful if you use nixosModules.agent. Points the
+  # `castle` CLI at this private repo's own state/ directory rather than
+  # a per-user default under $XDG_STATE_HOME — see "The agent's state"
+  # below.
+  castle.agent.stateDir = "/home/<your-login>/private/state";
+
+  # Optional — override the worker tenant (default: a headless
+  # `claude -p`, see agent/castle-worker-claude) or the router's notify
+  # command (default: notify-send on $PATH). Most residents on
+  # nixosModules.desktop need neither.
+  # castle.agent.worker.command = "/path/to/your/own/worker/tenant";
+  # castle.agent.notify.command = "";  # e.g. to no-op on a headless host
+
+  # Optional — taste, only meaningful if you use nixosModules.desktop.
+  # hosts/xps9370 already supplies hardware-derived scale/cursor
+  # defaults for that chassis; override any of the four here to your
+  # own preference regardless of host — see "The display-preference
+  # slot" below.
+  castle.display = {
+    # scale = 1.5;
+    # cursorTheme = "Bibata-Modern-Ice";  # or your own cursor package
+    # cursorSize = 32;
+    # terminalFontSize = 11;
+  };
 }
 ```
 
@@ -124,6 +167,99 @@ The values this repo may never contain:
   commit identity, wired into home-manager's `programs.git`. Only
   required if you import `nixosModules.home`, which asserts both are
   set.
+- `castle.agent.stateDir` — where the `castle` CLI's journal (and the
+  resident model) live. Optional even if you import
+  `nixosModules.agent`: unset, the CLI falls back to
+  `$XDG_STATE_HOME/castle`, a reasonable per-user default but not the
+  durable, git-tracked location the architecture calls for. See "The
+  agent's state" below.
+- `castle.agent.worker.command` — which tenant holds the worker seat
+  (docs/architecture.md's Proposal 03). Defaults to a headless
+  `claude -p` (`agent/castle-worker-claude`); override only if you're
+  running a different tenant. Whatever holds this seat, it never
+  deploys — see `agent/README.md`.
+- `castle.agent.notify.command` — what the router's `notify` channel
+  actually runs (docs/architecture.md). Defaults to plain `notify-send`
+  on `$PATH`, which is real once `nixosModules.desktop` is imported
+  (it installs mako + libnotify); set to `""` on a headless host to
+  no-op the attempt outright.
+- `castle.display.{scale,cursorTheme,cursorSize,terminalFontSize}` —
+  taste, only meaningful with `nixosModules.desktop`. See "The
+  display-preference slot" below.
+
+## The display-preference slot
+
+`modules/desktop` declares four options — `castle.display.scale`,
+`.cursorTheme`, `.cursorSize`, `.terminalFontSize` — all `nullOr`,
+defaulting to `null` ("framework default": leave that setting alone
+entirely). Three layers can resolve a value, in ascending priority:
+this module's `null` default; a host module's hardware-derived default
+via `lib.mkDefault` (`hosts/xps9370` sets `scale`, `cursorTheme`, and
+`cursorSize` this way, since a panel's physical DPI is a machine fact —
+Principle 01 consequence 2, "hosts are modules"); and your own
+`resident.nix`, which overrides outright and always wins. `nix flake
+check` proves all three layers resolve correctly via an assertion in
+this repo's `nixosConfigurations.example` (`flake.nix`) — read it if
+you want to see the exact resolution the layering guarantees.
+
+Two of the four are simple values (`cursorSize`, `terminalFontSize` are
+plain integers; `scale` is a float — Sway's own output-scale unit).
+`cursorTheme` is a *name*, and it only means something paired with a
+package that ships a theme by that name: `modules/desktop` installs
+`pkgs.bibata-cursors` so the option has something real to point at out
+of the box (`hosts/xps9370` defaults to its `"Bibata-Modern-Classic"`
+theme) — if you want a different cursor theme, add its package to your
+own private-layer config and set `cursorTheme` to one of *its* theme
+names. Note the dependency this creates: `cursorSize` only takes effect
+once `cursorTheme` is non-null anywhere in the stack (an unset theme
+leaves the whole `home.pointerCursor` slot untouched, by design — see
+`modules/desktop`'s option description) — on `hosts/xps9370` that's
+already satisfied by the host's own default, but if you override
+`cursorTheme` to `null` explicitly to opt back out of a managed cursor
+theme, `cursorSize` goes inert with it.
+
+## The agent's state
+
+`docs/architecture.md` and `agent/README.md` (the mechanism itself)
+are the full spec; this section is the private-layer half of it — what
+you actually add to make the "agent's model of you" slot real instead
+of a placeholder.
+
+`nixosModules.agent` installs the `castle` CLI but creates no state
+anywhere — Principle 02 again: a rebuild never contains a person, so
+the journal and resident model can't live in the derivation path. They
+live in this repo, your private one, under a `state/` directory you
+create:
+
+```
+state/
+  journal/            One file per record — requests, decisions,
+                       results, questions, answers. Append-only in
+                       spirit: nothing is ever edited, only added to.
+  resident-model.md    Accumulated facts about you, one entry per
+                       fact, each carrying its own provenance (question
+                       asked, answer given, when). See agent/README.md
+                       for the entry format and a worked (fake)
+                       example. Starts empty, or absent entirely, until
+                       the first elicited answer.
+```
+
+Point `castle.agent.stateDir` at this directory (an absolute path,
+since it's wired straight into an environment variable — see
+`resident.nix` above) and every `castle` invocation in your session
+reads and writes there instead of a throwaway per-user default.
+Because it's an ordinary directory in a git repo you already commit
+and control, it survives a reinstall, a move to new hardware, and a
+change of which model or harness holds the worker seat — which is the
+entire point (`docs/architecture.md`'s "Where runtime state lives").
+
+Two things `docs/architecture.md` is explicit about and worth
+repeating here: committing to this directory is a standing,
+made-then-reported authority — the diff is the audit trail, not a
+thing to approve in advance — and **pushing stays manual** until
+secrets tooling gives this repo a credential story for doing it
+unattended. Don't wire a cron job or a service to `git push` this
+repo's state until that lands.
 
 ## The installer image (optional, per host)
 
@@ -225,8 +361,10 @@ the space, do not invent formats yet:
   public flake. Until then: **no plaintext credentials anywhere**, the
   private repo included. A private repo is access control, not
   encryption.
-- **The agent's model of you** — accumulated context and the decision
-  journal. Shape arrives with the agent tooling.
+
+The agent's model of you is no longer on this list — its shape landed
+with `docs/tasks/0008-agent-layer-skeleton.md`. See "The agent's
+state" above.
 
 ## Test
 

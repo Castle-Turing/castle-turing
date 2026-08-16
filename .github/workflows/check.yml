@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - main
+  # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
+  # via `gh workflow run` — needed to get real CI results while
+  # iterating on a feature branch before opening a PR against it.
+  workflow_dispatch: {}
 
 jobs:
   flake-check:
@@ -13,3 +17,180 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake check
+
+  # Proposal 03's hardening test (docs/architecture.md), taking its first
+  # steps: the scripted-tenant agent loop, docs/tasks/0008. Deliberately
+  # its own job, not folded into flake-check above: this harness needs no
+  # Nix at all (agent/castle is stdlib Python; test/agent-loop/run.sh is
+  # plain bash), so it runs on the stock Ubuntu runner's own toolchain
+  # rather than paying for a Nix install it has no use for.
+  agent-loop-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test/agent-loop/run.sh
+      # Proposal 03's hardening test, second half
+      # (docs/tasks/0009-ambient-intake.md): the worker seat re-tenanted
+      # with no structural change, proven by running the same loop
+      # twice with two differently-shaped scripted workers and diffing
+      # a normalized summary of the outcomes. Same runner, no Nix,
+      # same reason as the job above.
+      - run: test/agent-loop/tenant-swap.sh
+
+  # The modal's logic (agent/castle-modal), driven headlessly: canned
+  # stdin piped at it, asserting on the request record it produces and
+  # the status fold it renders — no compositor, no foot, no Sway
+  # involved (docs/tasks/0009-ambient-intake.md's verification plan).
+  modal-headless-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test/agent-loop/modal-headless-test.sh
+
+  # docs/tasks/0009 gave this repo its first managed Sway config
+  # (modules/home's wayland.windowManager.sway) and a foot config
+  # alongside it, but flake-check above only proves the *Nix options*
+  # evaluate — it never asks Sway's or foot's own parser to look at
+  # the file they actually produce. That gap matters more than usual
+  # here: modules/desktop deliberately runs no auto-login
+  # (greetd+tuigreet — see that module's header comment and
+  # docs/tasks/0003-findings.md finding #1), so a Sway config that
+  # fails to parse turns into a resident stuck at a login prompt that
+  # can never produce a session — the exact lockout class this project
+  # has scar tissue about. This job closes that gap directly.
+  #
+  # It deliberately does NOT lean on home-manager's own
+  # `wayland.windowManager.sway.checkConfig` option, even though that
+  # option defaults to true today and (per modules/services/window-
+  # managers/i3-sway/sway.nix at this flake's pinned home-manager rev,
+  # see flake.lock) already runs an equivalent check as a side effect
+  # of *building* the generated config's derivation. checkConfig is
+  # just another Nix option — something could flip it false for an
+  # unrelated reason later and silently reopen this exact hole. This
+  # job builds the config/package store paths itself and runs each
+  # program's real parser over the real file, independent of that
+  # upstream default.
+  sway-config-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Build the generated configs and the packages that read them
+        run: |
+          # Attribute paths below were confirmed by reading
+          # home-manager's actual module source at this flake's pinned
+          # rev (flake.lock: home-manager rev
+          # c8058ecc1329a71a3c99c4d0353dba4009a66152) — not guessed:
+          #   * modules/services/window-managers/i3-sway/sway.nix
+          #     writes the rendered Sway config as the derivation at
+          #     `xdg.configFile."sway/config".source` (a
+          #     pkgs.writeTextFile home-manager names "sway.conf"),
+          #     and wires up `wayland.windowManager.sway.package`
+          #     (pkgs.sway.override { wrapperFeatures.gtk = true; ...}
+          #     per modules/home — not bare pkgs.sway, which may carry
+          #     different wrapper flags) as the binary that reads it.
+          #   * modules/programs/foot.nix does the same for foot:
+          #     `xdg.configFile."foot/foot.ini".source` (present only
+          #     when programs.foot.settings is non-empty, which it is
+          #     here via nixosConfigurations.example's
+          #     terminalFontSize override) and `programs.foot.package`.
+          # Both live under `config.home-manager.users.resident`
+          # because nixosConfigurations.example wires modules/home's
+          # home-manager.users.${castle.admin.username}, and that
+          # flake sets castle.admin.username = "resident" as its
+          # placeholder resident.
+          HM='.#nixosConfigurations.example.config.home-manager.users.resident'
+
+          SWAY_CONFIG=$(nix build --no-link --print-out-paths "$HM.xdg.configFile.\"sway/config\".source")
+          SWAY_PKG=$(nix build --no-link --print-out-paths "$HM.wayland.windowManager.sway.package")
+          FOOT_CONFIG=$(nix build --no-link --print-out-paths "$HM.xdg.configFile.\"foot/foot.ini\".source")
+          FOOT_PKG=$(nix build --no-link --print-out-paths "$HM.programs.foot.package")
+          # xvfb-run pulled from the exact same nixpkgs instance this
+          # system uses (nixosSystem exposes `pkgs` alongside `config`
+          # at the top level) so it can't drift from the pin above.
+          XVFB_RUN=$(nix build --no-link --print-out-paths '.#nixosConfigurations.example.pkgs.xvfb-run')/bin/xvfb-run
+
+          {
+            echo "SWAY_CONFIG=$SWAY_CONFIG"
+            echo "SWAY_PKG=$SWAY_PKG"
+            echo "FOOT_CONFIG=$FOOT_CONFIG"
+            echo "FOOT_PKG=$FOOT_PKG"
+            echo "XVFB_RUN=$XVFB_RUN"
+          } >> "$GITHUB_ENV"
+
+          echo "--- generated sway config ($SWAY_CONFIG) ---"
+          cat "$SWAY_CONFIG"
+          echo "--- generated foot config ($FOOT_CONFIG) ---"
+          cat "$FOOT_CONFIG"
+
+      - name: Run sway --validate over the generated config
+        run: |
+          # --validate parses the config and exits without starting a
+          # real session, but Sway still does some startup probing
+          # even in validate mode (swaywm/sway#4691), so it needs
+          # *something* to attach to and a GPU it's willing to run on
+          # even headlessly: xvfb-run supplies a throwaway X server
+          # for that, and --unsupported-gpu waives the GPU check. This
+          # is the identical flag combination home-manager's own
+          # checkPhase uses (see the previous step's comment) — copied
+          # here deliberately so this check keeps working even if this
+          # repo ever turns checkConfig off. DBUS_SESSION_BUS_ADDRESS
+          # and a scratch, private XDG_RUNTIME_DIR keep Sway from
+          # reaching for a real session bus or runtime dir that
+          # doesn't exist on this runner — this is a validate run, not
+          # a real session, so no seat and no compositor are needed or
+          # provided.
+          export DBUS_SESSION_BUS_ADDRESS=/dev/null
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          chmod 700 "$XDG_RUNTIME_DIR"
+          "$XVFB_RUN" "$SWAY_PKG/bin/sway" --config "$SWAY_CONFIG" --validate --unsupported-gpu
+
+      - name: Assert the generated Sway config still carries the default keybindings
+        run: |
+          # sway --validate (above) only proves the config *parses* — it
+          # is perfectly happy with a config that binds exactly one key,
+          # which is precisely how the 0009 review pass's finding 1
+          # lockout looked: modules/home's own binding, defined at
+          # normal priority, silently discarded home-manager's entire
+          # default keybinding set instead of adding to it (see the long
+          # comment on that option in modules/home/default.nix for the
+          # mechanism). Nothing about --validate would have caught that,
+          # so it can't be trusted alone to guard the regression. This
+          # step grep-asserts that a representative sample of the
+          # defaults home-manager ships (terminal, kill, exit, one
+          # workspace switch) and this repo's own $mod4+Shift+space
+          # binding are all present in the same generated file. It is
+          # deliberately a sample, not an exhaustive re-listing of every
+          # default binding — the point is to fail loudly if the whole
+          # default set goes missing again, not to pin every keybind
+          # home-manager happens to ship today.
+          missing=0
+          for expected in \
+            'bindsym Mod1+Return exec' \
+            'bindsym Mod1+Shift+q kill' \
+            'bindsym Mod1+Shift+e exec swaynag' \
+            'bindsym Mod1+1 workspace number 1' \
+            'bindsym Mod4+Shift+space exec foot --app-id=castle-modal'
+          do
+            if ! grep -qF "$expected" "$SWAY_CONFIG"; then
+              echo "MISSING expected binding: $expected"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more expected Sway keybindings were not found in the generated config."
+            echo "If this is a deliberate rebind, update the expected list above. If it isn't,"
+            echo "this is the finding-1 lockout regressing: a keybindings definition at the"
+            echo "wrong priority is silently discarding home-manager's default bindings again."
+            exit 1
+          fi
+
+      - name: Run foot --check-config over the generated config
+        run: |
+          # foot ships its own config-check mode (-C/--check-config):
+          # parses the file and exits 0 (ok) or 230 (invalid), with no
+          # Wayland connection needed — it exists for exactly this,
+          # validating a config without opening a terminal. No xvfb
+          # needed here, unlike Sway above.
+          "$FOOT_PKG/bin/foot" --check-config --config "$FOOT_CONFIG"

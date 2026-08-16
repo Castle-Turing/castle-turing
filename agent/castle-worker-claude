@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# agent/castle-worker-claude — the default castle.agent.worker.command
+# tenant (docs/tasks/0009-ambient-intake.md item 4): a headless
+# `claude -p` invocation, wrapped just enough to keep the errand-boundary
+# contract honest. `castle work` (agent/castle's cmd_work) is the caller:
+# it pipes the request body to this script's stdin and sets
+# CASTLE_REQUEST_ID / CASTLE_DIFF_FILE / CASTLE_REPO_ROOT in the
+# environment before running whatever castle.agent.worker.command names —
+# this script, by default.
+#
+# Per Proposal 03, the harness is free inside a seat; only the boundary
+# is a contract. This wrapper's whole job is turning that boundary into
+# a prompt: read the request, diagnose in the actual repo, write a diff
+# to $CASTLE_DIFF_FILE, explain the reasoning on stdout (the journal,
+# not a chat scrollback, is where the account has to live — see
+# docs/architecture.md's worker seat description).
+#
+# THE WORKER MUST NOT DEPLOY. That sentence is not decoration in the
+# prompt below — it is the one thing this whole file exists to make
+# unmissable to the tenant. No nixos-rebuild, no git commit, no applying
+# anything to a running system, from any agent seat, in this slice (see
+# docs/tasks/0009's non-goals). A resident reviews the diff this script
+# collects and applies it by hand.
+set -euo pipefail
+
+: "${CASTLE_REQUEST_ID:?castle-worker-claude: CASTLE_REQUEST_ID must be set (see agent/castle's cmd_work)}"
+: "${CASTLE_DIFF_FILE:?castle-worker-claude: CASTLE_DIFF_FILE must be set (see agent/castle's cmd_work)}"
+: "${CASTLE_REPO_ROOT:=$PWD}"
+
+request_body="$(cat)"
+
+# The heredoc below is redirected straight to a file rather than
+# captured via `prompt="$(cat <<PROMPT ... PROMPT)"` — bash's parser
+# tracks quote pairing (both ' and ") across an entire $(...) nesting
+# even for content sitting inside a heredoc, and this prompt's prose
+# has plenty of apostrophes plus one deliberately-quoted phrase, so
+# that form breaks with "unexpected EOF" depending on exactly how many
+# quote characters land on which side of the split. Same underlying
+# gotcha test/agent-loop/scripted-worker.sh's own comment documents for
+# backticks; writing to a file first sidesteps the whole class of it,
+# for the same reason.
+prompt_file="$(mktemp)"
+cat <<PROMPT > "$prompt_file"
+You are the worker seat of Castle Turing's agent layer, handling errand
+${CASTLE_REQUEST_ID} in the repository checked out at ${CASTLE_REPO_ROOT}.
+
+The resident's request, in their own words:
+
+${request_body}
+
+Your contract (docs/architecture.md — the errand boundary, not the
+model-call boundary):
+
+1. Diagnose the problem in the actual repository and decide which
+   layer the fix belongs in (public mechanism, a host module, or a
+   private-layer slot — see docs/principles/01-open-by-construction.md
+   if it's ambiguous).
+2. Produce a unified diff of the fix and write it, and only it, to the
+   file at \$CASTLE_DIFF_FILE (currently ${CASTLE_DIFF_FILE}). If no
+   change is warranted, leave that file empty and say why on stdout.
+3. Print your reasoning to stdout as plain prose: the diagnosis, why
+   this layer, what you checked. This becomes the permanent journal
+   record of the errand — nothing that lives only in your own scratch
+   space will be remembered afterward.
+4. If you need the resident's own judgment mid-errand (a genuine
+   posture question, not something inferrable from the repo), append a
+   question record instead of guessing — e.g. via a
+   'castle record --type question ...' invocation, if the castle CLI
+   is on \$PATH in this environment — and end your turn. Nothing
+   re-invokes you when that question is answered: the answer lands in
+   the journal for a later errand (or a human) to pick up. So if the
+   rest of the errand can be completed without the answer, complete it
+   and file the question alongside your result rather than stopping —
+   an errand that halts on a question the resident may not read for
+   hours has spent their time to buy nothing.
+
+THE ONE RULE THAT OVERRIDES EVERYTHING ELSE: you MUST NOT deploy this
+change. Do not run nixos-rebuild, do not run git commit, do not apply
+this change to a running system in any way, from this seat, under any
+circumstance — no matter how confident you are or how small the change
+looks. Produce the diff and explain it; the resident applies it.
+PROMPT
+
+# Read the prompt into a variable and delete the file *before* handing
+# off to claude, rather than trapping on EXIT — this script execs into
+# claude below, replacing its own process image, so a trap registered
+# here would never fire (0009 review pass finding 2). Left as a trap,
+# every `castle work` would leave a temp file holding the resident's
+# verbatim request text on disk forever, which matters beyond disk
+# hygiene given this repo's privacy posture (CLAUDE.md's hard rule).
+# Deleting explicitly, before exec, needs no trap at all: the file is
+# gone by the time anything else could see it, exec or no exec.
+prompt="$(cat "$prompt_file")"
+rm -f "$prompt_file"
+
+exec claude -p "$prompt"
