@@ -96,11 +96,25 @@ def run_compose(castle, out=sys.stdout) -> int:
 
 
 def _errand_state(downstream: list) -> str:
+    """`result` was checked before question/answer, so 'done' won any
+    errand that also had an unanswered question — but the worker prompt
+    (agent/castle-worker-claude) explicitly tells tenants to "file the
+    question alongside your result rather than stopping", so
+    result+unanswered-question is the *normal* shape for a worker that
+    needed input mid-errand, not an edge case. That made "waiting on
+    you" — the one state this whole modal exists to surface — silently
+    unreachable in exactly the flow the worker is instructed to use
+    (0009 review pass finding 4). Reporting both when both apply is
+    strictly more honest than picking one."""
     types = {rec.type for rec in downstream}
-    if "result" in types:
-        return "done"
-    if "question" in types and "answer" not in types:
+    has_result = "result" in types
+    waiting = "question" in types and "answer" not in types
+    if has_result and waiting:
+        return "done, waiting on you"
+    if waiting:
         return "waiting on you"
+    if has_result:
+        return "done"
     return "in progress"
 
 
