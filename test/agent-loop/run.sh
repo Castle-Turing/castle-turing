@@ -198,6 +198,18 @@ JOURNAL_COUNT_AFTER_3="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l |
 log "finding 3 regression: the journal must still validate clean after every rejected write above"
 "$CASTLE" validate || fail "journal failed to validate after finding-3's rejected writes — one of them left a partial or corrupt record behind"
 
+log "finding 6 regression (0009 review pass): a field value containing a newline must be rejected, not silently corrupt the journal"
+JOURNAL_COUNT_BEFORE_NL="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+if "$CASTLE" record --type decision --provenance initiated --seat router --refs "$REQ1" \
+    --evidence "$(printf 'line one\nline two')" \
+    >"$WORKDIR/bad-newline-out" 2>"$WORKDIR/bad-newline-err"; then
+  fail "castle record accepted an --evidence value containing a newline"
+fi
+grep -q "newline" "$WORKDIR/bad-newline-err" || fail "castle record's newline-rejection message changed unexpectedly"
+JOURNAL_COUNT_AFTER_NL="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_NL" -eq "$JOURNAL_COUNT_BEFORE_NL" ] || fail "castle record wrote a journal file despite rejecting the newline-bearing value"
+"$CASTLE" validate || fail "journal failed to validate after the rejected newline write — a partial file may have been left behind"
+
 log "router bug regression (docs/tasks/0009 item 7): a non-router decision referencing a result must not suppress routing"
 REQ3="$("$CASTLE" ask --provenance initiated "Test errand gamma: only exists to exercise the router-bug regression test.")"
 RES3="$("$CASTLE" record --type result --provenance initiated --seat worker --refs "$REQ3" --body "Errand gamma result, for the regression test only.")"

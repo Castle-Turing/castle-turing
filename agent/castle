@@ -133,6 +133,30 @@ def parse_record(path: pathlib.Path) -> Record:
     return Record(fields=fields, body=body, path=path)
 
 
+def _reject_newline_fields(fields: dict, *, what: str) -> None:
+    """A field value containing a newline breaks this format at the
+    root (0009 review pass finding 6): render_record/render_model_entry
+    write `f"{key}: {value}"` on one line, with no escaping, so a
+    multi-line value produces a continuation line with no colon.
+    parse_record then raises on that file, and load_all — whose job is
+    to keep working over one bad file rather than refusing to touch the
+    rest of the journal — silently SKIPS it. The record vanishes from
+    `route` and `digest` while `validate` fails on it, all after the
+    caller (e.g. `castle record --evidence "$(some_command)"`, an easy
+    way to get a newline in) was told the write succeeded. Called from
+    every writer *before* anything is written, so the failure is loud,
+    immediate, and leaves no partial file behind — multi-line content
+    belongs in the body, which has no such restriction.
+    """
+    for key, value in fields.items():
+        if isinstance(value, str) and "\n" in value:
+            raise RecordError(
+                f"{what} field {key!r} contains a newline, which this format's "
+                f"flat frontmatter cannot represent: {value!r}. Put multi-line "
+                "content in the record body instead."
+            )
+
+
 def render_record(fields: dict, body: str) -> str:
     lines = ["---"]
     seen = set()
@@ -239,6 +263,7 @@ def write_record(
         fields["evidence"] = evidence
     if extra:
         fields.update(extra)
+    _reject_newline_fields(fields, what="record")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{record_id}.md"
     path.write_text(render_record(fields, body))
@@ -281,6 +306,11 @@ def resident_model_path() -> pathlib.Path:
 
 
 def render_model_entry(fields: dict, body: str) -> str:
+    # Same defect, same fix, as write_record's frontmatter (finding 6,
+    # 0009 review pass): resident-model.md is append-only for the same
+    # reason the journal is, and `fact` in particular can come straight
+    # from an unchecked `castle answer --fact` argument.
+    _reject_newline_fields(fields, what="resident-model")
     lines = ["---"]
     for key in MODEL_FIELD_ORDER:
         if key in fields:
@@ -886,7 +916,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except RecordError as exc:
+        # Every subcommand's write path funnels through write_record /
+        # render_model_entry, both of which now raise RecordError rather
+        # than silently writing something parse_record can't read back
+        # (finding 6, 0009 review pass). One catch here, instead of one
+        # in each subcommand, is what makes that guarantee — a future
+        # write path gets the same clean failure for free.
+        print(f"castle: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
