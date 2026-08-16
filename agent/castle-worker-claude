@@ -67,8 +67,13 @@ model-call boundary):
    posture question, not something inferrable from the repo), append a
    question record instead of guessing — e.g. via a
    'castle record --type question ...' invocation, if the castle CLI
-   is on \$PATH in this environment — and end your turn; you will be
-   invoked again once it is answered.
+   is on \$PATH in this environment — and end your turn. Nothing
+   re-invokes you when that question is answered: the answer lands in
+   the journal for a later errand (or a human) to pick up. So if the
+   rest of the errand can be completed without the answer, complete it
+   and file the question alongside your result rather than stopping —
+   an errand that halts on a question the resident may not read for
+   hours has spent their time to buy nothing.
 
 THE ONE RULE THAT OVERRIDES EVERYTHING ELSE: you MUST NOT deploy this
 change. Do not run nixos-rebuild, do not run git commit, do not apply
