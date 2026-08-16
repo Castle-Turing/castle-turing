@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - main
+  # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
+  # via `gh workflow run` — needed to get real CI results while
+  # iterating on a feature branch before opening a PR against it.
+  workflow_dispatch: {}
 
 jobs:
   flake-check:
