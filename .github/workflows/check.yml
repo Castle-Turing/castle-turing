@@ -192,20 +192,33 @@ jobs:
           # (modules/desktop's own `mkDefault`, not an opt-in like the
           # other castle.display settings), so every generated config
           # should carry a `bg <path> <mode>` line unless a private
-          # layer explicitly disabled it. This is exactly the class of
-          # bug this repo keeps finding: `sway --validate` above is
-          # perfectly happy with `bg /nowhere/at/all.jpg fill` — it
-          # checks the directive parses, not that the path resolves to
-          # anything (swaywm/sway#4691), and Sway itself only opens the
-          # file at real session startup, on someone's actual desktop.
-          # `nix flake check` proving the option evaluates has the same
-          # blind spot. The path this step checks is extracted from the
-          # real generated config, not recomputed from the Nix
-          # expression, so it can't drift from what Sway will actually
-          # be told to open; and it's already real on this runner's
-          # filesystem by the time this step runs, because building
-          # $SWAY_CONFIG above forced the store path it's interpolated
-          # into as a dependency of that build.
+          # layer explicitly disabled it.
+          #
+          # An earlier version of this comment claimed `sway --validate`
+          # doesn't check that a `bg` path resolves to anything, by
+          # analogy with the finding-1 lockout this job's other steps
+          # guard against — that claim was never verified here and was
+          # wrong. Confirmed by deliberately breaking this on a
+          # throwaway branch (docs/tasks/0014's verification pass,
+          # logged in that session's scratchpad): Sway's own
+          # sway/commands/output/background.c does an access() check
+          # and refuses to load a config whose `bg` file is missing, and
+          # home-manager's `checkConfig` (on by default; see the header
+          # comment on this job) runs that same validation as a build
+          # step, so a missing background file already fails the
+          # "Build the generated configs" step above with a real, if
+          # buried-in-derivation-log, error before this step is ever
+          # reached — see that failure's exact text in the decision log.
+          #
+          # This step still earns its place as a second, independent
+          # layer: it reads the actual generated text rather than
+          # trusting a specific Sway version's internal behavior (which
+          # this repo has no control over and doesn't pin the way it
+          # pins nixpkgs itself), it still fires if `checkConfig` is
+          # ever turned off (the exact scenario the "Run sway
+          # --validate" step below exists for), and it gives a short,
+          # purpose-built failure message instead of requiring someone
+          # to read Sway's raw stderr out of a failed derivation build.
           BG_LINE=$(grep -E '^[[:space:]]*bg[[:space:]]' "$SWAY_CONFIG" || true)
           if [ -z "$BG_LINE" ]; then
             echo "No 'bg' line found in the generated Sway config."
@@ -219,9 +232,9 @@ jobs:
           if [ ! -f "$BG_PATH" ]; then
             echo "castle.display.wallpaper's generated 'bg' line names a file that does not"
             echo "exist in the store: $BG_PATH"
-            echo "This is a black-desktop bug waiting to happen: Sway will accept this config"
-            echo "(--validate above does not open the file) and only fail to show a background"
-            echo "at real session startup, on someone else's machine."
+            echo "This is a black-desktop bug waiting to happen: something between the"
+            echo "castle.display.wallpaper option and Sway's own file-access check let it"
+            echo "through anyway."
             exit 1
           fi
 
