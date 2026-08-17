@@ -37,8 +37,7 @@ premise mostly worthless in practice.
 **A related finding already in hand.** Bottou et al. (*JMLR* 2013) show
 that what makes logged interaction data reusable is not raw observation
 but the **considered set and selection propensity**. That is compatible
-with citation-only persistence, and has since landed on the decision
-record separately (`considered`/`confidence`, `agent/castle`'s
+record separately (`considered`/`propensity`, `agent/castle`'s
 `cmd_route`; see `agent/README.md`'s "The considered set and the
 selection propensity" and `docs/architecture.md`'s Records section) —
 but it sharpens this brief's question rather than answering it, because
