@@ -18,8 +18,8 @@ a design commitment.
 `scale = 2.0`. Sway already multiplies cursor size by the output scale,
 so `xcursor_theme <theme> 48` on a scale-2.0 output renders at roughly
 96 physical pixels. On this 3840×2160 13" panel that is about 7mm of
-cursor. The resident's verbatim report: "The cursor is freaking
-gigantic."
+cursor — reported on the real hardware as dramatically, unusably
+oversized, consistent with the double-scaling math above.
 
 The existing comment justifies 48 on the grounds that XWayland and some
 GTK paths do not follow Sway's output scale for the pointer glyph. That

@@ -75,9 +75,9 @@
   # here on top of a 2.0 output scale was tried first (48, reasoning
   # from the real XWayland/GTK gap below) and double-compensated: Sway
   # rendered it at roughly 96 physical pixels, about 7mm on this panel —
-  # confirmed on the first real deploy, resident's own words "the cursor
-  # is freaking gigantic" (docs/tasks/0013-first-deploy-findings.md).
-  # 18 is the corrected, eye-calibrated value on this panel at scale
+  # confirmed on the first real deploy as dramatically, unusably
+  # oversized (docs/tasks/0013-first-deploy-findings.md). 18 is the
+  # corrected, eye-calibrated value on this panel at scale
   # 2.0 (36 physical pixels, ~2.8mm) — below the 24px unscaled default,
   # and still visibly larger than what task 0008's original "too small"
   # complaint was about, because that complaint predates `scale` being

@@ -79,7 +79,7 @@
         it larger to counter a HiDPI panel double-compensates on top of
         `scale` (docs/tasks/0013-first-deploy-findings.md, bug 1: 48
         alongside `scale = 2.0` rendered at roughly 96 physical pixels,
-        confirmed on a real deploy — "the cursor is freaking gigantic");
+        confirmed on a real deploy as dramatically, unusably oversized);
         see hosts/xps9370 for a worked, eye-calibrated example of
         picking a correct pre-scale value instead.
 
