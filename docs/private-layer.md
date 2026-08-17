@@ -150,6 +150,8 @@ The values this repo may never contain:
     # terminalFont = "Fira Code";  # illustrative — needs pkgs.fira-code
     # uiFont = "Inter";            # illustrative — needs pkgs.inter
     # terminalFontSize = 11;
+    # wallpaper = "/home/you/Pictures/my-wallpaper.jpg";
+    # wallpaper = null;  # no wallpaper
   };
 }
 ```
@@ -190,33 +192,31 @@ The values this repo may never contain:
   (it installs mako + libnotify); set to `""` on a headless host to
   no-op the attempt outright.
 - `castle.display.{scale,cursorTheme,cursorSize,terminalFont,
-  terminalFontSize,uiFont,uiFontSize,consoleFont}` — taste, only
+  terminalFontSize,uiFont,uiFontSize,consoleFont,wallpaper}` — taste, only
   meaningful with `nixosModules.desktop`. They do not all resolve the
   same way: four (`scale`, `cursorTheme`, `cursorSize`, `consoleFont`)
-  still need a host module to supply the real value, four carry a
+  still need a host module to supply the real value, five carry a
   non-null framework default of their own — see "The display-preference
   slot" below for which is which and why `null` no longer means the
   same thing everywhere in this set.
 
 ## The display-preference slot
 
-`modules/desktop` declares eight options under `castle.display`:
+`modules/desktop` declares nine options under `castle.display`:
 `scale`, `cursorTheme`, `cursorSize`, `terminalFont`,
-`terminalFontSize`, `uiFont`, `uiFontSize`, and `consoleFont`. (A
-ninth, `wallpaper`, also lives under `castle.display`, but the
-framework module defaults it on its own rather than leaving the slot
-to a host or resident — see that option's own description in
-`modules/desktop/default.nix`.)
+`terminalFontSize`, `uiFont`, `uiFontSize`, `consoleFont`, and
+`wallpaper`.
 
-All eight are `nullOr`, but **`null` no longer means the same thing
+All nine are `nullOr`, but **`null` no longer means the same thing
 for each of them**, and an earlier version of this document was wrong
 to say it always means "framework default: leave that setting alone
 entirely." That is still true for `scale`, `cursorTheme`, `cursorSize`,
 and `consoleFont` — nothing is set, and whatever Sway, GTK, or the
 kernel does on its own applies. For `terminalFont`, `terminalFontSize`,
-`uiFont`, and `uiFontSize`, the framework has a real default (see the
-table below), so setting one of these four to `null` is an **explicit
-opt-out** — you are turning a default off, not declining to state one.
+`uiFont`, `uiFontSize`, and `wallpaper`, the framework has a real
+default (see the table below), so setting one of these five to `null`
+is an **explicit opt-out** — you are turning a default off, not
+declining to state one.
 
 Which layer actually supplies each option's value differs, and that
 asymmetry is itself the substance of this update, not an inconsistency
@@ -227,6 +227,7 @@ to smooth over in the retelling:
 | `scale`, `cursorTheme`, `cursorSize`, `consoleFont` | three layers, ascending priority: this module's `null` default → a host module's `lib.mkDefault` → your `resident.nix` | each is a hardware/machine fact, not personal data (Principle 01 consequence 2) — only a host module can know a panel's physical DPI, a cursor size to match it, or (see below) a console font that fits a real pixel grid; `hosts/xps9370` sets all four this way |
 | `terminalFontSize`, `uiFontSize` | this module's own non-null default (12, 11) | a point size is density-independent because `scale` already normalizes density, so one number is right on every host — no host-specific layer is needed |
 | `terminalFont`, `uiFont` | this module's own default, but deliberately the *generic* family `monospace`/`sans-serif` — meant to be overridden from `resident.nix` | the framework does not decide what typeface a Castle Turing looks like; a generic family always resolves, where naming a specific face would fail silently on any machine missing it |
+| `wallpaper` | this module's own `lib.mkDefault` | a wallpaper is a framework-owned asset with one canonical default, not a machine fact — the framework module itself supplies it (the shipped image), and a resident can override with a different path or set `null` to disable it |
 
 `nix flake check` proves this resolution via an assertion in this
 repo's `nixosConfigurations.example` (`flake.nix`) — read it if you
