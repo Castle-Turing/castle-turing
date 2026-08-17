@@ -193,6 +193,20 @@ let
     # route out is entirely fine for this image's purpose — and rejects
     # the third (link-local only, not reachable from another host).
     #
+    # show_addrs checks both IPv4 and IPv6 global-scope addresses, not
+    # just v4: this predicate reuses show_addrs, which used to be purely
+    # decorative (only ever fed into the connected banner's display
+    # text), so nothing depended on which address families it covered.
+    # Making it the gate for have_network() changes that — an IPv6-only
+    # LAN (SLAAC/DHCPv6, no v4 at all) has NetworkManager correctly
+    # reporting "connected" while an IPv4-only show_addrs would silently
+    # never satisfy this predicate, repeating this task's own bug for a
+    # narrower case (caught by a Codex CLI review of an earlier version
+    # of this change, before it shipped). `ip ... scope global` for IPv6
+    # includes ULA (fc00::/7) alongside true global unicast, which is
+    # correct here too: ULA isn't internet-routable but is exactly as
+    # LAN-reachable as the IPv4 case this predicate already accepts.
+    #
     # Deliberately NOT `nmcli -t -f CONNECTIVITY general = full`: that
     # answers a different question (can NetworkManager reach its configured
     # check endpoint), returns "unknown" wherever connectivity checking
@@ -216,9 +230,19 @@ let
       [ -n "$(show_addrs)" ]
     }
 
+    # Both address families, not just v4 -- see have_network's comment
+    # above for why this stopped being purely cosmetic. Two separate `ip`
+    # calls rather than a single `ip -o addr show scope global` (which
+    # would print both families unfiltered): `-4`/`-6` keep this function
+    # able to be read as "the v4 list, then the v6 list", matching the
+    # awk/cut pipeline below either family already used, and avoiding a
+    # dependency on `ip`'s combined-output field order staying stable
+    # across both families in one invocation.
     show_addrs() {
-      ip -4 -o addr show scope global 2>/dev/null \
-        | awk '{print $4}' | cut -d/ -f1 | paste -sd', ' -
+      {
+        ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+        ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+      } | paste -sd', ' -
     }
 
     # `clear`'s exit status depends on TERM/terminfo being usable on
