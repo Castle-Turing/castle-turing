@@ -374,7 +374,7 @@ BANNER
         # attached to looking at the exact same instant -- see that
         # comment for the race a separate re-poll used to open.
         if ! have_network; then
-          echo "NetworkManager reports: STATE=${LAST_STATE:-<empty>}  global addrs: ${LAST_ADDRS:-none}"
+          echo "NetworkManager reports: STATE=''${LAST_STATE:-<empty>}  global addrs: ''${LAST_ADDRS:-none}"
           # Held longer than the bare busy-spin guard needs, so the line
           # above is actually readable before the screen clears again --
           # not just present in the (much larger) serial-log scrollback.
