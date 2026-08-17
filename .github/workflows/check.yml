@@ -216,7 +216,7 @@ jobs:
           # this repo has no control over and doesn't pin the way it
           # pins nixpkgs itself), it still fires if `checkConfig` is
           # ever turned off (the exact scenario the "Run sway
-          # --validate" step below exists for), and it gives a short,
+          # --validate" step above exists for), and it gives a short,
           # purpose-built failure message instead of requiring someone
           # to read Sway's raw stderr out of a failed derivation build.
           BG_LINE=$(grep -E '^[[:space:]]*bg[[:space:]]' "$SWAY_CONFIG" || true)
