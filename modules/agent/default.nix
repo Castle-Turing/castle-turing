@@ -87,6 +87,14 @@ in
         (test/agent-loop/run.sh) points at a throwaway temp directory,
         which is what makes that harness possible without touching a
         real resident's journal.
+
+        Must not contain a literal `"` character: this module wires it
+        (and `worker.command`/`notify.command` below) through
+        `environment.sessionVariables`, which nixpkgs' own option
+        description warns "due to limitations in the PAM format values
+        may not contain the `\"` character" — see this module's `config`
+        comment for what actually breaks if that's violated. Asserted
+        below rather than left to fail silently on the host.
       '';
     };
 
@@ -117,6 +125,10 @@ in
         `CASTLE_WORKER_COMMAND` directly (test/agent-loop/run.sh),
         bypassing Nix entirely, the same pattern `CASTLE_STATE_DIR`
         already uses there.
+
+        Must not contain a literal `"` character — see `stateDir`'s
+        description for why (this option is wired through
+        `environment.sessionVariables` the same way).
       '';
     };
 
@@ -134,6 +146,10 @@ in
         else. Set explicitly to `""` on a headless host to no-op the
         attempt outright rather than let every `castle route` warn on
         stderr about a missing `notify-send`.
+
+        Must not contain a literal `"` character — see `stateDir`'s
+        description for why (this option is wired through
+        `environment.sessionVariables` the same way).
       '';
     };
   };
@@ -193,9 +209,73 @@ in
     # merges — not as an operand of a plain `//` alongside other attrs,
     # which is what the unconditional CASTLE_WORKER_COMMAND entry below
     # needs to sit next to.
+    #
+    # All three ride environment.sessionVariables together, not just
+    # CASTLE_STATE_DIR: they were one environment.variables block before
+    # this fix, all three are read by processes that can equally be
+    # spawned inside the Sway session (not just castle-modal — a worker
+    # or notify invocation triggered from a terminal inside that same
+    # session hits the identical login-shell-only gap), and
+    # agent/castle's own fallbacks for worker/notify (DEFAULT_WORKER_
+    # COMMAND, plain notify-send) would otherwise silently substitute a
+    # different command than the one configured — the same shape of
+    # silent-wrong-behavior bug 2 was, just for a different value.
     environment.sessionVariables =
       (lib.optionalAttrs (cfg.stateDir != null) { CASTLE_STATE_DIR = cfg.stateDir; })
       // { CASTLE_WORKER_COMMAND = cfg.worker.command; }
       // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
+
+    # /code-review caught this on the branch that introduced the switch
+    # to sessionVariables above: nixos/modules/config/system-
+    # environment.nix's own pamVariable writes `NAME   DEFAULT="value"`
+    # into /etc/pam/environment with no escaping, and nixos/modules/
+    # security/pam.nix wires pam_env.so in as a `required` (not
+    # `optional`) session rule — the same rule bug 2's fix now routes
+    # through for a greetd login (see the comment above). A value
+    # containing a literal `"` would produce a malformed
+    # /etc/pam/environment line; because the rule is `required`, that
+    # can fail PAM session establishment for *every* login through
+    # greetd (a full-host lockout risk), not just break castle's own
+    # env var the way a malformed /etc/set-environment line would have
+    # under the old, login-shell-only mechanism. Asserted here, loudly,
+    # at eval time, rather than left to surface on a real host as a
+    # login failure with no obvious cause.
+    assertions = [
+      {
+        assertion = cfg.stateDir == null || !(lib.hasInfix "\"" cfg.stateDir);
+        message = ''
+          castle.agent.stateDir contains a literal `"` character, which
+          the PAM environment-file format `environment.sessionVariables`
+          writes to cannot represent (nixpkgs' own option description:
+          "due to limitations in the PAM format values may not contain
+          the `\"` character") — and this module wires stateDir through
+          exactly that option so CASTLE_STATE_DIR reaches a greetd-
+          launched Sway session (docs/tasks/0013-first-deploy-findings.md,
+          bug 2). Remove the quote from the path.
+        '';
+      }
+      {
+        assertion = !(lib.hasInfix "\"" cfg.worker.command);
+        message = ''
+          castle.agent.worker.command contains a literal `"` character —
+          see castle.agent.stateDir's identical assertion message for
+          why that breaks environment.sessionVariables' PAM-format
+          write, and here the PAM rule it breaks is `required`, so this
+          can fail login for the whole host, not just castle-modal.
+          Quote arguments inside the command differently (e.g. single
+          quotes, or a wrapper script) instead.
+        '';
+      }
+      {
+        assertion = cfg.notify.command == null || !(lib.hasInfix "\"" cfg.notify.command);
+        message = ''
+          castle.agent.notify.command contains a literal `"` character —
+          see castle.agent.stateDir's identical assertion message for
+          why that breaks environment.sessionVariables' PAM-format
+          write. Quote arguments inside the command differently (e.g.
+          single quotes, or a wrapper script) instead.
+        '';
+      }
+    ];
   };
 }

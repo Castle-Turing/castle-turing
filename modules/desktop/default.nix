@@ -67,16 +67,33 @@
       type = lib.types.nullOr lib.types.ints.positive;
       default = null;
       description = ''
-        Cursor size in (unscaled) pixels, wired into
+        Cursor size in **pre-scale** pixels, wired into
         `home.pointerCursor.size`. `null` means "framework default"
         (currently 24, home-manager's own default, applied only when
         `cursorTheme` is also set — an unset theme leaves the whole
-        pointer-cursor slot alone). A HiDPI panel is the concrete
-        motivating case (docs/tasks/0008's cursor errand): XWayland and
-        some GTK cursor rendering paths do not reliably follow Sway's
-        own output scale, so an explicit larger size is sometimes the
-        actual fix rather than `scale` alone — see hosts/xps9370 for a
-        hardware-derived default.
+        pointer-cursor slot alone). Pre-scale, not "unscaled": Sway
+        itself multiplies this value by the output scale when it emits
+        `seat * xcursor_theme <name> <size>`, the same way a font point
+        size gets multiplied — this option is an input to that
+        multiplication, not a value already compensated for it. Setting
+        it larger to counter a HiDPI panel double-compensates on top of
+        `scale` (docs/tasks/0013-first-deploy-findings.md, bug 1: 48
+        alongside `scale = 2.0` rendered at roughly 96 physical pixels,
+        confirmed on a real deploy — "the cursor is freaking gigantic");
+        see hosts/xps9370 for a worked, eye-calibrated example of
+        picking a correct pre-scale value instead.
+
+        Separately, real problem: XWayland and some GTK cursor
+        rendering paths do not reliably follow Sway's own output scale
+        for the pointer glyph itself, so those clients specifically can
+        still show a native-resolution, comparatively tiny cursor even
+        with this value correct for Sway's own seat. This option does
+        not solve that gap — it only controls what Sway itself (and,
+        via the same `XCURSOR_SIZE` variable, GTK/X11 clients that *do*
+        follow it) renders — and treating a bigger number here as the
+        fix for it is exactly the reasoning that produced the bug
+        above. The gap is real but unsolved; it needs its own
+        investigation, not a larger value on this option.
       '';
     };
     terminalFontSize = lib.mkOption {
