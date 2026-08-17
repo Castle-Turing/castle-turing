@@ -96,6 +96,24 @@ in
 
   nodes.machine =
     { config, pkgs, ... }:
+    let
+      # A single store path with no embedded spaces, rather than
+      # threading `env WLR_RENDERER=pixman <sway>` through greetd's own
+      # `command`-string word-splitting AND tuigreet's own forwarded
+      # `--cmd` value as one quoted token (code-review finding on this
+      # branch: that double-parse chain is real but untested anywhere
+      # else in this repo, and worth eliminating rather than trusting
+      # it). A wrapper script sidesteps both parsers entirely — greetd
+      # and tuigreet only ever see one bare word here. Full store paths
+      # inside it (not bare `env`/`sway`, relying on $PATH), same
+      # reasoning test/vm-install/vm-test-system.nix's own header
+      # comment gives for its identical choice: greetd/its children run
+      # with whatever minimal environment the service unit has, not a
+      # guaranteed $PATH.
+      swayHeadless = pkgs.writeShellScript "sway-headless" ''
+        exec ${pkgs.coreutils}/bin/env WLR_RENDERER=pixman ${config.programs.sway.package}/bin/sway
+      '';
+    in
     {
       imports = [
         self.nixosModules.base
@@ -139,10 +157,8 @@ in
       # modules/desktop's own `default_session.command` (compare
       # against that module's source): the `--time --remember --cmd`
       # flags are unchanged, only what `--cmd` resolves to differs.
-      services.greetd.settings.default_session.command = lib.mkForce (
-        "${pkgs.tuigreet}/bin/tuigreet --time --remember --cmd "
-        + "'${pkgs.coreutils}/bin/env WLR_RENDERER=pixman ${config.programs.sway.package}/bin/sway'"
-      );
+      services.greetd.settings.default_session.command =
+        lib.mkForce "${pkgs.tuigreet}/bin/tuigreet --time --remember --cmd ${swayHeadless}";
     };
 
   testScript = ''
@@ -163,12 +179,12 @@ in
 
     # --- Assert Sway is actually running: its own IPC socket, not
     # pixels (docs/tasks/0011 scope item 2). ---------------------------
-    machine.wait_until_succeeds(
+    # wait_until_succeeds returns the successful attempt's own captured
+    # output, so this is the only invocation needed — a second, separate
+    # `machine.succeed` of the identical command would just re-run it.
+    SWAYSOCK = machine.wait_until_succeeds(
         "su - resident -c 'ls /run/user/*/sway-ipc.*.sock'",
         timeout=dt.timedelta(minutes=3),
-    )
-    SWAYSOCK = machine.succeed(
-        "su - resident -c 'ls /run/user/*/sway-ipc.*.sock'"
     ).strip()
     machine.screenshot("03-sway-session")
 

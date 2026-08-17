@@ -107,7 +107,7 @@ jobs:
       # finds anything.
       - name: Build and run the desktop-loop test
         run: |
-          nix build .#desktop-loop-test -L --keep-failed --print-out-paths \
+          nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths \
             | tee /tmp/desktop-loop-out-path.txt
 
       - name: Collect artifacts (screenshots) from a successful run
