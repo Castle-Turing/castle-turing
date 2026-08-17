@@ -10,14 +10,29 @@ the real installer image (`flake.nixosModules.installer`) instead of a
 one-off test fixture, and added the "installer itself is SSH-reachable
 unattended" assertion below.
 
-What this harness does **not** cover: `modules/installer.nix`'s console
-UX (the auto-`nmtui`-on-no-connectivity prompt and the persistent
-status block showing the installer's mDNS name/IP/SSH command). Every
-assertion here goes over the network (SSH by key), because that's what
-CI can drive unattended — nobody, human or script, is watching the QEMU
-VM's virtual console in this harness. The console behavior needs a
-human's eyes at least once, on real hardware, to confirm it reads the
-way it's supposed to; see `hosts/xps9370/README.md`.
+Most assertions here go over the network (SSH by key), because that's
+what CI can drive unattended — nobody, human or script, is watching the
+QEMU VM's virtual console interactively in this harness. One exception
+(`docs/tasks/0016`): phase 1 also greps the captured serial log for the
+"connected" banner's hostname and `ssh root@` lines, because SSH
+reachability alone doesn't prove that banner ever rendered — that gap
+is exactly how `have_network()`'s connected branch went unreachable on
+every boot, undetected, until a human read a real serial console by eye
+(`docs/tasks/0016-installer-network-predicate.md`). That one check
+stays narrow on purpose: a byte-level assertion on two specific lines,
+not a parse of the console UX in general.
+
+What this harness still does **not** cover: the interactive parts of
+`modules/installer.nix`'s console UX — the auto-`nmtui`-on-no-connectivity
+prompt, the VT escape hatch, and anything that needs a human actually
+watching the screen update live. QEMU's `-nic user` (slirp) always
+brings up its own DHCP server, so the VM is *never* without a network in
+CI — which is exactly why only the connected path gets exercised here:
+the no-network banner and diagnostic (`docs/tasks/0016` defect 3) have
+no condition in this harness that would ever trigger them. That
+interactive behavior needs a human's eyes at least once, on real
+hardware, to confirm it reads the way it's supposed to; see
+`hosts/xps9370/README.md`.
 
 ## What it asserts
 
@@ -28,7 +43,11 @@ Run in order, against one QEMU/OVMF VM:
    — boots and comes up SSH-reachable by key **with zero console
    interaction**: no `nmtui`, no fetching a key at the console. This is
    the regression test for installer ephemerality
-   (`docs/tasks/0003-findings.md` finding #3).
+   (`docs/tasks/0003-findings.md` finding #3). The same boot also
+   confirms `statusScript`'s connected banner (hostname + `ssh root@`
+   line) actually reached the serial console — the regression test for
+   `have_network()`'s connected branch having been unreachable on every
+   boot (`docs/tasks/0016-installer-network-predicate.md`).
 2. `nixos-anywhere` installs the real target (disko partitions the
    virtio disk, `nixos-install` runs) against that booted installer.
 3. The VM reboots from its own disk with the installer media detached,
@@ -113,6 +132,12 @@ Useful environment variables:
 - `CASTLE_HARNESS_SSH_PORT` — host-forwarded SSH port (default 10222).
 - `CASTLE_HARNESS_BOOT_TIMEOUT` — seconds to wait for SSH on each boot
   (default 180).
+- `CASTLE_HARNESS_CONNECTED_BANNER_TIMEOUT` — seconds to wait for the
+  installer's connected banner on the serial console in phase 1 (default
+  340). Deliberately not tied to `CASTLE_HARNESS_BOOT_TIMEOUT`: the
+  banner can be delayed by up to a fixed 300s if the installer's own
+  DHCP head start loses the race and it falls into `nmtui`
+  (`docs/tasks/0016`) — see the constant's own comment in `run.sh`.
 
 ## Reading a failure
 
@@ -130,8 +155,11 @@ image):
 
 - `phase1-installer` — either the installer image never came up
   SSH-reachable (check `phase1-installer.serial.log` — this is the
-  finding #3 regression), or it came up fine but `nixos-anywhere` itself
-  failed (disko/format/copy/`nixos-install` error) — check
+  finding #3 regression); or SSH came up but the connected banner never
+  reached the serial log (also check `phase1-installer.serial.log` —
+  this is the `docs/tasks/0016` regression, `have_network()` gone wrong
+  again); or it came up fine but `nixos-anywhere` itself failed
+  (disko/format/copy/`nixos-install` error) — check
   `phase1-nixos-anywhere.log` first in that case.
 - `phase2-first-boot` — the freshly installed disk didn't boot on its
   own, or SSH as the admin needed something console/Wi-Fi/password
