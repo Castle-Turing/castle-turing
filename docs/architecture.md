@@ -53,6 +53,18 @@ Decision records carry one more required field: `evidence` (see
 Proposal 04). The body carries the prose — a request's description, a
 diagnosis, a decision's rationale.
 
+`castle route` also stamps every decision it writes with `considered`
+(the channels it evaluated) and `propensity` (the probability its
+policy would make that choice in that context — how likely the policy
+was to choose it, not how sure anyone is that the choice was right) —
+the considered-set and selection-propensity pair counterfactual
+off-policy evaluation needs (Bottou et al., JMLR 14, 2013), written now
+for corpus continuity since the journal is append-only and cannot be
+backfilled later. Unlike `evidence`, neither is required on records
+that predate this addition; see `agent/README.md` for the fields, the
+honest limits of what they buy under today's deterministic rule, and
+why they're optional rather than required.
+
 A `correction` (docs/tasks/0010-correction-record.md) is the resident
 speaking unbidden — not asking for anything, not answering a question
 the system posed, but volunteering a judgment about how the system is

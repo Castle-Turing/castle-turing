@@ -158,6 +158,18 @@ grep -q '^channel: notify$' "$DECISION_FOR_Q1" || fail "the requested errand's q
 DECISION_FOR_Q2="$(grep -l "^refs: $QUESTION2\$" "$CASTLE_STATE_DIR"/journal/*-decision-*.md || true)"
 grep -q '^channel: digest$' "$DECISION_FOR_Q2" || fail "the initiated errand's question did not route to 'digest': $DECISION_FOR_Q2"
 
+log "propensity fields: every decision castle route writes must carry considered + propensity, well-formed"
+# Bottou et al. (JMLR 14, 2013): off-policy evaluation needs the
+# considered set and the selection propensity on every logged decision.
+# Checked on all four decisions from this pass (two results, two
+# questions) rather than just one, since cmd_route writes them in a
+# single loop body and a check on only one instance would miss a bug
+# that only showed up on, say, the digest-channel branch.
+for DECISION_FILE in "$DECISION_FOR_RES1" "$DECISION_FOR_RES2" "$DECISION_FOR_Q1" "$DECISION_FOR_Q2"; do
+  grep -q '^considered: notify,digest$' "$DECISION_FILE" || fail "$DECISION_FILE: expected considered=notify,digest (today's router always weighs both channels)"
+  grep -q '^propensity: 1\.0$' "$DECISION_FILE" || fail "$DECISION_FILE: expected propensity=1.0 (today's rule is deterministic — see agent/README.md)"
+done
+
 log "resident-model write path (Proposal 05): answering the alpha question, fact name read from the question record itself"
 ANSWER1="$("$CASTLE" answer "$QUESTION1" "Fix small perceptual issues like this one and tell me afterward.")"
 log "  -> $ANSWER1"
@@ -209,6 +221,98 @@ grep -q "newline" "$WORKDIR/bad-newline-err" || fail "castle record's newline-re
 JOURNAL_COUNT_AFTER_NL="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
 [ "$JOURNAL_COUNT_AFTER_NL" -eq "$JOURNAL_COUNT_BEFORE_NL" ] || fail "castle record wrote a journal file despite rejecting the newline-bearing value"
 "$CASTLE" validate || fail "journal failed to validate after the rejected newline write — a partial file may have been left behind"
+
+log "propensity fields: backward compatibility — a decision record written with neither considered nor propensity must still validate"
+# The journal is append-only, so every decision record written before
+# this schema addition existed is permanent and must stay valid
+# forever (agent/README.md's "why these are optional, not required").
+# castle record (unlike castle route) never sets considered/propensity
+# on its own, so this is exactly that pre-existing shape, produced for
+# real rather than hand-written as a fixture.
+OLD_STYLE_DECISION="$("$CASTLE" record --type decision --provenance initiated --seat router --refs "$REQ1" \
+  --evidence "backward-compatibility fixture: a decision with no considered/propensity fields, the pre-schema-addition shape")"
+OLD_STYLE_DECISION_FILE="$CASTLE_STATE_DIR/journal/$OLD_STYLE_DECISION.md"
+grep -q '^considered:' "$OLD_STYLE_DECISION_FILE" && fail "$OLD_STYLE_DECISION_FILE unexpectedly has a considered field — this fixture is supposed to lack one"
+grep -q '^propensity:' "$OLD_STYLE_DECISION_FILE" && fail "$OLD_STYLE_DECISION_FILE unexpectedly has a propensity field — this fixture is supposed to lack one"
+"$CASTLE" validate || fail "a decision record with neither considered nor propensity failed to validate — backward compatibility is broken"
+
+log "propensity fields: validate must reject a present-but-malformed propensity, considered, or channel-not-in-considered value"
+JOURNAL_COUNT_BEFORE_PROPENSITY="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+# castle record has no --considered/--propensity flags (only castle
+# route writes them), so a malformed value is planted by hand-writing a
+# journal file directly — the same technique the router-bug regression
+# above uses for FAKE_DECISION. validate must catch it independent of
+# which code path produced the bad file.
+BAD_PROPENSITY_FILE="$CASTLE_STATE_DIR/journal/20260101T000000Z-decision-bad0c1.md"
+cat > "$BAD_PROPENSITY_FILE" <<EOF
+---
+id: 20260101T000000Z-decision-bad0c1
+type: decision
+provenance: initiated
+refs: $REQ1
+seat: router
+created: 2026-01-01T00:00:00Z
+evidence: propensity malformed-value regression fixture (propensity out of range)
+considered: notify,digest
+propensity: 1.5
+---
+
+Malformed propensity fixture: 1.5 is not in [0,1].
+EOF
+if "$CASTLE" validate >"$WORKDIR/bad-propensity-out" 2>"$WORKDIR/bad-propensity-err"; then
+  fail "castle validate accepted a decision record with propensity=1.5 (out of [0,1])"
+fi
+grep -q "propensity" "$WORKDIR/bad-propensity-err" || fail "castle validate's propensity-range rejection message changed unexpectedly"
+rm -f "$BAD_PROPENSITY_FILE"
+
+BAD_CONSIDERED_FILE="$CASTLE_STATE_DIR/journal/20260101T000000Z-decision-bad0c2.md"
+cat > "$BAD_CONSIDERED_FILE" <<EOF
+---
+id: 20260101T000000Z-decision-bad0c2
+type: decision
+provenance: initiated
+refs: $REQ1
+seat: router
+created: 2026-01-01T00:00:00Z
+evidence: propensity malformed-value regression fixture (considered empty)
+considered:
+propensity: 1.0
+---
+
+Malformed considered fixture: present but empty, not a non-empty flat list.
+EOF
+if "$CASTLE" validate >"$WORKDIR/bad-considered-out" 2>"$WORKDIR/bad-considered-err"; then
+  fail "castle validate accepted a decision record with an empty considered field"
+fi
+grep -q "considered" "$WORKDIR/bad-considered-err" || fail "castle validate's considered rejection message changed unexpectedly"
+rm -f "$BAD_CONSIDERED_FILE"
+
+BAD_MEMBERSHIP_FILE="$CASTLE_STATE_DIR/journal/20260101T000000Z-decision-bad0c3.md"
+cat > "$BAD_MEMBERSHIP_FILE" <<EOF
+---
+id: 20260101T000000Z-decision-bad0c3
+type: decision
+provenance: initiated
+refs: $REQ1
+seat: router
+created: 2026-01-01T00:00:00Z
+evidence: propensity malformed-value regression fixture (channel not in considered)
+considered: digest
+propensity: 1.0
+channel: notify
+---
+
+Malformed membership fixture: the chosen channel isn't among what was considered.
+EOF
+if "$CASTLE" validate >"$WORKDIR/bad-membership-out" 2>"$WORKDIR/bad-membership-err"; then
+  fail "castle validate accepted a decision record whose channel is not a member of its considered list"
+fi
+grep -q "not among 'considered'" "$WORKDIR/bad-membership-err" || fail "castle validate's channel-membership rejection message changed unexpectedly"
+rm -f "$BAD_MEMBERSHIP_FILE"
+
+"$CASTLE" validate || fail "journal failed to validate clean once all three malformed propensity fixtures were removed"
+JOURNAL_COUNT_AFTER_PROPENSITY="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_PROPENSITY" -eq "$JOURNAL_COUNT_BEFORE_PROPENSITY" ] || fail "propensity malformed-value fixtures were not fully cleaned up"
 
 log "castle correct: write-path discipline, the same finding-3 regressions cmd_ask/cmd_answer already guard against (docs/tasks/0010-correction-record.md)"
 JOURNAL_COUNT_BEFORE_CORRECT="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"

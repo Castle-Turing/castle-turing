@@ -86,6 +86,47 @@ def main() -> int:
                 f"{r.get('type')} {r.get('id')} was never routed: no decision record references it"
             )
 
+    # Propensity fields (docs/architecture.md's Records section;
+    # agent/README.md's "The considered set and the selection
+    # propensity"): checked independently of agent/castle's own
+    # cmd_validate, same "check the tool from the outside" reasoning as
+    # the rest of this file. Only decisions carrying a `channel` field
+    # are checked — that's the existing, pre-established signal for "a
+    # router-written decision" (agent/README.md: "castle route adds a
+    # channel field... to the decision records it writes"), and this
+    # harness also plants hand-written decision records without
+    # considered/propensity on purpose (the backward-compatibility
+    # fixture in run.sh), which must NOT be flagged here.
+    for d in decisions:
+        if "channel" not in d:
+            continue
+        channel = d.get("channel", "")
+        considered_raw = d.get("considered", "")
+        considered = [part.strip() for part in considered_raw.split(",") if part.strip()]
+        if not considered:
+            failures.append(
+                f"decision {d.get('id')} has channel={channel!r} but no non-empty "
+                "'considered' field"
+            )
+        elif channel not in considered:
+            failures.append(
+                f"decision {d.get('id')} chose channel={channel!r}, which is not "
+                f"among the channels it claims to have considered: {considered_raw!r}"
+            )
+        propensity_raw = d.get("propensity", "")
+        try:
+            propensity = float(propensity_raw)
+        except ValueError:
+            failures.append(
+                f"decision {d.get('id')} has channel={channel!r} but 'propensity' "
+                f"({propensity_raw!r}) does not parse as a float"
+            )
+        else:
+            if not (0.0 <= propensity <= 1.0):
+                failures.append(
+                    f"decision {d.get('id')}'s propensity ({propensity_raw!r}) is not in [0,1]"
+                )
+
     # docs/tasks/0010-correction-record.md scope 4: resident speech is
     # never "addressed to the resident," so no decision record may ever
     # cite a correction — that would be the router routing the
@@ -113,7 +154,7 @@ def main() -> int:
 
     print(
         f"OK: {len(files)} record(s), {len(decisions)} decision(s), "
-        f"every routable record was routed with cited evidence"
+        f"every routable record was routed with cited evidence and well-formed propensity fields"
     )
     return 0
 

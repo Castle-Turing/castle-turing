@@ -58,6 +58,13 @@ import tempfile
 RECORD_TYPES = ("request", "decision", "result", "question", "answer", "correction")
 PROVENANCE_VALUES = ("requested", "initiated")
 
+# The router's channel vocabulary (docs/architecture.md's Router
+# section). Named once, here, so `cmd_route` and the `considered` field
+# it writes can't drift apart — "considered" is defined as "the channels
+# the router evaluated," and today that's exactly this tuple, every
+# time, for every decision (see cmd_route).
+CHANNELS = ("notify", "digest")
+
 # `correction` (docs/tasks/0010-correction-record.md) is the resident
 # speaking unbidden — never asked for, never answering a question — so
 # it takes `provenance: requested` and `seat: intake` unconditionally,
@@ -73,7 +80,14 @@ PROVENANCE_VALUES = ("requested", "initiated")
 # correction record's frontmatter in one stable, readable order — every
 # other record type simply never has them, and `render_record` already
 # skips any FIELD_ORDER key that isn't present in a given record's
-# fields.
+# fields. `considered` and `propensity` (decision-only, written by
+# `cmd_route`) are new here: the counterfactual-logging fields Bottou et
+# al. (JMLR 14, 2013) argue off-policy evaluation is unidentified
+# without — see agent/README.md for the honest account of what they do
+# and do not buy today. `channel` stays deliberately absent from this
+# tuple, unchanged from before this addition: it lands after `propensity`
+# by the pre-existing sorted-remainder fallback below, and touching that
+# ordering isn't this change's business.
 FIELD_ORDER = (
     "id",
     "type",
@@ -87,6 +101,8 @@ FIELD_ORDER = (
     "context-notifies-1h",
     "context-notifies-24h",
     "evidence",
+    "considered",
+    "propensity",
 )
 
 REQUIRED_FIELDS = ("id", "type", "provenance", "refs", "seat", "created")
@@ -809,6 +825,18 @@ def cmd_route(args: argparse.Namespace) -> int:
     is no code path here that decides a channel without also calling
     write_record for it).
 
+    Every decision also carries `considered` (the channels evaluated —
+    today, always all of CHANNELS, since the rule is a total function
+    over provenance with no early-out) and `propensity` (how likely this
+    policy was to choose that channel in that context — not how sure
+    anyone is that the choice was right). With today's deterministic
+    rule the honest value is `1.0` every time: this is not a claim of
+    certainty in some deeper sense, just an accurate description of a
+    rule that never does anything else given the same provenance. See
+    agent/README.md for why these two fields are written now regardless
+    — corpus continuity for later off-policy evaluation (Bottou et al.,
+    JMLR 14, 2013), not present-day analytical power.
+
     `correction` records are deliberately never in the set this walks —
     see the comment on `to_route`, below, for why that's load-bearing
     now rather than incidental.
@@ -868,6 +896,17 @@ def cmd_route(args: argparse.Namespace) -> int:
             "(docs/architecture.md: \"requested -> surface to the resident now via notify; "
             "initiated -> digest\").",
         ]
+        # `considered`: every channel this policy weighed, comma-separated
+        # in the existing flat-list convention (split_refs reads it back
+        # the same way it reads `refs`) — today, unconditionally, all of
+        # CHANNELS, since the rule below picks one of exactly these two
+        # with no early-out. `propensity`: the probability this policy
+        # would choose `channel` given this context. The rule is a
+        # deterministic function of `provenance`, so the honest value is
+        # `1.0` on every record — not a measured probability, a true
+        # statement about a rule with no other branch. Both exist for
+        # corpus continuity, not present-day analysis; see
+        # agent/README.md.
         decision_id = write_record(
             jdir,
             type="decision",
@@ -876,7 +915,11 @@ def cmd_route(args: argparse.Namespace) -> int:
             refs=[rec.id],
             evidence=evidence,
             body="\n".join(body_lines),
-            extra={"channel": channel},
+            extra={
+                "channel": channel,
+                "considered": ",".join(CHANNELS),
+                "propensity": "1.0",
+            },
         )
         appended.append((decision_id, rec.id, channel))
         if channel == "notify":
@@ -1144,6 +1187,58 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # validate, full stop.
         if rtype == "decision" and not rec.fields.get("evidence", "").strip():
             errors.append(f"{path.name}: decision record missing non-empty 'evidence'")
+
+        # `considered`/`propensity` (decision-only, written by cmd_route
+        # for the counterfactual-logging reasons in agent/README.md) are
+        # validated *when present*, not required. Deliberately not added
+        # to REQUIRED_FIELDS or given an `evidence`-style hard check:
+        # the journal is append-only (docs/architecture.md), so every
+        # decision record written before this field existed is already
+        # permanent, and a validator that suddenly required a field no
+        # writer could have supplied at the time would fail the entire
+        # pre-existing journal retroactively. `evidence` could be made
+        # required because it existed from the schema's first commit;
+        # these two cannot claim the same thing, so they get "well-formed
+        # if present" instead of "must be present."
+        considered_raw = rec.fields.get("considered")
+        considered_list: list[str] | None = None
+        if considered_raw is not None:
+            considered_list = split_refs(considered_raw)
+            if not considered_list:
+                errors.append(
+                    f"{path.name}: 'considered' ({considered_raw!r}) is present but "
+                    "not a non-empty flat list"
+                )
+
+        # A general invariant, not an assumption about today's specific
+        # channel vocabulary: whatever was chosen must be among what was
+        # weighed, for any policy this router ever runs (code-review
+        # finding on this task — cmd_validate is the permanent schema
+        # gate applied to every journal forever, including a future
+        # router's, so this belongs here rather than only in
+        # test/agent-loop/check_assertions.py's harness-specific check).
+        # Only checked when both fields are present, same "well-formed
+        # if present" treatment as everything else in this block.
+        channel_raw = rec.fields.get("channel")
+        if channel_raw is not None and considered_list is not None and channel_raw not in considered_list:
+            errors.append(
+                f"{path.name}: 'channel' ({channel_raw!r}) is not among 'considered' "
+                f"({considered_raw!r})"
+            )
+
+        propensity_raw = rec.fields.get("propensity")
+        if propensity_raw is not None:
+            try:
+                propensity_value = float(propensity_raw)
+            except ValueError:
+                errors.append(
+                    f"{path.name}: 'propensity' ({propensity_raw!r}) is not a float"
+                )
+            else:
+                if not (0.0 <= propensity_value <= 1.0):
+                    errors.append(
+                        f"{path.name}: 'propensity' ({propensity_raw!r}) is not in [0,1]"
+                    )
 
         created = rec.fields.get("created", "")
         try:
