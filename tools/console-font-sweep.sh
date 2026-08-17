@@ -71,16 +71,37 @@ hold() {
   fi
 }
 
+# Print the header comment as usage. Reads to the first non-comment line
+# rather than a hardcoded range — see the same helper in font-sweep.sh
+# for why: the range here was `2,50p` against a header that ran to 52,
+# so --help cut the Principle 01 note off mid-sentence.
+usage() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; }
+
+case "${1:-}" in --help|-h) usage; exit 0 ;; esac
 [ $# -ge 1 ] || die "give at least one font (path, or attr:name); --help for usage"
-case "${1:-}" in --help|-h) sed -n '2,50p' "$0"; exit 0 ;; esac
 
 command -v setfont >/dev/null || die "setfont not found (pkgs.kbd)"
 sudo -v || die "this needs sudo: setfont on a VT is privileged"
 
 # Never touch the VT the graphical session is on.
-session_vt="$(loginctl show-session "$(loginctl list-sessions --no-legend \
-              | awk -v u="$(id -un)" '$3==u {print $1; exit}')" \
-              -p VTNr --value 2>/dev/null || true)"
+#
+# A user owns more than one session — on a systemd/greetd host there is
+# the graphical one (Type=wayland, a real VTNr) *and* a long-lived
+# `manager` session whose VTNr is 0. Taking simply the first session
+# this user owns is wrong: `loginctl` orders by session ID, so after any
+# logout/login cycle the graphical session gets the higher ID and the
+# manager sorts first. That yields session_vt=0 — and `${session_vt:=1}`
+# does NOT rescue it, because "0" is a non-empty string. The skip loop
+# below then never fires, and on a host whose session sits on VT 7 this
+# script would `setfont` the very VT it promises to leave alone.
+# So: walk this user's sessions and take the first with a nonzero VTNr.
+session_vt=""
+while read -r s; do
+  [ -n "$s" ] || continue
+  v="$(loginctl show-session "$s" -p VTNr --value 2>/dev/null || true)"
+  if [ -n "$v" ] && [ "$v" != 0 ]; then session_vt="$v"; break; fi
+done <<< "$(loginctl list-sessions --no-legend 2>/dev/null \
+            | awk -v u="$(id -un)" '$3==u {print $1}' || true)"
 : "${session_vt:=1}"
 
 resolve() {
@@ -91,7 +112,13 @@ resolve() {
          out="$(nix build --no-link --print-out-paths "nixpkgs#$attr" 2>/dev/null | tail -1)" \
            || die "could not build nixpkgs#$attr"
          local hit
-         hit="$(find "$out" -name "$name.psf*" -o -name "$name" 2>/dev/null | head -1)"
+         # `-print -quit` rather than `| head -1`: under `set -o pipefail`
+         # head exiting first hands find a SIGPIPE, the pipeline reports
+         # 141, and `set -e` kills the script *before* the `|| die` below
+         # can say why. Small font packages happen to buffer inside the
+         # pipe and hide it; a large one would not. Same silent-abort
+         # class as the bug documented in font-sweep.sh's `origin=`.
+         hit="$(find "$out" \( -name "$name.psf*" -o -name "$name" \) -print -quit 2>/dev/null)"
          [ -n "$hit" ] || die "no font named '$name' inside nixpkgs#$attr"
          printf '%s\n' "$hit" ;;
     *)   die "'$spec' is neither an existing path nor attr:name" ;;
@@ -138,7 +165,13 @@ for spec in "$@"; do
         printf '[FAILED] Failed to start Network Manager Wait Online.\n'
         printf 'You are in emergency mode. After logging in, type\n'
         printf '"journalctl -xb" to view system logs.\n\n'
-        printf 'grid: %s\n' "$(stty -F "/dev/tty$vt" size 2>/dev/null | awk '{print $2 "x" $1}')"
+        # `sudo` stty, not bare stty: a spare VT is crw--w---- root:tty
+        # and GNU stty opens it O_RDONLY, so an unprivileged call fails
+        # with EACCES even for tty-group members. Every other write here
+        # goes through `sudo tee`; this one was missed, and the symptom
+        # was a silently blank `grid:` line — the exact number this
+        # comparison exists to report.
+        printf 'grid: %s\n' "$(sudo stty -F "/dev/tty$vt" size 2>/dev/null | awk '{print $2 "x" $1}')"
       } | sudo tee "/dev/tty$vt" >/dev/null
       sleep 4
     done

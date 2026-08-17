@@ -40,14 +40,26 @@
 # Everything is torn down when you press Enter: panes closed, bars
 # dismissed, original workspace restored. Nothing is written to your
 # home — fonts passed with --font-dir are exposed through a scratch
-# XDG_DATA_HOME, so fontconfig sees them for these panes only and no
-# `fc-cache` runs against ~.
+# XDG_DATA_HOME *and* a scratch XDG_CACHE_HOME, so fontconfig sees them
+# for these panes only and its cache lands in the temp dir rather than
+# in ~/.cache/fontconfig. (Redirecting only XDG_DATA_HOME, as an earlier
+# version did, left the cache writes behind and made this claim false.)
 #
 # NOT for the virtual console. The VT cannot render an outline font at
 # all; see tools/console-font-sweep.sh for that half.
 set -euo pipefail
 
 die() { printf 'font-sweep: %s\n' "$*" >&2; exit 1; }
+
+# Print the header comment as usage. Reads until the first non-comment
+# line rather than a hardcoded `sed -n '2,45p'` range: the range had
+# already drifted as the header grew, truncating --help two lines early
+# and silently dropping exactly the lines that say this script is not
+# for the virtual console and name console-font-sweep.sh as the other
+# half — the most useful thing to see if you ran --help unsure which
+# script you wanted. A range that must be updated by hand every time
+# the comment above it changes will be wrong again; this cannot be.
+usage() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; }
 
 # Keep the sweep on screen until the human is done looking. With a
 # terminal on stdin that means "press Enter"; without one it means "wait
@@ -75,7 +87,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --font-dir) [ $# -ge 2 ] || die "--font-dir needs a directory"
                 font_dirs+=("$2"); shift 2 ;;
-    --help|-h)  sed -n '2,45p' "$0"; exit 0 ;;
+    --help|-h)  usage; exit 0 ;;
     *)          break ;;
   esac
 done
@@ -97,16 +109,27 @@ pids=()
 # stock config includes <dir prefix="xdg">fonts</dir>, i.e. $XDG_DATA_HOME/fonts,
 # so pointing XDG_DATA_HOME at a scratch tree with symlinks in it adds those
 # fonts for exactly the processes we launch and nothing else on the system.
+#
+# XDG_CACHE_HOME is redirected too, and that is not incidental tidiness.
+# /etc/fonts/fonts.conf also carries <cachedir prefix="xdg">fontconfig</cachedir>,
+# so without this a sweep still writes cache files into ~/.cache/fontconfig —
+# which made an earlier version of this comment's "nothing is written to your
+# home" claim simply false (measured: 41 -> 44 files after one sweep).
+#
+# Known trade, worth stating rather than discovering: overriding XDG_DATA_HOME
+# also *hides* the user's real ~/.local/share/fonts from the swept processes.
+# So a --font-dir candidate cannot be compared against a face installed only
+# there; pass that one as another --font-dir if you need it in the comparison.
 fontenv=()
 if [ ${#font_dirs[@]} -gt 0 ]; then
-  mkdir -p "$work/xdg/fonts"
+  mkdir -p "$work/xdg/fonts" "$work/cache"
   i=0
   for d in "${font_dirs[@]}"; do
     [ -d "$d" ] || die "--font-dir '$d' is not a directory"
     ln -sfn "$(realpath "$d")" "$work/xdg/fonts/dir$i"
     i=$((i + 1))
   done
-  fontenv=(env "XDG_DATA_HOME=$work/xdg")
+  fontenv=(env "XDG_DATA_HOME=$work/xdg" "XDG_CACHE_HOME=$work/cache")
 fi
 
 # The sample. Deliberately not lorem ipsum: these are the four things

@@ -31,8 +31,15 @@ sweep* rather than edit a digit, and an instruction to re-run something
 that lives only in a dead session is worthless.
 
 `--font-dir DIR` exposes fonts that are not installed system-wide (a
-store path is fine) through a scratch `XDG_DATA_HOME`, so nothing is
-written to your home and no `fc-cache` runs against `~`.
+store path is fine) through a scratch `XDG_DATA_HOME` and `XDG_CACHE_HOME`,
+so nothing is written to your home — including fontconfig's cache, which
+otherwise lands in `~/.cache/fontconfig` even when the font directory is
+redirected.
+
+One trade that follows from it: overriding `XDG_DATA_HOME` also hides
+your real `~/.local/share/fonts` from the swept processes, so a face
+installed only there won't appear in the comparison unless you pass its
+directory as another `--font-dir`.
 
 **`console-font-sweep.sh` needs sudo and changes VT state.** `setfont`
 is privileged. It restores the kernel default on every VT it touched,
