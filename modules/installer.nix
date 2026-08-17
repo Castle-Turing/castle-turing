@@ -46,11 +46,49 @@ let
   # below), so it takes over the console through the *existing* getty
   # autologin that nixos/modules/profiles/installation-device.nix already
   # sets up (services.getty.autologinUser = "nixos") — no custom systemd
-  # unit or TTY plumbing needed. root's own shell is untouched, so a real
-  # shell is always still reachable (a second virtual console, e.g.
-  # Alt+F2, logging in as root with its stock empty password; or
-  # `ssh root@...` once the network is up) for anyone who needs to debug
-  # the image itself rather than just get it on a network.
+  # unit or TTY plumbing needed.
+  #
+  # docs/tasks/0012 (read its "Why" section for the incident report):
+  # this module used to claim, right here, that root's own shell was
+  # untouched and a second virtual console was therefore always
+  # reachable. That was wrong, and demonstrated wrong on the first
+  # from-scratch boot of the custom image: installation-device.nix sets
+  # `services.getty.autologinUser`, and NixOS's getty module applies that
+  # to the getty@ *template* unit, not just getty@tty1 — every VT
+  # auto-logs in as "nixos" and therefore runs this same script. When
+  # `nmtui` hit an unrelated bug (a `timeout` foreground-process-group
+  # issue, fixed above) and stopped reading the keyboard, switching VTs
+  # didn't reach a shell at all: it just launched a second, equally
+  # deaf, copy of the same script. A perfectly drawn menu, and no way to
+  # do anything, including diagnose it.
+  #
+  # `services.getty.autologinOnce = true` (set below, in `config`) is the
+  # fix: it's an existing, upstream NixOS option, not something invented
+  # here, and it does exactly what's needed — auto-login only the
+  # *first* tty (tty1) once per boot; every other VT, and tty1 itself on
+  # any respawn, falls through to a plain agetty login prompt where
+  # "root" (stock empty password, installation-device.nix) or "nixos"
+  # (same) gets a real shell. That also closes the brief's item 3 for
+  # free: if this script ever crashes, getty@tty1 respawns under
+  # systemd's normal Restart=always, the one-time flag file is already
+  # written, and the respawn lands at a login prompt instead of looping
+  # back into the same broken script — see
+  # nixpkgs/nixos/modules/services/ttys/getty.nix's autologinScript,
+  # which is exactly what makes this true rather than a hope.
+  #
+  # The alternative the brief also allows — leave autologin everywhere
+  # and teach this script an explicit "press S for a shell" key — was
+  # rejected on purpose: that escape would depend on this same script
+  # correctly reading the keyboard, which is the exact mechanism that
+  # failed in the incident this task exists to fix. tty1-only autologin
+  # makes the escape route depend on nothing this script does; even a
+  # future bug that reintroduces a SIGTTIN-style deaf read on tty1
+  # leaves every other VT completely unaffected.
+  #
+  # The escape route above is only real if it's discoverable from the
+  # screen the operator is actually looking at, not just from a comment
+  # in this file — see the ESCAPE_HINT banner line below, printed on
+  # every state this script can be in.
   statusScript = pkgs.writeShellApplication {
     name = "castle-installer-status";
     runtimeInputs = [
@@ -89,8 +127,23 @@ let
       # Never load-bearing, so never allowed to take the script down.
       safe_clear() { clear 2>/dev/null || true; }
 
+      # Printed on every screen this script ever shows (below), including
+      # the very first line, so it's on-screen no matter which state the
+      # operator's console froze in. This is the actual fix for
+      # docs/tasks/0012, not the tty1-only autologin config alone: an
+      # escape route nobody can see from the console they're staring at
+      # might as well not exist (that's what happened with the
+      # `systemd.unit=rescue.target` kernel argument and plugging in
+      # Ethernet during the incident this task documents -- both real,
+      # neither ever displayed anywhere). This line names no port
+      # number, hostname, or credential -- it's the same three words for
+      # every boot of every host, so it stays put across edits to
+      # anything below it.
+      ESCAPE_HINT="Stuck? Ctrl+Alt+F2 for a real shell (log in as root or nixos, no password)."
+
       safe_clear
       echo "Castle Turing installer -- booting, checking for a network connection..."
+      echo "$ESCAPE_HINT"
 
       # Give DHCP a head start before assuming nobody's on a network yet
       # (the common case: Ethernet, already plugged in, needs no prompt
@@ -128,7 +181,7 @@ let
           # pegging a core and flooding the console/serial log for as
           # long as the machine sits unconnected.
           safe_clear
-          cat <<'BANNER'
+          cat <<BANNER
 ======================================================================
  Castle Turing installer -- no network yet.
 
@@ -137,6 +190,8 @@ let
 
  Wi-Fi: use the screen below to join a network. Once connected, quit
  (Esc) to return here.
+
+ $ESCAPE_HINT
 ======================================================================
 BANNER
           # --foreground is load-bearing, not a style choice: without it
@@ -169,6 +224,8 @@ BANNER
      (key-only -- already authorized with the same admin key your
      private flake supplies for the installed system)
    waiting for install...
+
+   $ESCAPE_HINT
 ======================================================================
 BANNER
         sleep 15
@@ -206,6 +263,25 @@ in
           account itself is silent otherwise. Pick a different
           castle.admin.username for any private-layer configuration that
           imports nixosModules.installer.
+        '';
+      }
+      # docs/tasks/0012's own check (this repo's flake.nix `checks`
+      # output) reads the generated status script for the escape-hatch
+      # banner text; this assertion reads the generated *configuration*
+      # for the getty behavior half of the same guarantee — the pairing
+      # the brief asks for, not evaluation succeeding by itself.
+      {
+        assertion = config.services.getty.autologinOnce;
+        message = ''
+          services.getty.autologinOnce got turned off (or overridden)
+          somewhere. Without it, installation-device.nix's
+          `services.getty.autologinUser = "nixos"` auto-logs in on every
+          virtual console, not just tty1 — so every VT runs
+          statusScript, and if that script ever stops reading the
+          keyboard there is no shell reachable anywhere on the console.
+          See the comment on services.getty.autologinOnce below and
+          docs/tasks/0012 for the incident that made this a hard
+          requirement, not a preference.
         '';
       }
     ];
@@ -273,6 +349,45 @@ in
     # custom systemd unit.
     users.users.nixos.shell = statusScriptPath;
     environment.shells = [ statusScriptPath ];
+
+    # docs/tasks/0012: guarantee a shell. installation-device.nix (this
+    # module's own base profile) sets `services.getty.autologinUser =
+    # "nixos"` as a plain assignment, and NixOS's getty module applies
+    # that to the getty@ *template* unit — every virtual console, not
+    # just tty1 — so without this, every VT runs statusScript above, and
+    # if that script ever stops reading the keyboard (as it did on the
+    # incident this task documents) there is no console anywhere that
+    # reaches a shell. `autologinOnce` is an existing upstream NixOS
+    # option (nixos/modules/services/ttys/getty.nix) built for exactly
+    # this: auto-login happens once, on tty1, per boot; every other VT —
+    # and tty1 itself, on any respawn after this script exits or crashes
+    # — gets a plain agetty login prompt instead. "root" and "nixos"
+    # both have the stock installer's empty password there (see
+    # installation-device.nix), so that prompt is a real shell, not a
+    # dead end.
+    #
+    # The comment on statusScript above argues why this — tty1-only,
+    # with the escape route printed on the console itself — was chosen
+    # over teaching the status script its own "press a key for a shell"
+    # exit: that alternative's escape would depend on the same script
+    # correctly reading the keyboard, which is precisely the mechanism
+    # that failed here.
+    services.getty.autologinOnce = true;
+
+    # types.lines concatenates every module's contribution rather than
+    # requiring exactly one definition (nixpkgs/lib/types.nix,
+    # `separatedString`), so this adds to installation-device.nix's own
+    # helpLine (the "accounts have empty passwords" text) rather than
+    # replacing it. Shown in /etc/issue on every non-autologin getty
+    # prompt — i.e. tty2 upward, and tty1 after a respawn — which is
+    # exactly the escape route above; this makes it discoverable from
+    # that prompt too, not only from statusScript's own banners.
+    services.getty.helpLine = ''
+
+      This is a real login prompt, not the install-status screen (that's
+      tty1, which auto-logs in once per boot) -- log in as "root" or
+      "nixos" for a shell.
+    '';
 
     # A discarded-at-EOL live image: build speed beats a tightly packed
     # download here. A private layer building an image meant to be
