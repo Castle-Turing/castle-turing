@@ -10,7 +10,7 @@
 # in principle, useless in the situation it exists for.
 #
 # It is also where reasoning failed hardest during
-# docs/tasks/0016-legible-defaults.md. An early draft of that brief
+# docs/tasks/0017-legible-defaults.md. An early draft of that brief
 # asserted that fbcon will not load a glyph taller than 32 pixels, and
 # used it to argue Terminus was as large as the console could go. The
 # claim was never tested and is false — spleen-32x64 loads fine. One

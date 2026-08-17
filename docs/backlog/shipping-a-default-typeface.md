@@ -5,7 +5,7 @@ typeface — the way it already ships a default wallpaper — or whether a
 typeface stays a resident's choice supplied from the private layer,
 with the framework declaring only the option.
 
-**Why it matters.** Task 0016 declares the mechanism (a font-family
+**Why it matters.** Task 0017 declares the mechanism (a font-family
 option) and deliberately does not answer this: the resident's own face
 lands in the private layer for now, so the decision is deferred rather
 than made by default. But it is a real fork in what this project is.
@@ -66,13 +66,13 @@ mechanism.
   fits that description; it just costs two orders of magnitude more
   disk and touches every application rather than the desktop
   background.
-- Task 0016's split is the status quo this entry may overturn: the
+- Task 0017's split is the status quo this entry may overturn: the
   framework declares `castle.display.terminalFont` and
   `castle.display.uiFont` with generic `monospace` / `sans-serif`
   defaults (guaranteed to resolve to something already installed, zero
   added closure), and the resident's private layer supplies `Iosevka
   Slab Light Extended` at 12 and `Iosevka Aile Medium` at 10.
-- `tools/font-sweep.sh` (also from 0016) is how any future answer here
+- `tools/font-sweep.sh` (also from 0017) is how any future answer here
   should be argued: open the candidates side by side on a real panel
   and look, rather than reasoning about x-heights. Whoever specs this
   does not need to rebuild that harness.

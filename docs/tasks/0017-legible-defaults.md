@@ -1,4 +1,4 @@
-# Task 0016 — Legible text by default
+# Task 0017 — Legible text by default
 
 **Before starting:** read `CLAUDE.md`, `modules/desktop/default.nix`
 (how `castle.display.*` options are declared, and how

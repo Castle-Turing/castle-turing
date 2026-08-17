@@ -21,7 +21,7 @@ chrome); `console-font-sweep.sh` loads PSF fonts onto spare VTs so you
 can compare by switching to them, and restores the kernel default when
 you are done.
 
-Every display value in `docs/tasks/0016-legible-defaults.md` was picked
+Every display value in `docs/tasks/0017-legible-defaults.md` was picked
 this way. That was a deliberate reaction to
 `docs/tasks/0013-first-deploy-findings.md`, where a cursor size was
 reasoned into place and shipped unusably wrong — a mistake no further
@@ -54,7 +54,7 @@ a deployed system as a real command (`castle-font-sweep` on `$PATH`
 from `modules/desktop`) — which is a decision about the framework's
 product surface, not a tooling tidy-up. Parked here deliberately, with
 the tension recorded rather than papered over. See scope item 10 of
-`docs/tasks/0016-legible-defaults.md`.
+`docs/tasks/0017-legible-defaults.md`.
 
 ## `codex-review.sh` — the second, cross-model opinion
 

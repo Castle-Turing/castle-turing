@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS (read this before touching the script)
 #
-# Every display number in docs/tasks/0016-legible-defaults.md was picked
+# Every display number in docs/tasks/0017-legible-defaults.md was picked
 # by looking at this panel, not by reasoning about DPI. That was a
 # deliberate reaction to docs/tasks/0013-first-deploy-findings.md, where
 # a cursor size was argued into place (48, to "compensate" for a 2.0
@@ -11,7 +11,7 @@
 # — a mistake no amount of further reasoning would have caught, and that
 # thirty seconds of looking did.
 #
-# So 0016 tells its reader to re-run the sweep rather than edit a digit.
+# So 0017 tells its reader to re-run the sweep rather than edit a digit.
 # That instruction is worthless if the sweep only ever existed as
 # throwaway commands in somebody's session, which is exactly what
 # CLAUDE.md means by "a step that will repeat belongs in a harness
