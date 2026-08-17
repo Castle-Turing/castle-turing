@@ -67,13 +67,37 @@
   # can still override for taste, per castle.display.scale's own
   # description in modules/desktop.
   #
-  # cursorSize is set explicitly alongside scale rather than left to
-  # scale alone: XWayland and some GTK cursor-rendering paths do not
-  # reliably follow Sway's output scale for the pointer glyph itself (a
-  # commonly reported Sway+XWayland gap), so a HiDPI panel can still
-  # show a native-resolution, visually tiny cursor even with `scale`
-  # correctly set — doubling the nominal 24px default is the concrete,
-  # defensible fix for exactly the symptom the real errand reported.
+  # cursorSize is set explicitly alongside scale, but NOT to compensate
+  # for scale — Sway itself already multiplies the cursor size it's
+  # given by the output scale (that's what `seat * xcursor_theme <name>
+  # <size>`, wired from home.pointerCursor.size, feeds into), so this
+  # value is pre-scale, the same way a font point size is. Doubling it
+  # here on top of a 2.0 output scale was tried first (48, reasoning
+  # from the real XWayland/GTK gap below) and double-compensated: Sway
+  # rendered it at roughly 96 physical pixels, about 7mm on this panel —
+  # confirmed on the first real deploy as dramatically, unusably
+  # oversized (docs/tasks/0013-first-deploy-findings.md). 18 is the
+  # corrected, eye-calibrated value on this panel at scale
+  # 2.0 (36 physical pixels, ~2.8mm) — below the 24px unscaled default,
+  # and still visibly larger than what task 0008's original "too small"
+  # complaint was about, because that complaint predates `scale` being
+  # set at all: at 1x the pointer was genuinely native-resolution-tiny
+  # on a 331 PPI panel, not just under-sized relative to a 2.0-scaled
+  # UI. Don't "fix" this back toward 24 or higher on the assumption that
+  # a below-default number must be a regression; it isn't, and 0013 is
+  # the record of why.
+  #
+  # The real, separate problem: XWayland and some GTK cursor-rendering
+  # paths do not reliably follow Sway's own output scale for the
+  # pointer glyph itself (a commonly reported Sway+XWayland gap), so
+  # those clients can still show a native-resolution, comparatively
+  # tiny cursor even with this value correct for Sway's own seat. This
+  # option does not solve that — it only controls what Sway itself
+  # (and, via the same XCURSOR_SIZE variable, GTK/X11 clients that *do*
+  # follow it) renders. Treating 48 as "the fix for the XWayland gap"
+  # is exactly the reasoning that produced the double-scaled bug; the
+  # gap is real but out of scope here (0013's non-goals) and needs its
+  # own investigation, not a bigger number on this option.
   #
   # modules/home only wires home.pointerCursor at all when
   # castle.display.cursorTheme is non-null (an unset theme name leaves
@@ -105,6 +129,6 @@
   castle.display = {
     scale = lib.mkDefault 2.0;
     cursorTheme = lib.mkDefault "Bibata-Modern-Classic";
-    cursorSize = lib.mkDefault 48;
+    cursorSize = lib.mkDefault 18;
   };
 }

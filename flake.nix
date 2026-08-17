@@ -154,14 +154,16 @@
                   assertion =
                     config.castle.display.scale == 2.0
                     && config.castle.display.cursorTheme == "Bibata-Modern-Ice"
-                    && config.castle.display.cursorSize == 48
+                    && config.castle.display.cursorSize == 18
                     && config.castle.display.terminalFontSize == 12
                     && lib.hasSuffix "/share/backgrounds/castle-turing.jpg" config.castle.display.wallpaper;
                   message = ''
                     castle.display three-layer resolution regressed in
                     nixosConfigurations.example: expected hosts/xps9370's
-                    lib.mkDefault values (scale=2.0, cursorSize=48) to
-                    survive untouched since nothing here overrides them,
+                    lib.mkDefault values (scale=2.0, cursorSize=18 — see
+                    that host module's comment for why 18 and not some
+                    other number, docs/tasks/0013-first-deploy-findings.md)
+                    to survive untouched since nothing here overrides them,
                     this module's own overrides (cursorTheme,
                     terminalFontSize) to win over both the framework
                     default and the host default, and

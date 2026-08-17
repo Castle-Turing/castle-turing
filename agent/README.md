@@ -396,10 +396,15 @@ has to hold forever, not just today.
   Delete it any time; nothing durable is ever spool-only.
 - **`modules/agent`** (this flake's `nixosModules.agent`) installs the
   `castle` CLI and declares `castle.agent.stateDir`, which — when set
-  by a private layer — is wired into `CASTLE_STATE_DIR` for every login
-  shell. See `docs/private-layer.md` for what a resident actually
-  points that at (the private repo's own `state/` directory, so the
-  journal survives a reinstall).
+  by a private layer — is wired into `CASTLE_STATE_DIR` via
+  `environment.sessionVariables`, i.e. PAM-set for every session, not
+  just a login shell — see that module's `config` comment for why the
+  distinction is load-bearing (docs/tasks/0013-first-deploy-findings.md:
+  a greetd-launched Sway session, and `castle-modal` spawned from it,
+  never sourced the login-shell-only variant). See
+  `docs/private-layer.md` for what a resident actually points that at
+  (the private repo's own `state/` directory, so the journal survives a
+  reinstall).
 - `CASTLE_STATE_DIR` is also what makes `test/agent-loop/run.sh`
   possible without touching a real resident's journal: it points every
   `castle` invocation in that harness at a throwaway temp directory.

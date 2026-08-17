@@ -73,6 +73,19 @@ let
   scriptedWorker = ../agent-loop/scripted-worker.sh;
   checkAssertions = ../agent-loop/check_assertions.py;
 
+  # Deliberately non-default (docs/tasks/0013's bug 2b): the fallback
+  # this same value would coincide with is $HOME/.local/state/castle
+  # (agent/castle's state_dir()), and a harness where the configured
+  # path and the fallback are identical cannot tell a working
+  # CASTLE_STATE_DIR handoff from a silently-fallen-back one — that's
+  # exactly the shape of bug 2 itself, and exactly what made the
+  # original version of this test blind to it. Modeled on the private
+  # layer's own real shape (modules/agent's stateDir option doc example,
+  # "/home/<you>/private/state") rather than an arbitrary path, so this
+  # test exercises the configuration a real resident actually runs, not
+  # a synthetic one.
+  testStateDir = "/home/resident/private/state";
+
   # Plain, hardware-neutral fixture text — not personal data, never
   # meant to resemble a real complaint or a real correction.
   complaintBody = "The cursor is hard to see on this VM after the loop test logs in.";
@@ -151,6 +164,12 @@ in
         gitUserName = "Resident";
         gitUserEmail = "resident@example.invalid";
       };
+      # See testStateDir's own comment above (bug 2b): this is the one
+      # line that makes the assertions below capable of catching bug 2
+      # — without it, the configured path and CASTLE_STATE_DIR's
+      # fallback are the same directory and the test cannot fail on
+      # this mechanism no matter which one actually fired.
+      castle.agent.stateDir = testStateDir;
 
       # Not a departure from the mechanism under test: a bare NixOS
       # system has no `python3` on $PATH by default (modules/agent's
@@ -238,8 +257,15 @@ in
     machine.send_key("ret")  # dismiss ("Press Enter to close.")
     retry(lambda last: not has_modal())
 
+    # ${testStateDir}, not $HOME/.local/state/castle: this is bug 2b's
+    # actual assertion, and the whole point of setting a non-default
+    # castle.agent.stateDir above — see that binding's comment. If
+    # CASTLE_STATE_DIR silently failed to reach castle-modal (bug 2, the
+    # regression this guards), the record would land at the fallback
+    # instead and every `ls`/`cat` below against ${testStateDir} would
+    # fail outright rather than quietly passing against the wrong file.
     request_path = machine.succeed(
-        "su - resident -c 'ls $HOME/.local/state/castle/journal/*-request-*.md'"
+        "su - resident -c 'ls ${testStateDir}/journal/*-request-*.md'"
     ).strip()
     request_id = request_path.rsplit("/", 1)[-1][: -len(".md")]
     print(f"OK: modal filed request {request_id}")
@@ -267,7 +293,7 @@ in
         f"castle route did not report routing the requested-provenance result to notify: {route_out}"
     )
 
-    journal_dump = machine.succeed("su - resident -c 'cat $HOME/.local/state/castle/journal/*.md'")
+    journal_dump = machine.succeed("su - resident -c 'cat ${testStateDir}/journal/*.md'")
     assert "type: decision" in journal_dump, journal_dump
     assert "evidence:" in journal_dump and request_id in journal_dump, journal_dump
     print("OK: castle route wrote a decision record citing evidence")
@@ -291,7 +317,7 @@ in
     retry(lambda last: not has_modal())
 
     correction_path = machine.succeed(
-        "su - resident -c 'ls $HOME/.local/state/castle/journal/*-correction-*.md'"
+        "su - resident -c 'ls ${testStateDir}/journal/*-correction-*.md'"
     ).strip()
     correction_id = correction_path.rsplit("/", 1)[-1][: -len(".md")]
     correction_record = machine.succeed(f"su - resident -c 'cat {correction_path}'")
@@ -301,7 +327,7 @@ in
     assert "${correctionBody}" in correction_record, correction_record
     print(f"OK: modal filed correction {correction_id} through its other path")
 
-    model_content = machine.succeed("su - resident -c 'cat $HOME/.local/state/castle/resident-model.md'")
+    model_content = machine.succeed("su - resident -c 'cat ${testStateDir}/resident-model.md'")
     assert "provenance: volunteered" in model_content, model_content
     assert f"stated: {correction_id}" in model_content, model_content
     assert "${correctionBody}" in model_content, model_content
@@ -313,7 +339,7 @@ in
     # differently-implemented pass over the exact same journal the
     # modal and the real Sway session just produced. -------------------
     check_out = machine.succeed(
-        "su - resident -c 'python3 /tmp/check_assertions.py $HOME/.local/state/castle/journal'"
+        "su - resident -c 'python3 /tmp/check_assertions.py ${testStateDir}/journal'"
     )
     print(check_out)
     assert check_out.startswith("OK:"), check_out
