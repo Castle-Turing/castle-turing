@@ -93,6 +93,23 @@ in
   # Sway starts asserts via its own IPC socket or the journal's own
   # files, never pixels, per docs/tasks/0011's scope.
   enableOCR = true;
+  # `runNixOSTest` passes `node.pkgs`, which by default makes every
+  # `nixpkgs.*` option (including `nixpkgs.config`) read-only across all
+  # nodes (nixos/lib/testing/nodes.nix: `node.pkgsReadOnly` defaults to
+  # `node.pkgs != null`) by importing
+  # nixos/modules/misc/nixpkgs/read-only.nix, which disables the normal
+  # nixpkgs module outright and marks `nixpkgs.config` a `types.unique`
+  # option. `modules/dev` sets `nixpkgs.config.allowUnfreePredicate`
+  # unconditionally (it has no reason to expect it's running inside a
+  # nixosTest, and must not be modified just to accommodate one — see
+  # this file's header on staying byte-for-byte the published
+  # mechanism), so without this, evaluation fails outright with
+  # "the option `nodes.machine.nixpkgs.config' is defined multiple
+  # times" before a single derivation is even built — this is
+  # documented as the intended escape hatch for exactly this case
+  # ("Set this to false when any of the nodes... need to configure any
+  # of the nixpkgs.* options").
+  node.pkgsReadOnly = false;
 
   nodes.machine =
     { config, pkgs, ... }:

@@ -105,24 +105,57 @@ jobs:
       # text the last attempt saw), which is the primary debugging
       # signal regardless of whether the screenshot recovery below
       # finds anything.
+      # `set -o pipefail` is explicit and load-bearing here, not
+      # decorative: this step's own log (a prior run, before this fix)
+      # showed the default runner shell as `bash -e {0}` with no
+      # `pipefail`, so a `nix build ... | tee file` pattern lets a
+      # failing `nix build` (e.g. a Nix evaluation error, which exits
+      # before any VM ever boots) be masked by `tee`'s own exit code —
+      # the step reports success, `if: success()` steps downstream run
+      # against a nonexistent/garbage result, and the job goes green
+      # for a test that never ran at all. Redirecting stdout directly
+      # (no pipe) sidesteps the whole class of bug rather than trusting
+      # pipefail alone to catch it a second time.
       - name: Build and run the desktop-loop test
         run: |
+          set -euo pipefail
           nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths \
-            | tee /tmp/desktop-loop-out-path.txt
+            > /tmp/desktop-loop-out-path.txt
 
+      # The store path is validated, not trusted blindly: the same
+      # failure this step's header comment describes (a masked `nix
+      # build` failure) previously left /tmp/desktop-loop-out-path.txt
+      # empty, which turned `cp -r "$OUT"/.` into `cp -r /.` — copying
+      # the runner's entire filesystem (21,881 files, including a
+      # /dev/fd/0 special file that then broke the upload step) into
+      # what was supposed to be a small screenshots directory. Refusing
+      # to copy from anything that isn't a real /nix/store path turns
+      # that failure mode into a loud, immediate error instead of a
+      # silent 21,881-file artifact.
       - name: Collect artifacts (screenshots) from a successful run
         if: success()
         run: |
+          set -euo pipefail
           mkdir -p desktop-loop-artifacts
           OUT="$(cat /tmp/desktop-loop-out-path.txt)"
-          cp -r "$OUT"/. desktop-loop-artifacts/ 2>/dev/null || true
+          case "$OUT" in
+            /nix/store/*) ;;
+            *)
+              echo "desktop-loop-out-path.txt did not contain a Nix store path (got: '$OUT'); refusing to copy from it." >&2
+              exit 1
+              ;;
+          esac
+          cp -r "$OUT"/. desktop-loop-artifacts/
+          echo "Collected $(find desktop-loop-artifacts -type f | wc -l) file(s) from $OUT"
 
       # Best-effort only: --keep-failed's build directory may be owned
       # by a nix build user other than the runner's own account, and
       # its exact naming isn't a stable contract this step should fail
-      # the job over. sudo + a wide glob + swallowed errors, same
+      # the job over. sudo + a wide glob + swallowed cp errors, same
       # spirit as vm-install-test.yml's if-no-files-found: ignore on
-      # its own log upload.
+      # its own log upload — but the file count below is printed
+      # either way, so "found nothing" is a visible, explicit line in
+      # the log rather than indistinguishable from "found everything."
       - name: Collect artifacts (screenshots) from a failed run
         if: failure()
         continue-on-error: true
@@ -131,6 +164,7 @@ jobs:
           sudo find /tmp -maxdepth 1 -name 'nix-build-*desktop-loop*' \
             -exec sh -c 'cp -r "$1"/. desktop-loop-artifacts/ 2>/dev/null' _ {} \; || true
           sudo chown -R "$(id -u):$(id -g)" desktop-loop-artifacts || true
+          echo "Collected $(find desktop-loop-artifacts -type f | wc -l) file(s) from any --keep-failed build directory found"
 
       - name: Upload desktop-loop-test artifacts
         if: always()
