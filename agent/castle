@@ -1134,8 +1134,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
         print(
             "Volunteered, unprompted — the resident's own words about how "
             "the system is doing (docs/tasks/0010-correction-record.md). "
-            "Not an errand: nothing below is \"in progress\" or \"done,\" "
-            "and none of it was routed."
+            "Not an errand: nothing below is \"awaiting a worker\" or "
+            "\"done,\" and none of it was routed."
         )
         print()
         for rec in corrections:

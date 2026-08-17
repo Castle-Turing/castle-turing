@@ -182,10 +182,14 @@ castle-modal --mode status  [--limit N]
   human.
 - **status** — folds the `--limit` most recent errands (default 10)
   from the journal into a compact listing: what was asked, whether it's
-  in progress, waiting on the resident, or done, and what the router
-  most recently decided and why. The "come back later and check" half
-  of the design. Corrections never appear here: they aren't errands,
-  and there's nothing about one to "come back and check" on.
+  awaiting a worker, waiting on the resident, or done, and what the
+  router most recently decided and why. "Awaiting a worker" is the
+  fallthrough — no record type here means *a tenant claimed this
+  errand*, so it says only that nothing has touched the errand yet, not
+  that anything is under way (`docs/tasks/0015-filed-not-in-progress.md`;
+  see `_errand_state`). The "come back later and check" half of the
+  design. Corrections never appear here: they aren't errands, and
+  there's nothing about one to "come back and check" on.
 
 Headless by construction: both modes only ever read `sys.stdin` and
 write `sys.stdout`/`sys.stderr`, with no `curses` and no compositor

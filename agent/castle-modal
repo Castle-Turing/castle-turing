@@ -195,7 +195,26 @@ def _errand_state(downstream: list) -> str:
     you" — the one state this whole modal exists to surface — silently
     unreachable in exactly the flow the worker is instructed to use
     (0009 review pass finding 4). Reporting both when both apply is
-    strictly more honest than picking one."""
+    strictly more honest than picking one.
+
+    The fallthrough below used to read "in progress". Read that as
+    plain English and it claims a worker is running; read it as what
+    the code actually does and it is just "no result, no unanswered
+    question" — the state of a request record in the instant after it's
+    written, before anything has looked at it, because no record type
+    here means *a tenant claimed this errand*. That type doesn't exist
+    yet, so this branch can never observe a claim — only its absence.
+    On the reference host, where `castle work` is invoked by hand
+    rather than scheduled, that absence is the steady state: every
+    filed request reads "in progress" forever, including ones nothing
+    will ever pick up, and a resident who trusts the label has no
+    reason to run the worker that would make it true (docs/tasks/0015).
+    "awaiting a worker" says only what the journal actually shows. A
+    real in-progress state needs a record written when a tenant claims
+    the errand — deliberately not added here, because it belongs with
+    the first *asynchronous* worker: `castle work` today runs
+    synchronously from a shell, so a claimed record would be written
+    and read microseconds apart."""
     types = {rec.type for rec in downstream}
     has_result = "result" in types
     waiting = "question" in types and "answer" not in types
@@ -205,7 +224,7 @@ def _errand_state(downstream: list) -> str:
         return "waiting on you"
     if has_result:
         return "done"
-    return "in progress"
+    return "awaiting a worker"
 
 
 def run_status(castle, limit: int, out=sys.stdout) -> int:

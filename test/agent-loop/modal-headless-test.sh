@@ -50,7 +50,11 @@ echo "$STATUS_OUT"
 echo "$STATUS_OUT" | grep -q "$REQUEST_ID" || fail "status mode did not list $REQUEST_ID"
 echo "$STATUS_OUT" | grep -q "$REQUEST_ID_2" || fail "status mode did not list $REQUEST_ID_2"
 echo "$STATUS_OUT" | grep -q "The cursor is too small on the laptop screen." || fail "status mode did not show what was asked"
-echo "$STATUS_OUT" | grep -q "in progress" || fail "status mode did not show a request with no result yet as 'in progress'"
+
+log "status mode: a request with no downstream records must not claim to be 'in progress' (docs/tasks/0015) — nothing has claimed it yet"
+echo "$STATUS_OUT" | grep -q "in progress" && fail "status mode still claims an untouched errand is 'in progress' — no worker has ever run automatically on the reference host, so this reads as permanently true"
+echo "$STATUS_OUT" | grep -A1 "^\[$REQUEST_ID\]" | grep -q "awaiting a worker" || fail "status mode did not show a request with no downstream records as 'awaiting a worker'"
+echo "$STATUS_OUT" | grep -A1 "^\[$REQUEST_ID_2\]" | grep -q "awaiting a worker" || fail "status mode did not show the second untouched request as 'awaiting a worker'"
 
 log "status mode: a request with a result renders as 'done'"
 "$CASTLE" record --type result --provenance requested --seat worker --refs "$REQUEST_ID" --body "Fixed." >/dev/null
