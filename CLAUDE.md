@@ -45,8 +45,16 @@ directly to `main` from an agent session; merges go through PRs so the human
 can run the weekly-audit muscle on code the same way as on decisions.
 
 Before opening a PR, run `/code-review` on the branch and address its
-findings. Codex reviews the PR itself as a second, cross-model opinion; the
-human still makes every merge decision.
+findings, then run `tools/codex-review.sh` for a second, cross-model
+opinion. Codex's findings are posted verbatim — no seat summarises or
+filters an independent reviewer before the human sees it — and any
+disposition goes in a separate comment underneath, so a disagreement
+between the two reviewers stays legible. The human still makes every
+merge decision.
+
+Codex's GitHub-integrated review is *not* what runs here: it requires a
+ChatGPT Pro plan on org-owned repositories, which is why the review moved
+to the CLI. See `docs/backlog/cross-model-review-is-paywalled.md`.
 
 Scope every review and diff against `origin/main`, never a local branch
 ref. Worktrees accumulate stale local branches, and a stale base produces
@@ -61,9 +69,39 @@ included.
 When asked to spec a feature: choose the smallest next chunk of useful
 work, ask clarifying questions first, then draft a numbered brief in
 `docs/tasks/` containing the spec, plan, and an implementation prompt
-for a separate session. Always ask for explicit approval before writing
-the brief — or any CLAUDE.md change — to disk. The brief is committed on
-the branch that implements it, per the tasks convention.
+for a separate session. The brief is committed on the branch that
+implements it, per the tasks convention.
+
+**Every piece of implementation work gets a brief, however small.**
+Proportionality decides a brief's length, never whether it exists: a
+feature earns clarifying questions and a full spec, a mechanical change
+earns fifteen lines committed alongside the work. What must not happen
+is a change whose reasoning lives only in a PR description — that is on
+a hosting service, not in the repo, and it is the one place these
+conventions exist to avoid depending on. `docs/tasks/` is the log a
+future agent reads cold to learn why the code is shaped as it is, and
+especially what was considered and rejected; git history records only
+what changed.
+
+**If the design shifts during implementation, the same PR updates the
+brief.** Briefs are written up front and ride their branch, so nothing
+else corrects one the work has overtaken, and a brief confidently
+describing an abandoned design is worse than none.
+
+**Approval, and how autonomy overrides it.** Ask for explicit approval
+before writing a brief to disk. That default is suspended for the scope
+of an explicit instruction to work autonomously — then write the brief,
+proceed, and record every judgment call that would otherwise have been
+a question, so the approval happens in review rather than not at all.
+Autonomy relaxes *when* the human is consulted; it never relaxes the
+conventions themselves. Watch for this specifically: the two times a
+brief has been skipped in this project, both were under an autonomy
+grant, by an agent treating "work autonomously" as licence to decide a
+change was too small to document.
+
+**A CLAUDE.md change always needs explicit approval**, autonomy grant or
+not. These are the rules the rest runs on; an agent must never quietly
+rewrite the thing it is being held to.
 
 Every brief states its verification plan: what the implementing agent
 can test with no human involved (build it if cheap — a VM, a dry run,
