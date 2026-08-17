@@ -127,6 +127,23 @@ resolve() {
 
 touched=()
 pids=()
+# What to put back when the sweep ends. Read from /etc/vconsole.conf,
+# which is where NixOS writes `console.font` — so on a host that has
+# configured one (castle.display.consoleFont), teardown restores *that*
+# rather than the kernel's built-in.
+#
+# This distinction is the whole point and was got wrong first time
+# round. `setfont` with no font argument does restore something sane —
+# kbd falls back through default → default8x16 — but "sane" is the
+# kernel's 8x16, not the font the system is configured for. On a HiDPI
+# host that is precisely the ~1mm text castle.display.consoleFont
+# exists to eliminate, so finishing a sweep left the console *worse*
+# than it started, until the next reboot or a vconsole-setup restart.
+# Caught by a cross-model review after a same-model review had checked
+# "does it restore something sane", cleared it, and asked the wrong
+# question.
+configured_font="$(sed -n 's/^FONT=//p' /etc/vconsole.conf 2>/dev/null | head -1 | tr -d '"' || true)"
+
 # Guarded because the trap is armed on INT/TERM *and* EXIT, so a
 # Ctrl-C runs it twice — harmless for setfont, but it printed the
 # "Restored..." line twice, which reads like something went wrong.
@@ -135,8 +152,21 @@ cleanup() {
   [ "$cleaned" = 1 ] && return 0
   cleaned=1
   for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done
-  for t in "${touched[@]:-}"; do sudo setfont -C "/dev/tty$t" >/dev/null 2>&1 || true; done
-  [ ${#touched[@]} -gt 0 ] && printf 'Restored the kernel default font on VT: %s\n' "${touched[*]}"
+  for t in "${touched[@]:-}"; do
+    if [ -n "$configured_font" ]; then
+      # Fall through to the bare form if the configured name will not
+      # load — better a legible-ish default than leaving the swept
+      # font in place.
+      sudo setfont -C "/dev/tty$t" "$configured_font" >/dev/null 2>&1 \
+        || sudo setfont -C "/dev/tty$t" >/dev/null 2>&1 || true
+    else
+      sudo setfont -C "/dev/tty$t" >/dev/null 2>&1 || true
+    fi
+  done
+  if [ ${#touched[@]} -gt 0 ]; then
+    printf 'Restored %s on VT: %s\n' \
+      "${configured_font:-the kernel default font}" "${touched[*]}"
+  fi
   return 0
 }
 trap cleanup EXIT INT TERM
