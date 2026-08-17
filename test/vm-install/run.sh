@@ -252,6 +252,41 @@ assert_boots phase1-installer root \
   "assertion failed: the installer image is SSH-reachable by key with zero console interaction within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0003-findings.md finding #3, closed by docs/tasks/0006-installer-image.md" \
   "installer SSH-reachable by key with zero console interaction." \
   -cdrom "$ISO_PATH" -boot order=d
+
+# docs/tasks/0016: the harness being SSH-reachable (above) doesn't prove
+# statusScript's own "connected" banner ever printed -- that's exactly
+# the gap that let the connected branch of modules/installer.nix's
+# have_network() sit unreachable, undetected by this harness, until a
+# human read a real serial console by eye. installer.nix (this
+# directory) puts `console=ttyS0` on the kernel command line and
+# modules/installer.nix restores --autologin on serial-getty@ for
+# exactly this reason (see that file's header comment), so statusScript
+# runs on ttyS0 too and its output lands in this same serial log --
+# nothing extra to wire up, just something to actually assert on.
+#
+# Checked for the two lines the brief calls out specifically, not "the
+# script produced output": the hostname line and the `ssh root@` line
+# from the connected-state banner. "castle-installer" is
+# modules/installer.nix's own networking.hostName default
+# (lib.mkDefault) -- not a real network's name -- and this directory's
+# installer.nix doesn't override it, so it's safe to match literally
+# here; if that ever changes, this check changes with it in the same
+# commit.
+INSTALLER_HOSTNAME="castle-installer"
+log "[phase1] Confirming the connected banner (hostname + ssh line) reached the serial console..."
+CONNECTED_BANNER_DEADLINE=$((SECONDS + BOOT_TIMEOUT))
+CONNECTED_BANNER_OK=""
+while (( SECONDS < CONNECTED_BANNER_DEADLINE )); do
+  if grep -q "reachable at:.*${INSTALLER_HOSTNAME}\.local" "$LOG_DIR/phase1-installer.serial.log" 2>/dev/null \
+      && grep -q "ssh root@${INSTALLER_HOSTNAME}\.local" "$LOG_DIR/phase1-installer.serial.log" 2>/dev/null; then
+    CONNECTED_BANNER_OK=1
+    break
+  fi
+  sleep 1
+done
+[ -n "$CONNECTED_BANNER_OK" ] || fail "assertion failed: the installer's connected banner (hostname line + ssh root@ line) never reached the serial console within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0016-installer-network-predicate.md, defect 1"
+log "[phase1] PASS: connected banner (hostname + ssh root@ line) reached the serial console."
+
 log "[phase1] Running nixos-anywhere (disko + install)..."
 if ! "$NIXOS_ANYWHERE_BIN" \
     --store-paths "$DISKO_SCRIPT" "$TOPLEVEL" \
