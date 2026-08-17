@@ -45,8 +45,16 @@ directly to `main` from an agent session; merges go through PRs so the human
 can run the weekly-audit muscle on code the same way as on decisions.
 
 Before opening a PR, run `/code-review` on the branch and address its
-findings. Codex reviews the PR itself as a second, cross-model opinion; the
-human still makes every merge decision.
+findings, then run `tools/codex-review.sh` for a second, cross-model
+opinion. Codex's findings are posted verbatim — no seat summarises or
+filters an independent reviewer before the human sees it — and any
+disposition goes in a separate comment underneath, so a disagreement
+between the two reviewers stays legible. The human still makes every
+merge decision.
+
+Codex's GitHub-integrated review is *not* what runs here: it requires a
+ChatGPT Pro plan on org-owned repositories, which is why the review moved
+to the CLI. See `docs/backlog/cross-model-review-is-paywalled.md`.
 
 Scope every review and diff against `origin/main`, never a local branch
 ref. Worktrees accumulate stale local branches, and a stale base produces

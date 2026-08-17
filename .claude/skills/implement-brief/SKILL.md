@@ -8,6 +8,35 @@ description: Implement a numbered task brief from docs/tasks/ in the Castle Turi
 This packages the preamble every implementer needs. The brief itself is
 the spec — this is the context around it.
 
+## First: is there a brief?
+
+**Implementation work gets a numbered brief in `docs/tasks/`.** Not
+"substantial" work — implementation work. `CLAUDE.md` states this
+without a size threshold, and a small change is exactly where the
+temptation to skip it bites.
+
+If you are about to write code and no brief exists, **stop and ask for
+one** rather than proceeding and explaining yourself in the PR
+description. Two reasons, and the second is the real one:
+
+1. The brief rides the branch that implements it, so spec and
+   implementation merge and get audited together. A PR opened without
+   one has nothing to audit the code *against*.
+2. **A PR description is not in the repo.** It lives on a hosting
+   service. This project's own conventions — the backlog in files, the
+   RFCs in the tree — exist precisely so a clone contains the whole
+   argument and nothing depends on a service being up. "The PR
+   description carries the reasoning" moves the reasoning to the one
+   place these conventions were written to avoid depending on.
+
+This has been got wrong twice, both times by an orchestrator deciding a
+change was too small to deserve a brief, and both times the code review
+caught it. Proportionality is not the test; "is this implementation
+work" is.
+
+Docs-only changes — a proposal, a backlog entry, a correction to prose —
+are not implementation work and need no brief.
+
 ## Read, in this order
 
 1. **`CLAUDE.md`** — the hard rules. They are absolute.
@@ -80,7 +109,14 @@ just exit status.
   an honest section on anything faked, stubbed, or unverified. A human
   reads this.
 - **`/code-review` before opening the PR**, scoped against
-  `origin/main` after a `git fetch` — never a local branch ref.
+  `origin/main` after a `git fetch` — never a local branch ref. Then
+  `tools/codex-review.sh` for the cross-model pass; post its output
+  verbatim and put your dispositions in a separate comment underneath.
+- **Push, then report — do not poll CI from inside the task.** The
+  harness re-invokes you when work completes, so an agent that loops
+  waiting on `gh run list` pays full freight to advance nothing. One
+  agent burned ~88k tokens this way after its work was already pushed.
+  Trigger the run, report, and let the orchestrator watch it.
 
 ## Conventions worth knowing before you trip on them
 
