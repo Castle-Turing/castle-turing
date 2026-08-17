@@ -126,9 +126,28 @@
   # write a private layer that imports host-xps9370 without desktop,
   # override castle.display back out (or drop this whole block) in your
   # own resident.nix.
+  # consoleFont sits here rather than in modules/desktop for the same
+  # reason `scale` does, and the reason is worth not forgetting: a
+  # console font is a raw pixel grid, and the virtual console never sees
+  # castle.display.scale at all. The point sizes (terminalFontSize,
+  # uiFontSize) are density-independent *because* scale normalizes
+  # density, so the framework can default those for every host; a
+  # console font cannot be defaulted that way. spleen-16x32 gives a
+  # 240x67 grid on this 3840x2160 panel — roughly 2.4mm glyphs, against
+  # the kernel default 8x16's ~1.2mm, which is what made the greeter and
+  # any recovery shell effectively unreadable here.
+  #
+  # Chosen by looking, not derived: ter-v32n (identical metrics),
+  # spleen-32x64 (twice the size, 120x33) and a generated 24x48 were all
+  # loaded onto spare VTs and compared — see
+  # docs/tasks/0017-legible-defaults.md and tools/console-font-sweep.sh
+  # to re-run that comparison. Note especially that there is NO 32px
+  # ceiling in fbcon; an early draft of that brief claimed one, and it
+  # was false.
   castle.display = {
     scale = lib.mkDefault 2.0;
     cursorTheme = lib.mkDefault "Bibata-Modern-Classic";
     cursorSize = lib.mkDefault 18;
+    consoleFont = lib.mkDefault "spleen-16x32";
   };
 }

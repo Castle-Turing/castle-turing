@@ -120,13 +120,133 @@ in
         investigation, not a larger value on this option.
       '';
     };
+    terminalFont = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "monospace";
+      description = ''
+        Terminal typeface: a fontconfig family (or full pattern, e.g.
+        `"Iosevka Slab:style=Light Extended"`), composed with
+        `terminalFontSize` into home-manager's
+        `programs.foot.settings.main.font` as `<font>:size=<n>`.
+
+        The default is the *generic* family `monospace` rather than a
+        specific face, deliberately. A fontconfig family name only
+        means something if a package providing it is installed; naming
+        a real face here would make the framework's default silently
+        fall back to something else on any machine that lacks it,
+        which is a confusing failure to debug. `monospace` always
+        resolves — on a stock Castle Turing desktop, to DejaVu Sans
+        Mono from this module's own `fonts.packages`, at no added
+        closure cost.
+
+        This option exists so the framework does **not** have to decide
+        what typeface a Castle Turing looks like. A resident who wants
+        a real face sets it here from their private layer, and supplies
+        the font package alongside it. Whether the framework should
+        ever ship an opinionated typeface of its own is deliberately
+        open — see `docs/backlog/shipping-a-default-typeface.md`; don't
+        settle it by quietly adding a font package to this module.
+      '';
+    };
     terminalFontSize = lib.mkOption {
       type = lib.types.nullOr lib.types.ints.positive;
+      default = 12;
+      description = ''
+        foot's font point size, composed with `terminalFont` into
+        home-manager's `programs.foot.settings.main.font`.
+
+        Unlike `scale` or `cursorTheme`, this does **not** default to
+        `null`/"leave it alone": foot's own built-in default is 8 pt,
+        which is too small to read on any modern panel and is what
+        made a fresh desktop unusable for development
+        (`docs/tasks/0017-legible-defaults.md`). "A fresh desktop is
+        legible" is a framework property, not resident taste — the
+        same argument that makes `wallpaper` the other option this
+        module has an opinion about.
+
+        12 was calibrated by eye on a 331 PPI panel at `scale = 2.0`,
+        by opening candidate sizes side by side rather than deriving a
+        number from DPI — see that brief's "How the sizes and the
+        typeface were picked", and `tools/font-sweep.sh` to re-run the
+        comparison rather than editing this digit on a hunch. Point
+        sizes are density-independent because `scale` already
+        normalizes density, so this one number is right on every host;
+        that is exactly why it lives here and `consoleFont` does not.
+
+        `null` is still accepted and now means "set no font at all,
+        leave foot to its own default" — an explicit opt-out rather
+        than the absence of an opinion.
+      '';
+    };
+    uiFont = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "sans-serif";
+      description = ''
+        Typeface for UI chrome — GTK applications (including Firefox's
+        chrome and file pickers), Sway window titles, swaynag, and the
+        bar. A family name, optionally carrying a weight
+        (`"Iosevka Aile Medium"`).
+
+        The weight rides *inside the family string* rather than in a
+        separate option, because the two consumers disagree about
+        units: home-manager's `gtk.font` takes family and size as
+        separate fields, while Sway wants a single Pango description.
+        Both accept a weight word inside the name, so a `uiFontWeight`
+        option would only have to be reassembled into this string.
+
+        Generic default, for the same reason as `terminalFont` — see
+        that option. `sans-serif` resolves to DejaVu Sans on a stock
+        desktop.
+      '';
+    };
+    uiFontSize = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = 11;
+      description = ''
+        Point size for everything `uiFont` covers. Framework default
+        11, calibrated the same way `terminalFontSize` was.
+
+        Note that a size is only right *paired with a weight*: the
+        reference resident runs 10, because `Iosevka Aile Medium`'s
+        heavier stems buy back what the smaller size costs. Against
+        this module's own lighter default sans, 10 reads thin — which
+        is why the framework keeps 11 and the resident's 10 lives in
+        their private layer next to the face it belongs with. If you
+        change one, re-check the other by looking.
+
+        `null` means "set no UI font at all", leaving GTK and Sway to
+        their own defaults.
+      '';
+    };
+    consoleFont = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        foot's font point size, wired into home-manager's
-        `programs.foot.settings.main.font`. `null` means "framework
-        default": foot's own built-in size applies.
+        Font for the virtual console — the boot log, the tuigreet
+        greeter, and the emergency shell. A `console.font` value: the
+        name of a PSF bitmap font available in `console.packages`
+        (this module ships `pkgs.spleen`, so its `spleen-16x32`,
+        `spleen-32x64` and siblings resolve out of the box).
+
+        **This is the one `castle.display` font setting that is not
+        density-independent, and the reason it defaults to `null`
+        here while the point sizes above have framework defaults.**
+        The console never sees `castle.display.scale`: it is a raw
+        pixel grid, so a font that is correct on a 331 PPI panel is
+        absurd on a 1080p one. That is the same argument that puts
+        `scale` and `cursorSize` in `hosts/<name>/` rather than this
+        module — so a host module supplies this value
+        (`hosts/xps9370` sets `spleen-16x32` with `lib.mkDefault`),
+        and the framework declares the slot without filling it.
+
+        Do not "fix" this into a framework default for consistency
+        with its three siblings. The asymmetry is the design.
+
+        Setting this also turns on `console.earlySetup`, so the font
+        applies from the initrd rather than only after stage 2 —
+        an unreadable early-boot console is half of what this option
+        exists to fix. `null` leaves both alone, and the kernel's
+        built-in 8x16 font applies.
       '';
     };
     wallpaper = lib.mkOption {
@@ -186,6 +306,30 @@ in
         '';
       }
     ];
+
+    # The virtual console. Unlike every other castle.display setting,
+    # this one is a NixOS-level option rather than something modules/home
+    # wires into a user's session: the console exists before any user
+    # logs in, which is exactly when it matters most (boot log, greeter,
+    # emergency shell).
+    #
+    # `console.packages` is set unconditionally, even when consoleFont is
+    # null, for the same reason this module ships pkgs.bibata-cursors for
+    # cursorTheme: an option that names a font is useless unless
+    # something provides that name, and a host or private layer setting
+    # `consoleFont = "spleen-32x64"` should not also have to know which
+    # package to add. Spleen is a few hundred kilobytes.
+    console = {
+      packages = [ pkgs.spleen ];
+    } // lib.optionalAttrs (config.castle.display.consoleFont != null) {
+      font = config.castle.display.consoleFont;
+      # Apply the font from the initrd rather than after stage 2.
+      # Without this the early-boot console — the part you read when
+      # something has gone wrong — keeps the kernel's 8x16 default even
+      # though the option is set, which is half the problem this option
+      # exists to solve. Costs a slightly larger initrd.
+      earlySetup = true;
+    };
 
     programs.sway = {
       enable = true;

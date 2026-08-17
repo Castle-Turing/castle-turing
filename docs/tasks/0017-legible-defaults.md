@@ -472,6 +472,73 @@ trip through Nix*, not discovering what they should be:
 
 ## Implementation notes (corrections to the above, discovered while building it)
 
-*(to be filled in by the implementing session — per `CLAUDE.md`, if the
-design shifts during implementation, this same PR updates this brief.
-Item 6's (a)-or-(b) choice must be recorded here.)*
+**Item 6's choice: (a).** `bars` is restated in `modules/home` with
+home-manager's own default values (mode, hiddenState, position,
+workspaceButtons, workspaceNumbers, statusCommand, trayOutput) and the
+font swapped. A bar left at 8 pt while every surface around it grew
+would have been a visibly half-finished job. The cost is the pin: if a
+home-manager input bump changes its default bar entry, this block will
+not follow. CI now asserts both the bar font *and* the presence of
+`status_command`, which is the field that silently disappears if the
+restatement is ever trimmed as "redundant".
+
+**Deviation from scope items 1–2: framework defaults are declared as
+`mkOption` `default`s, not as config-level `lib.mkDefault`.** The brief
+said "change its default from `null` to `lib.mkDefault 12`", by analogy
+with how `wallpaper` defaults itself. That analogy is wrong for these
+options, and using it would have planted a trap:
+
+- An `mkOption` `default` sits at priority 1500. A host's
+  `lib.mkDefault` (1000) beats it, and a private layer's plain
+  assignment (100) beats both. Clean three-layer resolution.
+- A config-level `lib.mkDefault` also sits at 1000 — the *same*
+  priority a host module uses. The moment any host set
+  `terminalFontSize` with `lib.mkDefault`, that would be an
+  ambiguous-priority conflict rather than an override.
+
+`wallpaper` gets away with the config-level form because no host sets
+it. Since `consoleFont` is explicitly designed to be host-supplied, and
+nothing stops a host from wanting its own point sizes, `mkOption`
+`default` is the correct layer here. Recorded rather than silently
+done, per `CLAUDE.md`.
+
+**`console.earlySetup` decision (item 3's open question): enabled,
+conditionally.** It is set whenever `consoleFont` is non-null, in the
+same `modules/desktop` block. Without it the font applies only after
+stage 2, leaving the early-boot console — the part you read when
+something has gone wrong — at the kernel's 8x16 default despite the
+option being set. That is half the problem the option exists to solve.
+The cost is a slightly larger initrd.
+
+**`console.packages` is set unconditionally**, even when `consoleFont`
+is `null`. Same reasoning as shipping `pkgs.bibata-cursors` for
+`cursorTheme`: a host or private layer setting `consoleFont =
+"spleen-32x64"` should not also have to know which package provides
+that name. Spleen is a few hundred kilobytes.
+
+**Item 9 gained a second option.** The brief specced `terminalFont`;
+implementation added `uiFont` alongside it, because items 4–6 otherwise
+had to hardcode a family name in three places. The two are documented
+together, and the brief text above was updated to match rather than
+left describing a single option.
+
+**No `uiFontWeight` option.** The reference resident's chrome face is
+`Iosevka Aile Medium` — a weight, not just a family. Sway wants a
+single Pango description while home-manager's `gtk.font` takes family
+and size separately; both accept the weight *inside* the family string,
+so a separate weight option would only have to be reassembled into that
+string. The weight rides in `uiFont`.
+
+**What is verified, and what is not.** `nix flake check` passes; the
+extended `example` assertion pins all three layers including the
+asymmetry; the new CI steps were run locally against the real generated
+configs before being committed (foot: `Example Mono:size=14` — the
+example config's deliberate override; Sway: `font pango:sans-serif
+11.000000` in *both* the top-level config and the bar block;
+`console.font` resolving to `spleen-16x32` and that name really existing
+inside `pkgs.spleen`). **Not** verified: nothing here has been deployed
+to a real machine through these options — the reference resident is
+still running the equivalent settings written directly against
+home-manager, because their private layer pins the framework from
+GitHub. The Verification section's reboot step remains outstanding, and
+until it happens `earlySetup` in particular is untested in anger.
