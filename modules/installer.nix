@@ -69,9 +69,15 @@ let
   # by reading that source, not assumed — is exactly what's needed:
   # auto-login only the *first* tty (tty1) once per boot; every other
   # VT, and tty1 itself on any respawn, falls through to a plain agetty
-  # login prompt where "root" (stock empty password, installation-
-  # device.nix) or "nixos" (same) gets a real shell. That also closes
-  # the brief's item 3 for free: if this script ever crashes, getty@tty1
+  # login prompt. Only "root" (stock empty password, installation-
+  # device.nix) gets a real shell there — "nixos" does not, its shell is
+  # this very script (users.users.nixos.shell, below), so logging in as
+  # "nixos" on a spare VT just re-runs statusScript and drops the
+  # operator right back into the same nmtui loop. Confirmed the hard
+  # way (docs/tasks/0016): two copies of this script running at once,
+  # one on the intended tty1 autologin and one started by an operator
+  # following what shellLoginHint told them. That also closes the
+  # brief's item 3 for free: if this script ever crashes, getty@tty1
   # respawns under systemd's normal Restart=always, the one-time flag
   # file is already written, and the respawn lands at a login prompt
   # instead of looping back into the same broken script.
@@ -119,18 +125,20 @@ let
   # quietly drift apart — see their own comments.
 
   # The fact that could go stale without anyone noticing it drifted:
-  # which accounts have a shell here at all, and that neither needs a
-  # password. Shared, verbatim, between statusScriptText's banners
-  # (below) and services.getty.helpLine (config, below) — two
-  # unrelated NixOS surfaces (a script's stdout vs. agetty's issue
-  # file) that would otherwise encode this as independent literals
-  # with nothing keeping them in sync. A future change (a real
-  # password, a renamed account) is one edit here instead of a search
-  # for every place this used to say the same thing in different
-  # words. Per the incident above, a stale copy of exactly this fact
-  # is worse than printing nothing: a recovery console confidently
-  # giving directions that no longer work.
-  shellLoginHint = "log in as root or nixos, no password";
+  # which account has a shell here at all, and that it needs no
+  # password. Only "root" — see the comment above on why "nixos" isn't
+  # a second answer here, however natural it looks (docs/tasks/0016
+  # caught this file itself getting it wrong, in this exact string).
+  # Shared, verbatim, between statusScriptText's banners (below) and
+  # services.getty.helpLine (config, below) — two unrelated NixOS
+  # surfaces (a script's stdout vs. agetty's issue file) that would
+  # otherwise encode this as independent literals with nothing keeping
+  # them in sync. A future change (a real password, a renamed account)
+  # is one edit here instead of a search for every place this used to
+  # say the same thing in different words. Per the incident above, a
+  # stale copy of exactly this fact is worse than printing nothing: a
+  # recovery console confidently giving directions that no longer work.
+  shellLoginHint = "log in as root, no password";
 
   # The exact line statusScriptText (below) prints on *every* console
   # state it can be in. config.assertions (below) counts how many of
@@ -158,18 +166,54 @@ let
   # count) here is identical to its presence in the file that ships.
   # Cheaper, and it works without a Linux builder.
   statusScriptText = ''
-    # Ask NetworkManager whether it considers itself connected, rather
-    # than inferring readiness from the kernel routing table directly.
-    # `ip -4 route show default` can go true the instant a route
-    # appears, which can precede NetworkManager finishing activation
-    # (DNS, etc.) — a gap where this script would tell the operator
-    # "connected" before the machine actually is, which is exactly the
-    # kind of console-lies-to-the-operator failure this feature exists
-    # to prevent. "connected-global" is NetworkManager's own signal
-    # for "has real, non-link-local connectivity" and doesn't require
-    # its optional internet-reachability check to be configured.
+    # docs/tasks/0016: this function used to compare against the literal
+    # string "connected-global", on the theory that it was NetworkManager's
+    # own signal for "real, non-link-local connectivity" without needing
+    # the optional internet-reachability check configured. That theory was
+    # never checked against a running NetworkManager, and it's wrong:
+    # `connected-global` is the *enum constant* name
+    # (NM_STATE_CONNECTED_GLOBAL), not a string `nmcli -t -f STATE general`
+    # ever prints — terse mode prints "connected". The predicate was
+    # therefore FALSE on every boot, on real hardware, over SSH, at the
+    # same moment the machine was demonstrably reachable on the network.
+    # Since this is the only condition in the script's main loop, the
+    # connected banner below has never rendered anywhere, ever, and the
+    # script relaunched nmtui forever even after the operator joined a
+    # network and quit it.
+    #
+    # The fix asks a narrower, more honest question than the original
+    # comment did. "Real, non-link-local connectivity" was standing in for
+    # the actual requirement: can an operator on this LAN open an SSH
+    # session to this machine. That needs a routable address, not an
+    # internet route — an installer on an air-gapped bench network should
+    # show its address, not claim to be offline. `connected*` matches
+    # NetworkManager's "connected", "connected (site only)", and
+    # "connected (local only)" states; requiring a non-empty global-scope
+    # address (show_addrs, below) accepts the first two — a LAN with no
+    # route out is entirely fine for this image's purpose — and rejects
+    # the third (link-local only, not reachable from another host).
+    #
+    # Deliberately NOT `nmcli -t -f CONNECTIVITY general = full`: that
+    # answers a different question (can NetworkManager reach its configured
+    # check endpoint), returns "unknown" wherever connectivity checking
+    # isn't configured — the exact fragility this predicate is trying to
+    # avoid — and reports "limited" or "portal" on perfectly usable LANs
+    # that happen to block the check.
+    #
+    # Also NOT inferred from the kernel routing table directly (`ip -4
+    # route show default`): that can go true the instant a route appears,
+    # which can precede NetworkManager finishing activation (DNS, etc.) —
+    # a gap where this script would tell the operator "connected" before
+    # the machine actually is. Asking NetworkManager keeps that ordering
+    # honest; the enum-string typo above is what made this predicate wrong
+    # in practice, not the decision to ask NetworkManager in the first
+    # place.
     have_network() {
-      [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected-global" ]
+      case "$(nmcli -t -f STATE general 2>/dev/null)" in
+        connected*) ;;
+        *) return 1 ;;
+      esac
+      [ -n "$(show_addrs)" ]
     }
 
     show_addrs() {
@@ -217,14 +261,15 @@ let
         # human watching it would normally just back out the moment
         # they see it connected).
         #
-        # The `sleep 2` after nmtui returns is load-bearing, not
-        # cosmetic: if nmtui exits immediately instead of blocking (no
-        # controlling TTY yet, NetworkManager's D-Bus not up yet, or
-        # some other startup-ordering hiccup) and connectivity still
-        # isn't up, this branch would otherwise busy-spin -- clear,
-        # print, exec-fail, repeat, as fast as the shell can fork --
-        # pegging a core and flooding the console/serial log for as
-        # long as the machine sits unconnected.
+        # The pause after nmtui returns (below, in the still-disconnected
+        # branch) is load-bearing, not cosmetic: if nmtui exits
+        # immediately instead of blocking (no controlling TTY yet,
+        # NetworkManager's D-Bus not up yet, or some other
+        # startup-ordering hiccup) and connectivity still isn't up, this
+        # branch would otherwise busy-spin -- clear, print, exec-fail,
+        # repeat, as fast as the shell can fork -- pegging a core and
+        # flooding the console/serial log for as long as the machine sits
+        # unconnected.
         safe_clear
         # Quoted heredoc ('BANNER'): deliberate and load-bearing, not
         # the default nixpkgs style elsewhere in this file. This block
@@ -256,7 +301,29 @@ BANNER
         # invisible to the CI harness, which has nobody at the
         # keyboard to notice.
         timeout --foreground 300 nmtui || true
-        sleep 2
+
+        # docs/tasks/0016, defect 3: nmtui exited (timed out, or the
+        # operator backed out) and the top of the next iteration is about
+        # to re-check have_network and, if it's still false, wipe this
+        # screen and show the same "no network yet" banner again -- with
+        # no way for whoever's watching to tell "NetworkManager genuinely
+        # still reports disconnected" from "this script's predicate is
+        # wrong" apart. That ambiguity is exactly what let defect 1 sit
+        # unnoticed until a human was at the keyboard with a second
+        # machine to SSH in and check by hand. Printing NetworkManager's
+        # raw answer here means the same diagnosis takes one glance at
+        # this screen instead. Display-only, adds no input path -- the
+        # "considered and rejected" section in docs/tasks/0016 is explicit
+        # that the VT escape (shellLoginHint/escapeBanner) must keep being
+        # the only way out that doesn't depend on this script reading the
+        # keyboard correctly.
+        if ! have_network; then
+          echo "NetworkManager reports: STATE=$(nmcli -t -f STATE general 2>/dev/null || echo '<nmcli failed>')  global addrs: $(show_addrs || true)"
+          # Held longer than the bare busy-spin guard needs, so the line
+          # above is actually readable before the screen clears again --
+          # not just present in the (much larger) serial-log scrollback.
+          sleep 4
+        fi
         continue
       fi
 
