@@ -222,12 +222,26 @@ let
     # honest; the enum-string typo above is what made this predicate wrong
     # in practice, not the decision to ask NetworkManager in the first
     # place.
+    # LAST_STATE/LAST_ADDRS: deliberate globals, set as a side effect of
+    # every have_network() call, not `local`s. Two callers need exactly
+    # what this predicate already read to make its decision -- the
+    # connected banner (which used to re-run show_addrs a second time)
+    # and the no-network diagnostic (which used to re-run both nmcli and
+    # show_addrs independently, after this same check had already run
+    # once). Besides the redundant forking, that second read was a real
+    # race: if a lease landed in the gap between the predicate's read and
+    # the diagnostic's own separate read, the console could show "no
+    # network yet" immediately above a diagnostic line reading
+    # STATE=connected -- the console-contradicts-itself failure this
+    # whole feature exists to prevent, caught by code review before it
+    # shipped. One read, reused, removes the gap entirely.
     have_network() {
-      case "$(nmcli -t -f STATE general 2>/dev/null)" in
-        connected*) ;;
+      LAST_STATE=$(nmcli -t -f STATE general 2>/dev/null || true)
+      LAST_ADDRS=$(show_addrs || true)
+      case "$LAST_STATE" in
+        connected*) [ -n "$LAST_ADDRS" ] ;;
         *) return 1 ;;
       esac
-      [ -n "$(show_addrs)" ]
     }
 
     # Both address families, not just v4 -- see have_network's comment
@@ -238,11 +252,23 @@ let
     # awk/cut pipeline below either family already used, and avoiding a
     # dependency on `ip`'s combined-output field order staying stable
     # across both families in one invocation.
+    #
+    # `paste -sd, -` then a `sed` pass to widen the delimiter, not
+    # `paste -sd', ' -`: `-d`'s argument is a *list* of single-character
+    # delimiters that paste cycles through between successive lines, not
+    # one multi-character separator -- with a two-character list it
+    # alternates ',' then ' ' line-to-line, so three addresses render as
+    # "a,b c" (comma, then space, no comma before the third), not "a, b,
+    # c". Invisible with 0-1 addresses, which was every machine before
+    # this predicate started asking for IPv6 too; two or three addresses
+    # are now the common case on any dual-stack LAN, and this string is
+    # what the connected banner -- this task's whole point -- puts in
+    # front of an operator. Caught by code review before it shipped.
     show_addrs() {
       {
         ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
         ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
-      } | paste -sd', ' -
+      } | paste -sd, - | sed 's/,/, /g'
     }
 
     # `clear`'s exit status depends on TERM/terminfo being usable on
@@ -341,8 +367,14 @@ BANNER
         # that the VT escape (shellLoginHint/escapeBanner) must keep being
         # the only way out that doesn't depend on this script reading the
         # keyboard correctly.
+        # One call, not a second independent poll of nmcli/show_addrs for
+        # display: have_network() already set LAST_STATE/LAST_ADDRS as a
+        # side effect (see its own comment), and reusing them here is
+        # what keeps this diagnostic and the branch decision it's
+        # attached to looking at the exact same instant -- see that
+        # comment for the race a separate re-poll used to open.
         if ! have_network; then
-          echo "NetworkManager reports: STATE=$(nmcli -t -f STATE general 2>/dev/null || echo '<nmcli failed>')  global addrs: $(show_addrs || true)"
+          echo "NetworkManager reports: STATE=${LAST_STATE:-<empty>}  global addrs: ${LAST_ADDRS:-none}"
           # Held longer than the bare busy-spin guard needs, so the line
           # above is actually readable before the screen clears again --
           # not just present in the (much larger) serial-log scrollback.
@@ -357,8 +389,23 @@ BANNER
       # yourself every boot. Refreshed periodically in case DHCP hands
       # out a new lease, and re-verified at the top of this same loop
       # on every refresh -- see the comment above.
+      #
+      # $LAST_ADDRS, not a fresh $(show_addrs) call: the have_network()
+      # that just returned true (the `if ! have_network` above) can only
+      # have done so with a non-empty LAST_ADDRS already captured, so
+      # it's already the answer, and reusing it avoids two things --
+      # forking show_addrs a second time per refresh, and, more
+      # seriously, a bare unguarded `addrs=$(show_addrs)` here: under
+      # `set -euo pipefail` that assignment's own exit status is
+      # show_addrs's, and show_addrs can genuinely fail (a kernel with
+      # IPv6 disabled at boot makes its `ip -6` call fail; see that
+      # function's comment) -- which would have killed this script
+      # every time it reached the connected branch on such a machine,
+      # silently turning "no connected banner" into a new, narrower
+      # version of this task's own bug. Caught by code review before it
+      # shipped.
       safe_clear
-      addrs=$(show_addrs)
+      addrs="$LAST_ADDRS"
       # Unquoted heredoc, pre-existing and unrelated to the escape
       # hint above: ${config.networking.hostName} is a Nix
       # interpolation and $addrs a shell one, both necessary to show a

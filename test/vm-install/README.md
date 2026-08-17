@@ -25,12 +25,14 @@ not a parse of the console UX in general.
 What this harness still does **not** cover: the interactive parts of
 `modules/installer.nix`'s console UX — the auto-`nmtui`-on-no-connectivity
 prompt, the VT escape hatch, and anything that needs a human actually
-watching the screen update live. CI's QEMU run has nothing plugged into
-that network, so the no-network banner and diagnostic (`docs/tasks/0016`
-defect 3) never fire here either — the harness only ever exercises the
-connected path. That interactive behavior needs a human's eyes at least
-once, on real hardware, to confirm it reads the way it's supposed to;
-see `hosts/xps9370/README.md`.
+watching the screen update live. QEMU's `-nic user` (slirp) always
+brings up its own DHCP server, so the VM is *never* without a network in
+CI — which is exactly why only the connected path gets exercised here:
+the no-network banner and diagnostic (`docs/tasks/0016` defect 3) have
+no condition in this harness that would ever trigger them. That
+interactive behavior needs a human's eyes at least once, on real
+hardware, to confirm it reads the way it's supposed to; see
+`hosts/xps9370/README.md`.
 
 ## What it asserts
 
@@ -130,6 +132,12 @@ Useful environment variables:
 - `CASTLE_HARNESS_SSH_PORT` — host-forwarded SSH port (default 10222).
 - `CASTLE_HARNESS_BOOT_TIMEOUT` — seconds to wait for SSH on each boot
   (default 180).
+- `CASTLE_HARNESS_CONNECTED_BANNER_TIMEOUT` — seconds to wait for the
+  installer's connected banner on the serial console in phase 1 (default
+  340). Deliberately not tied to `CASTLE_HARNESS_BOOT_TIMEOUT`: the
+  banner can be delayed by up to a fixed 300s if the installer's own
+  DHCP head start loses the race and it falls into `nmtui`
+  (`docs/tasks/0016`) — see the constant's own comment in `run.sh`.
 
 ## Reading a failure
 

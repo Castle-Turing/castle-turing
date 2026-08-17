@@ -30,6 +30,20 @@ mkdir -p "$LOG_DIR"
 
 SSH_PORT="${CASTLE_HARNESS_SSH_PORT:-10222}"
 BOOT_TIMEOUT="${CASTLE_HARNESS_BOOT_TIMEOUT:-180}"
+# docs/tasks/0016: deliberately its own budget, not BOOT_TIMEOUT plus a
+# margin. BOOT_TIMEOUT covers "how long until sshd answers," which tracks
+# the network coming up more or less immediately; the installer's
+# connected banner can additionally be delayed by up to a *fixed* 300s if
+# statusScript's own 20s DHCP head start loses the race and it commits to
+# `timeout --foreground 300 nmtui` before the lease lands (real under
+# this harness's own TCG fallback, or a loaded runner — not
+# theoretical). Deriving this from BOOT_TIMEOUT would under-size it if
+# someone shortens BOOT_TIMEOUT for a fast box, and stacking a second
+# full BOOT_TIMEOUT on top of what wait_for_ssh already spent would risk
+# vm-install-test.yml's own job-level timeout-minutes in exactly the
+# regression case this assertion exists to catch. 340s = 20 (head start)
+# + 300 (nmtui) + margin.
+CONNECTED_BANNER_TIMEOUT="${CASTLE_HARNESS_CONNECTED_BANNER_TIMEOUT:-340}"
 
 QEMU_PID=""
 SUCCESS=""
@@ -231,6 +245,33 @@ wait_for_ssh() {
   return 1
 }
 
+# poll_until <timeout-seconds> <command...>
+# Repeats <command...> (a full command line -- typically a small wrapper
+# function, since redirections don't survive being passed as argv) once a
+# second until it exits 0 or <timeout-seconds> pass. Shared by every
+# plain "keep checking until this condition holds, no special pacing"
+# assertion below (graphical.target, the connected-banner check) instead
+# of each hand-rolling its own SECONDS-deadline loop -- a timeout or
+# pacing fix then lands in one place, not three. wait_for_ssh (above)
+# deliberately keeps its own separate loop rather than routing through
+# this: it paces off the serial log (loose before a login prompt appears,
+# tight after), a genuine behavioral difference this helper doesn't try
+# to absorb, not an oversight -- folding it in here would risk the one
+# poll loop in this file that's been relied on the longest, for a save of
+# one more copy.
+poll_until() {
+  local timeout="$1"
+  shift
+  local deadline=$((SECONDS + timeout))
+  while (( SECONDS < deadline )); do
+    if "$@"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 # assert_boots <phase> <user> <fail-message> <pass-message> [qemu args...]
 # The shared shape of every boot assertion: start QEMU for the phase,
 # wait for SSH by key, fail with the caller's message or log its PASS.
@@ -266,26 +307,31 @@ assert_boots phase1-installer root \
 #
 # Checked for the two lines the brief calls out specifically, not "the
 # script produced output": the hostname line and the `ssh root@` line
-# from the connected-state banner. "castle-installer" is
-# modules/installer.nix's own networking.hostName default
-# (lib.mkDefault) -- not a real network's name -- and this directory's
-# installer.nix doesn't override it, so it's safe to match literally
-# here; if that ever changes, this check changes with it in the same
-# commit.
-INSTALLER_HOSTNAME="castle-installer"
+# from the connected-state banner. Read out of the same build rather
+# than hardcoded as a second copy of modules/installer.nix's
+# networking.hostName default -- shellLoginHint (that file's own
+# comment, lines 127-141) argues at length against exactly that pattern,
+# and a hardcoded copy here would be the identical mistake in the
+# harness written to catch it: a rename would silently stop this check
+# matching anything, either a false failure or, worse, an unnoticed dead
+# assertion if the pattern were ever loosened in response. A single
+# `nix eval` of one string attribute is cheap (no build, and the flake's
+# already evaluated once for the ISO build above).
+log "Reading the installer's networking.hostName for the connected-banner check..."
+INSTALLER_HOSTNAME=$(nix eval --extra-experimental-features "nix-command flakes" --impure --raw \
+  --expr "(import \"$HARNESS_DIR/installer.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.networking.hostName")
+
+connected_banner_present() {
+  grep -q "reachable at:.*${INSTALLER_HOSTNAME}\.local" "$LOG_DIR/phase1-installer.serial.log" 2>/dev/null \
+    && grep -q "ssh root@${INSTALLER_HOSTNAME}\.local" "$LOG_DIR/phase1-installer.serial.log" 2>/dev/null
+}
+
 log "[phase1] Confirming the connected banner (hostname + ssh line) reached the serial console..."
-CONNECTED_BANNER_DEADLINE=$((SECONDS + BOOT_TIMEOUT))
-CONNECTED_BANNER_OK=""
-while (( SECONDS < CONNECTED_BANNER_DEADLINE )); do
-  if grep -q "reachable at:.*${INSTALLER_HOSTNAME}\.local" "$LOG_DIR/phase1-installer.serial.log" 2>/dev/null \
-      && grep -q "ssh root@${INSTALLER_HOSTNAME}\.local" "$LOG_DIR/phase1-installer.serial.log" 2>/dev/null; then
-    CONNECTED_BANNER_OK=1
-    break
-  fi
-  sleep 1
-done
-[ -n "$CONNECTED_BANNER_OK" ] || fail "assertion failed: the installer's connected banner (hostname line + ssh root@ line) never reached the serial console within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0016-installer-network-predicate.md, defect 1"
-log "[phase1] PASS: connected banner (hostname + ssh root@ line) reached the serial console."
+if poll_until "$CONNECTED_BANNER_TIMEOUT" connected_banner_present; then
+  log "[phase1] PASS: connected banner (hostname + ssh root@ line) reached the serial console."
+else
+  fail "assertion failed: the installer's connected banner (hostname line + ssh root@ line) never reached the serial console within ${CONNECTED_BANNER_TIMEOUT}s (see $LOG_DIR/phase1-installer.serial.log) — docs/tasks/0016-installer-network-predicate.md, defect 1"
+fi
 
 log "[phase1] Running nixos-anywhere (disko + install)..."
 if ! "$NIXOS_ANYWHERE_BIN" \
@@ -361,19 +407,17 @@ assert_boots phase2-first-boot harness \
 # interaction either. This deliberately runs against the same still-
 # booted VM as phase 2, not a fresh boot — nothing about this assertion
 # needs another reboot cycle.
+graphical_target_active() {
+  "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 \
+    systemctl is-active graphical.target >/dev/null 2>&1
+}
+
 log "[phase2b] Waiting for graphical.target..."
-GRAPHICAL_DEADLINE=$((SECONDS + BOOT_TIMEOUT))
-GRAPHICAL_OK=""
-while (( SECONDS < GRAPHICAL_DEADLINE )); do
-  if "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 \
-      systemctl is-active graphical.target >/dev/null 2>&1; then
-    GRAPHICAL_OK=1
-    break
-  fi
-  sleep 1
-done
-[ -n "$GRAPHICAL_OK" ] || fail "assertion failed: graphical.target was not reached within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase2-first-boot.serial.log)"
-log "[phase2b] PASS: graphical.target reached."
+if poll_until "$BOOT_TIMEOUT" graphical_target_active; then
+  log "[phase2b] PASS: graphical.target reached."
+else
+  fail "assertion failed: graphical.target was not reached within ${BOOT_TIMEOUT}s (see $LOG_DIR/phase2-first-boot.serial.log)"
+fi
 
 log "[phase2b] Checking for Sway's IPC socket and querying it..."
 SWAY_IPC_CHECK='
