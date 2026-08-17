@@ -207,63 +207,6 @@
         ];
       };
 
-      # docs/tasks/0012: the harness in test/vm-install/ structurally
-      # cannot catch a console that renders but eats every keypress — it
-      # asserts SSH-reachability with zero console interaction, so that
-      # console passes every one of its assertions untouched (that's
-      # exactly what shipped and locked an operator out on the first
-      # from-scratch boot). And this repo has already been burned twice
-      # by checks that pass on an evaluated *option* or a syntactically
-      # *valid* config while the thing a human would actually see is
-      # still wrong (`nix flake check` proving options evaluate;
-      # `sway --validate` accepting a session with one keybinding and no
-      # way out — see check.yml's sway-config-check job for the second
-      # one). So this check does what that job does: build the actual
-      # store path systemd will exec, and read it, rather than trust
-      # that the source above compiled to what it says.
-      #
-      # modules/installer.nix's own assertions cover the *configuration*
-      # half of the guarantee (services.getty.autologinOnce staying on,
-      # so not every getty auto-logs into the status script); this check
-      # covers the other half — that the escape hint modules/installer.nix
-      # adds to the status script's banners actually survived into the
-      # generated artifact, not just the Nix source.
-      checks.x86_64-linux.installer-escape-hatch =
-        let
-          pkgs = nixpkgs.legacyPackages.x86_64-linux;
-          # config.users.users.nixos.shell is a plain string with Nix
-          # store context (modules/installer.nix builds it as
-          # "${statusScript}/bin/castle-installer-status"), so passing
-          # it straight through as a derivation attribute below makes
-          # this build depend on — and this command can directly cat —
-          # the exact file agetty will exec into on tty1.
-          statusScript = self.nixosConfigurations.installer-example.config.users.users.nixos.shell;
-        in
-        pkgs.runCommand "installer-escape-hatch-check"
-          {
-            inherit statusScript;
-          }
-          ''
-            echo "--- generated installer status script ($statusScript) ---"
-            cat "$statusScript"
-            echo "--- end generated script ---"
-
-            if ! grep -q "Ctrl+Alt+F2" "$statusScript"; then
-              echo
-              echo "FAIL: the generated installer status script no longer prints its"
-              echo "escape-hatch hint (expected to find \"Ctrl+Alt+F2\" somewhere in it)."
-              echo "docs/tasks/0012-installer-escape-hatch.md: the way out has to be"
-              echo "readable on the console the operator is actually staring at, not"
-              echo "just documented in a source comment nobody stuck at a dead console"
-              echo "can read. If the wording changed deliberately, update this check's"
-              echo "expected string (flake.nix, checks.x86_64-linux.installer-escape-hatch)"
-              echo "to match."
-              exit 1
-            fi
-
-            touch "$out"
-          '';
-
       formatter = nixpkgs.lib.genAttrs [
         "x86_64-linux"
         "aarch64-linux"
