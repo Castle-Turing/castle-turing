@@ -12,7 +12,8 @@ hardening test that decides that. Proposals 03–05 were proposed with
 task 0008; Proposal 06 came out of asking what an outcome actually is —
 task 0010 built its verdict half, and its audit mechanics were revised
 against the measurement-and-oversight literature before any audit
-existed to harden.*
+existed to harden. Proposal 07 came out of asking how a seat changes
+hands, and is not yet implemented by anything.*
 
 ## The layer in one paragraph
 
@@ -209,7 +210,7 @@ as its own document:
   host) is an open design item; until secrets tooling lands, commits
   may be local-only with pushes left to the resident.
 
-## Capability tiers
+## Seat occupancy
 
 Seats declare the minimum capability they need; hosts declare the
 tiers available to them. The fallback chain for a seat that cannot be
@@ -217,9 +218,37 @@ filled at its tier ends at **"seat empty, and the resident is told"** —
 never at a weaker tenant faking a seat it cannot hold. A local model
 that can render digests but cannot do configuration surgery holds the
 digest seat and leaves the worker seat empty, and the system says so.
-The concrete tier configuration format is deliberately unspecified
-until a second tenant actually exists; inventing it earlier would be
-speculation.
+
+A tenant is anything that satisfies the seat's contract, and the range
+is wider than "which model":
+
+- a **deterministic rule** — `cmd_route`'s provenance rule is one, and
+  for decisions whose rule can be written this is the *best* tenant, not
+  a placeholder: auditable, free, instant, and its failure modes are
+  enumerable rather than emergent;
+- a **frontier model** behind a harness, where the judgment genuinely
+  cannot be written down;
+- a **local or fine-tuned model**, chosen for latency, cost, or privacy;
+- a **fallback chain** of the above, so a network outage or a crashed
+  local model degrades the system rather than stopping it;
+- a **human**, which is how every seat here was first held.
+
+Two arrangements run more than one tenant at once, and they answer
+different questions. **Ensemble** runs several and merges their output
+into one answer — it buys accuracy at N× cost and latency per decision
+and needs a merge rule someone has to defend, which is poor value for a
+router whose decisions are constant and whose best output is silence.
+The exception is review, where the *unmerged* ensemble is the whole
+point: two models reading the same diff, both outputs shown, because the
+disagreement is the signal. **Shadow** runs a candidate alongside the
+incumbent, records what it *would* have done, and acts on the incumbent
+— no merge rule, no latency cost, and it produces the evidence promotion
+requires. Shadow is how a seat changes hands (Proposal 07).
+
+The concrete configuration format lives with the tooling in `agent/`;
+this document fixes only that occupancy is **declared**, not implicit —
+a seat names what holds it, what it falls back to, and what runs in
+shadow behind it.
 
 ## Proposed commitments
 
@@ -535,6 +564,109 @@ routed record — where it should write fewer and coarser ones.
 Unresolved on purpose, and now narrowed: it is a question about
 decision granularity, no longer about whether falsifiers earn their
 keep.
+
+### Proposal 07 — Who holds a seat is itself a decision, and a tenant is promoted by verdicts, never by agreement
+
+**Statement.** Occupancy is declared, not implicit: a seat names what
+holds it, what it falls back to, and what runs in shadow behind it. A
+seat holds the **simplest tenant that suffices** — escalation to a
+model is a justified choice, never a default. A candidate tenant earns
+the seat by running in **shadow**, acting on nothing, while its
+would-be decisions accumulate; and it is **promoted on verdicts, never
+on agreement with the incumbent.** The promotion is itself a decision
+record, citing the evidence that earned it.
+
+**What this adds to Proposal 03.** That proposal established that a
+seat is defined by the artifacts it reads and writes, and that any
+intelligence satisfying the contract can hold it. It never said how a
+seat *changes hands*. Without an answer, re-tenanting is either an act
+of faith — swap it and hope — or it never happens at all, which makes
+Proposal 03 a claim the project never cashes.
+
+**Why agreement is the wrong criterion, and this is the whole point.**
+Promoting a candidate because it matches the incumbent 96% of the time
+measures **mimicry**, not judgment. It selects for a good imitator over
+a good decider, and it does so confidently, because the number looks
+like evidence. In Proposal 06's vocabulary, agreement is a *receipt* —
+cheap, continuous, machine-observable, and weak as truth. Only verdicts
+settle. That firewall was written to keep the resident's preferences
+from being inferred from their behaviour; it applies unchanged to
+keeping a seat's occupancy from being inferred from a candidate's
+conformity. Agreement may **screen** — below some threshold, do not
+bother auditing the disagreements — but it may never promote.
+
+**Teeth.**
+
+- **Simplest tenant that suffices.** A deterministic rule is a
+  destination, not a waypoint: where the rule can be written it is
+  auditable, free, instant, and its failure modes are enumerable rather
+  than emergent. `cmd_route`'s provenance rule is one such tenant. An
+  occupancy declaration that names a model states why the rule could
+  not be written.
+- **Shadow tenants never act.** A shadow candidate reads what the
+  incumbent reads and writes a `shadow-decision` record referencing the
+  live decision it shadowed, carrying the same fields the real decision
+  carries — channel, evidence, considered set, propensity — plus which
+  tenant produced it. `route` never routes it, `digest` never renders
+  it, and no downstream seat may read it as though it were a decision.
+  The journal stays complete, with nothing hidden and nothing acted on
+  that should not have been.
+- **Promotion cites verdicts.** The promotion record names the period,
+  the shadowed sample, and the resident-authored judgments that
+  favoured the candidate — audit answers, corrections, keep-or-rollback
+  outcomes. *"Promoted the local model to the router seat: 412 shadowed
+  decisions, and of 17 disagreements the resident's verdicts favoured
+  the candidate 12 to 5."* A promotion that can only cite an agreement
+  rate is not a promotion; it is a coin flip wearing a statistic.
+- **Demotion is symmetric and cheaper.** Reverting a promoted tenant is
+  a decision record too, but it needs only the evidence any decision
+  needs — the bar to remove a tenant is deliberately lower than the bar
+  to install one.
+- **The fallback chain still ends where Proposal 03 put it** — seat
+  empty, and the resident told. Shadow adds a candidate; it never adds
+  a way to fake occupancy.
+
+**The trap, named in advance.** Letting shadow *disagreements* drive
+which decisions the audit asks about is the query-selection problem
+Proposal 06 identifies, wearing a new hat: the candidate would be
+shaping the very sample that judges it, and a tenant that disagrees
+loudly on the cases it happens to be wrong about could talk its way
+into a seat. The mitigation is the same one — the audit sample mixes
+uniform-random with disagreement-driven items, **labelled as such**, so
+the bias is visible in the record rather than baked invisibly into the
+promotion evidence.
+
+**Cost, stated honestly.** Shadow costs N× compute for zero immediate
+benefit — the whole point is that its output changes nothing until it
+has earned the right to. Worse, promotion inherits Proposal 06's
+scarcity and compounds it: verdicts are sparse by design, disagreements
+between a decent candidate and a decent incumbent are rarer still, and
+verdicts *on those disagreements* are the intersection of two sparse
+things. The real failure mode is not a bad promotion. It is that
+**nothing is ever promotable**, the incumbent stays by default, and
+Proposal 03's replaceability quietly becomes theoretical — a seat that
+cannot change hands is a seat with a permanent occupant, whatever the
+architecture says.
+
+**Hardening test.** At least one seat is re-tenanted end to end —
+shadow records accumulated, a promotion decision written citing
+verdicts rather than agreement, the new tenant serving, and the whole
+chain readable cold from the journal. Separately, a seat that declares
+a deterministic tenant is *still* deterministic a release later, which
+is what distinguishes "simplest thing that suffices" from a slogan. And
+if after a year of lived use no seat has ever accumulated enough
+verdicts to promote anything, the verdict bar was set beyond what this
+system can supply, and this paragraph says so.
+
+**Known weak points.** Two, both left open rather than papered over.
+Shadow records grow without bound and nothing here says when they may
+be discarded — they are decisions, not observations, so Proposal 04's
+ephemerality rule does not reach them, and the honest answer is that
+nobody has needed one yet. And **ensemble is deliberately unmodelled**:
+the unmerged two-reviewer arrangement this project uses for code review
+is a real and valuable pattern, but it is a way of *serving* a seat
+rather than of changing who holds it, and folding it in here would blur
+a proposal that is about succession.
 
 ## Relation to the vision
 
