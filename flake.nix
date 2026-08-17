@@ -207,6 +207,22 @@
         ];
       };
 
+      # docs/tasks/0011: the real desktop stack, booted in a NixOS VM and
+      # driven end to end — modal keybinding, request, router, digest,
+      # correction — via nixosTest. Deliberately a `packages.*` output,
+      # not `checks.*`: `checks` is what bare `nix flake check` builds
+      # (check.yml's flake-check job runs it unfiltered on every PR),
+      # and this test is exactly the kind of slow, path-filtered job
+      # test/vm-install/'s own vm-install-test.yml already keeps out of
+      # that fast gate by running as its own workflow with its own
+      # trigger, rather than folding into `nix flake check` — see this
+      # test's own file header for what it does and does not change
+      # about the mechanism under test.
+      packages.x86_64-linux.desktop-loop-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+          import ./test/desktop-loop/test.nix { inherit self; }
+        );
+
       formatter = nixpkgs.lib.genAttrs [
         "x86_64-linux"
         "aarch64-linux"
