@@ -116,7 +116,7 @@
           self.nixosModules.dev
           self.nixosModules.agent
           (
-            { config, ... }:
+            { config, lib, ... }:
             {
               castle.admin = {
                 username = "resident";
@@ -133,10 +133,11 @@
               # castle.display slot (docs/tasks/0009-ambient-intake.md
               # item 1) — the third of its three layers, alongside this
               # module's own null default and host-xps9370's
-              # lib.mkDefault. Deliberately leaves `scale` untouched so
-              # the assertion below can prove the host's mkDefault
-              # survives when nothing overrides it, while cursorTheme
-              # and terminalFontSize prove an explicit override wins.
+              # lib.mkDefault. Deliberately leaves `scale` and
+              # `wallpaper` untouched so the assertion below can prove
+              # their respective mkDefaults survive when nothing
+              # overrides them, while cursorTheme and terminalFontSize
+              # prove an explicit override wins.
               castle.display = {
                 cursorTheme = "Bibata-Modern-Ice";
                 terminalFontSize = 12;
@@ -154,15 +155,20 @@
                     config.castle.display.scale == 2.0
                     && config.castle.display.cursorTheme == "Bibata-Modern-Ice"
                     && config.castle.display.cursorSize == 48
-                    && config.castle.display.terminalFontSize == 12;
+                    && config.castle.display.terminalFontSize == 12
+                    && lib.hasSuffix "/share/backgrounds/castle-turing.jpg" config.castle.display.wallpaper;
                   message = ''
                     castle.display three-layer resolution regressed in
                     nixosConfigurations.example: expected hosts/xps9370's
                     lib.mkDefault values (scale=2.0, cursorSize=48) to
                     survive untouched since nothing here overrides them,
-                    and this module's own overrides (cursorTheme,
+                    this module's own overrides (cursorTheme,
                     terminalFontSize) to win over both the framework
-                    default and the host default.
+                    default and the host default, and
+                    modules/desktop's own mkDefault (docs/tasks/0014) to
+                    resolve castle.display.wallpaper to the shipped
+                    image's store path since nothing here overrides
+                    that either.
                   '';
                 }
               ];

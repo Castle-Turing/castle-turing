@@ -33,6 +33,7 @@ let
     cursorTheme = null;
     cursorSize = null;
     terminalFontSize = null;
+    wallpaper = null;
   };
 
   # `programs.sway.enable` is a plain NixOS option (from nixpkgs' own
@@ -193,12 +194,33 @@ in
             }
           ];
 
-          # castle.display.scale (modules/desktop) — see that option's
-          # description for the three-layer resolution story. Omitted
-          # entirely (rather than set to some placeholder) when null,
-          # so Sway's own output auto-detection applies untouched.
-          output = lib.optionalAttrs (displayCfg.scale != null) {
-            "*".scale = toString displayCfg.scale;
+          # castle.display.scale and castle.display.wallpaper
+          # (modules/desktop) both land on the same output stanza, so
+          # they're merged into one attrset rather than two separate
+          # `optionalAttrs "*" = {...}` calls — two definitions of the
+          # same key ("*") in one attribute set is a genuine collision
+          # in Nix (the second would silently replace the first, not
+          # merge with it), not something `//` or two list entries
+          # would catch. Each half is still omitted independently when
+          # its option is null, so a host that sets neither gets no
+          # `output "*" {...}` block at all, same as before this option
+          # existed.
+          output = lib.optionalAttrs (displayCfg.scale != null || displayCfg.wallpaper != null) {
+            "*" =
+              (lib.optionalAttrs (displayCfg.scale != null) {
+                scale = toString displayCfg.scale;
+              })
+              // (lib.optionalAttrs (displayCfg.wallpaper != null) {
+                # "fill": scale-and-crop to cover the whole output,
+                # cropping any overflow, rather than letterboxing
+                # (swaybg's other modes: stretch, fit, center, tile).
+                # The usual desktop-wallpaper default, and the shipped
+                # image (3840x2160, modules/desktop/wallpapers) is
+                # large enough that fill never has to upscale on any
+                # output this framework currently targets (hosts/xps9370
+                # is exactly that resolution).
+                bg = "${displayCfg.wallpaper} fill";
+              });
           };
         };
       };
