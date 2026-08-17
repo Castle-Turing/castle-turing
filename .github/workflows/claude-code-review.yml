@@ -15,11 +15,29 @@ on:
     # that mixes code and docs is still reviewed in full. Only a PR whose
     # every changed file matches is skipped.
     #
-    # Note this deliberately does NOT filter check.yml (flake-check,
-    # agent-loop-test, modal-headless-test, sway-config-check). Those
-    # spend no model tokens, finish in under a minute, and are the gate —
-    # path-filtering a would-be required check is how a docs PR ends up
-    # blocked forever on a status that never reports.
+    # check.yml (flake-check, agent-loop-test, modal-headless-test,
+    # sway-config-check) is filtered too, as of docs/tasks/0018 — it
+    # used to run unconditionally on the reasoning that those jobs
+    # "finish in under a minute," which was wrong by roughly 4x
+    # (flake-check alone measured over four minutes on a docs-only PR).
+    # That reasoning also warned that path-filtering a would-be required
+    # check is how a docs PR ends up blocked forever on a status that
+    # never reports — a real hazard in general, but moot today: `main`
+    # carries no branch protection, so there is no required status check
+    # for a docs PR to be stranded on. See check.yml's own `on:` comment
+    # for the mitigation (an always-report shim) if that ever changes.
+    #
+    # check.yml's own paths-ignore is deliberately narrower than this
+    # workflow's `**/*.md` below: it uses `*.md`, which does not match
+    # agent/README.md or modules/desktop/wallpapers/README.md, because
+    # both sit inside Nix derivation sources (modules/agent's
+    # `src = ../../agent`, modules/desktop's `src = ./wallpapers`) and
+    # editing either changes a store path the build gate must still see.
+    # That asymmetry is deliberate, not an oversight: skipping a
+    # *review* on a docs change is harmless — a human reads prose PRs
+    # closely anyway — but skipping the *build* on a change that can
+    # alter the built system is not, so this workflow can afford the
+    # broader `**/*.md` while check.yml cannot.
     paths-ignore:
       - "docs/**"
       - "**/*.md"
