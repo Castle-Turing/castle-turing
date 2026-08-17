@@ -69,7 +69,7 @@ single `textScale` multiplier and not a bigger output scale.
 framework default the way the point sizes can. Point sizes are
 density-independent *because* `castle.display.scale` normalizes
 density; the console never sees `scale`, so a console font is a raw
-pixel grid. `ter-v32n` is right on a 331 PPI panel and absurd on a
+pixel grid. `spleen-16x32` is right on a 331 PPI panel and absurd on a
 1080p one. That is precisely the argument that put `scale` and
 `cursorSize` in `hosts/xps9370` rather than `modules/desktop`. So:
 `consoleFont` is **declared** in `modules/desktop` with a `null`
@@ -78,18 +78,36 @@ default, and **set** in `hosts/xps9370` with `lib.mkDefault`, next to
 with its three siblings — the asymmetry is the point, and this
 paragraph is the record of why.
 
-## How the two point sizes were picked
+## How the sizes and the typeface were picked
 
-Both were **calibrated by eye on the actual panel** during the spec
+All of it was **calibrated by eye on the actual panel** during the spec
 session, not reasoned to. This matters because 0013 is the record of
 what happens when a display number is argued into place instead:
 
 - **`terminalFontSize = 12`.** Three `foot` windows were opened
   side-by-side at `--font=monospace:size=11/12/13`, each showing the
   same sample (prose, a Nix snippet, a diff, and a dense `journalctl`
-  line — the four things actually read in a terminal here). 12 won.
+  line — the four things actually read in a terminal here). 12 won,
+  and 12 was re-confirmed afterwards against the chosen typeface
+  rather than assumed to transfer across faces.
 - **`uiFontSize = 11`.** Three `swaynag` bars at `-f 'DejaVu Sans
   11/12/13'`, stacked and compared the same way. 11 won.
+- **The terminal typeface: `Iosevka Slab Light Extended`.** Reached by
+  successive elimination in the same live-preview harness — DejaVu
+  Sans Mono against Iosevka; Iosevka against Iosevka Slab and Term
+  Slab; then weight (Light / Regular / Medium / Semibold) and width
+  (normal vs Extended) at fixed size; then size again at the winning
+  weight and width. It lives in the **private layer**, not here — see
+  scope item 9 and `docs/backlog/shipping-a-default-typeface.md`.
+
+  Two facts that fell out of that sweep and are worth not re-deriving:
+  `Iosevka Aile` and `Iosevka Etoile` report no fontconfig `spacing`
+  property (the monospaced cuts report `spacing=90`), so a grid
+  terminal forces them into one cell width and they are not terminal
+  candidates — only UI-font candidates. And `iosevka-bin` with
+  `variant = "Slab"` is **434 MB unpacked**, which is the whole reason
+  the typeface question got deferred to the backlog instead of being
+  answered here.
 
 **The two numbers differ on purpose, and 11 < 12 is not a mistake.**
 They are different font families in different units: 11 pt
@@ -124,22 +142,48 @@ it as a one-off.
 3. **`castle.display.consoleFont`** (new, `modules/desktop`) —
    `nullOr str`, default `null` ("kernel built-in font"), named as a
    `console.font` value. Wire it to `console.font`, and add
-   `pkgs.terminus_font` to `console.packages` so the option has
+   `pkgs.spleen` to `console.packages` so the option has
    something real to name — the same "ship the package so the option
    resolves" move `pkgs.bibata-cursors` makes for `cursorTheme` and
    `wallpaperPackage` makes for `wallpaper`. Set
-   `consoleFont = lib.mkDefault "ter-v32n"` in `hosts/xps9370`, in the
-   same `castle.display` block as `scale`, with a comment explaining
-   the panel-density derivation.
+   `consoleFont = lib.mkDefault "spleen-16x32"` in `hosts/xps9370`, in
+   the same `castle.display` block as `scale`, with a comment
+   explaining the panel-density derivation.
 
-   Verified available: `pkgs.terminus_font` ships
-   `ter-v24n/v28n/v32n` (`share/consolefonts`). **32 px is the
-   ceiling** — `fbcon` will not load a glyph taller than 32 — so this
-   is as large as the console gets without a different mechanism
-   (kmscon and friends), and at 32 px it is ~2.4 mm on this panel,
-   which lands close to foot at 12 pt × scale 2.0. Say so in the
-   comment; a future reader will otherwise try `ter-v40n` and get a
-   silent fallback.
+   **Correction to an earlier draft of this brief: there is no 32 px
+   ceiling.** That draft claimed `fbcon` will not load a glyph taller
+   than 32 px, and used it to argue Terminus was as large as the
+   console could get. It was asserted, not tested, and it is false —
+   `sudo setfont -C /dev/tty6 spleen-32x64.psfu` loads without
+   complaint on this kernel. The claim is recorded here because it
+   very nearly capped the console at half its useful size for no
+   reason.
+
+   That reopened the choice, and it was then settled by looking — each
+   candidate loaded onto a spare VT with `setfont -C /dev/ttyN` and
+   compared by switching between them, showing a sample built from what
+   a console is actually for (a login prompt, a boot log line, an
+   emergency-mode message):
+
+   | Font | Package | Grid at 3840×2160 | Glyph height | |
+   |---|---|---|---|---|
+   | `ter-v32n` | `pkgs.terminus_font` | 240×67 | ~2.4 mm | |
+   | **`spleen-16x32`** | **`pkgs.spleen`** | **240×67** | **~2.4 mm** | **chosen** |
+   | `spleen-32x64` | `pkgs.spleen` | 120×33 | ~4.9 mm | |
+   | `spleen-24x48` | *generated* | 160×45 | ~3.7 mm | rejected |
+
+   Two notes for anyone reopening this. **Spleen was preferred over
+   Terminus at identical metrics** — same 16×32 grid, so this was a
+   choice of design, not size. And the fourth row was an experiment
+   worth not repeating blindly: nothing in nixpkgs sits between 32 px
+   and 64 px tall (Terminus stops at 32, `uw-ttyp0` at 30, Cozette at
+   26, Tamsyn at 20, and Spleen jumps straight from 16×32 to 32×64), so
+   a 24×48 intermediate was manufactured by pixel-doubling Spleen's
+   `12x24` through `psf2txt` → awk → `txt2psf`. It loads fine, but it
+   is a doubled 12×24, not a face drawn at 24×48, and it lost. Building
+   it would also have meant this repo carrying a generated-font
+   derivation — real machinery for a surface seen at boot and in
+   recovery. Naming a stock font is the cheaper, more legible answer.
 
    Consider `console.earlySetup = true` so the font applies in the
    initrd rather than after stage 2 — decide and record which, since
@@ -192,12 +236,17 @@ it as a one-off.
    enumerates `{scale,cursorTheme,cursorSize,terminalFontSize}` in
    three places (the commented example block, the option list, and
    "The display-preference slot"). Update all of them: the count, the
-   two new options, and — importantly — the fact that the layering
+   three new options, and — importantly — the fact that the layering
    story is no longer uniform, since `terminalFontSize` and
    `uiFontSize` now resolve from a *framework* default while
-   `consoleFont` resolves from a *host* default. The doc's claim that
+   `consoleFont` resolves from a *host* default and `terminalFont`
+   is expected to be resident-supplied. The doc's claim that
    `null` means "leave that setting alone entirely" is no longer true
    for the two point sizes and must be corrected, not glossed.
+
+   The commented example block is also the right place to show a real
+   `terminalFont` value, since item 9's whole point is that this is the
+   option a resident is *expected* to set.
 
 8. **`flake.nix`'s `nixosConfigurations.example` assertion** — it
    currently proves the three-layer resolution for the existing
@@ -205,6 +254,34 @@ it as a one-off.
    a framework-defaulted option and a host-defaulted one resolve
    differently, and an assertion is the cheapest place to keep that
    honest.
+
+9. **`castle.display.terminalFont`** (new, `modules/desktop`) —
+   `nullOr str`, a fontconfig family name wired into the same
+   `programs.foot.settings.main.font` string as `terminalFontSize`, so
+   the two compose into one `<family>:size=<n>` value. Framework
+   default: **`monospace`**, which fontconfig already resolves to
+   DejaVu Sans Mono from `modules/desktop`'s existing `fonts.packages`
+   — zero added closure.
+
+   **This option exists so the framework does *not* have to answer the
+   typeface question.** The resident's own choice — `Iosevka Slab Light
+   Extended` — lives in their private layer along with the
+   `iosevka-bin` package that provides it, and the framework ships
+   nothing. Whether Castle Turing should ship an opinionated typeface
+   of its own is deliberately deferred to
+   `docs/backlog/shipping-a-default-typeface.md`; do not quietly settle
+   it by adding a font package here.
+
+   Two traps for the implementer, both found the hard way during
+   speccing. A fontconfig family name is not enough on its own: the
+   package providing it has to be installed or the name silently falls
+   back to something else, which is why the framework default is
+   `monospace` (guaranteed to resolve) rather than a specific face.
+   And `pkgs.iosevka` builds from source and takes hours — anything
+   touching this must name **`iosevka-bin`**, whose `variant = "Slab"`
+   TTC bundles `Iosevka Slab`, `Iosevka Term Slab`, and `Iosevka Fixed
+   Slab` together (verified with a clean fontconfig cache), so one
+   package covers all three families.
 
 ## Verification
 
@@ -219,26 +296,29 @@ default keybindings, the wallpaper path), and runs `foot --check-config`:
   level and inside the `bar {}` block. The wallpaper-path job is the
   precedent for "assert the generated config actually carries the value".
 - `foot --check-config` over the generated `foot.ini`, plus a grep for
-  `font=monospace:size=12` — today no `foot.ini` is generated at all,
-  so this is a new file appearing, not a changed one.
+  `size=12` — today no `foot.ini` is generated at all, so this is a new
+  file appearing, not a changed one. Note the family in that file comes
+  from the private layer (item 9), so CI must assert the *framework
+  default* (`monospace`), not the resident's Iosevka.
 - Build `nixosConfigurations.xps9370` and assert `console.font`
-  resolves to `ter-v32n` and that the built system's console font file
-  exists in the store.
+  resolves to `spleen-16x32` and that the built system's console font
+  file exists in the store.
 
-**Needs human hands.** The two point sizes are already calibrated (see
-above), so the remaining human step is narrower than it would have
-been — but it is not zero, because the console font is the one value
-that cannot be previewed from inside a running Wayland session:
+**Needs human hands.** Every value in this brief was calibrated by eye
+before it was written down (see "How the sizes and the typeface were
+picked"), including the console font — so unlike a normal first deploy,
+the remaining human work is confirming the numbers *survive the round
+trip through Nix*, not discovering what they should be:
 
 - `nixos-rebuild switch`, log out and back in, and confirm the
-  calibrated sizes survived the round trip into GTK and Sway chrome —
-  a Firefox window, a file picker, a titlebar, the bar.
-- **Reboot.** This is the step that actually tests item 3: the early
-  console, then the tuigreet greeter. `ter-v32n` is a reasoned value,
-  not a measured one, and 32 px is the ceiling — if it is still too
-  small there is no larger font to reach for, and the finding is
-  "the console needs a different mechanism", which belongs in
-  `docs/backlog/`, not in a bigger number.
+  calibrated sizes survived into GTK and Sway chrome — a Firefox
+  window, a file picker, a titlebar, the bar.
+- **Reboot.** This is the step that actually tests item 3, and it is
+  the one thing a live session cannot preview: `setfont` on a spare VT
+  proves a font *loads*, but not that `console.font` reaches the early
+  console and the tuigreet greeter through the initrd. If the font is
+  right on a switched-to VT and wrong at boot, the bug is in
+  `earlySetup`, not in the choice.
 
 ## Non-goals
 
@@ -253,6 +333,15 @@ that cannot be previewed from inside a running Wayland session:
   and no number here should be inflated to compensate for it — that
   reasoning is what produced 0013's bug 1.
 - **A GTK theme, icon theme, or any further ricing.** Font size only.
+- **Shipping a typeface with the framework.** Item 9 declares the
+  option and defaults it to `monospace`; it does not add a font package
+  to `modules/desktop`, and the resident's Iosevka stays in their
+  private layer. That question is open, not answered-in-the-negative —
+  see `docs/backlog/shipping-a-default-typeface.md`.
+- **The UI font *family*.** `uiFontSize` sets a size against DejaVu
+  Sans. Whether the chrome should move to a proportional Iosevka cut
+  (`Aile`, `Etoile`) to match the terminal is bound up with the
+  shipping question above and belongs with it.
 - **Changing `castle.display.scale`.** It is correct; see "The
   problem, measured".
 - **Per-application font overrides** (a different font for the
