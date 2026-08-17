@@ -90,8 +90,31 @@ what happens when a display number is argued into place instead:
   line — the four things actually read in a terminal here). 12 won,
   and 12 was re-confirmed afterwards against the chosen typeface
   rather than assumed to transfer across faces.
-- **`uiFontSize = 11`.** Three `swaynag` bars at `-f 'DejaVu Sans
-  11/12/13'`, stacked and compared the same way. 11 won.
+- **`uiFontSize = 10`, `uiFont = Iosevka Aile Medium`.** This one took
+  two passes, and the first pass produced a number that did not
+  survive the second. Round one swept `DejaVu Sans` at 11/12/13 and
+  picked 11 — but only the *size* was chosen there; DejaVu Sans was
+  the framework's existing font, not a decision. Round two swept the
+  family (`Iosevka Aile` / `Iosevka Etoile` / `DejaVu Sans`), then
+  Aile's weights, then size again at the winning weight, landing on
+  **Medium 10**.
+
+  The size moved from 11 to 10 because **weight and size trade against
+  each other**: Medium restores the visual solidity that dropping a
+  point costs, so Medium 10 reads about as substantial as Regular 11
+  while taking less vertical space in titlebars and the bar. Do not
+  "restore" this to 11 on the assumption that a smaller number is a
+  regression — it is the same pattern as `cursorSize = 18` in
+  `hosts/xps9370`, a below-expectation value that is correct because
+  it was measured rather than derived.
+  A note on authority, because the record should be unambiguous about
+  who chose what: an earlier draft of this brief named `DejaVu Sans` in
+  the scope items as though it were a resident choice. It was not — it
+  was the framework's incumbent font, defaulted to by the author of
+  that draft. The resident chose `Iosevka Aile Medium 10`. Everything
+  else DejaVu-shaped in this brief is a *framework default*, and the
+  two are labelled as such below.
+
 - **The terminal typeface: `Iosevka Slab Light Extended`.** Reached by
   successive elimination in the same live-preview harness — DejaVu
   Sans Mono against Iosevka; Iosevka against Iosevka Slab and Term
@@ -138,6 +161,15 @@ it as a one-off.
    the same "UI text" concept at the same density; a resident who
    wants them to differ can set the underlying home-manager options in
    their own layer.
+
+   **The framework default is 11, not the resident's 10.** 10 is
+   correct *paired with `Iosevka Aile Medium`*, whose weight buys back
+   what the smaller size costs; against the framework's own default
+   sans it would be too light. This is the clearest case in the brief
+   of a value that is only right in combination — the resident's 10
+   goes in their private layer next to the face it belongs with, and
+   the framework keeps the size that suits the font the framework
+   actually ships.
 
 3. **`castle.display.consoleFont`** (new, `modules/desktop`) —
    `nullOr str`, default `null` ("kernel built-in font"), named as a
@@ -191,14 +223,18 @@ it as a one-off.
    exists to fix.
 
 4. **GTK wiring** (`modules/home`) — `gtk.enable = true` with
-   `gtk.font = { name = "DejaVu Sans"; size = uiFontSize; package =
-   pkgs.dejavu_fonts; }`, guarded on `swayEnabled` like every other
-   display block in that module, and omitted entirely when
-   `uiFontSize` is null. Name a font the framework actually ships
-   (`modules/desktop`'s `fonts.packages` has `dejavu_fonts`,
-   `liberation_ttf`, `noto-fonts`) rather than `Sans` or `Cantarell` —
-   `Cantarell` is not installed, and GTK silently falling back is how
-   you end up debugging the wrong thing.
+   `gtk.font = { name = uiFont; size = uiFontSize; }`, guarded on
+   `swayEnabled` like every other display block in that module, and
+   omitted entirely when either option is null. `uiFont` is the new
+   family option from item 9; its framework default names a font
+   `modules/desktop` actually ships (`fonts.packages` has
+   `dejavu_fonts`, `liberation_ttf`, `noto-fonts`) rather than
+   `Cantarell`, which is *not* installed and would silently fall back —
+   that is a debugging session nobody should have to have.
+
+   Leave `gtk.font.package` unset: the framework's default family is
+   already installed system-wide, and a resident supplying their own
+   family supplies its package in the same private layer.
 
    Note this turns on home-manager's GTK module, which writes
    `gtk-3.0/settings.ini`, `gtk-4.0/settings.ini`, and dconf keys. That
@@ -207,9 +243,13 @@ it as a one-off.
    a ricing project" comment.
 
 5. **Sway chrome** (`modules/home`) — set
-   `wayland.windowManager.sway.config.fonts = { names = [ "DejaVu Sans" ];
-   size = uiFontSize; }`, which covers window titles and swaynag. This
-   is the exact pairing the `uiFontSize` sweep was run against.
+   `wayland.windowManager.sway.config.fonts = { names = [ uiFont ];
+   size = uiFontSize; }`. This covers window titles **and swaynag** —
+   they are one setting in Sway, not two (home-manager's own
+   description for this option reads "Font configuration for window
+   titles, nagbar..."), which is why the `uiFontSize` sweep used
+   `swaynag` bars as its instrument: they render the very setting being
+   measured.
 
 6. **swaybar** (`modules/home`) — the bar carries its own font and is
    *not* covered by item 5. **Read this before implementing:**
@@ -236,17 +276,22 @@ it as a one-off.
    enumerates `{scale,cursorTheme,cursorSize,terminalFontSize}` in
    three places (the commented example block, the option list, and
    "The display-preference slot"). Update all of them: the count, the
-   three new options, and — importantly — the fact that the layering
-   story is no longer uniform, since `terminalFontSize` and
-   `uiFontSize` now resolve from a *framework* default while
-   `consoleFont` resolves from a *host* default and `terminalFont`
-   is expected to be resident-supplied. The doc's claim that
-   `null` means "leave that setting alone entirely" is no longer true
-   for the two point sizes and must be corrected, not glossed.
+   four new options (`uiFontSize`, `consoleFont`, `terminalFont`,
+   `uiFont`), and — importantly — the fact that the layering story is
+   no longer uniform. Three different layers now supply values:
 
-   The commented example block is also the right place to show a real
-   `terminalFont` value, since item 9's whole point is that this is the
-   option a resident is *expected* to set.
+   | Option | Resolved by | Why |
+   |---|---|---|
+   | `terminalFontSize`, `uiFontSize` | framework default | density-independent, `scale` normalizes them |
+   | `consoleFont` | host module | a pixel grid; the console never sees `scale` |
+   | `terminalFont`, `uiFont` | resident's private layer | taste, and the package cost is theirs to choose |
+
+   The doc's claim that `null` means "leave that setting alone
+   entirely" is no longer true for the two point sizes and must be
+   corrected, not glossed. The commented example block is also the
+   right place to show real `terminalFont`/`uiFont` values, since item
+   9's whole point is that these are the options a resident is
+   *expected* to set.
 
 8. **`flake.nix`'s `nixosConfigurations.example` assertion** — it
    currently proves the three-layer resolution for the existing
@@ -255,22 +300,44 @@ it as a one-off.
    differently, and an assertion is the cheapest place to keep that
    honest.
 
-9. **`castle.display.terminalFont`** (new, `modules/desktop`) —
-   `nullOr str`, a fontconfig family name wired into the same
+9. **`castle.display.terminalFont` and `castle.display.uiFont`** (new,
+   `modules/desktop`) — `nullOr str` family names, each pairing with
+   the size option beside it.
+
+   `terminalFont` is a fontconfig pattern wired into the same
    `programs.foot.settings.main.font` string as `terminalFontSize`, so
    the two compose into one `<family>:size=<n>` value. Framework
    default: **`monospace`**, which fontconfig already resolves to
    DejaVu Sans Mono from `modules/desktop`'s existing `fonts.packages`
    — zero added closure.
 
-   **This option exists so the framework does *not* have to answer the
-   typeface question.** The resident's own choice — `Iosevka Slab Light
-   Extended` — lives in their private layer along with the
-   `iosevka-bin` package that provides it, and the framework ships
-   nothing. Whether Castle Turing should ship an opinionated typeface
+   `uiFont` is a family name consumed by items 4, 5 and 6 (GTK, Sway
+   chrome, the bar). Framework default: **`sans-serif`**, for the same
+   reason — a generic fontconfig family is guaranteed to resolve to
+   something installed, where a specific name is a silent-fallback
+   trap. Note the unit difference between its two consumers: GTK takes
+   family and size as separate fields, while Sway wants a Pango
+   description; a weight like `Medium` therefore rides *in the family
+   string* (`Iosevka Aile Medium`) rather than in a separate option.
+   That is why there is no `uiFontWeight` — Pango and fontconfig both
+   accept the weight inside the name, and a third option would only
+   have to be reassembled into the same string.
+
+   **These options exist so the framework does *not* have to answer the
+   typeface question.** The resident's choices — `Iosevka Slab Light
+   Extended` at 12 for the terminal, `Iosevka Aile Medium` at 10 for
+   the chrome — live in their private layer along with the two
+   `iosevka-bin` packages that provide them, and the framework ships
+   neither. Whether Castle Turing should ship an opinionated typeface
    of its own is deliberately deferred to
    `docs/backlog/shipping-a-default-typeface.md`; do not quietly settle
    it by adding a font package here.
+
+   That the resident's pair is Slab (terminal) plus Aile (chrome) is
+   not incidental: they are two cuts of one typeface, chosen together
+   so the desktop reads as one system. If the backlog question is ever
+   answered "yes, ship it", it is that *pairing* that would ship, and
+   it costs two font packages, not one.
 
    Two traps for the implementer, both found the hard way during
    speccing. A fontconfig family name is not enough on its own: the
@@ -283,6 +350,55 @@ it as a one-off.
    Slab` together (verified with a clean fontconfig cache), so one
    package covers all three families.
 
+10. **The calibration harness** — `tools/font-sweep.sh` and
+    `tools/console-font-sweep.sh`, committed on this branch alongside
+    a `tools/README.md` section.
+
+    Every value in this brief was picked by opening N panes, bars, or
+    VTs with one variable changed and looking. That worked, and it is
+    the reason this brief tells its reader to *re-run the sweep* rather
+    than edit a digit. An instruction to re-run something that only
+    ever existed as throwaway commands in one session is worthless —
+    which is exactly `CLAUDE.md`'s "a step that will repeat belongs in
+    a harness before it repeats", and this step repeated four times
+    inside a single spec session.
+
+    Principle 01 split: the mechanism (open N, same sample, one
+    variable, restore on exit) is public; the faces and sizes are
+    arguments, and the winner goes to a private layer or host module.
+
+    **Three bugs were found by using these scripts, not by reading
+    them**, and each is commented at its fix site because each is a
+    trap the next author would re-enter:
+
+    - A focused-workspace lookup with a fixed `grep -B2` window that
+      never matched. Under `set -euo pipefail` the failed pipeline
+      killed the script *silently*, before a single window opened.
+    - `read` on a non-TTY stdin returns EOF immediately, tearing the
+      sweep down before anything could be seen — which made the tool
+      undrivable by an agent session, the exact caller it needs to
+      support.
+    - `while :; do sleep 3600; done` defers SIGTERM until the sleep
+      returns, so teardown never ran: killed sweeps left windows on
+      screen and the next sweep stacked on top of them. Fixed with
+      `sleep & wait $!`, which is interruptible. In the console script
+      this one is worse than cosmetic — a swallowed TERM leaves the VTs
+      carrying the swept font instead of the kernel default.
+
+    **One open question the implementer should not settle silently.**
+    `tools/README.md` currently scopes that directory to "tooling for
+    people and agent sessions editing the repo itself... no reason to
+    exist on a resident's actual machine." A font sweep does not fit
+    that description: a resident re-runs it whenever they want to
+    change how their machine looks, long after this repo stops
+    changing. Either the README's charter widens, or this eventually
+    belongs on a deployed system as a real command (a
+    `castle-font-sweep` on `$PATH` from `modules/desktop`), which is a
+    product decision about the framework's surface, not a tooling
+    tidy-up. Put it in `tools/` for now, say plainly in the README that
+    the boundary is unresolved, and file the packaging question if it
+    starts to bite.
+
 ## Verification
 
 **Automated, no human needed** — extend the existing jobs in
@@ -292,9 +408,13 @@ generated Sway config, greps that config for expected content (the
 default keybindings, the wallpaper path), and runs `foot --check-config`:
 
 - `nix flake check` — the `example` assertion from scope item 8.
-- Grep the generated Sway config for `font pango:DejaVu Sans 11` at top
+- Grep the generated Sway config for `font pango:sans-serif 11` at top
   level and inside the `bar {}` block. The wallpaper-path job is the
   precedent for "assert the generated config actually carries the value".
+  As with `foot.ini` below, CI asserts the **framework defaults**
+  (`sans-serif`, 11) — the resident's `Iosevka Aile Medium 10` comes
+  from a private layer this repo cannot see, so a test expecting it
+  would fail for every stranger.
 - `foot --check-config` over the generated `foot.ini`, plus a grep for
   `size=12` — today no `foot.ini` is generated at all, so this is a new
   file appearing, not a changed one. Note the family in that file comes
@@ -332,16 +452,18 @@ trip through Nix*, not discovering what they should be:
   still needs its own investigation. Nothing in this task touches it,
   and no number here should be inflated to compensate for it — that
   reasoning is what produced 0013's bug 1.
-- **A GTK theme, icon theme, or any further ricing.** Font size only.
-- **Shipping a typeface with the framework.** Item 9 declares the
-  option and defaults it to `monospace`; it does not add a font package
-  to `modules/desktop`, and the resident's Iosevka stays in their
-  private layer. That question is open, not answered-in-the-negative —
-  see `docs/backlog/shipping-a-default-typeface.md`.
-- **The UI font *family*.** `uiFontSize` sets a size against DejaVu
-  Sans. Whether the chrome should move to a proportional Iosevka cut
-  (`Aile`, `Etoile`) to match the terminal is bound up with the
-  shipping question above and belongs with it.
+- **A GTK theme or icon theme.** Fonts only — no colours, no widget
+  styling, in the spirit of `modules/home`'s "not a ricing project".
+- **Shipping a typeface with the framework.** Item 9 declares both
+  family options and defaults them to the generic `monospace` and
+  `sans-serif`; it adds no font package to `modules/desktop`, and the
+  resident's Iosevka pair stays in their private layer. That question
+  is open, not answered-in-the-negative — see
+  `docs/backlog/shipping-a-default-typeface.md`.
+- **Packaging the sweep harness for deployed systems.** Item 10 puts
+  it in `tools/`; whether a resident should get it as a command on
+  `$PATH` is a product question, flagged there and deliberately not
+  settled here.
 - **Changing `castle.display.scale`.** It is correct; see "The
   problem, measured".
 - **Per-application font overrides** (a different font for the

@@ -43,13 +43,22 @@ mechanism.
 - **`iosevka` and `iosevka-bin` are different packages.** The former
   builds from source and takes hours; anything specced here should name
   `iosevka-bin` explicitly.
-- **The quasi-proportional cuts are not terminal fonts.** `Iosevka
-  Aile` and `Iosevka Etoile` report no fontconfig `spacing` property
-  (against `spacing=90` for the monospaced cuts), so a grid terminal
-  forces them into a single cell width. They remain live candidates for
-  the *UI* font (`castle.display.uiFontSize`'s family), where pairing
-  Aile with a monospaced Iosevka in the terminal would make the desktop
-  read as one system.
+- **The quasi-proportional cuts are not terminal fonts, but they are
+  the chrome font.** `Iosevka Aile` and `Iosevka Etoile` report no
+  fontconfig `spacing` property (against `spacing=90` for the
+  monospaced cuts), so a grid terminal forces them into a single cell
+  width and they are unusable there. `Iosevka Aile Medium 10` was
+  chosen for the chrome, precisely so the desktop reads as one system.
+- **So the real question is a two-package pairing, not one font.** The
+  resident's choice is `Iosevka Slab Light Extended` (terminal) plus
+  `Iosevka Aile Medium` (chrome) — two `iosevka-bin` variants. Anything
+  specced here has to price both, and "ship a typeface" means shipping
+  the pair or breaking the pairing that motivated it.
+- **Weight and size trade against each other, so a shipped default
+  cannot be just a family name.** The chrome landed on Medium at 10;
+  against the framework's own default sans, 10 would be too light.
+  Shipping a face therefore implies shipping the sizes calibrated
+  *for* it, or shipping a face that suits the existing sizes.
 - **The wallpaper is the precedent to argue with, in both
   directions.** `modules/desktop` ships `castle-turing.jpg` and
   `mkDefault`s it, on reasoning recorded in task 0014 — a
@@ -58,10 +67,15 @@ mechanism.
   disk and touches every application rather than the desktop
   background.
 - Task 0016's split is the status quo this entry may overturn: the
-  framework declares the font-family option with a `monospace` default
-  (which resolves to DejaVu Sans Mono via fontconfig, already
-  installed, zero added closure), and the resident's private layer
-  supplies `Iosevka Slab Light Extended` at size 12.
+  framework declares `castle.display.terminalFont` and
+  `castle.display.uiFont` with generic `monospace` / `sans-serif`
+  defaults (guaranteed to resolve to something already installed, zero
+  added closure), and the resident's private layer supplies `Iosevka
+  Slab Light Extended` at 12 and `Iosevka Aile Medium` at 10.
+- `tools/font-sweep.sh` (also from 0016) is how any future answer here
+  should be argued: open the candidates side by side on a real panel
+  and look, rather than reasoning about x-heights. Whoever specs this
+  does not need to rebuild that harness.
 
 **Open questions.** Does shipping a typeface serve strangers or impose
 on them — and is that different from the wallpaper, which imposes
