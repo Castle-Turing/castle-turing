@@ -9,8 +9,10 @@ never enter `docs/principles/`; a principle doc is a commitment. A
 proposal is promoted to a numbered principle only after implementation
 has leaned on it and it held, and each proposal below states the
 hardening test that decides that. Proposals 03–05 were proposed with
-task 0008; Proposal 06 came out of asking what an outcome actually is,
-and is not yet implemented by anything.*
+task 0008; Proposal 06 came out of asking what an outcome actually is —
+task 0010 built its verdict half, and its audit mechanics were revised
+against the measurement-and-oversight literature before any audit
+existed to harden.*
 
 ## The layer in one paragraph
 
@@ -312,6 +314,19 @@ algorithm — revealed behavior, harvested continuously, treated as ground
 truth. The design problem was never "how do we get labels." It is "how
 do we keep the two kinds from contaminating each other."
 
+When first drafted, that was an argument from design history. It is now
+the best-evidenced claim in this document. The field that spent two
+decades learning from clicks has published its own reckoning:
+state-of-the-art click debiasing, applied across more than a billion
+sessions, improved click prediction without improving relevance (Hager
+et al. 2024) — the receipts got better at predicting receipts. And the
+gap is not noise that more data averages away: inferring what someone
+values from how they behave is formally sign-indeterminate — the same
+observed behavior is consistent with opposite underlying preferences
+(Kleinberg, Mullainathan & Raghavan 2023). A system that promotes
+receipts to verdicts is not taking a shortcut to the truth; there is no
+road from the one to the other.
+
 **Teeth.**
 
 - **Decisions declare a falsifier, not a metric.** Every decision record
@@ -329,13 +344,68 @@ do we keep the two kinds from contaminating each other."
   be declared in the decision record *before* acting. Undeclared or
   unbounded post-intervention observation is a violation. Sensors answer
   "may I interrupt"; they are never outcome instruments.
-- **Receipts accumulate into questions and nothing else.** They never
-  write the resident model, never mark a decision right or wrong, never
-  create or remove a rule about whether something is communicated. Four
-  dismissed morning digests earn the system a question ("move it to
-  evening?"), never a silent adjustment. This is Proposal 05's grammar
-  extended from the model to the router: inference opens, the resident
-  closes.
+- **Receipts accumulate into questions — and question selection is
+  itself a decision.** Receipts never write the resident model, never
+  mark a decision right or wrong, never create or remove a rule about
+  whether something is communicated. Four dismissed morning digests earn
+  the system a question ("move it to evening?"), never a silent
+  adjustment — Proposal 05's grammar extended from the model to the
+  router. But the question channel is not the firewall it looks like: at
+  the label volumes this system runs on, *which* question gets asked
+  shapes the verdict corpus more than how many questions do (the
+  organizing premise of the active-learning literature; Settles 2009),
+  so
+  receipt-driven curiosity is agenda-setting power over ground truth —
+  one indirection removed, not removed. Two guards, not a prohibition:
+  promoting a receipt pattern into an audit question is itself a
+  journaled decision citing the receipts it rests on; and the audit's
+  sample mixes uniform-random draws with receipt-driven ones, each
+  labeled as which, so the query distribution's bias is a measured
+  quantity instead of an invisible one. The uniform half also keeps
+  feedback arriving on the decisions the system actually makes, not
+  only the ones it finds interesting.
+- **The audit judges blind, then sees the outcome, and both are
+  logged.** Identical decisions are rated better when they happened to
+  turn out well — by judges explicitly instructed to ignore outcomes
+  and sincerely convinced they had (Baron & Hershey 1988, still
+  replicating) — and manipulations designed to remove hindsight bias
+  reliably fail to remove it (Guilbault et al. 2004, across
+  ninety-five studies). No audit design eliminates this; a design can
+  only measure it. The audit records the resident's verdict on a
+  decision *before* revealing how it turned out, then records whether
+  the verdict flipped. The divergence is our own outcome bias, in a
+  column. Honest limit: this works only for outcomes the resident has
+  not already lived — an interruption's outcome arrived with the
+  interruption — so the measured divergence is a floor, not the whole
+  bias.
+- **The audit stream is salted with synthetic known-bad decisions at a
+  controlled, logged rate.** Vigilance collapses when targets are rare:
+  miss rates climb from under ten percent toward forty as target
+  prevalence falls (Wolfe, Horowitz & Kenner 2005) — so a naive audit
+  gets *less* sensitive exactly as the router gets better. Raising the
+  effective prevalence artificially is the one manipulation reliably
+  known to counter this, and it is deployed practice, not theory:
+  airport screening projects synthetic threats into real bags for
+  precisely this reason. Three disciplines keep the mechanism honest.
+  *Salt is indistinguishable on its surface*: it carries the same
+  fields, the same constant falsifier text, the same shape as the real
+  decisions beside it — what is known in advance is that a salt
+  decision *fails* its own falsifier check, because the evidence it
+  cites contradicts the routing it made. Catching it requires actually
+  performing the check, which is the very work being calibrated; salt
+  an auditor could spot by field inspection would measure nothing (see
+  the weak point below for what this does and does not fix). *Salt
+  never masquerades in the journal*: it exists nowhere as a
+  freestanding decision record — it appears only inside the audit's
+  own journaled record, labeled as salt, which lists what was shown,
+  what was salt, and what was caught. A successor tenant reading the
+  corpus meets salt only under that label, and the sensitivity series
+  is as durable as any other judgment (Proposal 04 intact on both
+  counts). *The floor is pre-registered*: the detection floor and the
+  salt rate are declared in the audit surface's configuration before
+  the first salted audit runs, and changing either is a journaled
+  decision — a floor chosen after seeing the detection rate is not a
+  floor.
 - **Missing labels degrade the router toward conservatism** — interrupt
   less, ask smaller — never toward learning from receipts instead.
 
@@ -352,40 +422,107 @@ mechanics clause has to earn its way in.
 audits, and learning is bottlenecked on the resident's audit attention:
 skip the audits and it does not quietly degrade into a behavioral
 learner, it simply stops learning. Most decisions will die unlabeled —
-and note the cruel structural fact underneath that, which this
-architecture cannot engineer away: this system's *best* outcomes look
-like nothing, and being ignored also looks like nothing. Ambient
-measurement is weakest for exactly the decisions this system most makes.
-A competitor optimizing on receipts calibrates in a week.
+and the cruel structural fact underneath that cannot be engineered
+away: this system's *best* outcomes look like nothing, and being
+ignored also looks like nothing. Two harder costs, learned from the
+oversight literature rather than guessed. First, audit sensitivity and
+router quality pull against each other by construction — the better
+the router, the rarer the real error, the higher the auditor's miss
+rate — so the safety mechanism is least sensitive exactly when trust
+in the system is highest, and only the salt floor keeps that
+measurable rather than assumed. Second, the documented failure mode of
+human-oversight regimes is not that review catches too little but
+that it *legitimizes*: across dozens of studied policies requiring
+human oversight of algorithmic decisions, the reviewers could not
+perform the oversight assumed, while the requirement itself lent the
+overseen systems a false sense of security (Green 2022). An audit
+that catches nothing licenses everything; unsalted, this proposal
+would be that pattern wearing a principle's clothes. What the
+evidence supports unchanged is the founding commitment itself —
+batched review beats in-the-moment confirmation, because confirmation
+prompts habituate to click-through within a few exposures (Akhawe &
+Felt 2013, across twenty-five million warning impressions). Within
+batching, *cadence* is the parameter the evidence actually attacks:
+the vision's "weekly" is an opening value, not a commitment — a
+shorter batch raises per-audit prevalence and shrinks the share of
+outcomes already lived before judgment, which is exactly the share
+blind-then-reveal cannot measure. The open parameter work (cadence,
+the floor and rate values, an audit cost budget) lives in
+`docs/backlog/weekly-audit-vigilance.md`. It is the naive batched
+audit — outcome-visible, unsalted, sensitivity assumed — that the
+research demolishes, and this revision is what remains after taking
+that seriously. A competitor optimizing on receipts still calibrates
+in a week.
 
-**Sequencing.** The two halves are not equally ready. Verdicts are
-buildable now — the `correction` record needs no new machinery, since
-intake already takes free text (see
-`docs/tasks/0010-correction-record.md`, the resident-authored half of
-this proposal). Receipts need a delivery surface that can
-actually report reception, which mako notifications cannot today
-(dismissed and expired are indistinguishable). Build the verdict half;
-let the receipt half wait for a surface that can produce one, rather
-than shipping speculative infrastructure for sensors that do not exist.
+**Sequencing.** The verdict half is built
+(`docs/tasks/0010-correction-record.md`): `correction` records,
+`castle correct`, and verbatim resident-model entries with
+`volunteered` provenance, each stamped with filing-time context. The
+receipt half still waits for a delivery surface that can actually
+report reception — mako cannot distinguish dismissed from expired —
+and speculative receipt infrastructure stays unbuilt until one
+exists. Decision records also need the fields that keep a logged
+decision counterfactually evaluable — the considered set, and the
+propensity with which the chosen option was selected (Bottou et al.
+2013) — a schema change tracked separately; see
+`docs/backlog/citation-only-evidence.md` for the research note it
+rides with. The next buildable piece is the audit surface
+itself, and it must be built to this proposal's shape from its first
+version: blind-then-reveal ordering, labeled mixed sampling, salt.
 
-**Hardening test.** After a quarter of lived use: every change in
-routing behavior traces to a verdict or an explicit answer, none to
-receipts alone; the audit runs mechanically off sampled falsifiers in
-under ten minutes; and at least one volunteered correction has traversed
-correction → model entry → visibly changed routing, cited end to end. If
-calibration demonstrably cannot be bought without promoting receipts to
-verdicts, the proposal was wrong, and this paragraph says where.
+One adjacent gap this proposal points at without owning: grading
+delivery only matters if there is a delivery option worth choosing,
+and a roster of `notify`, `digest`, and implied silence is
+impoverished. The reviewed evidence runs against pure silence —
+suppression without an ambient alternative produced no measured
+concentration benefit while raising anxiety and compulsive
+checking — and toward a glanceable, zero-commitment channel as the
+default resting place for most information. That is router and
+channel work, deferred with its evidence to
+`docs/backlog/ambient-default-channel.md`, not outcome-measurement
+work for this proposal.
 
-**Known weak point.** The falsifier requirement is the part of this that
-is schema discipline rather than principle, and it is bundled here
-because it is what makes the audit affordable. It also does not yet earn
-its keep: the router's current rule set is provenance alone, so every
-falsifier it writes would be the same sentence, and a required field
-that is always identical is a ritual rather than a check. That may be an
-argument for falsifiers arriving with the router's second rule, or an
-argument that the router presently writes too many decisions — one per
-routed record — where it should write fewer and coarser ones. Unresolved
-on purpose.
+**Hardening test.** Duration was the wrong pass criterion — an audit
+that runs in ten minutes and catches nothing has passed a test of
+nothing. After a quarter of lived audits, sensitivity is what is
+measured, against parameters fixed in advance: the salt detection
+rate holds above its pre-registered floor as the router improves — if
+it falls through, the audit has become legitimation, and this
+paragraph says so. Blind-then-reveal divergence is logged wherever an
+outcome was on record to reveal — if verdicts routinely flip on
+reveal, the training signal is outcome noise and the proposal's
+central claim fails. Every change in routing behavior traces to a
+verdict or an explicit answer, none to receipts alone. The audit
+sample is uniform-random by default; from the day receipt-driven
+draws exist (none can before a delivery surface reports reception),
+each traces to a journaled selection decision and carries its label —
+a receipt-less quarter satisfies this vacuously, and the audit
+records say so rather than leaving it ambiguous. At least one
+volunteered correction has traversed correction → model entry →
+visibly changed routing, cited end to end. And duration is still
+recorded in every audit's own record — demoted from pass criterion to
+tracked cost, because time-on-task fatigue is itself a sensitivity
+threat: an audit that must grow ever longer to hold its floor is
+failing differently, and the record has to show it. If calibration
+demonstrably cannot be bought without promoting receipts to verdicts,
+the proposal was wrong, and this paragraph says where.
+
+**Known weak point.** The falsifier requirement remains schema
+discipline rather than principle, and salting resolves only half of
+its problem. The half it resolves: the falsifier now names a check
+the audit actually performs — salt is constructed to fail its own
+falsifier, and catching that failure is the auditor's measured
+task — so the concept no longer waits for the router's second rule to
+mean anything. The half that stands: the router's rule set is still
+provenance alone, so every falsifier on a *real* decision is still
+the same sentence, and a required field with one constant value is
+still ritual on those records — which is also why salt can share that
+constant text and stay surface-indistinguishable at all. That may yet
+be evidence that the router writes too many decisions — one per
+routed record — where it should write fewer and coarser ones.
+Unresolved on purpose, and now narrowed: it is a question about
+decision granularity, no longer about whether falsifiers earn their
+keep.
 
 ## Relation to the vision
 
