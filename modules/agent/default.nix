@@ -79,8 +79,11 @@ in
 
           castle.agent.stateDir = "/home/<you>/private/state";
 
-        Wired straight into the `CASTLE_STATE_DIR` environment variable
-        every login shell sees — the same variable the CI harness
+        Wired into the `CASTLE_STATE_DIR` environment variable via
+        `environment.sessionVariables` (see this module's `config` for
+        why that option and not `environment.variables` — the mechanism
+        matters, `castle-modal` is spawned from a Sway keybinding, not a
+        login shell) — the same variable the CI harness
         (test/agent-loop/run.sh) points at a throwaway temp directory,
         which is what makes that harness possible without touching a
         real resident's journal.
@@ -137,13 +140,60 @@ in
 
   config = {
     environment.systemPackages = [ castleCli ];
+    # environment.sessionVariables, NOT environment.variables — confirmed
+    # by reading this flake's pinned nixpkgs (rev in flake.lock) rather
+    # than assumed, after the first real deploy showed CASTLE_STATE_DIR
+    # correctly present in /etc/set-environment and *still* not reaching
+    # castle-modal (docs/tasks/0013-first-deploy-findings.md, bug 2).
+    #
+    # environment.variables only ever lands in
+    # `environment.etc.set-environment` (nixos/modules/config/
+    # shells-environment.nix's `system.build.setEnvironment`), a file
+    # that file's own comment says exists "for resetting environment
+    # with `. /etc/set-environment` when needed" — it's sourced by
+    # /etc/profile, i.e. by login shells. modules/desktop's
+    # `services.greetd.settings.default_session.command` execs
+    # tuigreet, which on a successful login execs `sway` directly; no
+    # login shell, no /etc/profile, ever sits in that process's
+    # ancestry, so /etc/set-environment is never read for it. This is
+    # not new to this bug — test/desktop-loop/test.nix already
+    # documents the identical gap for WLR_RENDERER and works around it
+    # with a wrapper script instead, because that variable has no
+    # config-time value to carry through PAM.
+    #
+    # environment.sessionVariables takes a different path that does
+    # reach a greetd session: nixos/modules/config/system-environment.nix
+    # writes it to `/etc/pam/environment` (PAM's own env-file format,
+    # via `environment.etc."pam/environment"`), which is read by
+    # `pam_env.so`. nixos/modules/security/pam.nix wires that module
+    # into every PAM service's *session* stack by default — the "env"
+    # rule, `enable = cfg.setEnvironment` (default `true`) — and its own
+    # option description says outright: "Whether the service should set
+    # the environment variables listed in environment.sessionVariables
+    # using pam_env.so." `security.pam.services.login` (nixos/modules/
+    # programs/shadow.nix) takes that default, so /etc/pam.d/login's
+    # session stack includes pam_env. greetd's own PAM service
+    # (nixos/modules/services/display-managers/greetd.nix) sets
+    # `useDefaultRules = false` but its session rule is `session include
+    # login` — PAM's `include` splices in login's *entire* session
+    # stack, pam_env and all — so a greetd login still runs pam_env,
+    # which is what actually populates the environment PAM hands to the
+    # session command (tuigreet's `--cmd sway`) before it execs. This is
+    # the whole reason a PAM-based login manager runs pam_open_session
+    # at all, not an incidental detail. `environment.variables` is not
+    # abandoned by switching: shells-environment.nix folds
+    # sessionVariables into `environment.variables` itself
+    # (`environment.variables = config.environment.sessionVariables;`),
+    # so /etc/set-environment still carries these for a plain login
+    # shell — this change is strictly additive.
+    #
     # lib.optionalAttrs, not lib.mkIf, for the conditional pieces here:
     # mkIf tags a whole option *definition*, so it only composes
     # correctly when it's the entire right-hand side the module system
     # merges — not as an operand of a plain `//` alongside other attrs,
     # which is what the unconditional CASTLE_WORKER_COMMAND entry below
     # needs to sit next to.
-    environment.variables =
+    environment.sessionVariables =
       (lib.optionalAttrs (cfg.stateDir != null) { CASTLE_STATE_DIR = cfg.stateDir; })
       // { CASTLE_WORKER_COMMAND = cfg.worker.command; }
       // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
