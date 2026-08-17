@@ -69,9 +69,39 @@ included.
 When asked to spec a feature: choose the smallest next chunk of useful
 work, ask clarifying questions first, then draft a numbered brief in
 `docs/tasks/` containing the spec, plan, and an implementation prompt
-for a separate session. Always ask for explicit approval before writing
-the brief — or any CLAUDE.md change — to disk. The brief is committed on
-the branch that implements it, per the tasks convention.
+for a separate session. The brief is committed on the branch that
+implements it, per the tasks convention.
+
+**Every piece of implementation work gets a brief, however small.**
+Proportionality decides a brief's length, never whether it exists: a
+feature earns clarifying questions and a full spec, a mechanical change
+earns fifteen lines committed alongside the work. What must not happen
+is a change whose reasoning lives only in a PR description — that is on
+a hosting service, not in the repo, and it is the one place these
+conventions exist to avoid depending on. `docs/tasks/` is the log a
+future agent reads cold to learn why the code is shaped as it is, and
+especially what was considered and rejected; git history records only
+what changed.
+
+**If the design shifts during implementation, the same PR updates the
+brief.** Briefs are written up front and ride their branch, so nothing
+else corrects one the work has overtaken, and a brief confidently
+describing an abandoned design is worse than none.
+
+**Approval, and how autonomy overrides it.** Ask for explicit approval
+before writing a brief to disk. That default is suspended for the scope
+of an explicit instruction to work autonomously — then write the brief,
+proceed, and record every judgment call that would otherwise have been
+a question, so the approval happens in review rather than not at all.
+Autonomy relaxes *when* the human is consulted; it never relaxes the
+conventions themselves. Watch for this specifically: the two times a
+brief has been skipped in this project, both were under an autonomy
+grant, by an agent treating "work autonomously" as licence to decide a
+change was too small to document.
+
+**A CLAUDE.md change always needs explicit approval**, autonomy grant or
+not. These are the rules the rest runs on; an agent must never quietly
+rewrite the thing it is being held to.
 
 Every brief states its verification plan: what the implementing agent
 can test with no human involved (build it if cheap — a VM, a dry run,
