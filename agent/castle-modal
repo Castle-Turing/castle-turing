@@ -220,7 +220,10 @@ def _errand_state(castle, request_id: str, downstream: list) -> str:
     errand's lease says one is running right this second. Both, not
     either — a claim with a dead lease is an interrupted turn, and
     saying "in progress" about it would be exactly the absence-of-
-    evidence guess 0015 removed. The narrow race this live probe
+    evidence guess 0015 removed. It is also checked **first**, ahead of
+    any result: an errand whose failed turn the resident is retrying
+    right now must not be labelled with advice to run the very command
+    that is already running (and would be refused the lease). The narrow race this live probe
     shares with the dispatch reaper's own probe is documented on
     agent/castle's `lock_is_held`, and accepted there.
 
@@ -247,7 +250,19 @@ def _errand_state(castle, request_id: str, downstream: list) -> str:
     claims = [rec for rec in downstream if rec.type == "claim"]
 
     base = None
-    if results:
+    if claims and castle.lease_is_held(request_id):
+        # A held lease outranks everything, including a result that
+        # already exists. Results used to win outright, and the errand
+        # that exposed it is the one this whole label set is for: a
+        # failed errand the resident is retrying *right now* rendered
+        # "failed — castle work <id> to retry", which is advice to run
+        # a command that would be refused, because the retry it is
+        # advising already holds the lease. A live turn is the most
+        # specific true thing about an errand; the last turn's account
+        # is only the most recent one.
+        started = _started_at(castle, max(claims, key=lambda rec: rec.id))
+        base = f"in progress (started {started})"
+    elif results:
         # The newest result is this errand's latest account of itself —
         # a hand-run retry appends rather than replacing.
         outcome = results[-1].fields.get("outcome", "")
@@ -260,14 +275,10 @@ def _errand_state(castle, request_id: str, downstream: list) -> str:
         else:
             base = "done"
     elif claims:
-        if castle.lease_is_held(request_id):
-            started = _started_at(castle, max(claims, key=lambda rec: rec.id))
-            base = f"in progress (started {started})"
-        else:
-            # The window between "the lease died" and "the next dispatch
-            # sweep reaps it into a result". Nothing is running, so
-            # "interrupted" is the honest label, not "in progress".
-            base = f"interrupted — castle work {request_id} to retry"
+        # The window between "the lease died" and "the next dispatch
+        # sweep reaps it into a result". Nothing is running, so
+        # "interrupted" is the honest label, not "in progress".
+        base = f"interrupted — castle work {request_id} to retry"
 
     if waiting:
         return f"{base}, waiting on you" if base else "waiting on you"

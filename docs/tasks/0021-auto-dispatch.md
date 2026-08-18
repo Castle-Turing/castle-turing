@@ -855,8 +855,15 @@ implying action where none had happened); here the risk is a label
 that's honest about failure but leaves the resident not knowing what to
 do about it.
 
-A `claim` with a **live** lease and no `result` → `"in progress
-(started HH:MM)"` — the honest version of the state 0015 explicitly
+A `claim` with a **live** lease → `"in progress (started HH:MM)"`,
+checked **before** any result rather than only when no result exists.
+The first implementation gave results absolute precedence, and the
+errand that exposes the difference is the one these labels exist for:
+a failed errand the resident is retrying *right now* rendered
+`"failed — castle work <id> to retry"` — advice to run a command that
+was already running, and that would be refused the lease if taken. A
+live turn is the most specific true thing about an errand; the last
+turn's account is merely the most recent one. — the honest version of the state 0015 explicitly
 refused to fake (its non-goals: "the fallthrough… is not a claim that a
 worker is running"). This is now backed by real evidence: a held
 `flock`, checked live, not an absence-of-evidence guess (§2.3's note on
@@ -1012,8 +1019,10 @@ python3 like every other harness in this directory, its own CI job in
 
 **`test/agent-loop/modal-headless-test.sh` additions:** a result with
 each of the four `outcome` values produces the matching `_errand_state`
-label; a `claim` with a live lease produces `"in progress"`; every
-pre-existing state assertion in the file stays unchanged.
+label; a `claim` with a live lease produces `"in progress"`; a live
+lease *plus* an existing `failed` result still produces `"in progress"`
+(the precedence case above); every pre-existing state assertion in the
+file stays unchanged.
 
 **`test/desktop-loop/test.nix`:** enable `castle.agent.dispatch.enable`
 and set `castle.agent.worker.command` to a contract-conforming scripted

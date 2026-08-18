@@ -410,6 +410,29 @@ STATUS_AFTER_LEASE="$("$MODAL" --mode status --limit 40)"
 echo "$STATUS_AFTER_LEASE" | grep -q "^\[$REQ_CLAIMED\] requested — interrupted — castle work $REQ_CLAIMED to retry$" \
   || fail "the errand still claimed to be in progress after its lease holder died"
 
+log "status mode: a live turn outranks an existing result — a failed errand being retried right now reads as 'in progress', not as advice to retry it"
+# The label this ordering exists for. Under results-win-outright, an
+# errand whose failed turn the resident was retrying at that very
+# moment rendered "failed — castle work <id> to retry": advice to run a
+# command that was already running, and that would be refused the lease
+# if the resident took it.
+plant_result_with_outcome "$REQ_CLAIMED" failed 0c0005 >/dev/null
+STATUS_FAILED_CLAIM="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_FAILED_CLAIM" | grep -q "^\[$REQ_CLAIMED\] requested — failed — castle work $REQ_CLAIMED to retry$" \
+  || fail "with a failed result and no live lease, the errand should read as failed"
+python3 "$WORKDIR/hold-lease.py" "$XDG_RUNTIME_DIR" "$REQ_CLAIMED" "$WORKDIR/lease-held-2" &
+LEASE_HOLDER_2=$!
+for _ in $(seq 1 50); do
+  [ -f "$WORKDIR/lease-held-2" ] && break
+  sleep 0.2
+done
+[ -f "$WORKDIR/lease-held-2" ] || fail "the lease-holder helper never took the lock for the retry case"
+STATUS_LIVE_RETRY="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_LIVE_RETRY" | grep -qE "^\[$REQ_CLAIMED\] requested — in progress \(started [0-9]{2}:[0-9]{2}\)$" \
+  || fail "a live turn on an errand that already has a failed result did not read as 'in progress': $(echo "$STATUS_LIVE_RETRY" | grep "$REQ_CLAIMED" || true)"
+kill "$LEASE_HOLDER_2" 2>/dev/null || true
+wait "$LEASE_HOLDER_2" 2>/dev/null || true
+
 log "status mode: an unanswered question still overlays every one of these states unchanged"
 "$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
   --body "Should I try a different approach?" >/dev/null

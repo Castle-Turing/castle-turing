@@ -232,8 +232,11 @@ castle-modal --mode status  [--limit N]
   but the other states are now *earned* rather than guessed
   (`docs/tasks/0021-auto-dispatch.md`): "in progress (started HH:MM)"
   requires both a `claim` record and a live `flock` on that errand's
-  lease, checked at read time; a claim whose lease is dead reads as
-  interrupted, because nothing is actually running. A result's
+  lease, checked at read time and checked *first*, ahead of any result
+  — an errand whose failed turn is being retried at this moment must
+  not be labelled with advice to run the command that is already
+  running. A claim whose lease is dead reads as interrupted, because
+  nothing is actually running. A result's
   `outcome` supplies the rest — `done`, or "failed / timed out /
   interrupted — castle work `<id>` to retry". Every non-done label
   names the retry command on purpose: 0015's lesson was that a label
