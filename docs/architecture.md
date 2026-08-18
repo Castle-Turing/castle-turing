@@ -43,7 +43,7 @@ Frontmatter fields, minimum set:
 
 - `id` — unique, sortable (timestamp-prefixed).
 - `type` — `request`, `decision`, `result`, `question`, `answer`,
-  `correction`.
+  `correction`, `claim`.
 - `provenance` — `requested` (the resident asked for this) or
   `initiated` (the system undertook it on its own). See below.
 - `refs` — ids of the records this one responds to.
@@ -65,6 +65,21 @@ backfilled later. Unlike `evidence`, neither is required on records
 that predate this addition; see `agent/README.md` for the fields, the
 honest limits of what they buy under today's deterministic rule, and
 why they're optional rather than required.
+
+A `claim` (docs/tasks/0021-auto-dispatch.md) is written the instant a
+worker takes an errand — before the tenant command is even resolved.
+It exists for observability across a restart, never for mutual
+exclusion: exclusion comes free from an `flock` lease under
+`$XDG_RUNTIME_DIR`, and that lease dies with the login session, so
+without a durable record an interrupted turn would be
+indistinguishable from an untouched one. With it, three states are
+distinguishable cold: claim plus live lease (running now), claim with
+no live lease and no result (interrupted, and reapable), no claim at
+all (nothing has ever touched this errand). `result` records written
+from that task forward also carry `outcome` — `completed`, `failed`,
+`timeout`, or `interrupted` — because the exit code exists nowhere
+else once the process is gone, and no surface may ever infer failure
+by grepping a body for prose like "FAILED".
 
 A `correction` (docs/tasks/0010-correction-record.md) is the resident
 speaking unbidden — not asking for anything, not answering a question
@@ -153,7 +168,31 @@ tenant: **the worker proposes a diff; it never deploys.** No
 `nixos-rebuild`, no `git commit`, no applying anything to a running
 system, from this seat, in this slice — applying a reviewed diff stays
 a resident action. Autonomous deployment is a real authority-taxonomy
-question for a later task, not a side effect of this one.
+question for a later task, not a side effect of this one. Since
+docs/tasks/0021-auto-dispatch.md the seat's *invocation* can be
+automatic — a resident who opts into `castle.agent.dispatch.enable`
+has filed requests start themselves — and that changes nothing about
+the constraint: the worker proposes and never deploys regardless of
+who or what invoked it, and an automatically-started errand keeps the
+provenance of whoever wanted the work.
+
+**Dispatch** (plumbing, not a reasoning seat). The mechanism that
+invokes the worker seat on the journal's behalf: it notices that an
+eligible request exists, runs one worker turn at a time, and runs the
+router once afterward. It holds no judgment of its own and chooses no
+tenant. Which request runs next is a total function of the journal —
+the eligibility fold plus oldest-first order — reconstructable exactly
+by re-running that fold over the same snapshot, which is why dispatch
+writes no decision record per errand: a record carrying identical
+evidence text on every invocation forever is ritual, not
+accountability. The one record it writes about itself is a watermark,
+marking the instant automatic dispatch began existing on this journal,
+because nothing else can ever recover that fact. `seat: dispatch` is a
+new value in an existing category, not a new category — `digest` is
+already a non-reasoning surface seat. Giving dispatch a policy for
+*which* eligible request to run, or a say in whether to run one at
+all, would make it a reasoning seat; that is precisely what this
+paragraph exists to stop a later agent from "completing" it into.
 
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers
@@ -210,6 +249,17 @@ as its own document:
 - The push cadence (and the credential that enables pushing from a
   host) is an open design item; until secrets tooling lands, commits
   may be local-only with pushes left to the resident.
+- Automatic dispatch of resident-filed errands
+  (`castle.agent.dispatch.enable`, docs/tasks/0021-auto-dispatch.md) is
+  a **standing authority** too: opt-in and default-off, because it lets
+  a tenant start work — and spend money — with no human present at the
+  moment it happens. Which taxonomy category it belongs in (silent /
+  made-then-reported / queued-for-approval) is deliberately deferred to
+  the authority-taxonomy task, the same way the two bullets above defer
+  the private-repo-commit authority; see
+  `docs/backlog/authority-taxonomy-prior-art.md`. What is settled now:
+  it is off unless a resident turns it on in their own private layer,
+  and every turn it starts leaves a claim record and a result behind.
 
 ## Seat occupancy
 

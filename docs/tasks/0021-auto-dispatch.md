@@ -95,6 +95,23 @@ declares three `systemd.user` units, all `wantedBy = [ "default.target" ]`:
   missed inotify event (or a request filed while the user session was
   down) would otherwise wait forever.
 
+**All three carry `ConditionUser=!@system`** — a correction to this
+design found by running `test/desktop-loop`'s VM against the first
+implementation of it, not reasoned out in advance. `systemd.user.*`
+units are declared for *every* user with a systemd instance, and on a
+host importing `modules/desktop` that includes greetd's own `greeter`
+system account: its manager started `castle-dispatch` at the login
+screen, where the sweep exited 1 on a journal it has no business
+reading (`Permission denied: …/state/journal`) and left a failed unit
+in a session nobody inspects. Since §2.7 makes the sweep's exit code
+mean "dispatch itself broke," a guaranteed-failing instance of it on
+every boot is precisely the health signal a resident learns to ignore.
+`!@system` is nixpkgs' own idiom here — the user-specific
+`nixos-activation.service` carries the identical condition — and it
+needs no username baked into this repo (Principle 02). Pinned by an
+assertion in `flake.nix`'s dispatch variant, since losing it again
+would be silent.
+
 This is the first `systemd.user.*` unit in this repo — everything else
 that uses the path-unit-plus-oneshot pattern
 (`modules/base`'s `castle-password-reminder-check`) is a system unit,
@@ -345,7 +362,12 @@ only a hint for. A request is eligible iff:
   design idempotent, and the retry bound structural rather than
   counted — see §3's "Retry policy");
 - (c) no `claim` record referencing it currently holds a live lease
-  (i.e., it is not running right now);
+  (i.e., it is not running right now). *Implemented as a probe of the
+  request's own lease rather than a walk over claim records: the lease
+  is acquired strictly before the claim is written (§3.2), so a held
+  lease is the earlier and strictly stronger signal — it also catches
+  the sliver of a turn between "lease taken" and "claim written," which
+  a claim-keyed check would read as eligible.*
 - (d) `created >=` the watermark.
 
 Deliberately **not** conditions on eligibility, each recorded here with
@@ -769,7 +791,10 @@ positional arguments (`<castle-bin> <request-id>`), bypassing
 (lease, claim, timeout, `outcome`) would otherwise ship with zero
 coverage. New fixtures:
 
-- `contract-worker.sh` — succeeds, writes a diff.
+- `contract-worker.sh` — succeeds, writes a diff. *It also honors an
+  optional `CASTLE_TEST_WORKER_SLEEP` (default 0), which is how the
+  concurrency assertion below widens its race window — a knob on the
+  happy path rather than a fifth near-identical fixture file.*
 - `contract-worker-fail.sh` — exits nonzero, writes to stderr, no diff.
 - `contract-worker-hang.sh` — sleeps far longer than any test's
   configured timeout.
@@ -835,7 +860,12 @@ pre-existing state assertion in the file stays unchanged.
 **`test/desktop-loop/test.nix`:** enable `castle.agent.dispatch.enable`
 and set `castle.agent.worker.command` to a contract-conforming scripted
 tenant **in the same commit** — this is a safety floor, not an
-incidental config choice. `castle.agent.worker.command` currently
+incidental config choice. *`castle.agent.worker.repoRoot` is pinned to
+a non-default path in the same block, for the same reason
+`testStateDir` is non-default: the scripted tenant prints its own
+`$CASTLE_REPO_ROOT` back, and asserting that string lands in the result
+record is what proves the unit's `Environment=` actually reached the
+worker process rather than the `%h` fallback quietly standing in.* `castle.agent.worker.command` currently
 defaults to `castle-worker-claude` (a real `claude -p` invocation), and
 this VM already imports `modules/dev`, which installs the `claude`
 binary; without pinning the command to a scripted stand-in, enabling
@@ -861,7 +891,12 @@ new fixture file paths that need triggering the workflow.
   with dispatch left at its default) gains an assertion that no
   `castle-dispatch` user unit is generated — the middle case between
   "no agent module at all" (already proven by `test/vm-install`'s
-  harness) and "dispatch explicitly on."
+  harness) and "dispatch explicitly on." *Written as an implication
+  ("dispatch off ⇒ no units") rather than a flat "no units": the
+  `extendModules` variant below inherits this configuration's own
+  assertions, so a flat form would go red on the one configuration
+  that is supposed to have the units. The antecedent holds on
+  `.example`, so the check still bites exactly where it is aimed.*
 - A new `extendModules` variant, following the `example-mod4` precedent
   already in `flake.nix`, with `castle.agent.dispatch.enable = true`
   and a dummy `stateDir` set, asserting the three units exist and carry
