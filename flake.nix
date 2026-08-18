@@ -140,7 +140,14 @@
               # prove an explicit override wins.
               castle.display = {
                 cursorTheme = "Bibata-Modern-Ice";
-                terminalFontSize = 12;
+                terminalFontSize = 14;
+                # A resident-supplied typeface, the case
+                # castle.display.terminalFont exists for
+                # (docs/tasks/0017-legible-defaults.md). Not a real
+                # font package here — this configuration never renders
+                # anything — but it proves the private layer wins over
+                # the framework's generic default.
+                terminalFont = "Example Mono";
               };
               # A regression test for the three-layer resolution itself,
               # not just "the flake evaluates": docs/tasks/0009's
@@ -155,7 +162,18 @@
                     config.castle.display.scale == 2.0
                     && config.castle.display.cursorTheme == "Bibata-Modern-Ice"
                     && config.castle.display.cursorSize == 18
-                    && config.castle.display.terminalFontSize == 12
+                    && config.castle.display.terminalFontSize == 14
+                    && config.castle.display.terminalFont == "Example Mono"
+                    # Framework defaults, surviving because nothing here
+                    # or in the host overrides them.
+                    && config.castle.display.uiFont == "sans-serif"
+                    && config.castle.display.uiFontSize == 11
+                    # Host default, NOT a framework default — the
+                    # asymmetry docs/tasks/0017 argues for. If this ever
+                    # starts resolving from modules/desktop instead,
+                    # someone has "fixed" the inconsistency and broken
+                    # the reasoning behind it.
+                    && config.castle.display.consoleFont == "spleen-16x32"
                     && lib.hasSuffix "/share/backgrounds/castle-turing.jpg" config.castle.display.wallpaper;
                   message = ''
                     castle.display three-layer resolution regressed in
@@ -165,12 +183,24 @@
                     other number, docs/tasks/0013-first-deploy-findings.md)
                     to survive untouched since nothing here overrides them,
                     this module's own overrides (cursorTheme,
-                    terminalFontSize) to win over both the framework
-                    default and the host default, and
+                    terminalFont, terminalFontSize) to win over both the
+                    framework default and the host default, and
                     modules/desktop's own mkDefault (docs/tasks/0014) to
                     resolve castle.display.wallpaper to the shipped
                     image's store path since nothing here overrides
                     that either.
+
+                    Since docs/tasks/0017 the layering is no longer
+                    uniform, and this assertion pins that too: uiFont
+                    and uiFontSize must resolve from *framework*
+                    defaults (a point size is density-independent
+                    because scale normalizes it, so one value is right
+                    everywhere), while consoleFont must resolve from
+                    the *host* (a console font is a pixel grid, and the
+                    virtual console never sees scale at all). Three
+                    different layers now answer for different options
+                    in this same attrset; that is deliberate, and this
+                    is where it stays honest.
                   '';
                 }
               ];

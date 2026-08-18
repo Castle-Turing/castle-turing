@@ -135,15 +135,23 @@ The values this repo may never contain:
   # castle.agent.notify.command = "";  # e.g. to no-op on a headless host
 
   # Optional — taste, only meaningful if you use nixosModules.desktop.
-  # hosts/xps9370 already supplies hardware-derived scale/cursor
-  # defaults for that chassis; override any of the four here to your
-  # own preference regardless of host — see "The display-preference
-  # slot" below.
+  # hosts/xps9370 already supplies hardware-derived scale/cursor/console
+  # defaults for that chassis, and the module itself supplies legible
+  # framework defaults for the two point sizes and generic families for
+  # the two typefaces; override any of these here to your own
+  # preference regardless of host — see "The display-preference slot"
+  # below for which layer is actually supplying each value today, and
+  # what setting one to `null` does (not the same thing for every
+  # option).
   castle.display = {
     # scale = 1.5;
     # cursorTheme = "Bibata-Modern-Ice";  # or your own cursor package
     # cursorSize = 32;
+    # terminalFont = "Fira Code";  # illustrative — needs pkgs.fira-code
+    # uiFont = "Inter";            # illustrative — needs pkgs.inter
     # terminalFontSize = 11;
+    # wallpaper = "/home/you/Pictures/my-wallpaper.jpg";
+    # wallpaper = null;  # no wallpaper
   };
 }
 ```
@@ -183,33 +191,57 @@ The values this repo may never contain:
   on `$PATH`, which is real once `nixosModules.desktop` is imported
   (it installs mako + libnotify); set to `""` on a headless host to
   no-op the attempt outright.
-- `castle.display.{scale,cursorTheme,cursorSize,terminalFontSize}` —
-  taste, only meaningful with `nixosModules.desktop`. See "The
-  display-preference slot" below.
+- `castle.display.{scale,cursorTheme,cursorSize,terminalFont,
+  terminalFontSize,uiFont,uiFontSize,consoleFont,wallpaper}` — taste, only
+  meaningful with `nixosModules.desktop`. They do not all resolve the
+  same way: four (`scale`, `cursorTheme`, `cursorSize`, `consoleFont`)
+  still need a host module to supply the real value, five carry a
+  non-null framework default of their own — see "The display-preference
+  slot" below for which is which and why `null` no longer means the
+  same thing everywhere in this set.
 
 ## The display-preference slot
 
-`modules/desktop` declares four options — `castle.display.scale`,
-`.cursorTheme`, `.cursorSize`, `.terminalFontSize` — all `nullOr`,
-defaulting to `null` ("framework default": leave that setting alone
-entirely). Three layers can resolve a value, in ascending priority:
-this module's `null` default; a host module's hardware-derived default
-via `lib.mkDefault` (`hosts/xps9370` sets `scale`, `cursorTheme`, and
-`cursorSize` this way, since a panel's physical DPI is a machine fact —
-Principle 01 consequence 2, "hosts are modules"); and your own
-`resident.nix`, which overrides outright and always wins. `nix flake
-check` proves all three layers resolve correctly via an assertion in
-this repo's `nixosConfigurations.example` (`flake.nix`) — read it if
-you want to see the exact resolution the layering guarantees.
+`modules/desktop` declares nine options under `castle.display`:
+`scale`, `cursorTheme`, `cursorSize`, `terminalFont`,
+`terminalFontSize`, `uiFont`, `uiFontSize`, `consoleFont`, and
+`wallpaper`.
 
-Two of the four are simple values (`cursorSize`, `terminalFontSize` are
-plain integers; `scale` is a float — Sway's own output-scale unit).
-`cursorTheme` is a *name*, and it only means something paired with a
-package that ships a theme by that name: `modules/desktop` installs
-`pkgs.bibata-cursors` so the option has something real to point at out
-of the box (`hosts/xps9370` defaults to its `"Bibata-Modern-Classic"`
-theme) — if you want a different cursor theme, add its package to your
-own private-layer config and set `cursorTheme` to one of *its* theme
+All nine are `nullOr`, but **`null` no longer means the same thing
+for each of them**, and an earlier version of this document was wrong
+to say it always means "framework default: leave that setting alone
+entirely." That is still true for `scale`, `cursorTheme`, `cursorSize`,
+and `consoleFont` — nothing is set, and whatever Sway, GTK, or the
+kernel does on its own applies. For `terminalFont`, `terminalFontSize`,
+`uiFont`, `uiFontSize`, and `wallpaper`, the framework has a real
+default (see the table below), so setting one of these five to `null`
+is an **explicit opt-out** — you are turning a default off, not
+declining to state one.
+
+Which layer actually supplies each option's value differs, and that
+asymmetry is itself the substance of this update, not an inconsistency
+to smooth over in the retelling:
+
+| Option(s) | Resolved by | Why |
+|---|---|---|
+| `scale`, `cursorTheme`, `cursorSize`, `consoleFont` | three layers, ascending priority: this module's `null` default → a host module's `lib.mkDefault` → your `resident.nix` | each is a hardware/machine fact, not personal data (Principle 01 consequence 2) — only a host module can know a panel's physical DPI, a cursor size to match it, or (see below) a console font that fits a real pixel grid; `hosts/xps9370` sets all four this way |
+| `terminalFontSize`, `uiFontSize` | this module's own non-null default (12, 11) | a point size is density-independent because `scale` already normalizes density, so one number is right on every host — no host-specific layer is needed |
+| `terminalFont`, `uiFont` | this module's own default, but deliberately the *generic* family `monospace`/`sans-serif` — meant to be overridden from `resident.nix` | the framework does not decide what typeface a Castle Turing looks like; a generic family always resolves, where naming a specific face would fail silently on any machine missing it |
+| `wallpaper` | this module's own `lib.mkDefault` | a wallpaper is a framework-owned asset with one canonical default, not a machine fact — the framework module itself supplies it (the shipped image), and a resident can override with a different path or set `null` to disable it |
+
+`nix flake check` proves this resolution via an assertion in this
+repo's `nixosConfigurations.example` (`flake.nix`) — read it if you
+want to see the exact layering the check guarantees, including the
+non-uniform cases above and not just the original three-layer ones.
+
+Of the first row, `cursorSize` and `scale` are simple values (an
+integer and a float — Sway's own output-scale unit). `cursorTheme` is
+a *name*, and it only means something paired with a package that ships
+a theme by that name: `modules/desktop` installs `pkgs.bibata-cursors`
+so the option has something real to point at out of the box
+(`hosts/xps9370` defaults to its `"Bibata-Modern-Classic"` theme) — if
+you want a different cursor theme, add its package to your own
+private-layer config and set `cursorTheme` to one of *its* theme
 names. Note the dependency this creates: `cursorSize` only takes effect
 once `cursorTheme` is non-null anywhere in the stack (an unset theme
 leaves the whole `home.pointerCursor` slot untouched, by design — see
@@ -217,6 +249,41 @@ leaves the whole `home.pointerCursor` slot untouched, by design — see
 already satisfied by the host's own default, but if you override
 `cursorTheme` to `null` explicitly to opt back out of a managed cursor
 theme, `cursorSize` goes inert with it.
+
+Still in the first row, `consoleFont` shares its layering with
+`scale`/`cursorTheme`/`cursorSize` but for a different reason: the
+virtual console never sees `castle.display.scale` at all — it is a
+raw pixel grid, so a font sized correctly on a 331 PPI panel is
+absurd on a 1080p one, the same argument that keeps `scale` and
+`cursorSize` out of this module in the first place. Unlike
+`cursorSize`, though, there is no sane cross-host number to fall back
+to if no host module sets one, so this module's own default stays
+`null` with nothing implied behind it — `hosts/xps9370` sets
+`"spleen-16x32"` via `lib.mkDefault`, and a host with no display
+module at all just gets the kernel's built-in 8x16 font, which is
+exactly what "leave it alone" means for this option.
+
+`terminalFont` and `uiFont` are names too, and carry the same
+dependency in reverse: the framework's generic defaults always
+resolve because `modules/desktop` ships plain `dejavu_fonts`, but a
+real face you name from your own private layer is only real once you
+also add the package that provides it — the framework deliberately
+does not guess which one you mean or install it for you. `terminalFontSize`
+and `uiFontSize` compose with their matching font name into a single
+value (foot's `<font>:size=<n>`, or a Pango string for Sway's chrome),
+and the two should be judged together, not separately: a size that
+reads correctly against one weight of a face can read thin or heavy
+against another.
+
+None of these are values to derive by reasoning about DPI —
+`docs/tasks/0013-first-deploy-findings.md` is the record of that
+going wrong (a cursor size "corrected" for `scale` that was actually
+double-compensating, and shipped dramatically oversized).
+`tools/font-sweep.sh` opens candidate terminal/UI fonts and sizes side
+by side on the real panel so you can pick by looking instead;
+`tools/console-font-sweep.sh` does the same for `consoleFont` on a
+spare virtual console, the one surface here you cannot preview from
+inside a running Wayland session at all.
 
 ## The agent's state
 

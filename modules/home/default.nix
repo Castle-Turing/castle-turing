@@ -32,8 +32,30 @@ let
     scale = null;
     cursorTheme = null;
     cursorSize = null;
+    terminalFont = null;
     terminalFontSize = null;
+    uiFont = null;
+    uiFontSize = null;
+    consoleFont = null;
     wallpaper = null;
+  };
+
+  # The UI font is consumed three times below (GTK, Sway chrome, the
+  # bar) and every consumer wants both halves, so both being non-null is
+  # the single condition for wiring any of them. Kept as one predicate
+  # rather than repeated inline so the three cannot drift apart and
+  # leave, say, a bar font set while titlebars are not.
+  uiFontSet = displayCfg.uiFont != null && displayCfg.uiFontSize != null;
+
+  # Sway wants a Pango description built from a family list plus a
+  # size; the weight (if any) rides inside the family string. See
+  # castle.display.uiFont's description in modules/desktop for why
+  # there is no separate weight option.
+  swayFonts = {
+    names = [ displayCfg.uiFont ];
+    # Sway's own config takes a float here; home-manager renders it as
+    # `10.000000`, which is what the generated config carries.
+    size = displayCfg.uiFontSize * 1.0;
   };
 
   # `programs.sway.enable` is a plain NixOS option (from nixpkgs' own
@@ -185,6 +207,50 @@ in
             "Mod4+Shift+space" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
           };
 
+          # Window titles *and* swaynag — one setting in Sway, not two
+          # (home-manager's own description for this option reads "Font
+          # configuration for window titles, nagbar..."). That is why
+          # docs/tasks/0017 could calibrate this value using swaynag
+          # bars: they render the very setting being measured.
+          #
+          # The bar is NOT covered by this and needs `bars` below.
+          fonts = lib.mkIf uiFontSet swayFonts;
+
+          # swaybar carries its own font, so the setting above does not
+          # reach it. This is the trap: `bars` is a listOf submodule
+          # whose *option default* is a fully-spelled-out single-element
+          # list (mode, hiddenState, position, workspaceButtons,
+          # workspaceNumbers, statusCommand = i3status, colors,
+          # trayOutput, fonts), while barModule's own per-option
+          # defaults are null for stateVersion >= 20.09. Defining `bars`
+          # at all therefore REPLACES that list rather than merging into
+          # it, and every field not restated comes back null — silently
+          # taking the status line with it.
+          #
+          # docs/tasks/0017 item 6 posed this as (a) restate the default
+          # entry with the font swapped, pinning those values, or (b)
+          # leave the bar at 8pt and file it. (a) was chosen: a bar
+          # stuck at 8pt while every other surface grows is a visibly
+          # half-finished job. The pin is the cost — if a home-manager
+          # input bump changes its default bar, this block will not
+          # follow, and CI's sway-config-check prints the generated
+          # config so the difference is at least visible.
+          bars = lib.mkIf uiFontSet [
+            {
+              fonts = swayFonts;
+              # Restated from home-manager's own default bar entry. Do
+              # not trim these as "redundant": each one is null without
+              # this line, not inherited.
+              mode = "dock";
+              hiddenState = "hide";
+              position = "bottom";
+              workspaceButtons = true;
+              workspaceNumbers = true;
+              statusCommand = "${pkgs.i3status}/bin/i3status";
+              trayOutput = "primary";
+            }
+          ];
+
           # The modal is a small, centered dialog, not a tiled pane —
           # this is the one window this config gives special treatment.
           window.commands = [
@@ -233,8 +299,50 @@ in
       # binary either way.
       programs.foot = lib.mkIf swayEnabled {
         enable = true;
-        settings = lib.optionalAttrs (displayCfg.terminalFontSize != null) {
-          main.font = "monospace:size=${toString displayCfg.terminalFontSize}";
+        # castle.display.terminalFont and .terminalFontSize compose into
+        # foot's single `font` string as `<font>:size=<n>`. The family
+        # half may itself be a full fontconfig pattern carrying a style
+        # (`Iosevka Slab:style=Light Extended`), which is why it is
+        # interpolated verbatim rather than quoted or escaped — foot
+        # hands the whole string to fontconfig.
+        #
+        # Both halves must be non-null: a size with no family, or a
+        # family with no size, would produce a malformed pattern. Either
+        # being null means "don't manage foot's font at all", leaving
+        # foot's own default in place.
+        settings = lib.optionalAttrs
+          (displayCfg.terminalFont != null && displayCfg.terminalFontSize != null)
+          {
+            main.font = "${displayCfg.terminalFont}:size=${toString displayCfg.terminalFontSize}";
+          };
+      };
+
+      # GTK applications — which on a stock desktop means Firefox's
+      # chrome, its file picker, and the xdg-desktop-portal-gtk dialogs.
+      # Enabling home-manager's gtk module writes gtk-3.0/settings.ini,
+      # gtk-4.0/settings.ini and the matching dconf keys; deliberately
+      # only the font is set here. Themes and icon themes are a
+      # different decision with a much larger surface — resist growing
+      # this, in the same spirit as the Sway block's own comment.
+      #
+      # No `package`: the framework's default family is generic
+      # (`sans-serif`, resolved by fontconfig from fonts.packages), and
+      # a resident naming a real face supplies its package in the same
+      # private layer that names it.
+      # `enable` is gated only on the session existing, NOT on the font
+      # options being set. Enabling home-manager's gtk module is what
+      # writes gtk-3.0/settings.ini at all — and `home.pointerCursor`
+      # below feeds gtk-cursor-theme-name/-size into that same file.
+      # Gating `enable` on uiFontSet therefore coupled two unrelated
+      # things: a resident taking castle.display.uiFont's documented
+      # `null` opt-out silently lost their GTK *cursor* configuration
+      # too, leaving GTK apps on the XCURSOR_* env-var fallback. Only
+      # the font itself is conditional.
+      gtk = lib.mkIf swayEnabled {
+        enable = true;
+        font = lib.mkIf uiFontSet {
+          name = displayCfg.uiFont;
+          size = displayCfg.uiFontSize;
         };
       };
 

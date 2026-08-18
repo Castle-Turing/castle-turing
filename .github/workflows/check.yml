@@ -238,6 +238,87 @@ jobs:
             exit 1
           fi
 
+      - name: Assert the generated configs carry the legibility defaults
+        run: |
+          # docs/tasks/0017-legible-defaults.md. Four of the five text
+          # surfaces are driven by castle.display options; three of them
+          # land in these two generated files, so grep-assert them here
+          # rather than trusting that the options merely evaluated.
+          #
+          # These expectations are the FRAMEWORK defaults, not the
+          # reference resident's values. nixosConfigurations.example
+          # overrides terminalFont/terminalFontSize on purpose (to prove
+          # a private layer wins — see flake.nix's assertion), so the
+          # foot expectation below is that override, while the Sway ones
+          # are the untouched framework defaults. A stranger's private
+          # layer will differ from both; that is the point, and it is
+          # why nothing here expects Iosevka.
+          #
+          # The swaybar line is the one worth keeping: `fonts` in Sway
+          # covers window titles and swaynag but NOT the bar, so the bar
+          # needs its own `bars` entry — and defining `bars` replaces
+          # home-manager's default list wholesale, which silently drops
+          # statusCommand if it is not restated. Asserting both the bar
+          # font and the status_command catches that regression.
+          missing=0
+          check() {
+            if ! grep -qF "$2" "$1"; then
+              echo "MISSING in $(basename "$1"): $2"
+              missing=1
+            fi
+          }
+          check "$FOOT_CONFIG" 'font=Example Mono:size=14'
+          check "$SWAY_CONFIG" 'font pango:sans-serif 11.000000'
+          check "$SWAY_CONFIG" 'status_command'
+          # Two occurrences expected: the top-level font and the bar's.
+          n=$(grep -cF 'font pango:sans-serif 11.000000' "$SWAY_CONFIG" || true)
+          if [ "$n" -lt 2 ]; then
+            echo "Expected the UI font in BOTH the top-level config and the bar block,"
+            echo "found $n occurrence(s). Sway's top-level 'fonts' does not reach swaybar;"
+            echo "if the bars entry went missing, the bar has silently reverted to 8pt."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "The generated configs no longer carry the legibility defaults."
+            echo "If this is a deliberate change, update these expectations AND"
+            echo "docs/tasks/0017-legible-defaults.md, which records why each value is what it is."
+            exit 1
+          fi
+
+      - name: Assert the console font resolves and its package ships it
+        run: |
+          # The fifth surface. castle.display.consoleFont is deliberately
+          # host-defaulted, not framework-defaulted (a console font is a
+          # pixel grid; the VT never sees castle.display.scale). It is
+          # asserted against .example, which resolves to the host value
+          # only because .example imports nixosModules.host-xps9370 —
+          # so if that import is ever dropped, this check fails here
+          # rather than somewhere that looks unrelated. See
+          # docs/tasks/0017 and flake.nix's assertion.
+          CONSOLE_FONT=$(nix eval --raw '.#nixosConfigurations.example.config.console.font')
+          echo "console.font resolves to: $CONSOLE_FONT"
+          if [ "$CONSOLE_FONT" != "spleen-16x32" ]; then
+            echo "Expected hosts/xps9370's lib.mkDefault console font to survive."
+            exit 1
+          fi
+          # Naming a font is useless if nothing provides it: modules/desktop
+          # ships pkgs.spleen for exactly this reason, the same way it ships
+          # bibata-cursors for cursorTheme. Prove the named font is really in
+          # the package rather than assuming the name is spelled right.
+          SPLEEN=$(nix build --no-link --print-out-paths '.#nixosConfigurations.example.pkgs.spleen')
+          # Scoped to share/consolefonts, not the whole output: that is
+          # the only path console.packages links (pathsToLink), so a
+          # package shipping its PSF solely under share/fonts would pass
+          # a whole-output search and still fail to resolve at boot.
+          # spleen ships both, which is exactly how a loose search hides
+          # the difference.
+          if ! find "$SPLEEN/share/consolefonts" -name "$CONSOLE_FONT.psf*" | grep -q .; then
+            echo "console.font names '$CONSOLE_FONT' but pkgs.spleen ships no such font:"
+            find "$SPLEEN" -name '*.psf*' -printf '  %f\n'
+            exit 1
+          fi
+          echo "found $CONSOLE_FONT in $SPLEEN"
+
       - name: Run foot --check-config over the generated config
         run: |
           # foot ships its own config-check mode (-C/--check-config):
