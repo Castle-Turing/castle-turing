@@ -621,12 +621,13 @@ def load_journal_record(record_id: str) -> Record | None:
 # rebuilt from the journal by a better judge (docs/tasks/0010-correction-
 # record.md).
 #
-# Two write paths, both narrow by construction: `cmd_answer`, which only
-# ever runs because a human typed an answer at this CLI, and
-# `file_correction`, which only ever runs because a human typed a
-# correction (see below). Nothing here is ever called from `cmd_route` or
-# `cmd_work` — inference and workers may raise questions, never close
-# them, and they certainly never get to speak on the resident's behalf.
+# Two write paths, both narrow by construction: `file_answer`, which only
+# ever runs because a human typed an answer at this CLI or at
+# castle-modal's answer mode, and `file_correction`, which only ever runs
+# because a human typed a correction (see below). Nothing here is ever
+# called from `cmd_route` or `cmd_work` — inference and workers may raise
+# questions, never close them, and they certainly never get to speak on
+# the resident's behalf.
 # ---------------------------------------------------------------------------
 
 # `asked`/`answered` (elicited entries) and `provenance`/`stated`
@@ -694,6 +695,153 @@ def append_model_entry(
     separator = "\n" if existing.strip() else ""
     with path.open("a") as f:
         f.write(separator + entry)
+
+
+class AnswerRefused(Exception):
+    """Why `file_answer` refused to write. One exception type carrying a
+    `kind` discriminant rather than four exception classes: every caller
+    needs the same dispatch (map kind to wording), and a single type with
+    a discriminant is the smaller surface for that.
+
+    `kind` is one of "empty_body", "no_such_record", "wrong_type",
+    "already_answered". The extra attributes carry whatever detail a kind
+    needs — `record_type` for "wrong_type", `existing_answer_id` for
+    "already_answered" — and are empty strings otherwise. No wording
+    lives here or in `file_answer`: `cmd_answer` prints ids and the CLI's
+    long-standing spellings, castle-modal's answer mode prints plain
+    language with no ids at all, and both render from the same `kind`.
+    """
+
+    def __init__(
+        self,
+        kind: str,
+        *,
+        question_id: str = "",
+        record_type: str = "",
+        existing_answer_id: str = "",
+    ):
+        super().__init__(kind)
+        self.kind = kind
+        self.question_id = question_id
+        self.record_type = record_type
+        self.existing_answer_id = existing_answer_id
+
+
+def file_answer(
+    *, question_id: str, body: str, fact: str | None = None
+) -> tuple[str, str | None]:
+    """The answer write path (docs/tasks/0022-answer-in-ui.md scope 1) —
+    the `answer` record plus, when the question elicited a fact, the
+    resident-model entry Proposal 05 allows only here.
+
+    Extracted from `cmd_answer` for the same reason `file_correction`
+    was extracted from `cmd_correct`: a second caller now exists
+    (castle-modal's answer mode), and the modal reimplementing this write
+    path in its own words is exactly the erosion these shared functions
+    prevent — "the modal is castle's functions wearing a different hat"
+    (docs/tasks/0010-correction-record.md).
+
+    Every pre-write check lives here so no caller can skip one, and each
+    refusal raises AnswerRefused rather than printing: this function
+    prints nothing, ever, which is what lets `cmd_answer` keep its
+    existing stderr line naming the internal fact key while the modal
+    says something plainer over the identical write.
+
+    Returns `(answer_id, recorded_fact_or_None)`.
+    """
+    if not body.strip():
+        raise AnswerRefused("empty_body", question_id=question_id)
+    # Resolve and type-check the question *before* writing the answer
+    # (finding 3, 0009 review pass): the journal is append-only, so an
+    # answer whose `refs` points at a typo'd or otherwise nonexistent
+    # question id corrupts it permanently — `validate` flags the
+    # dangling ref forever, and nothing short of hand-editing history
+    # clears it. The old code wrote the answer unconditionally and only
+    # checked the question's existence afterward (for the resident-model
+    # fact lookup, treating absence as merely "no fact to record" rather
+    # than an error) — so a typo produced no error at the point of
+    # failure, just a silently-broken journal discovered later, if ever,
+    # by `castle validate`. Checking first, and refusing outright when
+    # the id doesn't resolve to an actual `question` record, is what
+    # keeps that impossible instead of merely detectable.
+    question = load_journal_record(question_id)
+    if question is None:
+        raise AnswerRefused("no_such_record", question_id=question_id)
+    if question.type != "question":
+        raise AnswerRefused(
+            "wrong_type", question_id=question_id, record_type=question.type
+        )
+
+    # Is this question still open? The same fold castle-modal's answer
+    # picker and the status surface's "waiting on you" overlay use: a
+    # question is answered iff some `answer` record names it in `refs`.
+    # Two answers on one question make "pending" ambiguous for every
+    # later reader — including the errand resumption
+    # docs/backlog/errand-resume-after-answer.md still defers, which will
+    # need to ask "is this question still open" and get one answer. The
+    # check lives here rather than in the modal so the CLI and the modal
+    # can never disagree about what pending means (docs/tasks/0015 scope
+    # 3 names two surfaces disagreeing as worse than either being wrong
+    # alone).
+    #
+    # Deliberately NOT a lock. The journal is one file per record, so two
+    # writers never physically conflict — flock protects a shared
+    # resource and there is none here. The realistic case this catches is
+    # a stale modal window left open from an earlier session and reused
+    # after the question was answered elsewhere, which now produces a
+    # legible refusal instead of a silent duplicate. The narrow race
+    # between this check and the write below — another writer answering
+    # the same question in the interval — is accepted: at most one
+    # duplicate answer could land, on a single-resident machine, in a
+    # window measured in microseconds, and a lock around a data model
+    # built specifically to need none costs more than the residual risk.
+    for rec in sorted(load_all(journal_dir()).values(), key=lambda rec: rec.id):
+        if rec.type == "answer" and question_id in rec.refs:
+            raise AnswerRefused(
+                "already_answered", question_id=question_id, existing_answer_id=rec.id
+            )
+
+    # Answering is also intake: a resident's word entering the system
+    # through one of its surfaces, same as `ask` — see architecture.md's
+    # description of intake as "no judgment, just capture."
+    record_id = write_record(
+        journal_dir(),
+        type="answer",
+        provenance="requested",
+        seat="intake",
+        refs=[question_id],
+        body=body,
+    )
+
+    # Proposal 05's write path: an explicit resident answer, and only
+    # that, may write a resident-model entry. The fact name normally
+    # comes from the question record itself (the seat that raised the
+    # question is the one that knows what it's eliciting) — the `fact`
+    # argument (`castle answer --fact`) is an override for a question
+    # record that predates this field, or one written by hand. If neither
+    # is present, this is just an ordinary answer with no model entry,
+    # which is a legitimate outcome: not every question is eliciting a
+    # durable fact. No caller may widen this rule — the modal in
+    # particular offers no way to supply a fact name, because the fact
+    # is the declaring seat's to set and a resident-typed one would make
+    # the model's key space free text (agent/README.md's "Two entry
+    # shapes exist... never both").
+    resolved_fact = fact or question.fields.get("fact")
+    if resolved_fact and resolved_fact.strip():
+        when = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+        entry_lines = []
+        if question.body.strip():
+            entry_lines.append(f"Q: {question.body.strip()}")
+        entry_lines.append(f"A: {body.strip()}")
+        append_model_entry(
+            fact=resolved_fact.strip(),
+            asked=question_id,
+            answered=record_id,
+            when=when,
+            body="\n".join(entry_lines),
+        )
+        return record_id, resolved_fact.strip()
+    return record_id, None
 
 
 # ---------------------------------------------------------------------------
@@ -939,73 +1087,53 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_answer(args: argparse.Namespace) -> int:
-    body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
-    if not body.strip():
-        print("castle answer: refusing to file an empty answer", file=sys.stderr)
-        return 1
-    # Resolve and type-check the question *before* writing the answer
-    # (finding 3, 0009 review pass): the journal is append-only, so an
-    # answer whose `refs` points at a typo'd or otherwise nonexistent
-    # question id corrupts it permanently — `validate` flags the
-    # dangling ref forever, and nothing short of hand-editing history
-    # clears it. The old code wrote the answer unconditionally and only
-    # checked the question's existence afterward (for the resident-model
-    # fact lookup, treating absence as merely "no fact to record" rather
-    # than an error) — so a typo produced no error at the point of
-    # failure, just a silently-broken journal discovered later, if ever,
-    # by `castle validate`. Checking first, and refusing outright when
-    # the id doesn't resolve to an actual `question` record, is what
-    # keeps that impossible instead of merely detectable.
-    question = load_journal_record(args.question_id)
-    if question is None:
-        print(f"castle answer: no such record: {args.question_id}", file=sys.stderr)
-        return 1
-    if question.type != "question":
-        print(
-            f"castle answer: {args.question_id} is not a question record "
-            f"(type={question.type!r})",
-            file=sys.stderr,
-        )
-        return 1
-    # Answering is also intake: a resident's word entering the system
-    # through the CLI surface, same as `ask` — see architecture.md's
-    # description of intake as "no judgment, just capture."
-    record_id = write_record(
-        journal_dir(),
-        type="answer",
-        provenance="requested",
-        seat="intake",
-        refs=[args.question_id],
-        body=body,
-    )
-    print(record_id)
+def _answer_refusal_message(exc: AnswerRefused) -> str:
+    """This CLI's wording for each AnswerRefused kind.
 
-    # Proposal 05's write path: an explicit resident answer, and only
-    # that, may write a resident-model entry. The fact name normally
-    # comes from the question record itself (the seat that raised the
-    # question is the one that knows what it's eliciting) — `--fact` is
-    # an override for a question record that predates this field, or one
-    # written by hand. If neither is present, this is just an ordinary
-    # answer with no model entry, which is a legitimate outcome: not
-    # every question is eliciting a durable fact. `question` is already
-    # resolved above (and guaranteed to exist and be type=question) —
-    # no need to re-read it here.
-    fact = args.fact or question.fields.get("fact")
-    if fact and fact.strip():
-        when = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
-        entry_lines = []
-        if question.body.strip():
-            entry_lines.append(f"Q: {question.body.strip()}")
-        entry_lines.append(f"A: {body.strip()}")
-        append_model_entry(
-            fact=fact.strip(),
-            asked=args.question_id,
-            answered=record_id,
-            when=when,
-            body="\n".join(entry_lines),
+    The first three spellings are unchanged, character for character,
+    from before `file_answer` existed: they are load-bearing habit for
+    anyone who already knows this CLI, and rewording them for no
+    functional reason churns every script and memory built against them
+    for nothing. The fourth is new. All four name ids freely — a CLI
+    diagnostic is not the resident-facing surface castle-modal's
+    no-internal-vocabulary rule binds (docs/tasks/0022 scope 2).
+    """
+    if exc.kind == "empty_body":
+        return "castle answer: refusing to file an empty answer"
+    if exc.kind == "no_such_record":
+        return f"castle answer: no such record: {exc.question_id}"
+    if exc.kind == "wrong_type":
+        return (
+            f"castle answer: {exc.question_id} is not a question record "
+            f"(type={exc.record_type!r})"
         )
-        print(f"answer: recorded resident-model entry for fact '{fact.strip()}'", file=sys.stderr)
+    return (
+        f"castle answer: {exc.question_id} was already answered by "
+        f"{exc.existing_answer_id} — a second answer would leave two records "
+        "claiming to close the same question, and nothing could then say "
+        "whether it is still open"
+    )
+
+
+def cmd_answer(args: argparse.Namespace) -> int:
+    """intake: the resident's word closing a question the system asked.
+    A thin wrapper over `file_answer`, which owns every pre-write check
+    — so this CLI and castle-modal's answer mode can never disagree
+    about what they will and will not write."""
+    body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
+    try:
+        record_id, recorded_fact = file_answer(
+            question_id=args.question_id, body=body, fact=args.fact
+        )
+    except AnswerRefused as exc:
+        print(_answer_refusal_message(exc), file=sys.stderr)
+        return 1
+    print(record_id)
+    if recorded_fact is not None:
+        # Printed here rather than inside `file_answer`: this line names
+        # the internal fact key, which is exactly the vocabulary the
+        # modal's answer mode exists to keep away from the resident.
+        print(f"answer: recorded resident-model entry for fact '{recorded_fact}'", file=sys.stderr)
     return 0
 
 
