@@ -2571,6 +2571,95 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     return reaped
 
 
+def _resumable_answers(records: dict[str, Record], request_id: str) -> list[Record]:
+    """Every unspent answer to a blocking question this request's own
+    worker turn(s) raised, oldest first (docs/tasks/0023 §4).
+
+    Empty is the ordinary case, not a special one: a first turn, a
+    non-blocking question, an unanswered blocking question, and a
+    blocking question whose answer some claim already spent all return
+    the same empty list. `_eligible_requests` uses it to decide
+    *whether* a turn starts; `run_worker_turn` calls the identical fold
+    to decide *what* the turn it is about to start resumes, so a
+    hand-run `castle work <id>` — which never consults eligibility at
+    all — resumes exactly what a dispatched turn would.
+
+    **Which questions belong to this request: `_find_root_request`,
+    not a strict `refs == [request_id]` match and not
+    `_collect_downstream`.** Strict direct keying assumes every worker
+    files its question with `--refs` pointed straight at the request,
+    and the one tenant that actually runs in production
+    (agent/castle-worker-claude) hands that decision to a model — so a
+    question a model quite reasonably filed against its own `result`
+    would be permanently unattributable, and answering it would resume
+    nothing, silently, forever. `_find_root_request` walks the same
+    `refs[0]` lineage edge, through as many hops as the chain has
+    rather than assuming exactly one, and it resolves
+    `question -> result -> request` to the same request a directly
+    refs'd question resolves to (a result's `refs[0]` is always the
+    request, by construction of `_write_worker_result` and the
+    reaper). It stops at the *first* request it reaches, so a question
+    on a follow-up filed with `castle ask --refs R1` resolves to the
+    follow-up and never contaminates R1. `_collect_downstream` would:
+    it is transitive with no type or errand keying, so a follow-up's
+    questions would pull its parent into resumption.
+
+    This is narrower than `_errand_state`'s "waiting on you" overlay
+    deliberately is (castle-modal keys those to no request at all,
+    because showing a resident every pending question on an errand
+    chain is right for a status surface). Eligibility is not a status
+    surface: it decides which single request gets a worker turn next.
+
+    **Spent is defined against the `claim`, never the result**
+    (§3). `_write_worker_result` and `_reap_interrupted` both hardcode
+    a result's refs to `[request, claim]` and neither can know an
+    answer id — so a resumed turn that then timed out, died, or met a
+    misconfigured tenant would leave its answer unspent, and every
+    subsequent sweep would resume it again at one model call per timer
+    tick. The claim cannot fail that way: `run_worker_turn` writes it
+    immediately after taking the lease and strictly before the tenant
+    command is even resolved, so every turn that starts leaves one,
+    whatever becomes of the turn afterward.
+    """
+    blocking_questions = [
+        rec
+        for rec in records.values()
+        if rec.type == "question" and rec.fields.get(BLOCKING_FIELD, "").strip()
+    ]
+    question_ids = set()
+    for question in blocking_questions:
+        root = _find_root_request(records, question)
+        if root is not None and root.id == request_id:
+            question_ids.add(question.id)
+    if not question_ids:
+        return []
+
+    # Every answer id any of this request's own claims already names.
+    # Keyed on `refs[0]`, the same lineage edge the reaper and
+    # `closing_result` key claims by, so a claim written for some other
+    # errand can never spend this one's answers.
+    spent: set[str] = set()
+    for rec in records.values():
+        if rec.type == "claim" and rec.refs and rec.refs[0] == request_id:
+            spent.update(rec.refs)
+
+    # Every answer naming one of those questions — not "the" answer.
+    # `file_answer` refuses a second answer to an already-answered
+    # question, but `castle record --type answer` is an unguarded back
+    # door onto the same journal, so this tolerates more than one
+    # rather than assuming a guarantee one writer enforces holds for
+    # every writer. Each is spent independently: an earlier answer
+    # already consumed by a claim does not make a later one consumed.
+    resumable = {
+        rec.id: rec
+        for rec in records.values()
+        if rec.type == "answer"
+        and rec.id not in spent
+        and any(ref in question_ids for ref in rec.refs)
+    }
+    return [resumable[rec_id] for rec_id in sorted(resumable)]
+
+
 def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[Record]:
     """The eligibility fold — the authority the wakeup is only a hint
     for (docs/tasks/0021 §2.4). A request is eligible iff it is a
