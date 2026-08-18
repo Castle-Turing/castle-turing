@@ -437,6 +437,16 @@ An **`outcome`** field on `result` records, from a closed vocabulary:
 | `timeout`     | the tenant outlived `CASTLE_WORKER_TIMEOUT` and its whole process group was killed. |
 | `interrupted` | the *invoker itself* died before writing anything, and a later `castle dispatch` sweep supplied the account from the surviving claim record. |
 
+Every result a worker turn writes references **both** the request and
+the `claim` it closes (`refs: <request-id>,<claim-id>`). That is what
+makes the reaper's ledger per *turn* rather than per errand: it asks
+"does any result name this claim?", so a failed errand a resident
+retried by hand — whose retry then died — still gets an account of that
+second turn. With request-only refs the first turn's result closed the
+second turn's claim and the interruption was never recorded at all.
+Eligibility is still per request: any result at all bars an automatic
+attempt.
+
 The `failed`/`interrupted` boundary is exactly "did anything survive to
 write the account": a tenant killed by a signal while `castle work` is
 still running is `failed`; only a turn nobody ever finished is

@@ -1275,12 +1275,25 @@ def worker_timeout_seconds() -> int:
     return value
 
 
-def _write_worker_result(request: Record, *, outcome: str, body_lines: list[str]) -> str:
+def _write_worker_result(
+    request: Record, *, outcome: str, body_lines: list[str], claim_id: str
+) -> str:
     """Every result `run_worker_turn` writes goes through here, so the
     `outcome` field cannot be forgotten on one branch and remembered on
     another. Provenance is inherited from the request, unchanged, no
     matter who or what started the turn (docs/tasks/0021 §5):
-    provenance records who *wanted* the work, never who started it."""
+    provenance records who *wanted* the work, never who started it.
+
+    `refs` names the claim as well as the request, which is what makes
+    the accounting **per turn** rather than per errand. The reaper
+    (§2.3) asks "is this claim closed?", and it can only answer that
+    from a result that names the claim: with results referencing the
+    request alone, a failed errand that a resident retried by hand —
+    and whose retry was then interrupted — had a result already, so
+    the second claim looked closed by the first turn's account and was
+    never reaped. That errand would sit forever showing a stale
+    `failed` while its real last turn went unrecorded.
+    """
     body_lines = list(body_lines)
     body_lines.append("")
     body_lines.append(WORKER_PROPOSES_NOTE)
@@ -1289,7 +1302,7 @@ def _write_worker_result(request: Record, *, outcome: str, body_lines: list[str]
         type="result",
         provenance=request.fields.get("provenance", "requested"),
         seat="worker",
-        refs=[request.id],
+        refs=[request.id, claim_id],
         body="\n".join(body_lines),
         extra={"outcome": outcome},
     )
@@ -1392,6 +1405,7 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 _write_worker_result(
                     request,
                     outcome="failed",
+                    claim_id=claim_id,
                     body_lines=[
                         f"Errand `{request.id}` could not start: no worker tenant is "
                         "configured (CASTLE_WORKER_COMMAND is empty).",
@@ -1414,6 +1428,7 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 _write_worker_result(
                     request,
                     outcome="failed",
+                    claim_id=claim_id,
                     body_lines=[
                         f"Errand `{request.id}` could not start: the configured worker "
                         f"tenant `{command}` does not parse as a command line ({exc}).",
@@ -1472,6 +1487,7 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                     _write_worker_result(
                         request,
                         outcome="failed",
+                        claim_id=claim_id,
                         body_lines=[
                             f"Errand `{request.id}` could not start: the configured "
                             f"worker tenant `{command}` could not be run ({exc}).",
@@ -1605,7 +1621,12 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                     "(a descendant that called setsid) and is still holding the "
                     "pipes. Nothing above came from the tenant's output stream."
                 )
-        return _write_worker_result(request, outcome=outcome, body_lines=body_lines), outcome
+        return (
+            _write_worker_result(
+                request, outcome=outcome, body_lines=body_lines, claim_id=claim_id
+            ),
+            outcome,
+        )
     finally:
         # Releasing the lease is closing the handle — the kernel would
         # do it anyway when this process exits, including if it dies.
@@ -1677,10 +1698,6 @@ def cmd_work(args: argparse.Namespace) -> int:
 # instant dispatch began existing on this journal — that nothing else
 # can ever recover.
 # ---------------------------------------------------------------------------
-
-
-def _refs_request(rec: Record, request_id: str) -> bool:
-    return request_id in rec.refs
 
 
 def _requests_with_results(records: dict[str, Record]) -> set[str]:
@@ -1800,16 +1817,29 @@ def _write_watermark(records: dict[str, Record]) -> str:
 def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     """Give every interrupted turn a result (docs/tasks/0021 §2.3).
 
-    A `claim` whose request has no `result` and whose lease is not held
-    by anybody means the process running that turn died without writing
-    anything — a reboot (which wipes $XDG_RUNTIME_DIR outright), a
+    A `claim` that no `result` references, and whose lease is not held
+    by anybody, means the process running that turn died without
+    writing anything — a reboot (which wipes $XDG_RUNTIME_DIR outright), a
     crash, a killed unit. Only a later sweep can supply the account,
     and it does so from the surviving claim record. The journal is the
     authority here; the lease is only ever a liveness probe, never the
     record of what happened.
     """
     reaped: list[str] = []
-    answered = _requests_with_results(records)
+    # Which *claims* are closed, not which requests are answered. Every
+    # result a worker turn writes names the claim it closes (see
+    # `_write_worker_result`), so this is a per-turn ledger: a request
+    # that already carries a `failed` result from an earlier turn is
+    # still reapable for a later turn that died, which is exactly the
+    # hand-retry case — resident retries a failed errand, the retry is
+    # interrupted, and under a per-request rule nothing would ever
+    # record that second turn's fate.
+    closed = {
+        ref
+        for rec in records.values()
+        if rec.type == "result"
+        for ref in rec.refs
+    }
     claims = sorted(
         (rec for rec in records.values() if rec.type == "claim"), key=lambda rec: rec.id
     )
@@ -1821,7 +1851,7 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
         request = records.get(request_id)
         if request is None or request.type != "request":
             continue
-        if request_id in answered:
+        if claim.id in closed:
             continue
 
         # Acquiring is the probe: held means a worker is running this
@@ -1837,8 +1867,7 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
             # lie in an append-only log.
             fresh = load_all(journal_dir())
             if any(
-                rec.type == "result" and _refs_request(rec, request_id)
-                for rec in fresh.values()
+                rec.type == "result" and claim.id in rec.refs for rec in fresh.values()
             ):
                 continue
             started = claim.fields.get("created", "unknown")
@@ -1869,16 +1898,19 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
                 extra={"outcome": "interrupted"},
             )
             reaped.append(record_id)
-            answered.add(request_id)
-            # The lease file is stale by definition now; removing it
-            # keeps the directory honest. Unlinking while still holding
-            # the lock is safe: a concurrent probe that already opened
-            # the old path simply locks an unlinked inode, sees nothing
-            # held, and consults the journal — which now has a result.
-            try:
-                lease_path(request_id).unlink()
-            except OSError:
-                pass
+            closed.add(claim.id)
+            # The stale lease file is deliberately left where it is.
+            # An earlier version unlinked it here "to keep the
+            # directory honest," which reintroduced exactly the race
+            # `run_worker_turn`'s own lock handling refuses: unlink is
+            # not atomic with respect to an acquirer that already
+            # opened the old path, so one process can hold a lock on an
+            # unlinked inode while the next creates a fresh file and
+            # locks that — two live holders of the "same" lease. The
+            # tidiness was worth nothing to buy that: an unheld lease
+            # file means nothing on its own (the journal is what says
+            # whether a turn finished), and $XDG_RUNTIME_DIR is wiped
+            # at reboot anyway.
         finally:
             lease.close()
     return reaped

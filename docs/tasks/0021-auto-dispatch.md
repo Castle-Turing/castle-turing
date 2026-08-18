@@ -367,8 +367,9 @@ existing at this moment, and these exact requests were outstanding
 when it did." It judges nothing about those requests. (5) **Needed now?** Yes — every
 subsequent sweep's eligibility fold (§2.4) depends on it existing.
 
-**2.3 — Reap interrupted turns.** For every `claim` record whose
-request has no `result`: probe the per-request lease
+**2.3 — Reap interrupted turns.** For every `claim` record that no
+`result` references (**the claim's own id, not its request's** — see
+§3's per-turn note): probe the per-request lease
 (`$XDG_RUNTIME_DIR/castle/leases/<request-id>.lock`,
 `flock(LOCK_NB)`). Lock held → a worker is running right now; skip it.
 Lock acquirable, or the file is simply absent (the normal case after a
@@ -379,7 +380,14 @@ and the acquisition), then write a `result` record with
 `outcome: interrupted`, `seat: dispatch`, provenance inherited from the
 original request, `refs: <request-id>,<claim-id>`, and a body stating
 the claim's recorded start time and that no process ever completed the
-turn. Remove the now-stale lease file. The journal is the authority
+turn.
+**Leave the stale lease file where it is** — an earlier version of this
+design said to remove it, and that was wrong: unlink is not atomic
+against an acquirer that already opened the old path, so it
+reintroduces exactly the race the rest of this design avoids (one
+process holding a lock on an unlinked inode while the next creates a
+fresh file and locks that). An unheld lease file means nothing on its
+own, and the runtime directory is wiped at reboot regardless. The journal is the authority
 here; the lease is only ever a liveness probe, never the record of
 what happened.
 
@@ -805,11 +813,20 @@ not a counter anywhere that could be reset or misconfigured. Automatic
 re-invocation of a model tenant after a failure is a cost-and-authority
 decision this task deliberately reserves to the human — see Non-goals.
 
-Normal results keep `refs: <request-id>` unchanged; the `claim` record
-already carries its own `refs: <request-id>`, so the journal's
-transitive-downstream fold (`_collect_downstream`, used by both
-`cmd_digest` and `castle-modal`'s `run_status`) picks the claim up for
-free with no change to that walk.
+**Every worker-written result names the claim it closes** —
+`refs: <request-id>,<claim-id>` — which the first implementation got
+wrong by keeping `refs: <request-id>` alone. The accounting has to be
+per *turn*, not per errand, because §2.3's reaper asks "is this claim
+closed?" and can only answer it from a result that names the claim.
+With request-only refs, a failed errand that a resident retried by hand
+— whose retry then died mid-turn — looked closed by the *first* turn's
+result: the second claim was never reaped, and the errand sat showing a
+stale `failed` forever with its real last turn unrecorded. Eligibility
+stays per request (any result at all still bars an automatic attempt);
+only the reaping is per turn. The `claim` record already carries its own
+`refs: <request-id>`, so the transitive-downstream fold
+(`_collect_downstream`, used by both `cmd_digest` and `castle-modal`'s
+`run_status`) picks both up for free with no change to that walk.
 
 ### 4. Status surfaces (task 0015's scope-3 rule: the two must agree)
 
@@ -970,6 +987,9 @@ python3 like every other harness in this directory, its own CI job in
 - a planted `claim` record with a stale or absent lease file yields a
   reaped `outcome: interrupted` result on the next sweep, and that
   result gets routed;
+- a planted second `claim` on an errand that already carries a `failed`
+  result — the hand-retry-then-died case — is *also* reaped, which is
+  what proves the reaper's ledger is per turn rather than per request;
 - an `answer` record filed against a `question` on an already-worked
   errand does **not** make the request eligible again — asserted as an
   explicit non-behavior, since this is precisely task 0023's

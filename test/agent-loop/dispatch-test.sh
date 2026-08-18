@@ -280,8 +280,41 @@ RESULT_INT2_FILE="$(referencing result "$REQ_INT2")"
 [ -n "$RESULT_INT2_FILE" ] || fail "the reaper ignored a claim whose lease file exists but is unheld"
 grep -q '^outcome: interrupted$' "$RESULT_INT2_FILE" || fail "$RESULT_INT2_FILE does not carry outcome: interrupted"
 grep -q "$CLAIM_INT2" "$RESULT_INT2_FILE" || fail "$RESULT_INT2_FILE does not cite the claim it reaped"
-[ ! -e "$LEASES/$REQ_INT2.lock" ] || fail "the reaper left the stale lease file behind"
+# Deliberately NOT asserting the lease file is gone. The reaper used to
+# unlink it, which reintroduced the flock/unlink race the worker's own
+# lock handling refuses: unlink is not atomic against an acquirer that
+# already opened the old path, so one process can hold a lock on an
+# unlinked inode while the next creates a fresh file and locks that.
+# A leftover unheld lease file is harmless — the journal, not this
+# directory, says whether a turn finished — so the file may or may not
+# remain, and either way the reaping above is what matters.
 "$CASTLE" validate
+
+log "per-turn accounting: an interrupted RETRY of an already-failed errand is still reaped"
+# The case a per-request rule got wrong. $REQ_FAIL already carries a
+# `failed` result from its automatic attempt. A resident retries it by
+# hand; that turn dies without writing anything. Under "a claim is
+# closed if its request has some result," the first turn's account
+# closed the second turn's claim, the retry was never reaped, and the
+# errand sat showing a stale `failed` forever with its real last turn
+# unrecorded. Results now name the claim they close, so each turn is
+# accounted for on its own.
+RETRY_CLAIM="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ_FAIL" \
+  --body "Planted claim: a hand-run retry of an already-failed errand, whose process then died.")"
+RESULTS_BEFORE_RETRY_REAP="$(count_referencing result "$REQ_FAIL")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_FAIL")" -eq $(( RESULTS_BEFORE_RETRY_REAP + 1 )) ] || fail "the interrupted retry of an already-failed errand was not reaped — claim $RETRY_CLAIM has no result of its own"
+RETRY_RESULT_FILE="$(grep -l "^refs: .*$RETRY_CLAIM" "$JOURNAL"/*-result-*.md 2>/dev/null || true)"
+[ -n "$RETRY_RESULT_FILE" ] || fail "no result record references the retry's claim $RETRY_CLAIM"
+grep -q '^outcome: interrupted$' "$RETRY_RESULT_FILE" || fail "$RETRY_RESULT_FILE does not carry outcome: interrupted"
+# And it is still not re-dispatched: eligibility is per request, and
+# this request has results. Only the reaping is per turn.
+[ "$(count_referencing claim "$REQ_FAIL")" -eq 2 ] || fail "a further automatic turn was started on the failed errand"
+"$CASTLE" validate
+
+log "every worker-written result names the claim it closes, not just the request"
+grep -q "^refs: $REQ1,$(basename "$(referencing claim "$REQ1")" .md)\$" "$JOURNAL/$RESULT1.md" \
+  || fail "$RESULT1 does not reference the claim of the turn that produced it: $(grep '^refs:' "$JOURNAL/$RESULT1.md")"
 
 # ---------------------------------------------------------------------
 log "NON-behavior (task 0023's territory): answering a question on an already-worked errand does not make it eligible again"
