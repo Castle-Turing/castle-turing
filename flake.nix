@@ -203,6 +203,44 @@
                     is where it stays honest.
                   '';
                 }
+                {
+                  # docs/tasks/0021-auto-dispatch.md: this
+                  # configuration imports nixosModules.agent and leaves
+                  # castle.agent.dispatch.enable at its default, so no
+                  # castle-dispatch user unit may exist. The middle
+                  # case between "no agent module at all" (proven by
+                  # test/vm-install's harness, which imports none) and
+                  # "dispatch explicitly on"
+                  # (nixosConfigurations.example-dispatch, below):
+                  # default-off has to be provably off, not merely
+                  # documented as off, because turning it on is a
+                  # standing authority decision this framework must
+                  # never make on a resident's behalf.
+                  #
+                  # Written as an implication ("dispatch off ⇒ no
+                  # units") rather than a flat "no units", because
+                  # `nixosConfigurations.example-dispatch` below
+                  # extends *this* configuration and inherits its
+                  # assertions — a flat form would go red there for
+                  # the one configuration that is supposed to have the
+                  # units. The antecedent holds here (this
+                  # configuration never sets the option), so the check
+                  # still bites exactly where it is aimed.
+                  assertion =
+                    config.castle.agent.dispatch.enable
+                    || (
+                      !(config.systemd.user.services ? castle-dispatch)
+                      && !(config.systemd.user.paths ? castle-dispatch)
+                      && !(config.systemd.user.timers ? castle-dispatch)
+                    );
+                  message = ''
+                    nixosConfigurations.example generates a castle-dispatch
+                    systemd user unit even though castle.agent.dispatch.enable
+                    is left at its default. Automatic dispatch is opt-in
+                    (docs/tasks/0021-auto-dispatch.md): importing
+                    nixosModules.agent must never start errands on its own.
+                  '';
+                }
               ];
             }
           )
@@ -318,6 +356,83 @@
                     silently before docs/tasks/0019 moved the chord to
                     Mod4+Shift+Return. If this assertion is red, the chord (or
                     something else) is colliding with a stock Mod4 binding again.
+                  '';
+                }
+              ];
+            }
+          )
+        ];
+      };
+
+      # The other half of the default-off proof (docs/tasks/0021-auto-
+      # dispatch.md): `nixosConfigurations.example` asserts that no
+      # castle-dispatch unit exists when dispatch is left alone; this
+      # variant turns it on and asserts the three units exist and carry
+      # the environment the sweep needs. Same `extendModules` precedent
+      # as example-mod4 above, and eval-only for the same reason —
+      # nothing builds or boots this configuration, but `nix flake
+      # check` forces every nixosConfiguration's `assertions`, which is
+      # all it takes to prove the wiring. A dummy stateDir, because the
+      # module (rightly) refuses to enable dispatch without one and
+      # this repo may never name a real resident's path.
+      nixosConfigurations.example-dispatch = self.nixosConfigurations.example.extendModules {
+        modules = [
+          (
+            { config, lib, ... }:
+            let
+              dummyStateDir = "/home/resident/private/state";
+              dummyRepoRoot = "/home/resident/private";
+              unit = config.systemd.user.services.castle-dispatch or null;
+              environment = if unit == null then [ ] else unit.serviceConfig.Environment;
+            in
+            {
+              castle.agent = {
+                dispatch.enable = true;
+                stateDir = dummyStateDir;
+                worker.repoRoot = dummyRepoRoot;
+              };
+
+              assertions = [
+                {
+                  assertion =
+                    (config.systemd.user.services ? castle-dispatch)
+                    && (config.systemd.user.paths ? castle-dispatch)
+                    && (config.systemd.user.timers ? castle-dispatch);
+                  message = ''
+                    nixosConfigurations.example-dispatch: castle.agent.dispatch.enable
+                    is true but modules/agent did not declare all three
+                    systemd.user units (path, service, timer). The path unit is
+                    the prompt trigger and the timer is the backstop for a missed
+                    inotify event — losing either silently degrades automatic
+                    dispatch to something slower or to nothing at all
+                    (docs/tasks/0021-auto-dispatch.md §1).
+                  '';
+                }
+                {
+                  # Asserted on the option values, not on a built unit
+                  # file: this is an eval-only check, and the attrs are
+                  # what modules/agent actually promises.
+                  assertion =
+                    unit != null
+                    && unit.serviceConfig.Type == "oneshot"
+                    && unit.serviceConfig.WorkingDirectory == "%h"
+                    && lib.elem "CASTLE_STATE_DIR=${dummyStateDir}" environment
+                    && lib.elem "CASTLE_WORKER_TIMEOUT=900" environment
+                    && lib.elem "CASTLE_REPO_ROOT=${dummyRepoRoot}" environment
+                    && lib.any (lib.hasPrefix "CASTLE_WORKER_COMMAND=") environment
+                    && config.systemd.user.paths.castle-dispatch.pathConfig.PathChanged
+                      == "${dummyStateDir}/journal"
+                    && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec
+                      == "5min";
+                  message = ''
+                    nixosConfigurations.example-dispatch: the castle-dispatch units
+                    do not carry what the sweep needs. Expected a oneshot service
+                    running from %h with CASTLE_STATE_DIR, CASTLE_WORKER_COMMAND,
+                    CASTLE_WORKER_TIMEOUT and CASTLE_REPO_ROOT baked in
+                    (determinism, not an inheritance gap — see modules/agent's own
+                    comment), a path unit watching the configured journal
+                    directory rather than a filename pattern, and a five-minute
+                    backstop timer (docs/tasks/0021-auto-dispatch.md §1).
                   '';
                 }
               ];
