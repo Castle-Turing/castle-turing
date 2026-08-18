@@ -1447,7 +1447,16 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         try:
             env = dict(os.environ)
             env["CASTLE_REQUEST_ID"] = request.id
-            env["CASTLE_REQUEST_BODY"] = request.body
+            # Deliberately no CASTLE_REQUEST_BODY. It was listed in the
+            # contract from 0009 and read by nothing — the body's
+            # channel is stdin, which every tenant in this repo
+            # actually uses — and putting it in the environment
+            # silently capped a request at the kernel's MAX_ARG_STRLEN:
+            # a body around 200KB made execve fail E2BIG, which this
+            # function then recorded as "check that the command exists
+            # and is executable" (the wrong cause entirely) while
+            # consuming the request's one automatic attempt. A channel
+            # nothing reads is not worth a size limit nobody documented.
             env["CASTLE_DIFF_FILE"] = str(diff_path)
             env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
             # On the TENANT's environment only — never on os.environ,

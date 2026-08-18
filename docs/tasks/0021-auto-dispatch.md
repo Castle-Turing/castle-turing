@@ -708,6 +708,18 @@ write the result as usual with `outcome: timeout` (§3.5), reading
 whatever is in `$CASTLE_DIFF_FILE` as-is and noting in the body that it
 may be partial.
 
+**`CASTLE_REQUEST_BODY` is removed from the tenant's environment.** A
+contract cleanup, found by review and verified: the variable has been
+listed since 0009 and is read by nothing — the body's channel is
+stdin, which every tenant in this repo actually uses — while putting
+it in the environment silently capped a request at the kernel's
+`MAX_ARG_STRLEN`. A body around 200KB made `execve` fail `E2BIG`,
+which `cmd_work` then recorded as "check that the command exists and
+is executable", the wrong cause entirely, while consuming that
+request's one automatic attempt. A channel nothing reads is not worth
+a size limit nobody documented. `$CASTLE_REQUEST_ID`,
+`$CASTLE_DIFF_FILE` and `$CASTLE_REPO_ROOT` are unchanged.
+
 **A tenant's output encoding is not part of the contract.** Both
 decoding paths — `Popen(text=True)` and the read of
 `$CASTLE_DIFF_FILE` — are lenient (`errors="replace"`). Found by

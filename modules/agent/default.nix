@@ -113,7 +113,7 @@ in
 
         The contract, whatever holds this option: the request body is
         piped to the command's stdin; `$CASTLE_REQUEST_ID`,
-        `$CASTLE_REQUEST_BODY`, `$CASTLE_DIFF_FILE`, and
+        `$CASTLE_DIFF_FILE`, and
         `$CASTLE_REPO_ROOT` are set in its environment; reasoning goes
         to stdout, a diff (or nothing) goes to `$CASTLE_DIFF_FILE`. See
         agent/castle-worker-claude for the reference implementation of
