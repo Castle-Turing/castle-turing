@@ -92,8 +92,23 @@ let
   # service's $PATH is not something this test should have to assume.
   # `pkgs.writeShellScript` gives an absolute-shebang, executable store
   # path; the PATH line supplies the rest.
+  #
+  # It raises a `question` before running the contract worker, and that
+  # is not decoration: swapping scripted-worker.sh out for the contract
+  # fixtures removed the only thing in this VM that ever produced a
+  # question record, leaving the worker-raises-a-question-and-the-router
+  # delivers-it path — a central claim of docs/architecture.md — with no
+  # coverage at all inside a booted systemd session. A tenant that files
+  # a question mid-errand and finishes anyway is exactly what
+  # agent/castle-worker-claude's prompt instructs a real tenant to do.
+  # stdout is the reasoning channel that lands in the result body, so
+  # the record id goes to /dev/null rather than into the account.
   dispatchWorker = pkgs.writeShellScript "castle-dispatch-test-worker" ''
     export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+    castle record --type question --provenance requested --seat worker \
+      --refs "$CASTLE_REQUEST_ID" \
+      --body "Scripted posture question for $CASTLE_REQUEST_ID: fix it and tell you, or explain first?" \
+      >/dev/null
     exec ${pkgs.bash}/bin/bash ${../agent-loop/contract-worker.sh}
   '';
 
@@ -408,6 +423,25 @@ in
         timeout=dt.timedelta(minutes=5),
     )
 
+    # The question the tenant raised mid-errand, and the router's
+    # decision about it — the path nothing else in this VM exercises.
+    question_path = machine.wait_until_succeeds(
+        "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md'",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    question_id = question_path.rsplit("/", 1)[-1][: -len(".md")]
+    question_record = machine.succeed(f"su - resident -c 'cat {question_path}'")
+    assert f"refs: {request_id}" in question_record, question_record
+    assert "seat: worker" in question_record, question_record
+    question_decision = machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '^refs: " + question_id + "$' ${testStateDir}/journal/*-decision-*.md\"",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    assert "channel: notify" in machine.succeed(
+        f"su - resident -c 'cat {question_decision}'"
+    ), question_decision
+    print(f"OK: the tenant's mid-errand question {question_id} was routed to notify by the same sweep")
+
     journal_dump = machine.succeed("su - resident -c 'cat ${testStateDir}/journal/*.md'")
     assert "type: decision" in journal_dump, journal_dump
     assert "evidence:" in journal_dump and request_id in journal_dump, journal_dump
@@ -477,7 +511,15 @@ in
         "journalctl --no-pager _SYSTEMD_USER_UNIT=castle-dispatch.service"
     )
     assert "dispatch: worked" in dispatch_log, dispatch_log
-    assert "notify command" not in dispatch_log, dispatch_log
+    # `castle route:` rather than `notify command`: _fire_notification
+    # has two failure warnings — an unparseable CASTLE_NOTIFY_COMMAND
+    # and a notify command that could not be run — and only the second
+    # says "notify command". Both are prefixed "castle route:", and the
+    # router's ordinary reports are not: they print "route: ..." and
+    # the sweep prints "dispatch: ..." (agent/castle's cmd_route and
+    # cmd_dispatch — checked, not assumed). So this one substring
+    # covers both warnings without matching healthy output.
+    assert "castle route:" not in dispatch_log, dispatch_log
     print("OK: the router's notify channel fired with no fallback warning")
 
     # --- Independent verification: check_assertions.py re-derives the
