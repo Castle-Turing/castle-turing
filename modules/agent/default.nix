@@ -428,6 +428,22 @@ in
         # wiring staying exactly as it is today.
         Environment =
           [
+            # A systemd user manager hands its units a bare PATH that
+            # contains neither of the two binaries this sweep actually
+            # needs, which the VM test caught doing exactly that: the
+            # default worker tenant (agent/castle-worker-claude) execs
+            # `claude` from $PATH, and `castle route`'s notify channel
+            # shells out to `notify-send`. Both live in the system
+            # profile on a host that imported modules/dev and
+            # modules/desktop respectively — so without this line,
+            # enabling dispatch with the *default* tenant produces a
+            # result record saying the tenant could not be run, and
+            # every notification the router fires is silently lost to a
+            # non-fatal warning nobody reads. `%u` and `%h` are systemd
+            # specifiers, so the resident's own profile paths are
+            # reachable with no username baked into this repo
+            # (Principle 02).
+            "PATH=/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin"
             "CASTLE_STATE_DIR=${toString cfg.stateDir}"
             "CASTLE_WORKER_COMMAND=${cfg.worker.command}"
             "CASTLE_WORKER_TIMEOUT=${toString cfg.worker.timeoutSeconds}"

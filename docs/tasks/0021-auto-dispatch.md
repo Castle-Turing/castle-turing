@@ -95,6 +95,24 @@ declares three `systemd.user` units, all `wantedBy = [ "default.target" ]`:
   missed inotify event (or a request filed while the user session was
   down) would otherwise wait forever.
 
+**The service also sets `PATH`** — the second correction the VM test
+forced. A systemd user manager hands its units a bare PATH containing
+neither binary this sweep actually needs: the default tenant
+(`agent/castle-worker-claude`) execs `claude` from `$PATH`, and
+`castle route`'s notify channel shells out to `notify-send`. Both live
+in the system profile on a host importing `modules/dev` and
+`modules/desktop` respectively. Without it, enabling dispatch with the
+*default* worker command writes a result saying the tenant could not
+be run, and every notification the router fires is lost to a
+non-fatal warning nobody reads — which would have quietly gutted the
+one resident-facing half of this whole feature. The value is
+`/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin`;
+`%u`/`%h` are systemd specifiers, so no username is baked into this
+repo. The VM test asserts the dispatch unit's journal carries no
+"notify command … failed" warning — which proves `notify-send` was
+found and ran, *not* that mako rendered anything a human saw; that
+distinction is Proposal 06's receipt half, still unbuilt.
+
 **All three carry `ConditionUser=!@system`** — a correction to this
 design found by running `test/desktop-loop`'s VM against the first
 implementation of it, not reasoned out in advance. `systemd.user.*`

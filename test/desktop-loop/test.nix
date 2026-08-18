@@ -436,6 +436,21 @@ in
     assert "${correctionBody}" in model_content, model_content
     print("OK: the correction produced a volunteered resident-model entry citing it")
 
+    # --- The notify channel, checked for silence rather than for a
+    # popup. `castle route` deliberately never lets a failed
+    # notification break routing — it warns on stderr and carries on —
+    # so the only evidence that the resident was actually told lives in
+    # the log the dispatch unit writes to. This assertion is here
+    # because the first run of this test found the warning: a systemd
+    # user manager's PATH has no `notify-send` in it, and every
+    # notification an auto-dispatched errand fired was being dropped
+    # into a non-fatal message nobody would ever read. Honest limit:
+    # this proves the notify command ran without complaint, not that a
+    # human saw a popup — mako cannot report reception, which is
+    # docs/architecture.md's Proposal 06 receipt half, still unbuilt.
+    machine.fail("journalctl --no-pager | grep -q 'notify command'")
+    print("OK: the router's notify channel fired with no fallback warning")
+
     # --- Independent verification: check_assertions.py re-derives the
     # frontmatter itself rather than trusting agent/castle's own parser
     # (its own header explains why), so this is a second,

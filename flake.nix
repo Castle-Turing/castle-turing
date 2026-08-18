@@ -429,6 +429,11 @@
                     && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser
                       == "!@system"
                     && lib.elem "CASTLE_STATE_DIR=${dummyStateDir}" environment
+                    # Without a PATH the default tenant (`claude -p`)
+                    # and the notify channel (`notify-send`) are both
+                    # unreachable from the unit — see modules/agent's
+                    # comment; the VM test caught this one too.
+                    && lib.any (lib.hasPrefix "PATH=/run/current-system/sw/bin") environment
                     && lib.elem "CASTLE_WORKER_TIMEOUT=900" environment
                     && lib.elem "CASTLE_REPO_ROOT=${dummyRepoRoot}" environment
                     && lib.any (lib.hasPrefix "CASTLE_WORKER_COMMAND=") environment
