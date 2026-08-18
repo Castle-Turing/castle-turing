@@ -15,6 +15,20 @@
 # not a chat scrollback, is where the account has to live — see
 # docs/architecture.md's worker seat description).
 #
+# THE PROMPT IS THE ONLY LEVER over how a real tenant uses `--blocking`
+# and `--refs`. Nothing else steers it: there is no flag, no setting and
+# no second model deciding whether a question stops an errand, so in
+# production `blocking: true` appears exactly when the model itself
+# decides, from the words below and nothing else, that it cannot
+# proceed. `--refs` is advice a model can also fail to follow — a wrong
+# id, a question filed against its own result — which is precisely why
+# the mechanism does not depend on it: `_resumable_answers`
+# (agent/castle) walks the refs chain back to the request rather than
+# demanding a direct hit, so a tenant that files its question some other
+# shape still gets resumed. That tolerance is a safety net, not a reason
+# to stop telling tenants the expected shape; the canonical form is what
+# keeps an errand's records readable by a human tracing them by hand.
+#
 # THE WORKER MUST NOT DEPLOY. That sentence is not decoration in the
 # prompt below — it is the one thing this whole file exists to make
 # unmissable to the tenant. No nixos-rebuild, no git commit, no applying
@@ -27,7 +41,35 @@ set -euo pipefail
 : "${CASTLE_DIFF_FILE:?castle-worker-claude: CASTLE_DIFF_FILE must be set (see agent/castle's cmd_work)}"
 : "${CASTLE_REPO_ROOT:=$PWD}"
 
-request_body="$(cat)"
+# Since docs/tasks/0023-resume-cold.md this is the errand's whole
+# continuation packet, not the bare request body: the request verbatim
+# under a heading, then — on an errand that has already had a turn —
+# every prior result, every question it raised, and every answer the
+# resident gave, all straight out of the journal. `castle work` renders
+# it on every turn, so there is no shape to detect here; the variable
+# is read and interpolated exactly as it always was.
+errand_records="$(cat)"
+
+# Set by `castle work` only when this turn is resuming an answered
+# blocking question, and absent otherwise (agent/castle's
+# RESUME_ANSWER_IDS_ENV). It carries ids, nothing else — the context is
+# in the packet above. Assembled as a variable rather than branching on
+# the heredoc, and with no $(...) around a heredoc anywhere: see the
+# comment below for the parser gotcha that shape runs into.
+resume_note=""
+if [ -n "${CASTLE_RESUME_ANSWER_IDS:-}" ]; then
+  resume_note="THIS IS A RESUMED TURN. An earlier turn on this errand
+stopped on a question it could not answer for itself, the resident has
+now answered it, and you are a fresh tenant with no memory of that turn.
+Everything that turn recorded is in the errand records above — that is
+all there is, and there is no transcript anywhere else. Read the earlier
+account and the resident's answer before doing anything, and do not
+redo work an earlier turn already recorded as done.
+
+The resident answering a question is not the resident approving a
+change. It closes the question; it grants no authority the rule at the
+bottom of this prompt does not already deny you."
+fi
 
 # The heredoc below is redirected straight to a file rather than
 # captured via `prompt="$(cat <<PROMPT ... PROMPT)"` — bash's parser
@@ -44,9 +86,13 @@ cat <<PROMPT > "$prompt_file"
 You are the worker seat of Castle Turing's agent layer, handling errand
 ${CASTLE_REQUEST_ID} in the repository checked out at ${CASTLE_REPO_ROOT}.
 
-The resident's request, in their own words:
+${resume_note}
 
-${request_body}
+This errand's records, verbatim from the journal — the resident's own
+words in the request, and the account of any turn this errand has
+already had:
+
+${errand_records}
 
 Your contract (docs/architecture.md — the errand boundary, not the
 model-call boundary):
@@ -64,15 +110,22 @@ model-call boundary):
    space will be remembered afterward.
 4. If you need the resident's own judgment mid-errand (a genuine
    posture question, not something inferrable from the repo), append a
-   question record instead of guessing — e.g. via a
-   'castle record --type question ...' invocation, if the castle CLI
-   is on \$PATH in this environment — and end your turn. Nothing
-   re-invokes you when that question is answered: the answer lands in
-   the journal for a later errand (or a human) to pick up. So if the
-   rest of the errand can be completed without the answer, complete it
-   and file the question alongside your result rather than stopping —
-   an errand that halts on a question the resident may not read for
-   hours has spent their time to buy nothing.
+   question record instead of guessing:
+
+   castle record --type question --provenance requested --seat worker --refs "${CASTLE_REQUEST_ID}" --body "..."
+
+   if the castle CLI is on \$PATH in this environment — always with
+   --refs "${CASTLE_REQUEST_ID}" naming this errand's own request, so
+   whatever picks the question up later can find its way back to this
+   errand. Add --blocking only if the errand genuinely cannot proceed
+   without an answer: an answered blocking question DOES re-invoke this
+   seat, automatically, with a fresh tenant and no memory of this turn
+   — everything your successor needs will be in the records you write,
+   not in anything you remember. A non-blocking question resumes
+   nothing, so if the rest of the errand can be completed without the
+   answer, complete it and file the question alongside your result
+   rather than stopping — an errand that halts on a question the
+   resident may not read for hours has spent their time to buy nothing.
 
 THE ONE RULE THAT OVERRIDES EVERYTHING ELSE: you MUST NOT deploy this
 change. Do not run nixos-rebuild, do not run git commit, do not apply

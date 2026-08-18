@@ -181,7 +181,20 @@ automatic — a resident who opts into `castle.agent.dispatch.enable`
 has filed requests start themselves — and that changes nothing about
 the constraint: the worker proposes and never deploys regardless of
 who or what invoked it, and an automatically-started errand keeps the
-provenance of whoever wanted the work.
+provenance of whoever wanted the work. Since
+docs/tasks/0023-resume-cold.md that contract describes one *turn*
+rather than necessarily a whole errand: a worker that cannot proceed
+without the resident's judgment marks its question as blocking and
+stops, and answering it makes the errand eligible for one further turn,
+each turn producing its own account. The turns are chained by the
+answer that resumed the next one, named in that turn's own `claim`
+record — which is what makes a given answer produce exactly one
+resumption and never a second. The resumed tenant is a fresh one with
+no memory of the earlier turn: it is handed that errand's own records
+and nothing else, which is Proposal 03's "no harness feature may be
+load-bearing" applied to continuity. An answer closes a question; it
+grants no authority, and a resumed turn proposes and never deploys
+exactly like a first one.
 
 **Dispatch** (plumbing, not a reasoning seat). The mechanism that
 invokes the worker seat on the journal's behalf: it notices that an

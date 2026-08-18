@@ -856,8 +856,20 @@ echo "$ANSWER_1_OUT" | grep -q "about: Answer-mode errand one: the pointer is ha
   || fail "the picker did not show an 'about:' line sourced from the root request"
 echo "$ANSWER_1_OUT" | grep -q "Second line of the question" \
   || fail "the selected question's body was truncated — the full text must be shown before answering"
-echo "$ANSWER_1_OUT" | grep -q "Filed. Nothing picks this errand back up automatically yet." \
-  || fail "the confirmation did not say plainly that nothing resumes the errand"
+# A bare "Filed.", with no second sentence: docs/tasks/0023 deleted the
+# "Nothing picks this errand back up automatically yet." half, because an
+# answered *blocking* question now resumes its errand. Asserted as a whole
+# line (grep -x on the stripped output would need the trailing prompt text
+# too, so this checks the sentence and then that nothing follows it) —
+# the point is that no replacement promise crept in: the modal cannot know
+# whether dispatch is running, so it must not claim a continuation.
+# `tr -d '\r'` because this transcript came off a pty, which translates
+# every newline to CRLF — without it an anchored whole-line match can
+# never succeed here, for a reason that has nothing to do with the text.
+printf '%s\n' "$ANSWER_1_OUT" | tr -d '\r' | grep -qx "Filed." \
+  || fail "the confirmation is not a bare 'Filed.': $ANSWER_1_OUT"
+echo "$ANSWER_1_OUT" | grep -q "picks this errand back up" \
+  && fail "the confirmation still claims nothing resumes the errand — 0023 made that false"
 echo "$ANSWER_1_OUT" | grep -q "Press Enter to close" \
   || fail "answer mode did not hold the window open until dismissed"
 ANSWER_1_FILE="$(answers_naming "$Q_ANS_1" | head -1)"
@@ -1166,7 +1178,7 @@ timeout 40 python3 "$WORKDIR/pty-stdin-pipe-stdout.py" "$MODAL" answer "1" "Answ
   > "$WORKDIR/answer-piped-stdout.txt" 2>&1 \
   || fail "answer mode with a tty stdin and a piped stdout did not exit promptly"
 [ "$(transcript_rc "$WORKDIR/answer-piped-stdout.txt")" = "0" ] || fail "the piped-stdout answer run did not exit 0"
-grep -q "Filed. Nothing picks this errand back up automatically yet." "$WORKDIR/answer-piped-stdout.txt" \
+tr -d '\r' < "$WORKDIR/answer-piped-stdout.txt" | grep -qx "Filed." \
   || fail "the piped-stdout answer run did not file anything: $(cat "$WORKDIR/answer-piped-stdout.txt")"
 grep -q "Press Enter to close" "$WORKDIR/answer-piped-stdout.txt" \
   && fail "answer mode asked a captured run to press Enter"

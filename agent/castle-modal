@@ -498,13 +498,21 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
 
     print(file=out)
     # No record id (compose mode's "Filed as {id}." is the pattern being
-    # deliberately broken here, not copied) and no promise of
-    # resumption: until something picks an answered errand back up,
-    # saying otherwise would be docs/tasks/0015's defect committed one
-    # level up — a label causing the inaction it describes. When
-    # docs/backlog/errand-resume-after-answer.md is finally built, the
-    # second sentence below is the line that gets deleted.
-    print("Filed. Nothing picks this errand back up automatically yet.", file=out)
+    # deliberately broken here, not copied). The second sentence that
+    # used to follow — "Nothing picks this errand back up automatically
+    # yet." — is deleted by docs/tasks/0023-resume-cold.md, exactly as
+    # the comment that stood here anticipated: an answered *blocking*
+    # question now does resume its errand.
+    #
+    # Nothing replaces it. "This errand will continue" would be true
+    # only for a blocking question, and only on a host where dispatch
+    # is enabled and running — this process knows the first from the
+    # question record but never the second, and it does not itself
+    # trigger anything. Promising a continuation this surface cannot
+    # observe would be docs/tasks/0015's defect the other way up: a
+    # label asserting an action nobody here can see happen. A bare
+    # "Filed." is true on every path.
+    print("Filed.", file=out)
     if recorded_fact is not None:
         # A write into the resident's own model that the resident is
         # never told about is authority exercised invisibly. One plain
