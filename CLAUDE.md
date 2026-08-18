@@ -64,6 +64,45 @@ trusting any review output. The same rule holds for anything else derived
 from a ref you did not just refresh — flake locks and path overrides
 included.
 
+## Delegation
+
+Work is handed off, not done by the session that receives it. The
+session talking to the human passes the instruction to a **Fable**
+sub-agent, which owns the job from spec through implementation:
+
+1. Fable picks a model to write the brief, sized to the ask — down to
+   Haiku when the ask is mechanical.
+2. Fable reviews the returned brief and sends it back for revision
+   until it is good. A brief nobody reviewed is not a brief.
+3. Fable picks a model to implement, again down to Haiku.
+4. Fable verifies the implementation itself before reporting up.
+
+**Size the implementer to the risk that the brief is wrong, not to the
+size of the diff.** A one-line config change specced wrongly is still a
+wrong change, and a small model will follow a bad brief off a cliff
+without noticing. Task 0017's brief instructed its implementer to use
+`lib.mkDefault` where an `mkOption` default was correct — a priority
+collision waiting to happen — and it was caught only because the
+implementer had enough judgment to argue with the spec and record the
+deviation. Mechanical work against an exact, already-verified spec is
+Haiku work. Work where the brief itself might be wrong is not, however
+small the edit looks.
+
+What delegation does not relax:
+
+- **Clarifying questions belong to the human.** No sub-agent can ask
+  one. Questions travel back up the chain; a sub-agent must never
+  invent an answer the spec workflow says to ask for.
+- **Approval before a brief lands on disk.** Fable returns the draft
+  and waits — unless the human granted autonomy for that task, the same
+  suspension the spec workflow already describes.
+- **Numbers are allocated before delegation**, never chosen by the
+  writer: parallel writers all compute the same "next" number.
+- **One worktree per branch**, and sub-agents are told explicitly not
+  to touch the primary checkout.
+- **Every report is a claim, not evidence.** Whoever delegated re-reads
+  the diff and re-runs the check.
+
 ## Spec workflow
 
 When asked to spec a feature: choose the smallest next chunk of useful
