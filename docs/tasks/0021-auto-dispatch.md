@@ -751,6 +751,16 @@ Two details found while implementing this, both about the same fact —
 `start_new_session` puts the tenant outside this process's group, and
 that cuts both ways:
 
+- **The timeout keys on the process, not on the pipes.**
+  `communicate(timeout=...)` fires on pipe EOF, and a tenant that
+  spawns a detached helper inheriting its stdout/stderr — which
+  `claude`-style CLIs do routinely — keeps those pipes open after
+  exiting 0. Read as "the tenant hung," that recorded a completed
+  errand as `outcome: timeout` with a body claiming its process group
+  had been killed. The handler now checks `proc.poll()` first: only a
+  still-running process is a timeout (kill the group, drain bounded);
+  an already-exited one is drained bounded with no kill and its
+  outcome decided by its exit code as usual.
 - **The post-kill drain is bounded** (five seconds). The kill goes to
   the tenant's process group; a descendant that called `setsid()` is no
   longer in it and may still hold the pipes, so an unbounded

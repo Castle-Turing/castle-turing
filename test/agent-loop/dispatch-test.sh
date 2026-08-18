@@ -28,6 +28,7 @@ WORKER_FAIL="$REPO_ROOT/test/agent-loop/contract-worker-fail.sh"
 WORKER_HANG="$REPO_ROOT/test/agent-loop/contract-worker-hang.sh"
 WORKER_DIE="$REPO_ROOT/test/agent-loop/contract-worker-die.sh"
 WORKER_FILER="$REPO_ROOT/test/agent-loop/contract-worker-filer.sh"
+WORKER_DETACH="$REPO_ROOT/test/agent-loop/contract-worker-detach.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-dispatch-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -290,6 +291,31 @@ grep -q '^outcome: timeout$' "$RESULT_HANG_FILE" || fail "$RESULT_HANG_FILE does
 # fired at all, not a precise duration a loaded CI runner could miss.
 [ "$HANG_ELAPSED" -lt 60 ] || fail "the hanging tenant was not killed on time (sweep took ${HANG_ELAPSED}s with CASTLE_WORKER_TIMEOUT=2)"
 log "  -> timed out after ${HANG_ELAPSED}s"
+"$CASTLE" validate
+
+# ---------------------------------------------------------------------
+log "a tenant that exits 0 while a detached helper still holds the pipes is completed, not timed out"
+# ---------------------------------------------------------------------
+# communicate(timeout=...) fires on pipe EOF, not on process exit. A
+# `claude`-style CLI spawning a background helper that inherits its
+# stdout/stderr diverges those two constantly: before this, such a
+# turn blocked for the whole timeout and was recorded `outcome:
+# timeout` with a body saying its process group had been killed — over
+# an errand that finished and wrote its diff. The fix asks the process
+# (proc.poll()), not the pipes.
+REQ_DETACH="$("$CASTLE" ask "Dispatch test: the tenant exits 0 but leaves a helper holding the pipes.")"
+DETACH_START="$(date +%s)"
+CASTLE_WORKER_COMMAND="$WORKER_DETACH" CASTLE_WORKER_TIMEOUT=3 "$CASTLE" dispatch >"$WORKDIR/detach-sweep.out" 2>&1 \
+  || fail "the detached-helper sweep exited nonzero: $(cat "$WORKDIR/detach-sweep.out")"
+DETACH_ELAPSED=$(( $(date +%s) - DETACH_START ))
+RESULT_DETACH_FILE="$(referencing result "$REQ_DETACH")"
+[ -n "$RESULT_DETACH_FILE" ] || fail "the detached-helper tenant produced no result record"
+grep -q '^outcome: completed$' "$RESULT_DETACH_FILE" || fail "$RESULT_DETACH_FILE should carry outcome: completed — the tenant exited 0, only its leftover helper held the pipes open; got: $(grep '^outcome:' "$RESULT_DETACH_FILE" || echo none)"
+grep -q 'synthetic (harness fixture only)' "$RESULT_DETACH_FILE" || fail "$RESULT_DETACH_FILE lost the diff the tenant wrote before exiting"
+# The fixture's helper sleeps 30s. The sweep must not have waited for
+# it — the bounded drain caps that at a few seconds.
+[ "$DETACH_ELAPSED" -lt 25 ] || fail "the sweep waited ${DETACH_ELAPSED}s on a helper the tenant left behind"
+log "  -> swept in ${DETACH_ELAPSED}s (the leftover helper sleeps 30s and is not waited on)"
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------

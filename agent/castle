@@ -1540,19 +1540,34 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
             try:
                 stdout, stderr = proc.communicate(input=request.body, timeout=timeout)
             except subprocess.TimeoutExpired:
-                timed_out = True
-                _kill_tenant_group(proc)
+                # `communicate(timeout=...)` fires on **pipe EOF**, not
+                # on process exit, and the two diverge in a case real
+                # tenants produce constantly: a `claude`-style CLI
+                # spawns a detached helper (setsid) that inherits the
+                # tenant's stdout and stderr, the tenant itself exits 0
+                # having written its diff, and the pipes stay open in
+                # the helper's hands for as long as it lives. Reading
+                # this timeout as "the tenant hung" recorded a
+                # successful errand as `outcome: timeout` — "the
+                # tenant's whole process group was killed" — over a
+                # result that had actually completed. So ask the
+                # process, not the pipes.
+                if proc.poll() is None:
+                    timed_out = True
+                    _kill_tenant_group(proc)
                 try:
-                    # Bounded, unlike the first attempt. The kill above
-                    # goes to the tenant's process group, and a
-                    # descendant that called setsid() on its own is no
-                    # longer in it — but it may still hold the write
-                    # end of these pipes, in which case an unbounded
-                    # drain here waits on a process nothing is going to
-                    # kill, wedging the sweep while it holds the global
-                    # dispatch lock. A few seconds is enough to collect
-                    # a killed tenant's output; past that, the output
-                    # is worth less than the sweep.
+                    # Bounded, unlike the first attempt. On the genuine
+                    # timeout above, the kill went to the tenant's
+                    # process group, and a descendant that called
+                    # setsid() is no longer in it — it may still hold
+                    # the write end of these pipes, in which case an
+                    # unbounded drain waits on a process nothing is
+                    # going to kill, wedging the sweep while it holds
+                    # the global dispatch lock. On the already-exited
+                    # path it is the same wait for the same reason,
+                    # minus the kill. Either way: a few seconds is
+                    # enough to collect what is there, and past that
+                    # the output is worth less than the sweep.
                     stdout, stderr = proc.communicate(timeout=TENANT_DRAIN_SECONDS)
                 except subprocess.TimeoutExpired:
                     drained = False
@@ -1643,15 +1658,16 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 "Anything above was read from $CASTLE_DIFF_FILE as it stood when the "
                 "tenant was killed, so it may be partial."
             )
-            if not drained:
-                body_lines.append("")
-                body_lines.append(
-                    "The tenant's own stdout and stderr could not be collected: "
-                    f"they were still open {TENANT_DRAIN_SECONDS}s after the kill, "
-                    "which means something it spawned escaped the process group "
-                    "(a descendant that called setsid) and is still holding the "
-                    "pipes. Nothing above came from the tenant's output stream."
-                )
+        if not drained:
+            body_lines.append("")
+            body_lines.append(
+                "The tenant's own stdout and stderr could not be collected: they "
+                f"were still open {TENANT_DRAIN_SECONDS}s after this turn stopped "
+                "waiting, which means something the tenant spawned escaped its "
+                "process group (a descendant that called setsid) and is still "
+                "holding the pipes. Nothing above came from the tenant's output "
+                "stream."
+            )
         return (
             _write_worker_result(
                 request, outcome=outcome, body_lines=body_lines, claim_id=claim_id
