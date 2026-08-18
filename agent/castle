@@ -336,6 +336,21 @@ def journal_dir() -> pathlib.Path:
     return d
 
 
+def runtime_dir_is_fallback() -> bool:
+    """True when `runtime_dir()` resolved to its `/tmp` last resort.
+
+    Asked by `castle dispatch`, which refuses to run there — see the
+    comment at that check. Written as its own predicate over the same
+    two conditions `runtime_dir()` branches on, rather than as a string
+    test on the returned path, so the two cannot drift: a resident
+    whose `XDG_RUNTIME_DIR` happens to live under /tmp is not on the
+    fallback, and nothing here has to guess that from a prefix.
+    """
+    if os.environ.get("XDG_RUNTIME_DIR"):
+        return False
+    return not pathlib.Path(f"/run/user/{os.getuid()}").is_dir()
+
+
 def runtime_dir() -> pathlib.Path:
     """`$XDG_RUNTIME_DIR/castle`, then `/run/user/$UID/castle`, then
     `/tmp/castle-$UID`.
@@ -2214,6 +2229,31 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             "(private repo not restored?); nothing to do"
         )
         return 0
+
+    # An unattended sweep will not make liveness decisions on locks in
+    # a world-writable directory. `/tmp/castle-$UID` is the last-resort
+    # branch of `runtime_dir()`, and any local user can create that
+    # path first and hold the sweep lock: dispatch would then report
+    # "another sweep is already running" and exit 0, forever, staying
+    # green in `systemctl --user status` while nothing ever ran. The
+    # per-request leases live there too, so squatting one of those
+    # instead makes the reaper decline to reap, or — worse — makes a
+    # sweep read a live turn's lease as free.
+    #
+    # A hand-run `castle work` keeps the fallback deliberately: a human
+    # is present, watching the command, and will notice it behaving
+    # strangely. Nobody is watching a timer.
+    if runtime_dir_is_fallback():
+        print(
+            "castle dispatch: refusing to sweep with locks under "
+            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
+            "so the only available lock directory is world-writable and an "
+            "unattended sweep cannot trust it. Run dispatch from a real login "
+            "session (the systemd user units do), or run `castle work <id>` by "
+            "hand, where a human is present to notice.",
+            file=sys.stderr,
+        )
+        return 1
 
     sweep_lock = acquire_lock(dispatch_lock_path())
     if sweep_lock is None:

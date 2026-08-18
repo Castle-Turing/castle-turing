@@ -144,6 +144,30 @@ esac
 [ ! -e "$MISSING_STATE" ] || fail "the sweep created $MISSING_STATE — it must wait for the private repo, not conjure a state directory"
 
 # ---------------------------------------------------------------------
+log "an unattended sweep refuses to make liveness decisions on world-writable locks"
+# ---------------------------------------------------------------------
+# With no XDG_RUNTIME_DIR and no /run/user/$UID, the only lock
+# directory left is /tmp/castle-$UID, which any local user can create
+# first: they hold the sweep lock and dispatch reports "another sweep
+# is already running" and exits 0, forever, green in systemctl while
+# nothing runs. A hand-run `castle work` keeps that fallback on
+# purpose — a human is watching it — but a timer is not.
+#
+# Branching on the directory because both worlds are real: a developer
+# machine has /run/user/$UID, a CI runner may not.
+if [ -d "/run/user/$(id -u)" ]; then
+  log "  -- /run/user/$(id -u) exists here, so the sweep should fall back to it and run normally"
+  env -u XDG_RUNTIME_DIR "$CASTLE" dispatch >"$WORKDIR/no-xdg.out" 2>&1 \
+    || fail "a sweep with no XDG_RUNTIME_DIR but a real /run/user/\$UID refused to run: $(cat "$WORKDIR/no-xdg.out")"
+else
+  log "  -- no /run/user/$(id -u) here, so the only lock directory is world-writable and the sweep must refuse"
+  if env -u XDG_RUNTIME_DIR "$CASTLE" dispatch >"$WORKDIR/no-xdg.out" 2>&1; then
+    fail "a sweep with only the /tmp lock fallback available exited 0 instead of refusing: $(cat "$WORKDIR/no-xdg.out")"
+  fi
+  grep -q "world-writable" "$WORKDIR/no-xdg.out" || fail "the refusal did not explain itself: $(cat "$WORKDIR/no-xdg.out")"
+fi
+
+# ---------------------------------------------------------------------
 log "an eligible request gets exactly one turn, and the same sweep routes its result"
 # ---------------------------------------------------------------------
 REQ1="$("$CASTLE" ask "Dispatch test: filed after the watermark, should start itself.")"

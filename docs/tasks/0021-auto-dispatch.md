@@ -297,6 +297,23 @@ already has.
 
 The sweep, in order:
 
+**2.0 — Two refusals before any of this runs.** The sweep declines to
+start at all in two states, both added after review, both exiting
+before anything is created or written. First, when
+`castle.agent.stateDir` does not exist on disk (§2.2's restore-order
+guard) — exit **0**, the machine is simply not ready. Second, when
+`runtime_dir()` resolved to its `/tmp/castle-$UID` last resort (no
+`XDG_RUNTIME_DIR`, no `/run/user/$UID`) — exit **1**, because an
+unattended sweep must not make liveness decisions on locks in a
+world-writable directory. Any local user can create that path first
+and hold the sweep lock, at which point dispatch reports "another
+sweep is already running" and exits 0 forever, staying green in
+`systemctl --user status` while nothing ever runs; squatting a
+per-request lease instead makes the reaper decline to reap, or makes a
+sweep read a live turn's lease as free. A hand-run `castle work` keeps
+the `/tmp` fallback deliberately — a human is present to notice
+something strange — and nobody is watching a timer.
+
 **2.1 — Global sweep lock.** `flock(LOCK_EX | LOCK_NB)` on
 `$XDG_RUNTIME_DIR/castle/dispatch.lock`. If held, print a short message
 and exit `0` — another sweep is already running, this is not an error.
