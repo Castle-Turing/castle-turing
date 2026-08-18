@@ -297,9 +297,20 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
             key=lambda rec: rec.id,
         )
         for decision in decisions:
-            channel = decision.fields.get("channel", "?")
+            channel = decision.fields.get("channel", "")
             evidence = decision.fields.get("evidence", "")
-            print(f"    decided -> {channel}: {evidence}", file=out)
+            if channel:
+                print(f"    decided -> {channel}: {evidence}", file=out)
+            else:
+                # A decision that routed nothing — today, the dispatch
+                # watermark, which names the requests it excluded from
+                # automatic starting in its own `refs` and therefore
+                # lands in this errand's fold (docs/tasks/0021 §2.2).
+                # "decided -> ?" would read as a routing that failed;
+                # this reads as what it is, which for an excluded
+                # request is exactly the explanation the resident wants
+                # for why nothing is happening on its own.
+                print(f"    noted: {evidence}", file=out)
         print(file=out)
     return 0
 

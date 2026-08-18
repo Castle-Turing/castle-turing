@@ -485,7 +485,15 @@ in
       # lifecycle*, which is exactly what docs/tasks/0021's non-goals
       # carve out from "no scheduling."
       timerConfig = {
-        OnStartupSec = "1min";
+        # 5s, not a minute: an OnStartupSec timer whose interval has
+        # already elapsed fires immediately on activation, so this
+        # value is really "how long after the user manager starts
+        # before the first sweep runs" — and the first sweep on a
+        # fresh journal is the one that writes the watermark. Five
+        # seconds puts that write before a human could plausibly have
+        # filed anything, which is what shrinks the excluded-by-name
+        # residual (docs/tasks/0021 §2.2) to nothing in practice.
+        OnStartupSec = "5s";
         OnUnitActiveSec = "5min";
       };
     };

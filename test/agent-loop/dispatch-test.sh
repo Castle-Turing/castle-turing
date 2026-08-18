@@ -75,11 +75,6 @@ log "watermark: the first sweep writes exactly one, and a request filed before i
 # ---------------------------------------------------------------------
 REQ_OLD="$("$CASTLE" ask "Dispatch test: filed before dispatch ever existed on this journal.")"
 log "  -> $REQ_OLD"
-# One second, deliberately: `created` has whole-second granularity and
-# eligibility is `created >= watermark`, so a request filed in the same
-# second as the first sweep is (by design) picked up rather than
-# stranded. This test is about the boundary a second earlier.
-sleep 1
 
 SWEEP1_OUT="$("$CASTLE" dispatch)"
 echo "$SWEEP1_OUT"
@@ -89,7 +84,14 @@ WATERMARK_COUNT="$(echo "$WATERMARK_FILES" | grep -c . || true)"
 grep -q '^seat: dispatch$' "$WATERMARK_FILES" || fail "the watermark record does not carry seat: dispatch"
 grep -q '^type: decision$' "$WATERMARK_FILES" || fail "the watermark record is not a decision record"
 grep -q '^provenance: initiated$' "$WATERMARK_FILES" || fail "the watermark record should carry provenance: initiated"
-grep -q '^refs: *$' "$WATERMARK_FILES" || fail "the watermark record should reference nothing"
+# The exclusion is by NAME, not by timestamp: the outstanding request
+# has to be listed in this record's own refs, because that list is the
+# whole of eligibility rule (d). A timestamp comparison used to do this
+# job and could strand the very request whose arrival woke the first
+# sweep (whole-second `created` granularity, a wall-clock tick in the
+# wrong place); naming the excluded set removes that class of bug
+# rather than narrowing its window.
+grep -q "^refs: .*$REQ_OLD" "$WATERMARK_FILES" || fail "the watermark record does not name the outstanding request $REQ_OLD in its refs — nothing else excludes it"
 grep -q '^evidence: .' "$WATERMARK_FILES" || fail "the watermark record has no non-empty evidence (Proposal 04)"
 grep -q "castle work" "$WATERMARK_FILES" || fail "the watermark record's body should tell the resident how to run pre-watermark requests by hand"
 "$CASTLE" validate
@@ -102,6 +104,18 @@ log "watermark: a second sweep does not write a second one"
 WATERMARK_COUNT_2="$(grep -l '^watermark: ' "$JOURNAL"/*-decision-*.md 2>/dev/null | grep -c . || true)"
 [ "$WATERMARK_COUNT_2" -eq 1 ] || fail "a second sweep wrote another watermark record (got $WATERMARK_COUNT_2)"
 [ "$(count_referencing result "$REQ_OLD")" -eq 0 ] || fail "the pre-watermark request was dispatched on a later sweep"
+
+log "the boundary case a timestamp comparison got wrong: a request filed in the same wall-clock second as an existing watermark still runs"
+# Deliberately NO sleep here. Under the old `created >= watermark`
+# rule this was the bug that mattered most in practice: on a fresh
+# host the first sweep is triggered by the arrival of the resident's
+# first request, so the request that woke dispatch was the one request
+# dispatch would refuse to run — permanently, and with no explanation
+# anywhere. The watermark already exists at this point in the script,
+# so this is the same-second case with nothing else going on.
+REQ_SAME_SECOND="$("$CASTLE" ask "Dispatch test: filed in the same second as a sweep, must still run.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_SAME_SECOND")" -eq 1 ] || fail "a request filed in the same wall-clock second as a sweep was not dispatched — the watermark is excluding by timestamp again, not by name"
 
 # ---------------------------------------------------------------------
 log "an eligible request gets exactly one turn, and the same sweep routes its result"

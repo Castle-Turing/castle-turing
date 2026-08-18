@@ -89,11 +89,18 @@ declares three `systemd.user` units, all `wantedBy = [ "default.target" ]`:
   (if set), `CASTLE_WORKER_TIMEOUT`, and `CASTLE_REPO_ROOT` (if set) —
   see "Where the environment comes from," below. No `Restart=`: a
   oneshot that fails is a mechanism fault, not a retry candidate (§2.7).
-- **`systemd.user.timers.castle-dispatch`** — `OnStartupSec = "1min"`,
+- **`systemd.user.timers.castle-dispatch`** — `OnStartupSec = "5s"`,
   `OnUnitActiveSec = "5min"`. A backstop, not the primary trigger: the
   path unit should fire within moments of a request landing, but a
   missed inotify event (or a request filed while the user session was
-  down) would otherwise wait forever.
+  down) would otherwise wait forever. `OnStartupSec` is five seconds
+  rather than a minute for a reason that belongs to §2.2: a timer whose
+  interval has already elapsed fires immediately on activation, so this
+  value is really "how long after the user manager starts before the
+  first sweep runs," and the first sweep on a fresh journal is the one
+  that writes the watermark. Five seconds puts that write before a
+  human could plausibly have filed anything, which shrinks §2.2's
+  excluded-by-name residual to nothing in practice.
 
 **The service also sets `PATH`** — the second correction the VM test
 forced. A systemd user manager hands its units a bare PATH containing
@@ -313,13 +320,34 @@ full stop.
 
 **2.2 — Watermark.** If no `decision` record with `seat: dispatch` and
 a `watermark:` field exists anywhere in the journal, write one:
-`type: decision`, `seat: dispatch`, `provenance: initiated`, `refs:`
-empty, `evidence` naming the timestamp and how many `request` records
-were outstanding (no `result`, no live-lease `claim`) at that instant,
-plus a machine-readable `watermark: <timestamp>` field (UTC,
-`CREATED_FMT`). The body explains, in prose, that requests created
-before this instant are not auto-dispatched and remain runnable by
-hand with `castle work <id>`. This is journal-resident, not a
+`type: decision`, `seat: dispatch`, `provenance: initiated`, and —
+this is the load-bearing part — **`refs` listing, by id, exactly the
+`request` records outstanding (no `result`, no live-lease `claim`) at
+that instant**. `evidence` names the timestamp and that count; a
+machine-readable `watermark: <timestamp>` field (UTC, `CREATED_FMT`)
+rides along as the thing `_find_watermark` recognises the record by,
+and as an honest statement of when dispatch began. The body explains,
+in prose, that the requests named in its own `refs` are the ones not
+auto-dispatched, and that they remain runnable by hand with
+`castle work <id>`.
+
+*Exclusion is by name, not by timestamp, and the first version of this
+design got that wrong.* It said eligibility rule (d) was
+`created >= watermark`. `created` has whole-second granularity, so a
+request filed at 12:00:00.9 whose arrival woke the very first sweep at
+12:00:01.0 landed on the wrong side of its own watermark and was
+excluded **forever**, with no explanation anywhere — and on a fresh
+host that is the single most likely thing to happen, since the first
+sweep is usually triggered by the first request. Naming the excluded
+set removes the class of bug instead of narrowing the window: anything
+not on the list is eligible, however close to the boundary it was
+filed. The residual is small, named, and visible: a request filed in
+the seconds between enabling dispatch and the first sweep is excluded
+*by name*, shows up in the status surface like any other errand, and
+runs by hand. §1's five-second `OnStartupSec` is what keeps that
+window from mattering.
+
+This is journal-resident, not a
 machine-local marker file, because a machine-local watermark is
 invisible to a cold reader of the journal — the entire premise of this
 layer — and would be silently lost on a reinstall, which is exactly
@@ -335,8 +363,8 @@ way to tell "filed before automatic dispatch existed" from "filed
 after but somehow never picked up." (3) **One record, prose body,
 readable cold?** Yes — a single decision record with a plain-English
 body. (4) **Observation or judgment?** An observation: "dispatch began
-existing at this moment, with this many requests already outstanding."
-It judges nothing about those requests. (5) **Needed now?** Yes — every
+existing at this moment, and these exact requests were outstanding
+when it did." It judges nothing about those requests. (5) **Needed now?** Yes — every
 subsequent sweep's eligibility fold (§2.4) depends on it existing.
 
 **2.3 — Reap interrupted turns.** For every `claim` record whose
@@ -386,7 +414,8 @@ only a hint for. A request is eligible iff:
   lease is the earlier and strictly stronger signal — it also catches
   the sliver of a turn between "lease taken" and "claim written," which
   a claim-keyed check would read as eligible.*
-- (d) `created >=` the watermark.
+- (d) it is not named in the watermark record's `refs` (§2.2 — the
+  exclusion is a list of ids, deliberately not a timestamp comparison).
 
 Deliberately **not** conditions on eligibility, each recorded here with
 its reason so a future reader does not "fix" the omission:
@@ -449,8 +478,12 @@ under automatic triggering, not just under a hand-run `castle route`.
 for whatever it found — including errands that themselves failed
 (failure is visible via the `outcome` field, §3.5, the router, and the
 status surfaces, §4; it is not a *mechanism* failure). Nonzero is
-reserved for mechanism faults: an unreadable journal, an unparseable
-watermark record, and the like. This is what keeps the unit's own
+reserved for mechanism faults: an unreadable journal, a watermark that
+cannot be written or read back, and the like. Note that
+an unparseable `watermark:` *timestamp* is no longer one of them —
+once exclusion moved to `refs`, nothing reads that field except
+`_find_watermark`, so a cosmetically mangled value is not a reason to
+refuse to start anything. This is what keeps the unit's own
 `systemd --user status` failed-state meaning "dispatch itself broke,"
 never "an errand the tenant attempted didn't go well" — conflating the
 two would train the resident to distrust the unit's health signal

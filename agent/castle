@@ -1544,38 +1544,63 @@ def _write_watermark(records: dict[str, Record]) -> str:
     this layer — and would be silently lost on a reinstall, exactly the
     failure docs/architecture.md's "Where runtime state lives" exists to
     prevent for everything else durable. It is an observation, not a
-    judgment: dispatch began existing at this instant, with this many
-    requests already outstanding. It judges nothing about them.
+    judgment: dispatch began existing at this instant, and these exact
+    requests were outstanding when it did. It judges nothing about them.
+
+    **The exclusion is by name, not by timestamp.** `refs` lists the
+    outstanding requests themselves, and that list is the whole of rule
+    (d) in `_eligible_requests`. An earlier version of this design
+    compared each request's `created` against the watermark's own
+    timestamp, and it had a real hole: `created` has whole-second
+    granularity, so a request filed at 12:00:00.9 whose arrival woke
+    the very first sweep at 12:00:01.0 was excluded forever — the one
+    request that triggered dispatch's first run was the one request
+    dispatch would never run. Naming the excluded set removes the class
+    of bug rather than narrowing the window: anything not on this list
+    is eligible, however close to the boundary it was filed.
     """
     now = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
-    outstanding = len(_outstanding_requests(records))
+    outstanding = sorted(rec.id for rec in _outstanding_requests(records))
     evidence = (
-        f"automatic dispatch began operating on this journal at {now}, with "
-        f"{outstanding} request record(s) outstanding (no result, nothing running) "
-        "at that instant"
+        f"automatic dispatch began operating on this journal at {now}; the "
+        f"{len(outstanding)} request record(s) outstanding at that instant (no "
+        "result, nothing running) are named in this record's refs and are "
+        "excluded from automatic dispatch"
     )
+    if outstanding:
+        excluded_prose = (
+            f"The {len(outstanding)} request record(s) named in this record's "
+            "`refs` were outstanding at that instant — filed, with no result, "
+            "and with nothing running on them. **Those requests, by name, are "
+            "not started automatically.** Dispatch did not exist when they were "
+            "filed, nobody chose to have them run unattended, and quietly "
+            "spending a model call on each one now would be a decision this "
+            "seat has no authority to make."
+        )
+    else:
+        excluded_prose = (
+            "No request records were outstanding at that instant, so this "
+            "record's `refs` are empty and nothing is excluded: every request "
+            "in this journal either already has a result or was filed after "
+            "dispatch began."
+        )
     return write_record(
         journal_dir(),
         type="decision",
         provenance="initiated",
         seat=DISPATCH_SEAT,
-        refs=[],
+        refs=outstanding,
         evidence=evidence,
         body="\n".join(
             [
                 f"Automatic dispatch started existing on this journal at {now}.",
                 "",
-                f"There were {outstanding} request record(s) outstanding at that "
-                "instant — filed, with no result, and with nothing running on "
-                "them. Requests created **before** this moment are deliberately "
-                "not started automatically: dispatch did not exist when they were "
-                "filed, nobody chose to have them run unattended, and quietly "
-                "spending a model call on each one now would be a decision this "
-                "seat has no authority to make.",
+                excluded_prose,
                 "",
-                "They remain runnable by hand at any time with "
-                "`castle work <request-id>`. Everything filed from this moment on "
-                "is picked up automatically.",
+                "Anything excluded here remains runnable by hand at any time "
+                "with `castle work <request-id>`. Everything filed from this "
+                "moment on — including a request filed in the same second as "
+                "this record — is picked up automatically.",
                 "",
                 "This record exists because it is the one fact nothing else can "
                 "recover: without it, a later reader has no way to tell \"filed "
@@ -1675,11 +1700,11 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     return reaped
 
 
-def _eligible_requests(records: dict[str, Record], watermark: str) -> list[Record]:
+def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[Record]:
     """The eligibility fold — the authority the wakeup is only a hint
     for (docs/tasks/0021 §2.4). A request is eligible iff it is a
-    request, no result references it, nothing is running on it, and it
-    was created at or after the watermark.
+    request, no result references it, it is not named in the watermark
+    record's refs, and nothing is running on it.
 
     Deliberately NOT conditions here, each recorded so a future reader
     does not "fix" the omission: **provenance** (an `initiated` request
@@ -1698,11 +1723,12 @@ def _eligible_requests(records: dict[str, Record], watermark: str) -> list[Recor
         for rec in records.values()
         if rec.type == "request"
         and rec.id not in answered
-        # `created` is CREATED_FMT, which is lexicographically ordered,
-        # so a string comparison is the same comparison a parse would
-        # make. `>=`, not `>`: a request filed in the same second as
-        # the watermark is picked up rather than stranded forever.
-        and rec.fields.get("created", "") >= watermark
+        # Excluded by name, from the watermark record's own refs — not
+        # by comparing timestamps. See `_write_watermark` for the hole
+        # that closes: with whole-second `created` granularity, the
+        # request whose arrival woke the very first sweep could land on
+        # the wrong side of its own watermark and be stranded forever.
+        and rec.id not in excluded
         # Checked last, because it is the only condition that costs a
         # syscall — and it subsumes §2.4(c)'s "no claim currently holds
         # a live lease": the lease is taken before the claim is
@@ -1720,10 +1746,10 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     whatever it found — including errands that themselves failed.
     Failure is visible in the `outcome` field, through the router, and
     on the status surfaces; it is not a *mechanism* failure. Nonzero is
-    reserved for mechanism faults (an unreadable journal, an
-    unparseable watermark), which is what keeps the systemd unit's own
-    failed state meaning "dispatch itself broke" rather than "an errand
-    the tenant attempted didn't go well."
+    reserved for mechanism faults (an unreadable journal, a watermark
+    that cannot be written or read back), which is what keeps the
+    systemd unit's own failed state meaning "dispatch itself broke"
+    rather than "an errand the tenant attempted didn't go well."
     """
     sweep_lock = acquire_lock(dispatch_lock_path())
     if sweep_lock is None:
@@ -1764,19 +1790,14 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                 )
                 return 1
             print(f"dispatch: wrote the dispatch watermark {watermark_id}")
-        watermark = watermark_record.fields.get("watermark", "").strip()
-        try:
-            dt.datetime.strptime(watermark, CREATED_FMT)
-        except ValueError:
-            # A mechanism fault, not an errand failure: with no
-            # trustworthy boundary, dispatching anything risks starting
-            # work nobody asked to have started automatically.
-            print(
-                f"castle dispatch: watermark record {watermark_record.id} carries an "
-                f"unparseable watermark ({watermark!r})",
-                file=sys.stderr,
-            )
-            return 1
+        # The exclusion set, read off the watermark record's own refs.
+        # Nothing parses the `watermark:` timestamp here any more: it is
+        # how `_find_watermark` recognises the record and an honest fact
+        # about when dispatch began, but it is no longer an input to any
+        # decision, so a cosmetically mangled one is not a reason to
+        # refuse to dispatch anything (it was, while eligibility
+        # compared timestamps — see `_write_watermark`).
+        excluded = set(watermark_record.refs)
 
         reaped = _reap_interrupted(records)
         for record_id in reaped:
@@ -1794,7 +1815,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         while True:
             records = load_all(journal_dir())
             eligible = [
-                rec for rec in _eligible_requests(records, watermark) if rec.id not in skip
+                rec for rec in _eligible_requests(records, excluded) if rec.id not in skip
             ]
             if not eligible:
                 break
@@ -1901,7 +1922,13 @@ def cmd_digest(args: argparse.Namespace) -> int:
         for rec in downstream:
             print(f"### {rec.type} {rec.id} (seat: {rec.fields.get('seat')})")
             if rec.type == "decision":
-                print(f"- channel: {rec.fields.get('channel', '?')}")
+                # Not every decision routes something. The dispatch
+                # watermark (docs/tasks/0021 §2.2) names the requests it
+                # excluded in its own `refs`, which is what puts it in
+                # this fold at all — printing `channel: ?` for it would
+                # invent a routing that never happened.
+                if rec.fields.get("channel"):
+                    print(f"- channel: {rec.fields['channel']}")
                 print(f"- evidence: {rec.fields.get('evidence', '')}")
             # `outcome` rendered inline wherever a result carries one
             # (docs/tasks/0021 §4), beside the decision fields above.
