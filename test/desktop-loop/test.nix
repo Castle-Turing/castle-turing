@@ -2,7 +2,7 @@
 # stack (modules/base, home, desktop, dev, agent — no test-only stand-in
 # for the mechanism under test itself) in a NixOS VM, log in through the
 # real, unmodified greetd+tuigreet prompt, press the real
-# $mod+Shift+space keybinding, and assert on the journal records the
+# $mod+Shift+Return keybinding, and assert on the journal records the
 # loop actually produces.
 #
 # Uses the `nixosTest`/`pkgs.testers.runNixOSTest` framework (a Python
@@ -233,6 +233,27 @@ in
     assert "sway" in json.dumps(version).lower(), f"get_version did not look like Sway: {version}"
     print(f"OK: Sway session confirmed live over its own IPC socket: {version}")
 
+    # --- Assert the session opened on workspace 1, before any key is
+    # pressed (docs/tasks/0019, defect 1). Sway takes the first workspace
+    # *mentioned in the config* as its initial workspace; home-manager
+    # emits `keybindings` sorted by key name, so without
+    # `defaultWorkspace` hoisting the workspace-1 binding to the front
+    # (modules/home/default.nix), `Mod1+0`'s `workspace number 10`
+    # binding sorts first and every session opens on workspace 10
+    # instead. This is red on the code this brief starts from — it would
+    # report "10" here. ---------------------------------------------------
+    workspaces = swaymsg("get_workspaces")
+    focused = [ws for ws in workspaces if ws.get("focused")]
+    assert len(focused) == 1, f"expected exactly one focused workspace, got: {workspaces}"
+    focused_name = focused[0]["name"]
+    assert focused_name == "1", (
+        f"session opened on workspace {focused_name!r}, not workspace \"1\": {workspaces}. "
+        "Sway takes the first workspace mentioned in the generated config as its "
+        "initial workspace; see docs/tasks/0019 (defect 1) and "
+        "wayland.windowManager.sway.config.defaultWorkspace in modules/home/default.nix."
+    )
+    print("OK: session opened on workspace 1")
+
     # --- Press the key, file a request (docs/tasks/0011 scope item 3) -
     NODE_GROUPS = ["nodes", "floating_nodes"]
 
@@ -245,7 +266,7 @@ in
     def has_modal():
         return any(node.get("app_id") == "castle-modal" for node in walk(swaymsg("get_tree")))
 
-    machine.send_key("meta_l-shift-spc")
+    machine.send_key("meta_l-shift-ret")
     retry(lambda last: has_modal())
     machine.screenshot("04-modal-open")
 
@@ -305,7 +326,7 @@ in
 
     # --- File a correction through the modal's other path (docs/tasks/
     # 0011 scope item 4, second half) ----------------------------------
-    machine.send_key("meta_l-shift-spc")
+    machine.send_key("meta_l-shift-ret")
     retry(lambda last: has_modal())
     machine.screenshot("06-modal-open-for-correction")
     machine.send_chars("${correctionBody}\n.\n")

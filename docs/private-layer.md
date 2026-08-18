@@ -285,6 +285,19 @@ by side on the real panel so you can pick by looking instead;
 spare virtual console, the one surface here you cannot preview from
 inside a running Wayland session at all.
 
+If your own config touches
+`wayland.windowManager.sway.config.keybindings` — to rebind the modal
+chord, add your own, or anything else — wrap your definition in
+`lib.mkOptionDefault`, exactly as `modules/home` does, rather than
+defining it bare. home-manager supplies its ~50 stock bindings as this
+option's own `default`, at the same priority `mkOptionDefault` writes
+at; a bare definition sits at a lower priority number and silently
+discards that *entire* default set the moment your module's definition
+is merged in, not just the keys you named. This is the same finding-1
+lockout `modules/home/default.nix`'s long comment on `keybindings`
+documents, reachable from the private-layer side instead — see
+docs/tasks/0019 for how it was found and verified.
+
 ## The agent's state
 
 `docs/architecture.md` and `agent/README.md` (the mechanism itself)

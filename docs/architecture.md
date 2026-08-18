@@ -106,9 +106,10 @@ a gigabyte of progress ticks.
 
 **Intake** (a surface). Turns a resident's request into a `request`
 record. The first intake was a CLI (`castle ask`); a compositor
-keybinding opening a modal — `agent/castle-modal`, bound to
-`$mod+Shift+space` in `modules/home`'s Sway config, docs/tasks/0009 —
-is the second, and eventually mail or calendar will be later ones. The
+keybinding opening a modal — `agent/castle-modal`, bound to a fixed
+`Mod4+Shift+Return` (not `$mod`-relative — deliberate, docs/tasks/0019)
+in `modules/home`'s Sway config, docs/tasks/0009 — is the second, and
+eventually mail or calendar will be later ones. The
 modal doubles as the "come back and check in later" surface: its status
 mode folds recent errands from the journal, the same fold `castle
 digest` does, without waiting for a digest period to end. An intake

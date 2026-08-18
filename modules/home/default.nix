@@ -148,6 +148,35 @@ in
           # running for notify-send to have anywhere to deliver to.
           startup = [ { command = "mako"; } ];
 
+          # Sway makes the first workspace *mentioned* in the config its
+          # initial workspace, and home-manager's own `keybindings`
+          # attrset is emitted sorted by key name — so `Mod1+0`'s
+          # `workspace number 10` binding was written before `Mod1+1`'s
+          # `workspace number 1`, and every session opened on workspace
+          # 10 (docs/tasks/0019, defect 1). `defaultWorkspace` fixes this
+          # by hoisting the one binding whose *value* string-equals this
+          # setting to the front of the bindsym block — it emits no
+          # `workspace` command of its own, it only reorders.
+          #
+          # The match is exact string equality against the binding's
+          # action, not a semantic comparison: it MUST be
+          # "workspace number 1", verbatim. Any other spelling
+          # ("workspace 1", a trailing space, ...) matches nothing,
+          # hoists nothing, and silently reproduces the bug — there is
+          # no error, because from the option's point of view an
+          # unmatched value is indistinguishable from not setting it at
+          # all. Resist "simplifying" this string.
+          #
+          # lib.mkDefault, not lib.mkOptionDefault: this is a framework
+          # default a private layer should be able to override at normal
+          # priority (same reasoning as modules/desktop's wallpaper
+          # default, docs/tasks/0014) — not the definition-level-priority
+          # trick the keybindings binding below needs. Demoting
+          # keybindings to mkDefault would drop home-manager's entire
+          # default set (see that comment below); do not harmonise the
+          # two.
+          defaultWorkspace = lib.mkDefault "workspace number 1";
+
           # $mod+Shift+space opens the ambient intake: a floating foot
           # terminal running castle-modal in compose mode
           # (docs/tasks/0009 item 3 — "press a key, describe a problem
@@ -156,13 +185,26 @@ in
           # deliberately, so this module stays decoupled from
           # modules/agent at the Nix level — the binding does nothing
           # useful without it, but building this module never requires
-          # it. Mod4 (the Super/Windows key) is Sway's own stock
-          # modifier; this chord deliberately overrides Sway/i3's stock
-          # "toggle floating on the focused window" default on
-          # mod+shift+space — a real trade, made once, on purpose (the
-          # pre-made decision behind docs/tasks/0009-ambient-intake.md).
-          # `swaymsg floating toggle` still reaches the same action by
-          # hand if it's ever missed.
+          # Mod4 (the Super/Windows key) with Shift+Return. The chord is
+          # fixed rather than $mod-relative on purpose: this is the door
+          # into the agent layer, not a window-management command, and
+          # agent/README.md, docs/architecture.md and the desktop-loop
+          # harness all name it literally, so one stable spelling is
+          # worth more here than following a resident's modifier.
+          #
+          # Shift+Return specifically because it appears in NO stock
+          # binding under ANY modifier value (home-manager sway.nix at
+          # this flake's pin), so the chord displaces nothing whatever a
+          # resident sets `modifier` to. That property is load-bearing.
+          # The previous chord was Mod4+Shift+space, and the comment here
+          # claimed it "deliberately overrides" Sway's stock floating
+          # toggle as "a real trade, made once, on purpose". That was
+          # false in both directions: under the default Mod1 modifier it
+          # displaced nothing at all, because Mod4+Shift+space and
+          # Mod1+Shift+space are different keys; and under
+          # `modifier = "Mod4"` it DID displace `floating toggle`, but
+          # nobody chose that — it happened silently, in a configuration
+          # nobody was looking at (docs/tasks/0019, defect 2).
           #
           # MUST be wrapped in lib.mkOptionDefault — the previous version
           # of this comment claimed the opposite and was wrong (0009
@@ -194,17 +236,31 @@ in
           # in `lib.mkOptionDefault` puts it at the same priority (1500)
           # as home-manager's defaults, so both definitions survive
           # filterOverrides' and reach attrsOf's per-key merge — which
-          # unions them by key with no conflict, since this chord shares
-          # no key with any Mod1-prefixed default. (Two same-priority
-          # definitions of the *same* key would still throw the
-          # ambiguous-priority error the old comment warned about — that
-          # risk is real, just per-key, not a reason to avoid
-          # mkOptionDefault altogether.) Confirmed by reading the
-          # generated config CI actually produces: the full default set
+          # unions them by key with no conflict, since Shift+Return is not a
+          # key any stock binding uses under any modifier.
+          #
+          # Two collision shapes exist here and they behave DIFFERENTLY;
+          # the previous version of this parenthetical described only the
+          # first and implied it covered both. (a) Two peer *module*
+          # definitions of the same key do throw the ambiguous-priority
+          # error — that risk is real and per-key. (b) A collision with
+          # home-manager's OWN default does not throw: it is cross-level,
+          # and it resolves silently in this module's favour. The
+          # definition-level mkOptionDefault above is consumed by
+          # filterOverrides at the definition level, leaving this value
+          # bare at priority 100 per key, which beats home-manager's
+          # per-value 1500 outright and drops it without a word. That is
+          # exactly how the old Mod4+Shift+space chord ate `floating
+          # toggle` under `modifier = "Mod4"` with no diagnostic of any
+          # kind (docs/tasks/0019, defect 2). Do not read the module
+          # system as a safety net here: for shape (b) it is silent.
+          #
+          # Confirmed by reading the generated config CI actually
+          # produces: the full default set
           # (Mod1+Return, Mod1+Shift+q, Mod1+Shift+e, workspace bindings,
           # the `resize` mode) is present alongside this binding.
           keybindings = lib.mkOptionDefault {
-            "Mod4+Shift+space" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
+            "Mod4+Shift+Return" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
           };
 
           # Window titles *and* swaynag — one setting in Sway, not two

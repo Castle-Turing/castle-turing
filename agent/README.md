@@ -149,7 +149,7 @@ castle show ID
 
 ## `castle-modal` — the ambient intake
 
-A floating `foot` terminal (bound to `Mod4+Shift+space` in
+A floating `foot` terminal (bound to `Mod4+Shift+Return` in
 `modules/home`'s Sway config — see that module for why this chord and
 not another) running `agent/castle-modal`, a second stdlib-only Python
 script that imports `agent/castle` in-process rather than shelling out
