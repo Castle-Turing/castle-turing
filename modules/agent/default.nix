@@ -426,30 +426,51 @@ in
         # required (pam_env-set variables only take effect on the
         # *next* login), and the unit stops depending on nixpkgs' PAM
         # wiring staying exactly as it is today.
-        Environment =
-          [
-            # A systemd user manager hands its units a bare PATH that
-            # contains neither of the two binaries this sweep actually
-            # needs, which the VM test caught doing exactly that: the
-            # default worker tenant (agent/castle-worker-claude) execs
-            # `claude` from $PATH, and `castle route`'s notify channel
-            # shells out to `notify-send`. Both live in the system
-            # profile on a host that imported modules/dev and
-            # modules/desktop respectively — so without this line,
-            # enabling dispatch with the *default* tenant produces a
-            # result record saying the tenant could not be run, and
-            # every notification the router fires is silently lost to a
-            # non-fatal warning nobody reads. `%u` and `%h` are systemd
-            # specifiers, so the resident's own profile paths are
-            # reachable with no username baked into this repo
-            # (Principle 02).
-            "PATH=/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin"
-            "CASTLE_STATE_DIR=${toString cfg.stateDir}"
-            "CASTLE_WORKER_COMMAND=${cfg.worker.command}"
-            "CASTLE_WORKER_TIMEOUT=${toString cfg.worker.timeoutSeconds}"
-          ]
-          ++ lib.optional (cfg.notify.command != null) "CASTLE_NOTIFY_COMMAND=${cfg.notify.command}"
-          ++ lib.optional (cfg.worker.repoRoot != null) "CASTLE_REPO_ROOT=${cfg.worker.repoRoot}";
+      };
+      # The unit-level `environment` option, NOT a raw
+      # serviceConfig.Environment list, and the difference is
+      # load-bearing: systemd's Environment= splits an unquoted value
+      # on whitespace, so a raw list entry like
+      # "CASTLE_WORKER_COMMAND=claude -p" silently becomes
+      # CASTLE_WORKER_COMMAND=claude with the "-p" dropped — a
+      # silent-wrong-value bug of exactly the shape docs/tasks/0013's
+      # bug 2 was, waiting for the first resident whose tenant command
+      # carries an argument. The `environment` option renders every
+      # entry through toJSON (nixos/lib/systemd-lib.nix, the
+      # `Environment=${toJSON ...}` line), producing
+      # Environment="NAME=value with spaces" — one quoted assignment,
+      # exactly what systemd's own syntax wants. The existing
+      # `"`-character assertions on these options are what keep that
+      # quoting always representable. A null value is simply omitted
+      # (same systemd-lib line), so notify/repoRoot need no
+      # optionalAttrs dance here.
+      environment = {
+        # A systemd user manager hands its units a bare PATH that
+        # contains neither of the two binaries this sweep actually
+        # needs, which the VM test caught doing exactly that: the
+        # default worker tenant (agent/castle-worker-claude) execs
+        # `claude` from $PATH, and `castle route`'s notify channel
+        # shells out to `notify-send`. Both live in the system
+        # profile on a host that imported modules/dev and
+        # modules/desktop respectively — so without this line,
+        # enabling dispatch with the *default* tenant produces a
+        # result record saying the tenant could not be run, and
+        # every notification the router fires is silently lost to a
+        # non-fatal warning nobody reads. `%u` and `%h` are systemd
+        # specifiers (Environment= expands specifiers), so the
+        # resident's own profile paths are reachable with no username
+        # baked into this repo (Principle 02). mkForce because
+        # nixpkgs' user.nix already gives every user service a stock
+        # PATH (coreutils, grep, sed, systemd) at normal priority;
+        # this value replaces it rather than merging, and loses
+        # nothing by doing so — /run/current-system/sw/bin carries all
+        # of those on any NixOS host.
+        PATH = lib.mkForce "/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin";
+        CASTLE_STATE_DIR = toString cfg.stateDir;
+        CASTLE_WORKER_COMMAND = cfg.worker.command;
+        CASTLE_WORKER_TIMEOUT = toString cfg.worker.timeoutSeconds;
+        CASTLE_NOTIFY_COMMAND = cfg.notify.command;
+        CASTLE_REPO_ROOT = cfg.worker.repoRoot;
       };
     };
 

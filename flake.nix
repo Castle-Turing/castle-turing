@@ -383,7 +383,12 @@
               dummyStateDir = "/home/resident/private/state";
               dummyRepoRoot = "/home/resident/private";
               unit = config.systemd.user.services.castle-dispatch or null;
-              environment = if unit == null then [ ] else unit.serviceConfig.Environment;
+              # The unit-level `environment` attrset, not a raw
+              # serviceConfig.Environment list — see modules/agent's
+              # comment on why the distinction is load-bearing (systemd
+              # splits an unquoted Environment= value on whitespace;
+              # the option's toJSON rendering is what quotes it).
+              environment = if unit == null then { } else unit.environment;
             in
             {
               castle.agent = {
@@ -428,15 +433,15 @@
                       == "!@system"
                     && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser
                       == "!@system"
-                    && lib.elem "CASTLE_STATE_DIR=${dummyStateDir}" environment
+                    && environment.CASTLE_STATE_DIR or null == dummyStateDir
                     # Without a PATH the default tenant (`claude -p`)
                     # and the notify channel (`notify-send`) are both
                     # unreachable from the unit — see modules/agent's
                     # comment; the VM test caught this one too.
-                    && lib.any (lib.hasPrefix "PATH=/run/current-system/sw/bin") environment
-                    && lib.elem "CASTLE_WORKER_TIMEOUT=900" environment
-                    && lib.elem "CASTLE_REPO_ROOT=${dummyRepoRoot}" environment
-                    && lib.any (lib.hasPrefix "CASTLE_WORKER_COMMAND=") environment
+                    && lib.hasPrefix "/run/current-system/sw/bin" (environment.PATH or "")
+                    && environment.CASTLE_WORKER_TIMEOUT or null == "900"
+                    && environment.CASTLE_REPO_ROOT or null == dummyRepoRoot
+                    && (environment.CASTLE_WORKER_COMMAND or "") != ""
                     && config.systemd.user.paths.castle-dispatch.pathConfig.PathChanged
                       == "${dummyStateDir}/journal"
                     && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec
