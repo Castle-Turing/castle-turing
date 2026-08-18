@@ -659,3 +659,55 @@ item 2's whole point and the risk `docs/tasks/0003-findings.md` warns
 about on this chassis; and `services.swayidle` has never run, because
 `idleBlankSeconds` is null everywhere by design and no private layer
 has set it yet.
+
+### Post-review additions
+
+Review found the shipped branch had no agent-testable guard layer at
+all beyond the upower assertion, while this brief's Verification
+section confidently described one. That is the failure this repo's
+update-the-brief rule exists to prevent, and the honest fix was to
+build the guards rather than to quietly narrow the plan:
+
+- `check.yml` gains an ergonomics step asserting, against the **real
+  generated artifacts**, that all six `XF86` bindings are present, that
+  the volume ceiling (`-l 1.0`) survives, that home-manager's default
+  bindings are still there alongside them (the finding-1 lockout guard
+  restated for this task's additions), and that the generated i3status
+  config keeps `battery all` while `ipv6` and `ethernet _first_` stay
+  gone.
+- Both directions were watched failing before being trusted: flipping
+  `hasEthernet` to `true` brings the ethernet entry back and the check
+  goes red; deleting the `XF86AudioMicMute` binding makes that
+  assertion go red. Neither is visible to `sway --validate` or to
+  `nix flake check`, which is the whole reason the step exists.
+- `docs/private-layer.md` gains a "Laptop ergonomics" section covering
+  the five new resident-facing options. `idleBlankSeconds` in
+  particular had a policy story that pointed residents at an option no
+  document mentioned.
+
+**Still not built, and deliberately not:** the `mem_sleep_default=deep`
+kernelParams regression assertion this brief's verification plan asks
+for. It guards against a nixos-hardware bump silently changing suspend
+depth — a real risk the brief names — but nothing in this branch sets
+that parameter, so there is no current value to pin and an assertion
+would encode an expectation about an upstream module rather than about
+this repo's own configuration. Left for whoever first observes suspend
+behaviour on real hardware, which is also the person who will know what
+the right value is.
+
+**One duplicate removed.** `pkgs.brightnessctl` had been added to
+`environment.systemPackages` with a comment claiming it was there "so
+the command also exists for a human at a shell". Verified false:
+nixpkgs' Sway module already puts brightnessctl in
+`programs.sway.extraPackages`, which lands in the same list — it
+evaluated to two copies. This brief's own "establish what arrives free"
+section said to confirm that before adding anything, and that step was
+skipped.
+
+**One latent sharp edge, recorded not fixed.** The swayidle commands
+interpolate `config.programs.sway.package`, which nixpkgs declares
+`nullOr`. Setting it `null` is the documented arrangement for a
+home-manager-managed Sway; a private layer doing that *and* setting
+`idleBlankSeconds` would get a Nix evaluation error rather than a clean
+message. Unreachable in-repo today, since `modules/desktop` leaves the
+default in place.

@@ -298,6 +298,58 @@ lockout `modules/home/default.nix`'s long comment on `keybindings`
 documents, reachable from the private-layer side instead — see
 docs/tasks/0019 for how it was found and verified.
 
+## Laptop ergonomics (optional)
+
+`nixosModules.desktop` binds the media and brightness keys for you —
+there is nothing to configure for those, and nothing to opt into. Four
+options exist for the parts that are taste or that only your machine
+knows. All default to doing nothing, so a private layer that sets none
+of them gets a working desktop with stock behaviour.
+
+```nix
+  # Touchpad. Pure taste, so the framework picks neither direction:
+  # unset means Sway's own default (natural scrolling off, tap off).
+  castle.input.touchpad = {
+    naturalScroll = true;   # content follows your fingers
+    tapToClick = true;
+  };
+
+  # Blank the screen after N seconds idle. Unset means no idle handling
+  # at all — no swayidle runs and the screen never blanks by itself.
+  castle.display.idleBlankSeconds = 600;
+```
+
+- `castle.input.touchpad.naturalScroll` / `.tapToClick` — booleans,
+  wired to Sway's `input type:touchpad`. Held strongly in both
+  directions by different people, which is exactly why the framework
+  declines to choose; `null` writes no `input` stanza at all.
+- `castle.display.idleBlankSeconds` — seconds of inactivity before the
+  outputs power off, via swayidle. **There is deliberately no default,
+  and deliberately no screen lock.** Idle policy belongs to the
+  attention-management work `docs/vision.md` describes (deep-focus
+  mode, graduated interventions), which would have to renegotiate any
+  policy set now — so the framework ships the mechanism with the policy
+  slot empty. If you want a blanking screen, this is the option; if you
+  want a lock, nothing here provides one yet.
+
+Two more are **machine facts, not preferences** — a host module is
+normally the right place for them, and `hosts/xps9370` already sets
+both. Override in your own layer only if you know better than your host
+module does:
+
+- `castle.hardware.hasEthernet` — whether the chassis has a wired port.
+  Declared in `nixosModules.base`, so a headless host can state it too.
+  When `false`, the status bar drops its ethernet entry, which would
+  otherwise show a permanent red fault for hardware that does not
+  exist. Defaults `true`, because a desktop with an unplugged cable
+  *should* show that fault.
+- `castle.power.criticalPowerAction` — what upower does at critical
+  battery. Unset leaves upower's own default (`HybridSleep`), which
+  needs somewhere to write a hibernation image; `nixosModules.desktop`
+  asserts against that combination on a machine with no swap rather
+  than letting it fail at the moment the battery dies. On a
+  zram-only host, `"PowerOff"` is the honest answer.
+
 ## The agent's state
 
 `docs/architecture.md` and `agent/README.md` (the mechanism itself)

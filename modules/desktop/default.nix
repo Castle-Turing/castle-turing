@@ -449,11 +449,13 @@ in
     environment.systemPackages = [
       pkgs.foot
       pkgs.firefox
-      # Backlight control for the XF86MonBrightness bindings in
-      # modules/home. Referenced there by absolute store path, so this
-      # entry is not what makes the binding work - it is here so the
-      # command also exists for a human at a shell.
-      pkgs.brightnessctl
+      # brightnessctl is deliberately NOT listed here: nixpkgs' own Sway
+      # module already puts it in programs.sway.extraPackages (alongside
+      # foot, grim, swayidle, swaylock, wmenu), and that list lands in
+      # environment.systemPackages - adding it again evaluated to two
+      # copies. The XF86MonBrightness bindings in modules/home reference
+      # it by absolute store path anyway, so nothing here is load-bearing
+      # for them.
       # The router's real interruption channel (docs/tasks/0009 item 5):
       # mako is the notification daemon that actually renders a
       # notify-send call on screen, and libnotify is what provides the
