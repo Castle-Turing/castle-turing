@@ -397,7 +397,16 @@ in
         # changing at all. The wakeup is a hint; the fold is the
         # authority.
         PathChanged = "${toString cfg.stateDir}/journal";
-        MakeDirectory = true;
+        # Deliberately NO MakeDirectory. systemd watches the nearest
+        # existing parent of a path that does not exist yet and fires
+        # when the path appears, so nothing is lost by not creating it
+        # — and creating the resident's state directory from a unit is
+        # exactly the restore-order hazard `castle dispatch`'s own
+        # guard closes: on a machine where dispatch is enabled before
+        # the private repo holding the journal is cloned, a unit that
+        # helpfully mkdir'd the path would both break that clone and
+        # let the first sweep write a watermark declaring that nothing
+        # predates it, minutes before the real history arrived.
       };
     };
 

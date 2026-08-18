@@ -462,6 +462,15 @@ mechanism promises in exchange:
   commit`, no applying a diff. You review and apply, exactly as
   before.
 
+**Clone this repo onto the machine before you turn dispatch on.** The
+sweep will not create `castle.agent.stateDir` for you: it checks
+whether that directory exists and, if it does not, says so and does
+nothing until the next timer tick. That refusal is deliberate. A sweep
+that created the directory would both break the clone you were about
+to do into it and — worse — write its watermark declaring that nothing
+predates automatic dispatch, minutes before your real journal arrived.
+Every request in that restored history would then look new.
+
 Two settings to get right when you enable it. `castle.agent.stateDir`
 is required (evaluation fails without it). And
 `castle.agent.worker.repoRoot` should name the repository you actually

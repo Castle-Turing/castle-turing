@@ -1997,6 +1997,31 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     systemd unit's own failed state meaning "dispatch itself broke"
     rather than "an errand the tenant attempted didn't go well."
     """
+    # Before anything else, and before `journal_dir()` gets a chance to
+    # create it: does the configured state directory exist at all?
+    #
+    # A resident enables dispatch, rebuilds, and the units start within
+    # seconds — quite possibly before the private repo holding their
+    # journal has been cloned onto this machine. Without this check the
+    # first sweep would create `<stateDir>/journal` on the spot and
+    # write a watermark with empty refs, and then the journal restored
+    # ten minutes later would arrive into a world where dispatch had
+    # already declared that nothing predates it: every request in that
+    # restored history becomes eligible, which is precisely the thing
+    # the watermark exists to prevent. The pre-created directory also
+    # breaks the clone that was about to happen.
+    #
+    # Exit 0, not 1: a state directory that does not exist yet is not a
+    # mechanism fault, it is a machine that is not ready. The timer
+    # comes back in five minutes, and by then it usually is.
+    configured_state_dir = state_dir()
+    if not configured_state_dir.exists():
+        print(
+            f"dispatch: state dir {configured_state_dir} does not exist yet "
+            "(private repo not restored?); nothing to do"
+        )
+        return 0
+
     sweep_lock = acquire_lock(dispatch_lock_path())
     if sweep_lock is None:
         # Not an error: another sweep is already running. The hint this

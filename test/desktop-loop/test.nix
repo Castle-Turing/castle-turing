@@ -223,6 +223,22 @@ in
       # dispatch unit specifically rather than only for the modal): the
       # scripted tenant prints its $CASTLE_REPO_ROOT, and the test
       # asserts that string lands in the result record.
+      # An existing state directory IS the documented resident
+      # contract: castle.agent.stateDir points into a private repo
+      # checkout that has already been cloned onto the machine
+      # (docs/private-layer.md). `castle dispatch` refuses to create it
+      # — a sweep that mkdir'd the resident's state directory before
+      # their journal was restored into it would break the restore and
+      # write a watermark claiming nothing predates it — so this VM has
+      # to supply what a real host's private repo supplies. It is also
+      # what lets the first sweep run within seconds of login and put
+      # its empty-refs watermark down before the resident files
+      # anything, which is the ordering every assertion below assumes.
+      systemd.tmpfiles.rules = [
+        "d /home/resident/private 0755 resident users -"
+        "d ${testStateDir} 0755 resident users -"
+      ];
+
       castle.agent.dispatch.enable = true;
       castle.agent.worker.command = "${dispatchWorker}";
       castle.agent.worker.repoRoot = testRepoRoot;

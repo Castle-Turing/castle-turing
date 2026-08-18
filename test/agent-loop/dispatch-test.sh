@@ -121,6 +121,28 @@ REQ_SAME_SECOND="$("$CASTLE" ask "Dispatch test: filed in the same second as a s
 [ "$(count_referencing result "$REQ_SAME_SECOND")" -eq 1 ] || fail "a request filed in the same wall-clock second as a sweep was not dispatched — the watermark is excluding by timestamp again, not by name"
 
 # ---------------------------------------------------------------------
+log "a state dir that does not exist yet is not a mechanism fault: the sweep says so, creates nothing, and exits 0"
+# ---------------------------------------------------------------------
+# The restore-order hazard: dispatch enabled and rebuilt before the
+# private repo holding the journal has been cloned. A sweep that
+# created the directory would break that clone AND write a watermark
+# with empty refs, so the history restored ten minutes later would
+# arrive with nothing marked as predating dispatch — every request in
+# it newly eligible, which is the exact outcome the watermark exists
+# to prevent.
+MISSING_STATE="$WORKDIR/not-restored-yet"
+[ ! -e "$MISSING_STATE" ] || fail "the missing-state-dir fixture path already exists"
+if ! GUARD_OUT="$(CASTLE_STATE_DIR="$MISSING_STATE" "$CASTLE" dispatch 2>&1)"; then
+  fail "a sweep against a nonexistent state dir exited nonzero — a machine that is not ready yet is not a mechanism fault: $GUARD_OUT"
+fi
+echo "$GUARD_OUT"
+case "$GUARD_OUT" in
+  *"does not exist yet"*) ;;
+  *) fail "the sweep did not explain that the state dir is missing: $GUARD_OUT" ;;
+esac
+[ ! -e "$MISSING_STATE" ] || fail "the sweep created $MISSING_STATE — it must wait for the private repo, not conjure a state directory"
+
+# ---------------------------------------------------------------------
 log "an eligible request gets exactly one turn, and the same sweep routes its result"
 # ---------------------------------------------------------------------
 REQ1="$("$CASTLE" ask "Dispatch test: filed after the watermark, should start itself.")"

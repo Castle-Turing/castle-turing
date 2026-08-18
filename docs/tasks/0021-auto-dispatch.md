@@ -79,9 +79,13 @@ New Nix option `castle.agent.dispatch.enable` (`modules/agent`,
 declares three `systemd.user` units, all `wantedBy = [ "default.target" ]`:
 
 - **`systemd.user.paths.castle-dispatch`** — `pathConfig.PathChanged =
-  "${cfg.stateDir}/journal"`, `MakeDirectory = true`. Fires on *any* new
-  record landing in the journal, not just requests — see "Why a
-  request-shaped watcher was rejected," below.
+  "${cfg.stateDir}/journal"`, and **no `MakeDirectory`** (the first
+  version of this design said `MakeDirectory = true`; see §2.2's
+  state-directory guard for why that was wrong). systemd watches the
+  nearest existing parent of a path that does not exist yet and fires
+  when the path appears, so nothing is lost by not creating it. Fires
+  on *any* new record landing in the journal, not just requests — see
+  "Why a request-shaped watcher was rejected," below.
 - **`systemd.user.services.castle-dispatch`** — `Type = "oneshot"`,
   `ExecStart` runs `castle dispatch` (the new subcommand, §2),
   `WorkingDirectory = "%h"`, and an `Environment=` block carrying
@@ -330,6 +334,29 @@ and as an honest statement of when dispatch began. The body explains,
 in prose, that the requests named in its own `refs` are the ones not
 auto-dispatched, and that they remain runnable by hand with
 `castle work <id>`.
+
+**The sweep refuses to run at all until the state directory exists.**
+Before anything else — before `journal_dir()` can create it — the
+sweep checks `castle.agent.stateDir` on disk, and if it is absent
+prints `state dir <path> does not exist yet (private repo not
+restored?); nothing to do` and exits **0**, leaving the timer to try
+again. This closes a restore-order hazard the first version of this
+design walked straight into: a resident enables dispatch and rebuilds,
+the units start within seconds, and the private repo holding their
+journal has not been cloned onto the machine yet. The sweep would
+create `<stateDir>/journal` itself (the path unit's `MakeDirectory`,
+and `journal_dir()`'s own mkdir), write a watermark with **empty
+refs** — nothing outstanding, because nothing exists — and then the
+real journal restored ten minutes later would arrive into a world
+where dispatch had already declared that nothing predates it. Every
+request in that restored history becomes eligible: the exact outcome
+§2.2 exists to prevent, produced by §2.2 itself. The pre-created
+directory also breaks the clone that was about to happen. Exit 0 and
+not 1 because a machine that is not ready yet is not a mechanism
+fault. An existing state directory is the documented resident contract
+(`docs/private-layer.md`: `stateDir` points into an already-cloned
+private checkout), and `test/desktop-loop` now supplies one via
+`systemd.tmpfiles.rules` rather than relying on a unit to conjure it.
 
 *Exclusion is by name, not by timestamp, and the first version of this
 design got that wrong.* It said eligibility rule (d) was
