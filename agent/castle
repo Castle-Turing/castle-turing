@@ -1296,6 +1296,34 @@ def _kill_tenant_group(proc: subprocess.Popen) -> None:
         pass
 
 
+class TenantNotRunnable(Exception):
+    """The configured worker tenant could not be started at all.
+
+    Raised by `run_worker_turn` *after* it has written the errand's
+    `outcome: failed` result — that record still lands, unchanged,
+    because it is what bounds the silent-retry loop §3.4 exists to
+    close. What the exception adds is a signal to the caller that this
+    was not a failure of the errand but of the environment the errand
+    was attempted in: an empty or unparseable
+    `CASTLE_WORKER_COMMAND`, or a command that could not be exec'd.
+
+    That distinction matters exactly once, and only for a sweep. A
+    transient exec environment — a store path swapped mid-rebuild, a
+    broken PATH — is the same for every request in the queue, so a
+    sweep that shrugged and carried on would burn the one automatic
+    attempt of every eligible errand in a single pass, and exit 0 while
+    doing it. Aborting caps the damage at one errand and turns the
+    unit red, which is what the unit's health signal is for.
+
+    Carries the id of the result it already wrote, so a caller can
+    point at it.
+    """
+
+    def __init__(self, message: str, result_id: str):
+        super().__init__(message)
+        self.result_id = result_id
+
+
 class LeaseHeld(Exception):
     """Another live process already holds this request's worker lease.
 
@@ -1458,11 +1486,10 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         # the ordinary router path instead of leaving them to notice a
         # growing pile of nothing.
         if not command.strip():
-            print(
-                "castle work: no worker command configured (CASTLE_WORKER_COMMAND is empty)",
-                file=sys.stderr,
-            )
-            return (
+            message = "no worker command configured (CASTLE_WORKER_COMMAND is empty)"
+            print(f"castle work: {message}", file=sys.stderr)
+            raise TenantNotRunnable(
+                message,
                 _write_worker_result(
                     request,
                     outcome="failed",
@@ -1476,16 +1503,14 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                         f"`castle work {request.id}`.",
                     ],
                 ),
-                "failed",
             )
         try:
             argv = shlex.split(command)
         except ValueError as exc:
-            print(
-                f"castle work: could not parse CASTLE_WORKER_COMMAND ({command!r}): {exc}",
-                file=sys.stderr,
-            )
-            return (
+            message = f"could not parse CASTLE_WORKER_COMMAND ({command!r}): {exc}"
+            print(f"castle work: {message}", file=sys.stderr)
+            raise TenantNotRunnable(
+                message,
                 _write_worker_result(
                     request,
                     outcome="failed",
@@ -1498,7 +1523,6 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                         f"and re-run `castle work {request.id}`.",
                     ],
                 ),
-                "failed",
             )
 
         diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
@@ -1565,11 +1589,10 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                     start_new_session=True,
                 )
             except OSError as exc:
-                print(
-                    f"castle work: could not run worker command {command!r}: {exc}",
-                    file=sys.stderr,
-                )
-                return (
+                message = f"could not run worker command {command!r}: {exc}"
+                print(f"castle work: {message}", file=sys.stderr)
+                raise TenantNotRunnable(
+                    message,
                     _write_worker_result(
                         request,
                         outcome="failed",
@@ -1583,7 +1606,6 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                             f"`castle work {request.id}`.",
                         ],
                     ),
-                    "failed",
                 )
 
             timed_out = False
@@ -1776,6 +1798,14 @@ def cmd_work(args: argparse.Namespace) -> int:
 
     try:
         record_id, outcome = run_worker_turn(request)
+    except TenantNotRunnable as exc:
+        # The stderr message was already printed by the path that
+        # raised, and the `outcome: failed` result is already written —
+        # hand-run behavior is exactly what it was. The exception
+        # exists for `castle dispatch`, which must not attempt the next
+        # errand with the same broken tenant.
+        print(exc.result_id)
+        return 1
     except LeaseHeld:
         print(
             f"castle work: a worker already holds this errand's lease ({args.request_id}); "
@@ -2256,6 +2286,24 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             request = eligible[0]
             try:
                 record_id, outcome = run_worker_turn(request)
+            except TenantNotRunnable as exc:
+                # The errand's own `outcome: failed` result is already
+                # written, so this request is accounted for and bounded
+                # — but the fault is in the environment, not the
+                # errand, and it is the same environment every other
+                # eligible request would meet. Carrying on would burn
+                # the one automatic attempt of the whole queue in a
+                # single pass, and exit 0 while doing it. Stop at one,
+                # and let the unit go red so the health signal says
+                # what is actually wrong.
+                print(
+                    f"castle dispatch: the configured worker tenant could not be "
+                    f"run ({exc}); recorded {exc.result_id} for {request.id} and "
+                    "stopping this sweep rather than spending every other eligible "
+                    "request's one automatic attempt on the same fault",
+                    file=sys.stderr,
+                )
+                return 1
             except LeaseHeld:
                 # A human running `castle work` by hand reached this
                 # request first. A skip, not an error.

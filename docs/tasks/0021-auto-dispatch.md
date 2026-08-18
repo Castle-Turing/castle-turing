@@ -593,7 +593,18 @@ for whatever it found — including errands that themselves failed
 (failure is visible via the `outcome` field, §3.5, the router, and the
 status surfaces, §4; it is not a *mechanism* failure). Nonzero is
 reserved for mechanism faults: an unreadable journal, a watermark that
-cannot be written or read back, and the like. Note that
+cannot be written or read back, **and a worker tenant that cannot be
+started at all** (§3.4's three paths — empty command, unparseable
+command, `OSError` on exec). That last one was added after review, and
+it also *stops the sweep*: the errand it was attempting still gets its
+bounded `outcome: failed` result, but the fault is in the environment
+rather than the errand, and it is the same environment every other
+eligible request would meet. A sweep that shrugged and carried on
+would spend the one automatic attempt of the entire queue on a single
+transient fault — a store path swapped mid-rebuild, a broken `PATH` —
+and exit 0 while doing it. Aborting caps the damage at one errand per
+sweep and makes the unit's health signal say what is actually
+wrong. Note that
 an unparseable `watermark:` *timestamp* is no longer one of them —
 once exclusion moved to `refs`, nothing reads that field except
 `_find_watermark`, so a cosmetically mangled value is not a reason to
@@ -835,6 +846,13 @@ two things at once: it makes the request **ineligible** going forward
 tells the resident through the ordinary router path — "seat empty, and
 the resident is told," per `docs/architecture.md`'s occupancy language
 — instead of leaving them to notice a growing pile of nothing.
+
+These three paths also **raise** after writing their result
+(`TenantNotRunnable`, carrying the result's id). `cmd_work` catches it
+and returns 1 with the message it already printed, so hand-run
+behavior is byte-for-byte what it was; `cmd_dispatch` catches it and
+stops the sweep — see §2.7 for why one broken exec environment must
+not consume every eligible request's single automatic attempt.
 
 *A review finding, dispositioned rather than fixed:* these three now
 write a `result` for a **hand-run** `castle work` too, not only for a

@@ -519,6 +519,34 @@ log "  -- and it stays an ordinary request: runnable by hand, not deleted or dow
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
+log "a tenant that cannot be started stops the sweep — it does not burn every eligible request's one attempt"
+# The bounded-retry rule is per request, so a sweep that shrugged at an
+# unrunnable tenant and carried on would spend the single automatic
+# attempt of EVERY eligible errand on one transient fault — a store
+# path swapped mid-rebuild, a broken PATH — and exit 0 while doing it.
+# The errand it did attempt still gets its `outcome: failed` result
+# (that is what closes the silent-retry loop); what stops is the sweep.
+REQ_ABORT_A="$("$CASTLE" ask "Dispatch test: first of two, attempted with a broken tenant.")"
+sleep 1
+REQ_ABORT_B="$("$CASTLE" ask "Dispatch test: second of two, must survive the broken tenant untouched.")"
+if CASTLE_WORKER_COMMAND="$WORKDIR/still-not-a-real-binary" "$CASTLE" dispatch >"$WORKDIR/abort-sweep.out" 2>&1; then
+  fail "a sweep whose tenant could not be started exited 0 — the unit's health signal has to say the mechanism broke"
+fi
+cat "$WORKDIR/abort-sweep.out"
+grep -q "stopping this sweep" "$WORKDIR/abort-sweep.out" || fail "the aborting sweep did not explain itself: $(cat "$WORKDIR/abort-sweep.out")"
+[ "$(count_referencing result "$REQ_ABORT_A")" -eq 1 ] || fail "the attempted request has no failed result — the silent-retry loop is back"
+grep -q '^outcome: failed$' "$(referencing result "$REQ_ABORT_A")" || fail "the attempted request's result does not carry outcome: failed"
+[ "$(count_referencing result "$REQ_ABORT_B")" -eq 0 ] || fail "the second eligible request was attempted too — one broken tenant consumed more than one automatic attempt"
+[ "$(count_referencing claim "$REQ_ABORT_B")" -eq 0 ] || fail "the second eligible request was claimed despite the sweep aborting"
+"$CASTLE" validate
+
+log "  -- and the survivor is still eligible once the tenant works again"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_ABORT_B")" -eq 1 ] || fail "the request spared by the abort was not picked up by the next healthy sweep"
+grep -q '^outcome: completed$' "$(referencing result "$REQ_ABORT_B")" || fail "the spared request did not complete on the next sweep"
+"$CASTLE" validate
+
+# ---------------------------------------------------------------------
 log "corrections are never routed, even when dispatch is what triggers the router"
 # ---------------------------------------------------------------------
 CORRECTION="$("$CASTLE" correct "Dispatch test: the resident says how the system is doing.")"
