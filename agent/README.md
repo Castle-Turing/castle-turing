@@ -246,8 +246,10 @@ castle-modal --mode status  [--limit N]
   make a finished errand read as interrupted, and a second turn that
   died is not masked by an older turn's result. A request a tenant
   filed during its own turn reads "filed during a worker turn — `castle
-  work <id>` to run it", since nothing will ever start it
-  automatically. A result's
+  work <id>` to run it", and one the watermark excluded reads "not
+  started automatically (predates dispatch) — `castle work <id>` to run
+  it": nothing will ever start either of them on its own, so neither
+  may claim to be awaiting a worker. A result's
   `outcome` supplies the rest — `done`, or "failed / timed out /
   interrupted — castle work `<id>` to retry". Every non-done label
   names the retry command on purpose: 0015's lesson was that a label

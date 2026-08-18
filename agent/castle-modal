@@ -315,6 +315,20 @@ def _errand_state(castle, request, downstream: list) -> str:
         # No claim records anywhere on this errand: a journal from
         # before docs/tasks/0021, where nothing recorded turns at all.
         base = _outcome_label(results[-1].fields.get("outcome", ""), request_id)
+    elif any(
+        rec.type == "decision"
+        and rec.fields.get("seat") == castle.DISPATCH_SEAT
+        and rec.fields.get("watermark", "").strip()
+        for rec in downstream
+    ):
+        # The watermark names the requests it excluded in its own refs
+        # (docs/tasks/0021 §2.2), which is exactly why it turns up in
+        # this errand's downstream fold — so the reason nothing is
+        # happening is already here, and "awaiting a worker" would be
+        # 0015's failure again: a label promising a start that is never
+        # coming, on an errand automatic dispatch has permanently
+        # declined to touch.
+        base = f"not started automatically (predates dispatch) — castle work {request_id} to run it"
     elif request.fields.get(castle.FILED_DURING_TURN_FIELD, "").strip():
         # A request a worker tenant filed during its own turn
         # (docs/tasks/0021 §2.4(e)). "Awaiting a worker" would be the

@@ -1025,7 +1025,15 @@ shares with the reaper's own probe). A `claim` with
 a **dead** lease and no result reads as interrupted (the same case
 §2.3's reaper is racing to write a `result` for — between "the lease
 died" and "the next sweep reaps it," the honest label is "interrupted,"
-not "in progress," since nothing is actually running). A request carrying `filed-during-turn` (§2.4(e)) with no claims and no
+not "in progress," since nothing is actually running). A request the watermark excluded (§2.2), with no claims and no results
+→ `"not started automatically (predates dispatch) — castle work <id>
+to run it"`. The watermark names its excluded requests in its own
+`refs`, so it is already in that errand's downstream fold and the
+explanation is right there; `"awaiting a worker"` on an errand
+automatic dispatch has permanently declined to touch is 0015's failure
+again, in a third costume.
+
+A request carrying `filed-during-turn` (§2.4(e)) with no claims and no
 results → `"filed during a worker turn — castle work <id> to run it"`.
 Added with that stamp, and for the same reason the fallthrough was
 fixed in the first place: dispatch deliberately never starts these, so

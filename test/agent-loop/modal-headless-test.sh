@@ -550,6 +550,38 @@ STATUS_HAND_CLOSED="$("$MODAL" --mode status --limit 40)"
 echo "$STATUS_HAND_CLOSED" | grep -q "^\[$REQ_HAND_CLOSED\] requested — done$" \
   || fail "an errand a resident closed by hand still reads as unfinished: $(echo "$STATUS_HAND_CLOSED" | grep "$REQ_HAND_CLOSED" || true)"
 
+log "status mode: a request the watermark excluded says so, instead of waiting for a worker that will never come"
+# The watermark names its excluded requests in its own refs, so the
+# explanation is already in this errand's downstream fold — and
+# "awaiting a worker" on an errand automatic dispatch has permanently
+# declined to touch is 0015's failure exactly.
+REQ_PREDATES="$("$CASTLE" ask "Filed before dispatch existed on this journal.")"
+WATERMARK_FIXTURE="$CASTLE_STATE_DIR/journal/20260101T000600Z-decision-0f0001.md"
+cat > "$WATERMARK_FIXTURE" <<EOF
+---
+id: 20260101T000600Z-decision-0f0001
+type: decision
+provenance: initiated
+refs: $REQ_PREDATES
+seat: dispatch
+created: 2026-01-01T00:06:00Z
+evidence: planted watermark fixture: dispatch began after this request was filed
+watermark: 2026-01-01T00:06:00Z
+---
+
+Planted fixture: the dispatch watermark, naming $REQ_PREDATES as excluded.
+EOF
+"$CASTLE" validate || fail "the planted watermark fixture does not validate"
+STATUS_PREDATES="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES\] requested — not started automatically (predates dispatch) — castle work $REQ_PREDATES to run it$" \
+  || fail "a watermark-excluded request did not say so: $(echo "$STATUS_PREDATES" | grep "$REQ_PREDATES" || true)"
+echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES\] requested — awaiting a worker$" \
+  && fail "a watermark-excluded request still claims to be awaiting a worker — nothing will ever start it automatically"
+# The watermark is a decision with no channel, and the fold renders it
+# as a note rather than inventing a routing that never happened.
+echo "$STATUS_PREDATES" | grep -A2 "^\[$REQ_PREDATES\]" | grep -q "noted: planted watermark fixture" \
+  || fail "the channel-less watermark decision did not render as a note under the errand it excluded"
+
 log "status mode: a request a tenant filed during its own turn says so, instead of promising a worker that is never coming"
 # docs/tasks/0021 §2.4(e): dispatch deliberately never starts these, so
 # "awaiting a worker" would be 0015's exact failure — a label promising
