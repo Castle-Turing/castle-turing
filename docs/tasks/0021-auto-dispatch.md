@@ -426,6 +426,19 @@ own, and the runtime directory is wiped at reboot regardless. The journal is the
 here; the lease is only ever a liveness probe, never the record of
 what happened.
 
+*One accepted limit, stated rather than engineered around:* a worker
+deliberately outliving its login session (`nohup castle work …`, or
+one left running in tmux after logout) loses its lease without losing
+its life — systemd removes `/run/user/$UID` at session end, taking the
+lock file with it — so a later sweep can write `interrupted` for a
+turn that is still working. It is accepted because surviving logout is
+outside this mechanism's stated lifetime: the units are
+`WantedBy=default.target` with no lingering (§1), which draws the same
+boundary on purpose. And the live turn still writes its own result
+when it finishes, so the journal carries both accounts rather than
+losing one — two visible, contradictory records a resident can read
+beat one confident wrong one.
+
 **A note on what "probing" actually means**, since both this reaper and
 `_errand_state`'s live-lease check (§4) do it: a probe is a nonblocking
 acquire immediately followed by a release, purely to test whether the

@@ -314,7 +314,7 @@ RESULT_INT="$(basename "$RESULT_INT_FILE" .md)"
 [ -n "$(referencing decision "$RESULT_INT")" ] || fail "the reaped result was not routed"
 [ "$(count_referencing result "$REQ_INT")" -eq 1 ] || fail "the reaped request was ALSO dispatched — a reaped result must make it ineligible"
 
-log "the reaper also clears a stale lease file left behind by a dead process"
+log "the reaper also handles a claim whose lease FILE outlived the process holding it — the file's presence proves nothing, only the lock does"
 REQ_INT2="$("$CASTLE" ask "Dispatch test: an interrupted turn whose lease file outlived it.")"
 CLAIM_INT2="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ_INT2" \
   --body "Planted claim: the lease file survived, but nothing holds it.")"

@@ -1869,6 +1869,21 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     and it does so from the surviving claim record. The journal is the
     authority here; the lease is only ever a liveness probe, never the
     record of what happened.
+
+    **Honest limit, accepted rather than fixed.** A worker deliberately
+    outliving its login session — `nohup castle work …`, or one left in
+    a tmux session after logout — loses its lease without losing its
+    life: systemd removes /run/user/$UID at the end of the session, so
+    the lock file goes with it while the process runs on. A later sweep
+    then sees a claim with no live lease and writes `interrupted` for a
+    turn that is still working. Accepted for two reasons. Surviving
+    logout is outside this mechanism's stated lifetime — the units are
+    `WantedBy=default.target` with no lingering, which draws the same
+    boundary deliberately (docs/tasks/0021 §1) — and the live turn
+    still writes its own result when it finishes, so the journal ends
+    up carrying both accounts of the same turn rather than silently
+    losing one. Two visible, contradictory records a resident can read
+    is a better failure than a confident wrong one.
     """
     reaped: list[str] = []
     # Which *claims* are closed, not which requests are answered. Every
