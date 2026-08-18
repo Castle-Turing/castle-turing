@@ -336,6 +336,12 @@ def _answer_refusal(exc) -> str:
         return "castle-modal: no such question, nothing filed."
     if exc.kind == "wrong_type":
         return "castle-modal: that is not a question, nothing filed."
+    if exc.kind == "unreadable_answer":
+        # No path and no id, unlike the CLI's version of this same
+        # refusal: this surface may not hand the resident a filename to
+        # go and fix. It says what happened and that nothing was
+        # written, which is the honest part they can act on.
+        return "castle-modal: can't check that question is still open, nothing filed."
     return "castle-modal: empty answer, nothing filed."
 
 

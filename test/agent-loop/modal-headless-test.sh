@@ -1055,4 +1055,64 @@ grep -q "No errands yet" "$WORKDIR/status-empty.txt" \
   || fail "the empty-journal status path did not print its message before pausing"
 [ "$(transcript_rc "$WORKDIR/status-empty.txt")" = "0" ] || fail "empty-journal status mode did not exit 0"
 
+log "file_answer: a resident-model entry that cannot be written must not cost the resident their answer (review round 1, finding 3)"
+# The answer record is durable before the entry is attempted, and the
+# already-answered guard would refuse a retry — so an escaping OSError
+# here would lose the typed answer permanently. The model is a view
+# over the journal and can be re-derived; the record cannot.
+REQ_MODEL_FAIL="$("$CASTLE" ask "Answer-mode errand ten: the model file is not writable.")"
+Q_MODEL_FAIL="$(plant_question "$REQ_MODEL_FAIL" 20260201T001000Z \
+  "Does a failed model write still leave the answer filed?" "model-write-posture")"
+MODEL_FILE="$CASTLE_STATE_DIR/resident-model.md"
+MODEL_BEFORE="$(model_byte_count)"
+chmod 0444 "$MODEL_FILE"
+set +e
+MODEL_FAIL_ID="$("$CASTLE" answer "$Q_MODEL_FAIL" "Yes, it should." 2>"$WORKDIR/model-fail-err")"
+MODEL_FAIL_RC=$?
+set -e
+chmod 0644 "$MODEL_FILE"
+[ "$MODEL_FAIL_RC" = "0" ] || fail "castle answer exited $MODEL_FAIL_RC when only the resident-model write failed — the answer itself was fine"
+[ -n "$MODEL_FAIL_ID" ] || fail "castle answer printed no record id when the resident-model write failed"
+[ -f "$CASTLE_STATE_DIR/journal/$MODEL_FAIL_ID.md" ] || fail "castle answer printed $MODEL_FAIL_ID but wrote no such record"
+grep -q "could not be written" "$WORKDIR/model-fail-err" \
+  || fail "nothing on stderr said the resident-model entry failed: $(cat "$WORKDIR/model-fail-err")"
+grep -q "$MODEL_FAIL_ID" "$WORKDIR/model-fail-err" \
+  || fail "the diagnostic did not name the answer that WAS filed: $(cat "$WORKDIR/model-fail-err")"
+[ "$(model_byte_count)" = "$MODEL_BEFORE" ] || fail "the resident model grew even though its write failed"
+grep -q "recorded resident-model entry" "$WORKDIR/model-fail-err" \
+  && fail "castle answer claimed it recorded an entry that was never written"
+"$CASTLE" validate || fail "the journal does not validate after a failed resident-model write"
+
+log "file_answer: an answer record that does not parse stops the guard cold, on both surfaces (review round 1, finding 8)"
+# load_all skips what it cannot parse, so folding the guard over it
+# would let one corrupt answer re-open the silent duplicate the guard
+# exists to close. An unreadable answer means pendingness cannot be
+# established, and neither surface may write through that.
+REQ_CORRUPT="$("$CASTLE" ask "Answer-mode errand eleven: a corrupt answer record blocks the guard.")"
+Q_CORRUPT="$(plant_question "$REQ_CORRUPT" 20260201T001100Z "Is this question still open?")"
+CORRUPT_ANSWER="$CASTLE_STATE_DIR/journal/20260201T001101Z-answer-broken.md"
+printf 'this file has no frontmatter at all and cannot be parsed\n' > "$CORRUPT_ANSWER"
+FILES_BEFORE="$(journal_file_count)"
+if "$CASTLE" answer "$Q_CORRUPT" "Trying anyway." 2>"$WORKDIR/corrupt-cli-err"; then
+  fail "castle answer wrote an answer while an unparseable answer record made pendingness unknowable"
+fi
+grep -q "cannot verify" "$WORKDIR/corrupt-cli-err" \
+  || fail "the CLI refusal did not say it could not verify the question's state: $(cat "$WORKDIR/corrupt-cli-err")"
+grep -q "castle validate" "$WORKDIR/corrupt-cli-err" \
+  || fail "the CLI refusal did not point at castle validate: $(cat "$WORKDIR/corrupt-cli-err")"
+if printf 'Trying anyway.\n.\n' | "$MODAL" --mode answer --question "$Q_CORRUPT" 2>"$WORKDIR/corrupt-modal-err"; then
+  fail "castle-modal wrote an answer while an unparseable answer record made pendingness unknowable"
+fi
+grep -q "can.t check that question is still open, nothing filed." "$WORKDIR/corrupt-modal-err" \
+  || fail "the modal refusal did not use its plain, path-free wording: $(cat "$WORKDIR/corrupt-modal-err")"
+grep -q "$CORRUPT_ANSWER" "$WORKDIR/corrupt-modal-err" \
+  && fail "the modal named a journal path — this surface may not hand the resident a filename"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "something was written despite both refusals"
+rm -f "$CORRUPT_ANSWER"
+"$CASTLE" validate || fail "the journal does not validate once the corrupt fixture is removed"
+# And with the corrupt file gone, the same answer goes through: the
+# refusal was about the unreadable file, not about this question.
+"$CASTLE" answer "$Q_CORRUPT" "Now it works." >/dev/null \
+  || fail "the answer was still refused after the unparseable record was removed"
+
 log "all assertions passed"

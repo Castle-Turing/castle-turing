@@ -110,14 +110,26 @@ skip one:
 2. `question_id` resolves via `load_journal_record` — exists and parses.
 3. The resolved record's `type` is `question`.
 4. **New**: an immediate pendingness re-check, run right before the
-   write — walk every existing `answer` record in the journal and refuse
-   if any one's `refs` already contains `question_id`.
+   write — read every `*-answer-*.md` file in the journal and refuse if
+   any one's `refs` already contains `question_id`.
+
+   *(Corrected during implementation — review round 1, finding 8. This
+   originally folded over `load_all`, which skips any file that fails to
+   parse: one corrupt answer record would have silently re-opened the
+   duplicate this guard exists to close. The scan is strict instead —
+   each `*-answer-*.md` is parsed directly, and a file that does not
+   parse raises rather than being passed over. The read surfaces keep
+   using `load_all` and stay tolerant on purpose: a picker that renders
+   nothing at all because of one bad record is worse than one that shows
+   the rest, while a guard deciding whether to write has the opposite
+   duty.)*
 
 Every refusal raises one new module-level exception,
 `AnswerRefused(Exception)`, carrying a machine-usable `kind` (a short
 string: `"empty_body"`, `"no_such_record"`, `"wrong_type"`,
-`"already_answered"`) plus whatever detail that kind needs — for
-`already_answered`, the existing answer record's id. One exception type
+`"already_answered"`, `"unreadable_answer"`) plus whatever detail that
+kind needs — for `already_answered`, the existing answer record's id;
+for `unreadable_answer`, the path that would not parse. One exception type
 with a `kind` field, not four exception classes, because every caller of
 `file_answer` needs the same dispatch (map kind to wording) and a single
 type with a discriminant is the smaller surface for that. Each caller —
@@ -128,6 +140,22 @@ stderr line (the `recorded resident-model entry for fact '...'` line,
 which names an internal fact key and must never reach the modal) while
 the modal speaks a different, plain-language sentence over the identical
 underlying write.
+
+*(One deliberate exception, added during implementation — review round
+1, finding 3. The `append_model_entry` call is wrapped in
+`try/except OSError`, and on failure `file_answer` prints one stderr
+diagnostic naming the filed answer id and returns `(record_id, None)`.
+Letting that exception escape would cost the resident the answer they
+just typed — the CLI never printing its id, the modal closing on a
+traceback in zero frames — and, because the already-answered guard now
+refuses a retry, would make it unrepeatable forever. The model is a
+derived, regenerable view over the journal (`agent/README.md`), so the
+entry can be re-derived from the question and answer records; the record
+cannot be recovered. The rule this bends exists so no caller inherits
+another surface's **wording**, and a mechanism fault is not surface
+wording: neither caller can render this one — the CLI would have to
+re-detect it, and the modal's vocabulary rule forbids it from saying it
+at all, while neither may lie about what happened.)*
 
 On success, `file_answer`:
 

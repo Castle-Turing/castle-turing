@@ -704,9 +704,10 @@ class AnswerRefused(Exception):
     a discriminant is the smaller surface for that.
 
     `kind` is one of "empty_body", "no_such_record", "wrong_type",
-    "already_answered". The extra attributes carry whatever detail a kind
-    needs — `record_type` for "wrong_type", `existing_answer_id` for
-    "already_answered" — and are empty strings otherwise. No wording
+    "already_answered", "unreadable_answer". The extra attributes carry
+    whatever detail a kind needs — `record_type` for "wrong_type",
+    `existing_answer_id` for "already_answered", `path` for
+    "unreadable_answer" — and are empty strings otherwise. No wording
     lives here or in `file_answer`: `cmd_answer` prints ids and the CLI's
     long-standing spellings, castle-modal's answer mode prints plain
     language with no ids at all, and both render from the same `kind`.
@@ -719,12 +720,14 @@ class AnswerRefused(Exception):
         question_id: str = "",
         record_type: str = "",
         existing_answer_id: str = "",
+        path: str = "",
     ):
         super().__init__(kind)
         self.kind = kind
         self.question_id = question_id
         self.record_type = record_type
         self.existing_answer_id = existing_answer_id
+        self.path = path
 
 
 def file_answer(
@@ -795,7 +798,27 @@ def file_answer(
     # duplicate answer could land, on a single-resident machine, in a
     # window measured in microseconds, and a lock around a data model
     # built specifically to need none costs more than the residual risk.
-    for rec in sorted(load_all(journal_dir()).values(), key=lambda rec: rec.id):
+    # Scanned strictly, file by file, rather than folded out of
+    # `load_all`: that helper skips anything that fails to parse, so a
+    # single corrupt answer record would silently re-open the duplicate
+    # this guard exists to close — the one failure mode where "carry on
+    # with what parsed" is exactly wrong. An unreadable answer file
+    # means the question's state cannot be established, and the honest
+    # move is to refuse and say which file to look at.
+    #
+    # The asymmetry with the read surfaces is deliberate: the picker in
+    # castle-modal and the status overlay both fold with `load_all` and
+    # stay tolerant of a corrupt file, because a surface that refuses to
+    # render anything at all over one bad record is worse than one
+    # showing the rest. A guard that decides whether to *write* has the
+    # opposite duty.
+    for path in sorted(journal_dir().glob("*-answer-*.md")):
+        try:
+            rec = parse_record(path)
+        except RecordError:
+            raise AnswerRefused(
+                "unreadable_answer", question_id=question_id, path=str(path)
+            ) from None
         if rec.type == "answer" and question_id in rec.refs:
             raise AnswerRefused(
                 "already_answered", question_id=question_id, existing_answer_id=rec.id
@@ -833,13 +856,43 @@ def file_answer(
         if question.body.strip():
             entry_lines.append(f"Q: {question.body.strip()}")
         entry_lines.append(f"A: {body.strip()}")
-        append_model_entry(
-            fact=resolved_fact.strip(),
-            asked=question_id,
-            answered=record_id,
-            when=when,
-            body="\n".join(entry_lines),
-        )
+        try:
+            append_model_entry(
+                fact=resolved_fact.strip(),
+                asked=question_id,
+                answered=record_id,
+                when=when,
+                body="\n".join(entry_lines),
+            )
+        except OSError as exc:
+            # The answer record is already durable at this point, and
+            # the new already-answered guard means a retry of the same
+            # answer would now be refused — so letting this escape would
+            # cost the resident the answer they just typed (the CLI
+            # never printing its id, the modal window closing on an
+            # unhandled traceback in zero frames) AND make it
+            # unrepeatable forever. The model is a derived, regenerable
+            # *view* over the journal, not a second source of truth
+            # (agent/README.md, "The resident model"): the question and
+            # the answer are both in the journal, so this entry can be
+            # re-derived later. Losing the view is a bad afternoon;
+            # losing the record is unrecoverable.
+            #
+            # This one print is a deliberate exception to "file_answer
+            # prints nothing, ever". That rule exists so no caller
+            # inherits another surface's *wording* — and a mechanism
+            # fault is not surface wording. Neither caller can render
+            # this: the CLI would have to re-detect it, and the modal
+            # must not say it at all (its vocabulary rule) while still
+            # not lying about what happened.
+            print(
+                f"castle: answer {record_id} was filed, but its resident-model entry "
+                f"could not be written ({exc}). Nothing is lost — the model is a view "
+                "over the journal, and this entry can be re-derived from the question "
+                "and answer records.",
+                file=sys.stderr,
+            )
+            return record_id, None
         return record_id, resolved_fact.strip()
     return record_id, None
 
@@ -1107,6 +1160,11 @@ def _answer_refusal_message(exc: AnswerRefused) -> str:
             f"castle answer: {exc.question_id} is not a question record "
             f"(type={exc.record_type!r})"
         )
+    if exc.kind == "unreadable_answer":
+        return (
+            f"castle answer: cannot verify {exc.question_id} is still open — "
+            f"{exc.path} does not parse; run `castle validate`"
+        )
     return (
         f"castle answer: {exc.question_id} was already answered by "
         f"{exc.existing_answer_id} — a second answer would leave two records "
@@ -1358,6 +1416,11 @@ def _route_journal_locked() -> int:
         appended.append((decision_id, rec.id, channel))
         if channel == "notify":
             summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
+            # 200 characters is the cap on the whole body, not on the
+            # part before the hint: appending after the slice would let
+            # a question notification run to 230 and defeat the limit
+            # rather than spend it. The hint is the part worth keeping
+            # whole, so the summary yields the room.
             notification_body = summary[:200]
             if rec.type == "question":
                 # The notification is the only *push* channel this system
@@ -1388,7 +1451,8 @@ def _route_journal_locked() -> int:
                 # notification body is wrapped by the daemon anyway, so
                 # the newline bought nothing and cost a false failure in
                 # a harness this task does not otherwise touch.
-                notification_body += " Press Mod4+Shift+a to answer."
+                hint = " Press Mod4+Shift+a to answer."
+                notification_body = summary[: 200 - len(hint)] + hint
             _fire_notification(f"Castle Turing — {rec.type}", notification_body)
 
     if not appended:
