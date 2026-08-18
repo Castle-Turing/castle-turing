@@ -9,13 +9,15 @@
 # dispatch is a subcommand rather than a shell script embedded in a
 # unit file.
 #
-# It is also the first harness anywhere that exercises the REAL
+# It is also the first harness in this directory to exercise the REAL
 # castle.agent.worker.command contract: request body on stdin,
 # reasoning on stdout, a diff or nothing to $CASTLE_DIFF_FILE,
 # $CASTLE_REQUEST_ID/$CASTLE_REPO_ROOT in the environment. run.sh and
-# test/desktop-loop/test.nix both call scripted-worker.sh with two
-# positional arguments, bypassing `cmd_work` entirely — see
-# contract-worker.sh's header for why those stay exactly as they are.
+# tenant-swap.sh still call scripted-worker.sh with two positional
+# arguments and bypass `cmd_work` entirely — see contract-worker.sh's
+# header for why those stay exactly as they are. (test/desktop-loop
+# went through `cmd_work` as of this same task: dispatch invokes it
+# there, with a contract-conforming tenant pinned in the VM.)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,6 +27,7 @@ WORKER_OK="$REPO_ROOT/test/agent-loop/contract-worker.sh"
 WORKER_FAIL="$REPO_ROOT/test/agent-loop/contract-worker-fail.sh"
 WORKER_HANG="$REPO_ROOT/test/agent-loop/contract-worker-hang.sh"
 WORKER_DIE="$REPO_ROOT/test/agent-loop/contract-worker-die.sh"
+WORKER_FILER="$REPO_ROOT/test/agent-loop/contract-worker-filer.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-dispatch-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -181,7 +184,13 @@ cat "$WORKDIR/conc-a.out" "$WORKDIR/conc-b.out"
 log "a hand-run castle work is refused while another turn holds the errand's lease, and writes nothing"
 # ---------------------------------------------------------------------
 REQ_LEASE="$("$CASTLE" ask "Dispatch test: the lease refusal path.")"
-CASTLE_TEST_WORKER_SLEEP=3 "$CASTLE" work "$REQ_LEASE" >"$WORKDIR/lease-holder.out" 2>&1 &
+# Ten seconds, not three: the assertion below is that a *second*
+# castle work is refused while this one holds the lease, and on a
+# loaded CI runner a three-second turn can finish before the refusal is
+# even attempted — turning a real regression into a legitimate retry
+# that passes. The window only needs to be wider than the harness is
+# slow.
+CASTLE_TEST_WORKER_SLEEP=10 "$CASTLE" work "$REQ_LEASE" >"$WORKDIR/lease-holder.out" 2>&1 &
 LEASE_HOLDER=$!
 for _ in $(seq 1 50); do
   [ "$(count_referencing claim "$REQ_LEASE")" -eq 1 ] && break
@@ -308,6 +317,54 @@ CASTLE_WORKER_COMMAND="$WORKDIR/definitely-not-a-real-binary" "$CASTLE" dispatch
 RESULT_NOBIN_FILE="$(referencing result "$REQ_NOBIN")"
 [ -n "$RESULT_NOBIN_FILE" ] || fail "an unrunnable worker command left no record at all"
 grep -q '^outcome: failed$' "$RESULT_NOBIN_FILE" || fail "$RESULT_NOBIN_FILE does not carry outcome: failed"
+"$CASTLE" validate
+
+# ---------------------------------------------------------------------
+log "a request a tenant files during its own turn is stamped, and never auto-dispatched (docs/tasks/0021 §2.4(e))"
+# ---------------------------------------------------------------------
+# The unbounded-spend case, and the reason it is not hypothetical: a
+# tenant that notices a second problem while fixing the first files it
+# the sanctioned way, with `castle ask`. Each filed request used to be
+# a fresh errand with its own fresh automatic attempt, so one sweep
+# could run turn after turn — holding the global dispatch lock
+# throughout — off a single resident request. Reproduced at five turns
+# before the stamp existed.
+REQ_FILER="$("$CASTLE" ask "Dispatch test: the tenant will file a follow-up while working this.")"
+REQUESTS_BEFORE_FILER="$(count_of_type request)"
+FILER_START="$(date +%s)"
+CASTLE_WORKER_COMMAND="$WORKER_FILER" CASTLE_TEST_CASTLE_BIN="$CASTLE" "$CASTLE" dispatch >"$WORKDIR/filer-sweep.out" 2>&1   || fail "the filer sweep exited nonzero: $(cat "$WORKDIR/filer-sweep.out")"
+FILER_ELAPSED=$(( $(date +%s) - FILER_START ))
+cat "$WORKDIR/filer-sweep.out"
+# It terminated at all: the assertion that would have hung forever (or
+# until the harness was killed) before the fix.
+[ "$FILER_ELAPSED" -lt 60 ] || fail "the sweep took ${FILER_ELAPSED}s — a tenant-filed request is extending it"
+[ "$(count_referencing result "$REQ_FILER")" -eq 1 ] || fail "expected exactly 1 result for $REQ_FILER, got $(count_referencing result "$REQ_FILER")"
+[ "$(count_of_type request)" -eq $(( REQUESTS_BEFORE_FILER + 1 )) ] || fail "expected exactly one follow-up request to have been filed, got $(( $(count_of_type request) - REQUESTS_BEFORE_FILER ))"
+
+FOLLOW_UP_FILE="$(grep -l '^filed-during-turn: ' "$JOURNAL"/*-request-*.md 2>/dev/null || true)"
+[ -n "$FOLLOW_UP_FILE" ] || fail "the tenant's follow-up request carries no filed-during-turn stamp — nothing stops it being auto-dispatched"
+FOLLOW_UP="$(basename "$FOLLOW_UP_FILE" .md)"
+log "  -> follow-up request: $FOLLOW_UP"
+CLAIM_FOR_FILER="$(basename "$(referencing claim "$REQ_FILER")" .md)"
+grep -q "^filed-during-turn: $CLAIM_FOR_FILER\$" "$FOLLOW_UP_FILE" || fail "$FOLLOW_UP_FILE's filed-during-turn does not name the claim of the turn that filed it ($CLAIM_FOR_FILER)"
+# The tenant never sets this itself — it runs plain `castle ask`. The
+# stamp arrives because the tenant inherits CASTLE_WORKER_CLAIM, which
+# is the whole mechanism, and a `castle record --type request` would
+# have been stamped identically.
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$FOLLOW_UP")" -eq 0 ] || fail "a tenant-filed request was auto-dispatched on a later sweep"
+[ "$(count_referencing claim "$FOLLOW_UP")" -eq 0 ] || fail "a tenant-filed request was claimed by a worker on a later sweep"
+"$CASTLE" validate
+
+log "  -- and it stays an ordinary request: runnable by hand, not deleted or downgraded"
+"$CASTLE" work "$FOLLOW_UP" >/dev/null || fail "castle work refused to run a tenant-filed request by hand — the stamp must bound automatic spend, not forbid the work"
+[ "$(count_referencing result "$FOLLOW_UP")" -eq 1 ] || fail "a hand-run castle work on the tenant-filed request produced no result"
+# That hand-run result is unrouted until something routes it, and the
+# next section asserts a sweep appends nothing when only a correction
+# is outstanding — so route it here rather than leaving a false
+# positive lying in wait for that assertion.
+"$CASTLE" dispatch >/dev/null
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------

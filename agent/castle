@@ -75,6 +75,35 @@ import tempfile
 RECORD_TYPES = ("request", "decision", "result", "question", "answer", "correction", "claim")
 PROVENANCE_VALUES = ("requested", "initiated")
 
+# Stamped on a `request` record written while a worker tenant's turn is
+# running (docs/tasks/0021 §2.4(e)); its value is that turn's `claim`
+# id. `castle dispatch` never starts a request carrying it.
+#
+# The one-automatic-attempt bound (§2.4(b)) is per request, and that is
+# only a bound on unattended spend while the *supply* of requests is
+# outside the tenant's control. It isn't: a tenant can file a request
+# mid-turn, through `castle ask` or `castle record` like anything else,
+# and each new request is a fresh errand with its own fresh attempt.
+# Observed, not theorised — one sweep ran five turns off a single
+# resident request before this stamp existed, and the sweep holds the
+# global dispatch lock the whole time it does so.
+#
+# The stamp severs the chain at generation one, and it is a mechanical
+# observation rather than a judgment: "this request was filed while
+# that turn was running" is a fact about who was executing at write
+# time, not a claim about the request's worth. Whether the follow-up
+# work happens stays a human decision — the request is an ordinary
+# request, it shows up in the status surface like any other, and
+# `castle work <id>` runs it.
+FILED_DURING_TURN_FIELD = "filed-during-turn"
+
+# The environment variable that carries the running turn's claim id
+# into the tenant's own environment, and from there into any `castle`
+# the tenant invokes. Set on the tenant's env dict only — never on
+# os.environ of the dispatching process, which would stamp every
+# request the dispatcher itself later wrote.
+WORKER_CLAIM_ENV = "CASTLE_WORKER_CLAIM"
+
 # The closed vocabulary of the `outcome` field on `result` records
 # (docs/tasks/0021 §3.5). `completed`/`failed`/`timeout` are written by
 # whichever invoker watched the tenant finish, fail, or hang;
@@ -137,6 +166,11 @@ FIELD_ORDER = (
     "seat",
     "created",
     "outcome",
+    # Request-only, and next to `outcome` for the same reason: it is
+    # the machine-readable half of what the record says about its own
+    # circumstances, and a reader skimming a request should meet it
+    # before the prose.
+    "filed-during-turn",
     "surface",
     "context-local-created",
     "context-last-notify",
@@ -453,6 +487,16 @@ def write_record(
         fields["evidence"] = evidence
     if extra:
         fields.update(extra)
+    # Stamped here rather than in `cmd_ask`, deliberately: a worker
+    # tenant files a follow-up request with whatever hands it has —
+    # `castle ask`, `castle record --type request`, or anything else
+    # that ends up calling this function — and a stamp applied at one
+    # of those entry points would simply be avoided by using another.
+    # This is the single choke point every written record passes
+    # through (docs/tasks/0021 §2.4(e)).
+    claim_id = os.environ.get(WORKER_CLAIM_ENV, "").strip()
+    if type == "request" and claim_id and FILED_DURING_TURN_FIELD not in fields:
+        fields[FILED_DURING_TURN_FIELD] = claim_id
     _reject_newline_fields(fields, what="record")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{record_id}.md"
@@ -1226,7 +1270,7 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         except OSError:
             pass
 
-        write_record(
+        claim_id = write_record(
             journal_dir(),
             type="claim",
             provenance=request.fields.get("provenance", "requested"),
@@ -1312,6 +1356,13 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
             env["CASTLE_REQUEST_BODY"] = request.body
             env["CASTLE_DIFF_FILE"] = str(diff_path)
             env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
+            # On the TENANT's environment only — never on os.environ,
+            # which would stamp every request this process later wrote
+            # as though a turn had filed it. Any `castle` the tenant
+            # runs inherits this and stamps the requests it writes
+            # (write_record), which is what stops a tenant from
+            # generating its own unattended work (§2.4(e)).
+            env[WORKER_CLAIM_ENV] = claim_id
 
             try:
                 # start_new_session=True puts the tenant in its own
@@ -1704,7 +1755,8 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
     """The eligibility fold — the authority the wakeup is only a hint
     for (docs/tasks/0021 §2.4). A request is eligible iff it is a
     request, no result references it, it is not named in the watermark
-    record's refs, and nothing is running on it.
+    record's refs, it was not filed by a tenant during its own turn,
+    and nothing is running on it.
 
     Deliberately NOT conditions here, each recorded so a future reader
     does not "fix" the omission: **provenance** (an `initiated` request
@@ -1729,6 +1781,13 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
         # request whose arrival woke the very first sweep could land on
         # the wrong side of its own watermark and be stranded forever.
         and rec.id not in excluded
+        # A request a worker tenant filed during its own turn is never
+        # started automatically (§2.4(e), and see
+        # FILED_DURING_TURN_FIELD for the unbounded-spend chain this
+        # severs). It stays an ordinary request otherwise: visible in
+        # the status surface, runnable with `castle work <id>`, and
+        # never quietly deleted or downgraded.
+        and not rec.fields.get(FILED_DURING_TURN_FIELD, "").strip()
         # Checked last, because it is the only condition that costs a
         # syscall — and it subsumes §2.4(c)'s "no claim currently holds
         # a live lease": the lease is taken before the claim is

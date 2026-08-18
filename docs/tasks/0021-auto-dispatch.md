@@ -415,7 +415,40 @@ only a hint for. A request is eligible iff:
   the sliver of a turn between "lease taken" and "claim written," which
   a claim-keyed check would read as eligible.*
 - (d) it is not named in the watermark record's `refs` (§2.2 — the
-  exclusion is a list of ids, deliberately not a timestamp comparison).
+  exclusion is a list of ids, deliberately not a timestamp comparison);
+- (e) it carries no `filed-during-turn` field — i.e. no worker tenant
+  filed it while its own turn was running.
+
+*(e) is the one condition here that bounds spend rather than
+correctness, and it was added during implementation because the sweep
+turned out not to terminate without it.* The one-automatic-attempt
+rule (b) is per request, and that bounds unattended spend only while
+the **supply** of requests is outside the tenant's control. It isn't: a
+tenant that notices a second problem while fixing the first files it
+the sanctioned way — `castle ask`, the same intake any seat uses — and
+each filed request is a fresh errand with its own fresh automatic
+attempt. Observed, not theorised: one sweep ran five turns off a single
+resident request, holding the global dispatch lock throughout.
+
+The stamp is applied in `write_record` rather than in `cmd_ask`,
+because a tenant files with whatever hands it has (`castle ask`,
+`castle record --type request`, anything else that ends up writing a
+record) and a stamp at one entry point is simply avoided by using
+another; `write_record` is the choke point every written record
+passes through. Its value is the running turn's `claim` id, carried to
+the tenant in `CASTLE_WORKER_CLAIM` on the tenant's environment only —
+never on the dispatcher's own — and inherited by anything the tenant
+runs. The tenant neither sets it nor knows it exists.
+
+It is a **mechanical observation, not a judgment**: "this request was
+filed while that turn was running" is a fact about who was executing
+at write time, and it says nothing about whether the work is worth
+doing. So the request stays an ordinary request — it appears in the
+status surface like any other, and `castle work <id>` runs it. What
+the stamp removes is only the *automatic* attempt: the chain is
+severed at generation one, and whether a tenant's follow-up work
+happens goes back to being a human decision, which is where a
+cost-and-authority question of that shape belongs.
 
 Deliberately **not** conditions on eligibility, each recorded here with
 its reason so a future reader does not "fix" the omission:
@@ -852,6 +885,13 @@ coverage. New fixtures:
 - `contract-worker-die.sh` — kills itself with `SIGKILL` mid-turn, to
   exercise a signal death distinctly from a clean nonzero exit (see
   §3.5's `failed`-versus-`interrupted` distinction).
+- `contract-worker-filer.sh` — *added during implementation, with
+  §2.4(e)*: files one follow-up request with `castle ask` during its
+  own turn. Not a pathological tenant — this is what a reasonable one
+  does — which is exactly why the sweep has to stay bounded in its
+  presence. It also proves the inheritance path the stamp depends on:
+  the fixture never sets `filed-during-turn` and does not know it
+  exists, it just runs `castle ask`.
 
 The existing `scripted-worker.sh` and `scripted-worker-alt.py` stay
 **byte-for-byte untouched** — they hold the worker seat for `run.sh`
@@ -897,6 +937,12 @@ python3 like every other harness in this directory, its own CI job in
 - an empty `CASTLE_WORKER_COMMAND` yields `outcome: failed` on the very
   first sweep, not a silent, unbounded retry loop across several
   sweeps;
+- a request a tenant filed during its own turn carries
+  `filed-during-turn` naming that turn's claim, the sweep that ran the
+  tenant terminates promptly, and two further sweeps never dispatch the
+  follow-up — while `castle work <id>` on it by hand still works,
+  because the stamp bounds automatic spend rather than forbidding the
+  work (§2.4(e));
 - `correction` records are never routed, even when dispatch is what
   triggers `castle route` (reusing `run.sh`'s existing assertion shape
   under automatic triggering rather than a hand-run `castle route`);

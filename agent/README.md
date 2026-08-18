@@ -137,8 +137,9 @@ castle show ID
   interrupted turn a result; work every eligible request, oldest
   first, one at a time; run `route` exactly once at the end. A request
   is eligible iff nothing has produced a `result` for it, nothing is
-  running on it, and it was created at or after the watermark — a fold
-  over the journal, nothing else. Provenance is deliberately *not* an
+  running on it, it is not named in the watermark record's own `refs`,
+  and it carries no `filed-during-turn` stamp — a fold over the
+  journal, nothing else. Provenance is deliberately *not* an
   eligibility condition (it decides the channel, never whether the
   errand runs), and neither is an unanswered question (errand
   resumption is `docs/backlog/errand-resume-after-answer.md`'s
@@ -406,6 +407,26 @@ would know one had happened. `castle record --type claim` is
 permitted, unlike `--type correction`: a claim is a mechanical
 observation, not resident speech, so none of the reasoning that makes
 corrections special applies.
+
+A **`filed-during-turn`** field on `request` records, whose value is a
+`claim` id. `write_record` stamps it on any request written while a
+worker tenant's turn is running — the tenant carries
+`CASTLE_WORKER_CLAIM` in its environment, and anything it invokes
+(`castle ask`, `castle record --type request`) inherits it. Dispatch
+never auto-starts a request carrying the stamp.
+
+The reason is spend, not correctness. "One automatic attempt per
+request" bounds unattended work only while the *supply* of requests is
+outside the tenant's control, and it isn't: a tenant that spots a
+second problem while fixing the first files it the sanctioned way, and
+each new request is a fresh errand with a fresh attempt. One sweep ran
+five turns off a single resident request before this existed. The
+stamp is a mechanical observation — "filed while that turn was
+running," a fact about who was executing, never a claim about the
+request's worth — so the request stays an ordinary request: it appears
+in the status fold like any other and `castle work <id>` runs it. Only
+the automatic attempt is withheld, which puts "should this follow-up
+happen?" back where a cost-and-authority question belongs.
 
 An **`outcome`** field on `result` records, from a closed vocabulary:
 
@@ -732,7 +753,9 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   automatically; a hanging tenant under `CASTLE_WORKER_TIMEOUT=2`
   produces `outcome: timeout` in seconds rather than its full sleep; a
   planted claim with an absent or stale lease is reaped into an
-  `outcome: interrupted` result that then gets routed; an `answer`
+  `outcome: interrupted` result that then gets routed; a request a
+  tenant filed mid-turn is stamped, never auto-started, and still
+  runnable by hand; an `answer`
   filed against a question on an already-worked errand does **not**
   make it eligible again (an explicit non-behavior — task 0023's
   territory, and a regression here would silently widen 0021's scope
