@@ -1172,7 +1172,24 @@ dispatch unit specifically rather than just for the modal). This makes
 the VM test into exactly the feature's acceptance condition: filing one
 request through the modal produces a routed outcome with no subsequent
 resident CLI action at all. The correction-filing flow and the file's
-other existing assertions are unchanged. Remember to check the path
+other existing assertions are unchanged.
+
+*Two additions made while implementing that, both to keep coverage the
+swap would otherwise have removed or left thin.* The scripted tenant
+**raises a `question` before doing its work**: pinning
+`worker.command` to the contract fixtures took away the only thing in
+this VM that ever produced a question record, leaving
+worker-raises-a-question-and-the-router-delivers-it — a central claim
+of `docs/architecture.md`, and exactly what
+`agent/castle-worker-claude`'s prompt instructs a real tenant to do —
+with no coverage inside a booted systemd session at all. The test
+asserts the question exists, references the request, and was routed to
+`notify` by the same sweep. And the notify health assertion matches on
+`castle route:` rather than on `notify command`: `_fire_notification`
+has two warning variants and only one of them says "notify command",
+while both carry that prefix — and the router's ordinary reports print
+`route: …` and the sweep's print `dispatch: …` without it, so the
+substring covers both failures without matching healthy output. Remember to check the path
 filters in `.github/workflows/desktop-loop-test.yml` if this adds any
 new fixture file paths that need triggering the workflow.
 
