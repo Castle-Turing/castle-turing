@@ -1744,6 +1744,94 @@ def worker_timeout_seconds() -> int:
     return value
 
 
+def render_continuation_packet(records: dict[str, Record], request: Record) -> str:
+    """What goes on the tenant's stdin: this errand's own records,
+    verbatim (docs/tasks/0023 §7).
+
+    Rendered on **every** turn, with no branch for "is this a first
+    turn." On a first turn it degenerates to one section holding
+    exactly today's stdin — the request body — under a heading, which
+    is what keeps this one function rather than two. That uniformity is
+    the point: every replaceable tenant receives the same record-level
+    context, so continuing an errand needs no warm session, no vendor
+    resume token, and no hidden transcript (Proposal 03 applied to
+    errand continuity — a resumption that only worked because the same
+    process was still alive would not count).
+
+    **The fold is selective, not `_collect_downstream`.** That helper
+    is transitive over `refs` with no keying by type or errand, and
+    using it here would hand a worker tenant three things it must never
+    read: the watermark decision record, any `correction` the resident
+    filed against this request (the resident judging the *system* — see
+    docs/architecture.md's Router paragraph; feeding it back into the
+    work being judged is exactly backwards, and `cmd_digest` already
+    filters corrections out of its errand fold for the same reason),
+    and a follow-up request's entire subtree. Results are keyed the way
+    `closing_result` keys them, questions the way `_resumable_answers`
+    keys them — identically, deliberately: if eligibility and the
+    packet disagreed about which questions belong here, a request could
+    become eligible from a question the packet then failed to render,
+    handing a tenant an answer id whose own question is missing from
+    its own stdin.
+
+    `decision` records are excluded too: they carry the router's
+    channel-and-timing reasoning about when to interrupt the resident,
+    which invites a worker to reason about the resident's attention —
+    not information an errand's work needs. `claim` records are in the
+    errand fold but not in the packet: they say a turn began and with
+    which tenant, which the result of that turn already accounts for in
+    prose. Resident-model entries are excluded as well, and that one is
+    a real gap rather than a decision about this packet — no worker
+    reads the resident model on any turn, first or resumed
+    (docs/backlog/workers-do-not-read-the-resident-model.md).
+
+    No truncation and no size limit, anywhere. A cap would be an
+    invented constant with no measurement behind it, and silently
+    withholding the context this whole path exists to deliver is a
+    worse failure than an occasionally long prompt.
+    """
+    lines = [f"# Errand `{request.id}` — everything this errand has recorded so far", ""]
+    lines += ["## The original request, in the resident's own words", ""]
+    lines += [request.body.strip(), ""]
+
+    results = sorted(
+        (rec for rec in records.values() if rec.type == "result" and request.id in rec.refs),
+        key=lambda rec: rec.id,
+    )
+    for index, result in enumerate(results, start=1):
+        lines += [f"## Account of an earlier turn on this errand ({index} of {len(results)})", ""]
+        lines += [result.body.strip(), ""]
+
+    questions = sorted(
+        (
+            rec
+            for rec in records.values()
+            if rec.type == "question"
+            and (root := _find_root_request(records, rec)) is not None
+            and root.id == request.id
+        ),
+        key=lambda rec: rec.id,
+    )
+    for question in questions:
+        answers = sorted(
+            (
+                rec
+                for rec in records.values()
+                if rec.type == "answer" and question.id in rec.refs
+            ),
+            key=lambda rec: rec.id,
+        )
+        blocking = "blocking" if question.fields.get(BLOCKING_FIELD, "").strip() else "not blocking"
+        answered = "answered below" if answers else "not answered yet"
+        lines += [f"## A question this errand raised ({blocking}, {answered})", ""]
+        lines += [question.body.strip(), ""]
+        for answer in answers:
+            lines += ["### The resident's answer, verbatim", ""]
+            lines += [answer.body.strip(), ""]
+
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def _write_worker_result(
     request: Record, *, outcome: str, body_lines: list[str], claim_id: str
 ) -> str:
@@ -1819,6 +1907,25 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
         started = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
 
+        # What this turn is resuming, and the context it will be handed
+        # to resume it with, pinned here — after the lease, before the
+        # claim (docs/tasks/0023 §7). Both come off one read of the
+        # journal, so the answers the claim spends and the questions
+        # the packet renders cannot disagree with each other.
+        #
+        # Recomputed here rather than passed in by the caller,
+        # deliberately: `_eligible_requests` uses the same fold to
+        # decide *whether* a turn starts, and this decides *what* the
+        # turn resumes — so `castle work <id>` by hand, which never
+        # consults eligibility at all, resumes exactly what a
+        # dispatched turn would, with no second code path to keep in
+        # sync. The narrow race left (an answer becoming spent between
+        # dispatch's check and this one) is the same probe-then-act
+        # shape `lock_is_held` already documents and accepts.
+        turn_records = load_all(journal_dir())
+        resuming = _resumable_answers(turn_records, request.id)
+        continuation = render_continuation_packet(turn_records, request)
+
         # The lease file's contents are informational only — a human
         # looking at $XDG_RUNTIME_DIR/castle/leases/ deserves to see
         # what is holding it. The durable account is the claim record
@@ -1831,18 +1938,47 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         except OSError:
             pass
 
+        # The claim is also the receipt for whatever this turn is
+        # resuming: the request id first, exactly as before, then every
+        # answer this turn was given (docs/tasks/0023 §3). That is what
+        # spends them. It has to be the claim rather than the result,
+        # because the claim is written here — before the tenant command
+        # is even resolved — so every turn that starts leaves one no
+        # matter how it ends, while a result can be written by paths
+        # (the reaper, the tenant-fault branches below) that cannot
+        # know an answer id at all. Spending on a record those paths
+        # cannot write correctly would leave a crashed resumed turn
+        # eligible forever: one model call per timer tick, silently.
+        #
+        # Every existing consumer keys claims by `refs[0]` — the reaper,
+        # `closing_result`, castle-modal's `_errand_state` — so the ids
+        # after it are invisible to all three, and a first turn's claim
+        # is byte-identical to what it always was.
+        claim_body_lines = [
+            f"Worker turn on errand `{request.id}` began at {started}.",
+            "",
+            f"Tenant command: `{command}`",
+            "",
+        ]
+        if resuming:
+            claim_body_lines += [
+                "This turn is a RESUMPTION: the resident answered a blocking "
+                "question this errand raised, and the answer ids after the "
+                "request id in this record's own refs are what that turn was "
+                "given. Naming them here is what spends them, so no later "
+                "sweep resumes the same answer twice — however this turn ends "
+                "(docs/tasks/0023-resume-cold.md §3).",
+                "",
+            ]
         claim_id = write_record(
             journal_dir(),
             type="claim",
             provenance=request.fields.get("provenance", "requested"),
             seat="worker",
-            refs=[request.id],
+            refs=[request.id] + [answer.id for answer in resuming],
             body="\n".join(
-                [
-                    f"Worker turn on errand `{request.id}` began at {started}.",
-                    "",
-                    f"Tenant command: `{command}`",
-                    "",
+                claim_body_lines
+                + [
                     "This record exists so an interrupted turn stays visible "
                     "after the machine that was running it is gone: the lease "
                     "that guarantees exclusion lives in $XDG_RUNTIME_DIR and "
@@ -1931,6 +2067,17 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
             # (write_record), which is what stops a tenant from
             # generating its own unattended work (§2.4(e)).
             env[WORKER_CLAIM_ENV] = claim_id
+            # Absent, not empty, on a first turn — and *popped* rather
+            # than merely left unset, because `env` starts as a copy of
+            # os.environ and a tenant that itself runs `castle work`
+            # (or a resident who exported this by hand) would otherwise
+            # leak a stale value into a turn that is resuming nothing.
+            # The claim's refs are the durable account of what a turn
+            # resumed; this variable only has to agree with it.
+            if resuming:
+                env[RESUME_ANSWER_IDS_ENV] = ",".join(answer.id for answer in resuming)
+            else:
+                env.pop(RESUME_ANSWER_IDS_ENV, None)
 
             try:
                 # start_new_session=True puts the tenant in its own
@@ -2041,7 +2188,17 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 # promise for retried communication.
                 stdout, stderr = None, None
                 deadline = time.monotonic() + timeout
-                pending_input: str | None = request.body
+                # The continuation packet, not the bare request body:
+                # on a first turn the two differ only by a heading, and
+                # on a resumed one this is the whole of what a fresh
+                # tenant gets to know (docs/tasks/0023 §7). Assembled
+                # here, inside run_worker_turn, rather than in
+                # `cmd_work` — `cmd_dispatch` calls this function
+                # directly, so a builder in `cmd_work` would give a
+                # hand-run turn and a dispatched one different stdin on
+                # the same errand, breaking the "same code path by
+                # construction" property this docstring claims.
+                pending_input: str | None = continuation
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
