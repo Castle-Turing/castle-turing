@@ -493,6 +493,47 @@ STATUS_OPEN_TURN="$("$MODAL" --mode status --limit 40)"
 echo "$STATUS_OPEN_TURN" | grep -q "^\[$REQ_OPEN_TURN\] requested — interrupted — castle work $REQ_OPEN_TURN to retry$" \
   || fail "an unclosed newest turn was masked by an older turn's result: $(echo "$STATUS_OPEN_TURN" | grep "$REQ_OPEN_TURN" || true)"
 
+log "status mode: an outcome value this version does not know renders verbatim, never as 'done'"
+# `outcome` is a named cross-task contract (0026/0027 reuse it), so a
+# value from a later task, a hand-written record, or a typo will reach
+# this surface eventually. Reporting it as success because it was not
+# recognised is precisely the prose-vs-field failure the field exists
+# to end. Planted directly and removed again, the same pattern
+# run.sh's malformed-propensity fixtures use: `castle validate`
+# rejects unknown outcomes on purpose, so the record cannot be left
+# lying in the journal.
+REQ_UNKNOWN_OUTCOME="$("$CASTLE" ask "An outcome from a vocabulary this version has never heard of.")"
+UNKNOWN_RESULT="$CASTLE_STATE_DIR/journal/20260101T000500Z-result-0e0001.md"
+cat > "$UNKNOWN_RESULT" <<EOF
+---
+id: 20260101T000500Z-result-0e0001
+type: result
+provenance: requested
+refs: $REQ_UNKNOWN_OUTCOME
+seat: worker
+created: 2026-01-01T00:05:00Z
+outcome: cancelled
+---
+
+Planted fixture: an outcome value outside this version's vocabulary.
+EOF
+STATUS_UNKNOWN="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_UNKNOWN" | grep -q "^\[$REQ_UNKNOWN_OUTCOME\] requested — cancelled — castle work $REQ_UNKNOWN_OUTCOME to retry$" \
+  || fail "an unrecognised outcome did not render verbatim with a retry hint: $(echo "$STATUS_UNKNOWN" | grep "$REQ_UNKNOWN_OUTCOME" || true)"
+echo "$STATUS_UNKNOWN" | grep -q "^\[$REQ_UNKNOWN_OUTCOME\] requested — done$" \
+  && fail "an unrecognised outcome was reported as done — success by default on a field that exists to prevent exactly that"
+rm -f "$UNKNOWN_RESULT"
+"$CASTLE" validate || fail "the journal did not validate clean once the unknown-outcome fixture was removed"
+
+log "castle record --outcome: a human holding the worker seat can state the fact, and the surface reads it"
+REQ_HANDFAIL="$("$CASTLE" ask "A failed errand a human recorded by hand.")"
+"$CASTLE" record --type result --provenance requested --seat worker --refs "$REQ_HANDFAIL" \
+  --outcome failed --body "Tried it by hand; it did not work." >/dev/null
+STATUS_HANDFAIL="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_HANDFAIL" | grep -q "^\[$REQ_HANDFAIL\] requested — failed — castle work $REQ_HANDFAIL to retry$" \
+  || fail "a hand-written result with --outcome failed did not read as failed: $(echo "$STATUS_HANDFAIL" | grep "$REQ_HANDFAIL" || true)"
+"$CASTLE" validate || fail "a hand-written result carrying --outcome does not validate"
+
 log "status mode: a claim closed by a HAND-WRITTEN result (no claim id in its refs) reads by that result, not as interrupted"
 # The human-seat-holder shape: `castle work` crashed, the resident
 # finished the errand with `castle record --type result --refs R` — the

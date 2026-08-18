@@ -41,7 +41,7 @@ file, `agent/castle`, meant to be read top to bottom.
 castle ask [--provenance requested|initiated] [--refs id,id] TEXT...
 castle answer QUESTION_ID [--fact NAME] TEXT...
 castle correct [--refs id,id] TEXT...
-castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--body TEXT | --body-file PATH] [--spool]
+castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--outcome VALUE] [--body TEXT | --body-file PATH] [--spool]
 castle route
 castle work REQUEST_ID
 castle dispatch
@@ -82,7 +82,11 @@ castle show ID
 - **`record`** — the generic writer underneath the above, and what a
   worker or router seat calls directly. Any seat, any type. `--fact` is
   honored here too so a worker raising a `question` record can name the
-  fact it's eliciting up front.
+  fact it's eliciting up front, and `--outcome` likewise for a
+  `result` — **a human holding the worker seat by hand should pass
+  `--outcome failed` when an errand failed**, because no surface may
+  read failure out of prose: a result with no `outcome` field reads as
+  done, forever (see "The claim record, and the `outcome` field").
 - **`route`** — the router. Reads every `result` and `question` record
   not yet referenced by a `decision` record **written by the router
   seat itself** — filtering on `seat: router`, not just record type, is
@@ -471,6 +475,14 @@ and it lives in this field; the body carries the reasoning. That is
 not hypothetical hygiene — before this field existed, a failed errand's
 result body said "FAILED" in prose and `castle-modal`'s status fold,
 having no way to read it, reported the errand as plain "done."
+
+A surface meeting a value it does not recognise — a later task
+extending this vocabulary, a hand-written record, a typo — renders it
+**verbatim, with the retry hint**, never as "done". Defaulting an
+unknown member of a named contract to success would be the same
+prose-versus-field failure the field was added to end, one level up.
+Absent and `completed` keep meaning done, which is the append-only
+compatibility promise.
 
 Like `considered`/`propensity`, and for the identical reason,
 `outcome` is validated **when present** and never required: the

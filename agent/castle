@@ -834,7 +834,11 @@ def cmd_record(args: argparse.Namespace) -> int:
     elif body is None and not sys.stdin.isatty():
         body = sys.stdin.read()
     target = spool_dir() if args.spool else journal_dir()
-    extra = {"fact": args.fact} if getattr(args, "fact", None) else None
+    extra: dict[str, str] = {}
+    if getattr(args, "fact", None):
+        extra["fact"] = args.fact
+    if getattr(args, "outcome", None):
+        extra["outcome"] = args.outcome
     record_id = write_record(
         target,
         type=args.type,
@@ -843,7 +847,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         refs=split_refs(args.refs or ""),
         evidence=args.evidence,
         body=body or "",
-        extra=extra,
+        extra=extra or None,
     )
     print(record_id)
     return 0
@@ -2539,6 +2543,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--fact",
         default=None,
         help="resident-model fact name (question records only, by convention) — see 'castle answer'",
+    )
+    p_record.add_argument(
+        "--outcome",
+        default=None,
+        choices=OUTCOME_VALUES,
+        help=(
+            "what happened to a worker turn (result records only, by convention — "
+            "the same way --fact is question-records-by-convention). A human "
+            "holding the worker seat by hand should pass this: no surface may "
+            "read failure out of prose, so a failed errand with no `outcome` "
+            "field reads as done, forever (docs/tasks/0021-auto-dispatch.md)."
+        ),
     )
     p_record.add_argument("--body", default=None, help="record body text")
     p_record.add_argument("--body-file", default=None, help="read the body from this file instead")

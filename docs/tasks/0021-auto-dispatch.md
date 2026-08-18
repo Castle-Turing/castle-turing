@@ -871,6 +871,18 @@ while its invoker survives to see the exit is `failed`; only an
 invoker that never got the chance to write anything produces
 `interrupted`.
 
+Two surface obligations that come with a *named* vocabulary, both
+added after review. `castle record` takes `--outcome` (choices are the
+closed set), so a human holding the worker seat by hand can state the
+fact rather than leaving a failed errand to read as done — the same
+"by convention" shape `--fact` already has for question records. And
+`_errand_state` renders an **unrecognised** non-empty value verbatim
+with the retry hint rather than folding it into "done": this field is
+a contract tasks 0026/0027 extend, so a value from the future will
+reach an older surface eventually, and reporting it as success because
+it was not understood is the prose-versus-field failure this field
+exists to end, one level up. Absent and `completed` still mean done.
+
 `cmd_validate` treats it exactly like `considered`/
 `propensity`: **validated when present, checked for membership in the
 closed set, never required** — the journal is append-only, and every

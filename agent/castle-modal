@@ -222,6 +222,18 @@ def _outcome_label(outcome: str, request_id: str) -> str:
         return f"timed out — castle work {request_id} to retry"
     if outcome == "interrupted":
         return f"interrupted — castle work {request_id} to retry"
+    if outcome and outcome != "completed":
+        # An outcome from outside today's vocabulary — a later task
+        # extending the contract, a hand-written record, a typo. Shown
+        # verbatim with the retry hint rather than folded into "done":
+        # `outcome` is a named cross-task contract (agent/README.md),
+        # and defaulting an unrecognised member of it to success is the
+        # exact failure this whole field exists to end — a surface
+        # quietly reporting an errand as fine because it did not
+        # understand what it was told. Absent and `completed` keep
+        # meaning done, which is the append-only compatibility promise
+        # and unchanged.
+        return f"{outcome} — castle work {request_id} to retry"
     return "done"
 
 
