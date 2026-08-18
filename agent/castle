@@ -1747,6 +1747,60 @@ def cmd_work(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def closing_result(
+    claim: Record, results: list[Record], claim_ids: set[str]
+) -> Record | None:
+    """The result that accounts for this turn, or None if the turn is
+    still open (docs/tasks/0021 §2.3). Shared by `castle dispatch`'s
+    reaper and `castle-modal`'s status fold so the two can never
+    disagree about whether a turn was ever closed.
+
+    Two clauses, and the second one exists because of a shape the CLI
+    itself suggests:
+
+    (a) **A result naming the claim.** Every worker result does
+        (`_write_worker_result`), and so does the reaper's own. Exact,
+        per turn, unambiguous.
+
+    (b) **A newer result naming the claim's request and no claim at
+        all.** This is the human-seat-holder shape: a resident whose
+        `castle work R` crashed finishes the errand by hand with
+        `castle record --type result --refs R` — the obvious spelling,
+        the one the help text implies — and that result closes the
+        dangling claim. Without it the next sweep wrote a permanent
+        `interrupted` contradicting a result the resident had just
+        filed, fired a second notification about it, and the status
+        surface masked the human's own closure forever. Every result
+        written before this task has this shape too, so clause (b) is
+        also what stops a pre-0021 journal being reaped wholesale the
+        first time dispatch runs over it.
+
+    The exclusion in (b) — a result that names *any* claim of this
+    request never closes a different one by recency — is what keeps
+    per-turn accounting intact, and the counterexample is concrete: the
+    reaper's own `interrupted` result for an old claim A lands with the
+    newest id in the journal, and without that exclusion it would close
+    still-open claim B, hiding a live or crashed turn behind an
+    unrelated turn's account.
+    """
+    request_id = claim.refs[0] if claim.refs else ""
+    named = [rec for rec in results if claim.id in rec.refs]
+    if named:
+        return max(named, key=lambda rec: rec.id)
+    if not request_id:
+        return None
+    by_recency = [
+        rec
+        for rec in results
+        if request_id in rec.refs
+        and rec.id > claim.id
+        and not any(ref in claim_ids for ref in rec.refs)
+    ]
+    if by_recency:
+        return max(by_recency, key=lambda rec: rec.id)
+    return None
+
+
 def _requests_with_results(records: dict[str, Record]) -> set[str]:
     """Every request id some `result` record references. Any result at
     all makes a request permanently ineligible regardless of its
@@ -1902,23 +1956,17 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     is a better failure than a confident wrong one.
     """
     reaped: list[str] = []
-    # Which *claims* are closed, not which requests are answered. Every
-    # result a worker turn writes names the claim it closes (see
-    # `_write_worker_result`), so this is a per-turn ledger: a request
-    # that already carries a `failed` result from an earlier turn is
-    # still reapable for a later turn that died, which is exactly the
-    # hand-retry case — resident retries a failed errand, the retry is
-    # interrupted, and under a per-request rule nothing would ever
-    # record that second turn's fate.
-    closed = {
-        ref
-        for rec in records.values()
-        if rec.type == "result"
-        for ref in rec.refs
-    }
+    # A per-*turn* ledger, not a per-request one: a request that already
+    # carries a `failed` result from an earlier turn is still reapable
+    # for a later turn that died (the hand-retry case). `closing_result`
+    # owns both clauses of "is this turn accounted for" — see its
+    # docstring, especially clause (b), which is what stops this reaper
+    # contradicting a resident who closed the errand by hand.
+    results = [rec for rec in records.values() if rec.type == "result"]
     claims = sorted(
         (rec for rec in records.values() if rec.type == "claim"), key=lambda rec: rec.id
     )
+    claim_ids = {rec.id for rec in claims}
     for claim in claims:
         refs = claim.refs
         if not refs:
@@ -1927,7 +1975,7 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
         request = records.get(request_id)
         if request is None or request.type != "request":
             continue
-        if claim.id in closed:
+        if closing_result(claim, results, claim_ids) is not None:
             continue
 
         # Acquiring is the probe: held means a worker is running this
@@ -1942,9 +1990,9 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
             # over a turn that actually completed would be a permanent
             # lie in an append-only log.
             fresh = load_all(journal_dir())
-            if any(
-                rec.type == "result" and claim.id in rec.refs for rec in fresh.values()
-            ):
+            fresh_results = [rec for rec in fresh.values() if rec.type == "result"]
+            fresh_claim_ids = {rec.id for rec in fresh.values() if rec.type == "claim"}
+            if closing_result(claim, fresh_results, fresh_claim_ids) is not None:
                 continue
             started = claim.fields.get("created", "unknown")
             record_id = write_record(
@@ -1974,7 +2022,7 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
                 extra={"outcome": "interrupted"},
             )
             reaped.append(record_id)
-            closed.add(claim.id)
+            results.append(parse_record(journal_dir() / f"{record_id}.md"))
             # The stale lease file is deliberately left where it is.
             # An earlier version unlinked it here "to keep the
             # directory honest," which reintroduced exactly the race

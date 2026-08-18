@@ -284,10 +284,16 @@ def _errand_state(castle, request, downstream: list) -> str:
             base = f"in progress (started {_started_at(castle, newest_claim)})"
         else:
             # The result that closes *this* turn, not merely the newest
-            # result on the errand.
-            closing = [rec for rec in results if newest_claim.id in rec.refs]
-            if closing:
-                base = _outcome_label(closing[-1].fields.get("outcome", ""), request_id)
+            # result on the errand — and the same two-clause rule the
+            # dispatch reaper uses, from the same function, so the two
+            # surfaces can never disagree about whether a turn was ever
+            # accounted for. Clause (b) is what stops this label
+            # masking a resident's own hand-written closure behind an
+            # "interrupted" the reaper was about to contradict.
+            claim_ids = {rec.id for rec in claims}
+            closing = castle.closing_result(newest_claim, results, claim_ids)
+            if closing is not None:
+                base = _outcome_label(closing.fields.get("outcome", ""), request_id)
             else:
                 # The window between "the lease died" and "the next
                 # dispatch sweep reaps it into a result". Nothing is

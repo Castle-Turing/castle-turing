@@ -361,6 +361,27 @@ grep -q "$CLAIM_INT2" "$RESULT_INT2_FILE" || fail "$RESULT_INT2_FILE does not ci
 # remain, and either way the reaping above is what matters.
 "$CASTLE" validate
 
+log "a resident who closes a crashed errand by hand is not contradicted by the next sweep"
+# The shape the CLI itself suggests: `castle work R` crashed leaving a
+# dangling claim, and the resident finishes the errand by hand with
+# `castle record --type result --refs R` — no claim id, because the
+# help text never asks for one. Before the recency clause, the next
+# sweep reaped that claim into a permanent `interrupted` contradicting
+# the result the resident had just written, fired a second
+# notification about it, and the status surface masked the human's own
+# closure forever.
+REQ_HANDCLOSE="$("$CASTLE" ask "Dispatch test: a crashed turn the resident finishes by hand.")"
+CLAIM_HANDCLOSE="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ_HANDCLOSE" \
+  --body "Planted claim: a turn that crashed before writing anything.")"
+HANDCLOSE_RESULT="$("$CASTLE" record --type result --provenance requested --seat worker --refs "$REQ_HANDCLOSE" \
+  --body "Resident finished this errand by hand after the worker crashed.")"
+log "  -> claim $CLAIM_HANDCLOSE closed by hand-written result $HANDCLOSE_RESULT"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_HANDCLOSE")" -eq 1 ] || fail "the sweep wrote a second result for $REQ_HANDCLOSE — it reaped a turn the resident had already accounted for by hand"
+grep -l '^outcome: interrupted$' "$JOURNAL"/*-result-*.md 2>/dev/null | xargs -r grep -l "$CLAIM_HANDCLOSE" >/dev/null 2>&1 \
+  && fail "an interrupted result was written for $CLAIM_HANDCLOSE despite a hand-written closure"
+"$CASTLE" validate
+
 log "per-turn accounting: an interrupted RETRY of an already-failed errand is still reaped"
 # The case a per-request rule got wrong. $REQ_FAIL already carries a
 # `failed` result from its automatic attempt. A resident retries it by

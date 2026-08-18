@@ -493,6 +493,22 @@ STATUS_OPEN_TURN="$("$MODAL" --mode status --limit 40)"
 echo "$STATUS_OPEN_TURN" | grep -q "^\[$REQ_OPEN_TURN\] requested — interrupted — castle work $REQ_OPEN_TURN to retry$" \
   || fail "an unclosed newest turn was masked by an older turn's result: $(echo "$STATUS_OPEN_TURN" | grep "$REQ_OPEN_TURN" || true)"
 
+log "status mode: a claim closed by a HAND-WRITTEN result (no claim id in its refs) reads by that result, not as interrupted"
+# The human-seat-holder shape: `castle work` crashed, the resident
+# finished the errand with `castle record --type result --refs R` — the
+# spelling the CLI implies — and the status surface used to mask that
+# closure behind "interrupted" forever, while the next sweep prepared
+# to contradict it in the journal. Same two-clause rule as the reaper,
+# from the same function.
+REQ_HAND_CLOSED="$("$CASTLE" ask "A crashed turn the resident closed by hand.")"
+plant_claim "$REQ_HAND_CLOSED" 0d0001 20260101T000100Z >/dev/null
+# Request-only refs, newer id: exactly what `castle record` writes.
+plant_result_with_outcome "$REQ_HAND_CLOSED" completed 0d0002 "" 20260101T000200Z >/dev/null
+"$CASTLE" validate || fail "the hand-closure fixtures do not validate"
+STATUS_HAND_CLOSED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_HAND_CLOSED" | grep -q "^\[$REQ_HAND_CLOSED\] requested — done$" \
+  || fail "an errand a resident closed by hand still reads as unfinished: $(echo "$STATUS_HAND_CLOSED" | grep "$REQ_HAND_CLOSED" || true)"
+
 log "status mode: a request a tenant filed during its own turn says so, instead of promising a worker that is never coming"
 # docs/tasks/0021 §2.4(e): dispatch deliberately never starts these, so
 # "awaiting a worker" would be 0015's exact failure — a label promising

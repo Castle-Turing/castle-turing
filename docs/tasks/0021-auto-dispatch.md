@@ -402,9 +402,23 @@ existing at this moment, and these exact requests were outstanding
 when it did." It judges nothing about those requests. (5) **Needed now?** Yes — every
 subsequent sweep's eligibility fold (§2.4) depends on it existing.
 
-**2.3 — Reap interrupted turns.** For every `claim` record that no
-`result` references (**the claim's own id, not its request's** — see
-§3's per-turn note): probe the per-request lease
+**2.3 — Reap interrupted turns.** For every `claim` record no result
+accounts for — where "accounts for" has two clauses, both in the
+shared `closing_result` helper: (a) a result whose `refs` name the
+claim (every worker result and every reaped result does), or (b) a
+result that names the claim's *request*, names no claim of that
+request at all, and is newer than the claim. Clause (b) is the
+human-seat-holder shape, added after review: a resident whose
+`castle work R` crashed finishes the errand with
+`castle record --type result --refs R` — the spelling the CLI implies
+— and without it the next sweep wrote a permanent `interrupted`
+contradicting the result the resident had just filed, fired a second
+notification about it, and the status surface masked that closure
+forever. It also covers every result written before this task. The
+exclusion inside (b) is what keeps per-turn accounting intact, and the
+counterexample is concrete: a reaper's own `interrupted` for old claim
+A lands with the newest id in the journal, and must not thereby close
+a still-open claim B. Then: probe the per-request lease
 (`$XDG_RUNTIME_DIR/castle/leases/<request-id>.lock`,
 `flock(LOCK_NB)`). Lock held → a worker is running right now; skip it.
 Lock acquirable, or the file is simply absent (the normal case after a
@@ -935,7 +949,9 @@ the state of its newest *turn*, not of its newest result** — a
 correction to the first implementation, which keyed on results and got
 two real cases backwards, in opposite directions. Since §3 makes every
 worker result name the `claim` it closes, "which turn are we talking
-about" is answerable, and it has to be asked: an errand whose retry
+about" is answerable (via the same two-clause `closing_result` helper
+§2.3 describes, so the reaper and this surface can never disagree
+about whether a turn was accounted for), and it has to be asked: an errand whose retry
 completed and whose older abandoned turn was reaped *afterwards*
 carries an `interrupted` result newer than its `completed` one, so
 keyed on results it reads as interrupted forever though it is
