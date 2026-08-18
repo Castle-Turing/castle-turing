@@ -603,8 +603,8 @@ log "status mode: an unanswered question still overlays every one of these state
 "$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
   --body "Should I try a different approach?" >/dev/null
 STATUS_OVERLAY="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you$" \
-  || fail "the ', waiting on you' overlay did not compose with an outcome label"
+echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you — press Mod4+Shift+a to answer$" \
+  || fail "the ', waiting on you — press Mod4+Shift+a to answer' overlay did not compose with an outcome label"
 "$CASTLE" validate || fail "the journal did not validate after the outcome/claim fixtures"
 
 # ---------------------------------------------------------------------
@@ -641,17 +641,418 @@ REQ_TWOQ="$("$CASTLE" ask "An errand whose worker asks twice.")"
 Q_FIRST="$("$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_TWOQ" --body "First question?")"
 STATUS_Q1="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
   || fail "an unanswered question did not raise the overlay: $(echo "$STATUS_Q1" | grep "$REQ_TWOQ" || true)"
 "$CASTLE" answer "$Q_FIRST" "Yes, go ahead." >/dev/null
 STATUS_Q1A="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
   && fail "an answered question still reads as waiting on the resident"
 "$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_TWOQ" --body "Second question, after the first was answered?" >/dev/null
 STATUS_Q2="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
   || fail "a SECOND question went unnoticed because an earlier one had been answered — the overlay is not pairing answers with questions"
 "$CASTLE" validate || fail "the journal does not validate after the two-question fixture"
+
+
+# ---------------------------------------------------------------------
+# docs/tasks/0022-answer-in-ui.md — answer mode.
+# ---------------------------------------------------------------------
+#
+# A fresh state dir for this whole section, and every question below
+# planted with an explicit id. Both are about determinism, not tidiness:
+# the picker is a screen-relative, oldest-first list of every pending
+# question in the journal, so asserting "[1] is the one I just filed"
+# against the journal the sections above accumulated would be asserting
+# on this file's own history instead. And record ids are timestamp-
+# prefixed to one-second granularity — two questions filed in the same
+# second sort by their random suffix, which is exactly the coin flip a
+# test about "press 2 and get the second one" must not contain.
+#
+# For the same reason each test below leaves the fold empty when it is
+# done: a question deliberately left pending by one test is a silent
+# off-by-one in the next one's picker indices.
+export CASTLE_STATE_DIR="$WORKDIR/answer-state"
+export XDG_RUNTIME_DIR="$WORKDIR/answer-runtime"
+mkdir -p "$CASTLE_STATE_DIR/journal" "$XDG_RUNTIME_DIR"
+
+# $3 is the body, $4 an optional `fact` name. The id's suffix is derived
+# from the stamp rather than random, so a failing assertion names a
+# fixture a reader can find.
+plant_question() {
+  local request_id="$1" stamp="$2" body="$3" fact="${4:-}"
+  local id="$stamp-question-q$(printf '%s' "$stamp" | tail -c 7)"
+  {
+    echo "---"
+    echo "id: $id"
+    echo "type: question"
+    echo "provenance: requested"
+    echo "refs: $request_id"
+    echo "seat: worker"
+    echo "created: 2026-02-01T00:00:00Z"
+    [ -n "$fact" ] && echo "fact: $fact"
+    echo "---"
+    echo
+    echo "$body"
+  } > "$CASTLE_STATE_DIR/journal/$id.md"
+  echo "$id"
+}
+
+journal_file_count() { find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' '; }
+model_byte_count() {
+  if [ -f "$CASTLE_STATE_DIR/resident-model.md" ]; then
+    wc -c < "$CASTLE_STATE_DIR/resident-model.md" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+answers_naming() { grep -l "^refs: $1\$" "$CASTLE_STATE_DIR"/journal/*-answer-*.md 2>/dev/null || true; }
+
+# One reusable pty driver for every interactive assertion below, rather
+# than a fresh inline PYEOF block per test. Same technique the two
+# drivers above already use (pty.openpty() plus a needle-based wait,
+# never a quiet-gap heuristic: a keypress is echoed by the pty's own tty
+# driver long before the program has finished acting on it), factored
+# out because this section drives eight interactions rather than one.
+# Steps are given after `--`:
+#
+#   wait:TEXT    block until TEXT appears in the transcript
+#   key:C        sleep past the cbreak gap, then send C
+#   send:TEXT    write TEXT verbatim ('\n' understood)
+#   sleep:N      wait N seconds
+#
+# The whole transcript goes to stdout followed by a final RC=<n> line
+# carrying the child's exit status, so a caller can grep the one and
+# read the other. The driver exits 2 if a `wait` step times out, which
+# is distinguishable from every exit code castle-modal itself produces.
+cat > "$WORKDIR/pty-drive.py" <<'PYEOF'
+import os
+import pty
+import select
+import subprocess
+import sys
+import time
+
+argv = sys.argv[1:]
+separator = argv.index("--")
+command, steps = argv[:separator], argv[separator + 1:]
+
+main_fd, sub_fd = pty.openpty()
+proc = subprocess.Popen(command, stdin=sub_fd, stdout=sub_fd, stderr=sub_fd, close_fds=True)
+os.close(sub_fd)
+transcript = b""
+
+
+def pump(timeout=0.2):
+    global transcript
+    ready, _, _ = select.select([main_fd], [], [], timeout)
+    if main_fd not in ready:
+        return True
+    try:
+        chunk = os.read(main_fd, 4096)
+    except OSError:
+        return False
+    if not chunk:
+        return False
+    transcript += chunk
+    return True
+
+
+def wait_for(needle: bytes, timeout=15.0) -> bool:
+    deadline = time.time() + timeout
+    while needle not in transcript and time.time() < deadline:
+        if not pump():
+            break
+    return needle in transcript
+
+
+def die(message: str) -> None:
+    sys.stderr.write(f"pty-drive: {message}\n")
+    sys.stderr.write(transcript.decode(errors="replace") + "\n")
+    proc.kill()
+    sys.exit(2)
+
+
+for step in steps:
+    kind, _, value = step.partition(":")
+    value = value.replace("\\n", "\n")
+    if kind == "wait":
+        if not wait_for(value.encode()):
+            die(f"timed out waiting for {value!r}")
+    elif kind == "key":
+        # The documented 0.2s gap before a single keypress: printing the
+        # prompt and switching the tty into cbreak mode are two separate
+        # statements, and a keypress landing between them is held by the
+        # kernel's still-canonical line discipline until a newline
+        # arrives — which a bare keypress never sends. This sleeps past
+        # that window. It is a property of simulating a keystroke at an
+        # instant no human types at, not of castle-modal.
+        time.sleep(0.2)
+        os.write(main_fd, value.encode())
+    elif kind == "send":
+        os.write(main_fd, value.encode())
+    elif kind == "sleep":
+        time.sleep(float(value))
+    else:
+        die(f"unknown step {step!r}")
+
+deadline = time.time() + 15
+while proc.poll() is None and time.time() < deadline:
+    if not pump():
+        break
+while pump(0.05):
+    pass
+try:
+    returncode = proc.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    die("castle-modal never exited")
+
+sys.stdout.write(transcript.decode(errors="replace"))
+sys.stdout.write(f"\nRC={returncode}\n")
+PYEOF
+
+drive_modal() {
+  # Usage: drive_modal <transcript-path> <modal-arg>... -- <step>...
+  local transcript="$1"; shift
+  python3 "$WORKDIR/pty-drive.py" "$MODAL" "$@" > "$transcript" || {
+    cat "$transcript" >&2
+    fail "pty driver failed (see the transcript above)"
+  }
+}
+transcript_rc() { sed -n 's/^RC=//p' "$1"; }
+refute() {
+  # `grep -q X && fail` is safe at top level under `set -e` (the failing
+  # grep is not the last command of the && list) but NOT as the last
+  # statement of a loop body or function, where the compound's own
+  # nonzero status becomes the loop's and trips the errexit. This says
+  # the same thing in a form that is safe everywhere.
+  local haystack="$1" needle="$2" message="$3"
+  if printf '%s' "$haystack" | grep -qi -- "$needle"; then
+    fail "$message"
+  fi
+}
+
+log "answer mode: nothing pending prints a friendly line and exits 0 (test 1)"
+ANSWER_NONE_OUT="$("$MODAL" --mode answer </dev/null)" || fail "answer mode with nothing pending should exit 0"
+echo "$ANSWER_NONE_OUT" | grep -q "Nothing is waiting on you." \
+  || fail "answer mode with an empty fold did not print the friendly line: $ANSWER_NONE_OUT"
+
+log "answer mode: one question, picked and answered on a pty (tests 2 and 4)"
+REQ_ANS_1="$("$CASTLE" ask "Answer-mode errand one: the pointer is hard to follow.")"
+Q_ANS_1="$(plant_question "$REQ_ANS_1" 20260201T000100Z \
+  "Cap the pointer speed, or leave it alone?
+Second line of the question, which the picker's preview does not show.")"
+"$CASTLE" validate || fail "the planted question fixture does not validate"
+drive_modal "$WORKDIR/answer-1.txt" --mode answer -- \
+  "wait:any other key to close" "key:1" "wait:End with a line containing just" \
+  "send:Cap it.\n.\n" "wait:Press Enter to close" "send:\n"
+ANSWER_1_OUT="$(cat "$WORKDIR/answer-1.txt")"
+echo "$ANSWER_1_OUT"
+[ "$(transcript_rc "$WORKDIR/answer-1.txt")" = "0" ] || fail "answer mode did not exit 0 after filing an answer"
+echo "$ANSWER_1_OUT" | grep -q "\[1\] Cap the pointer speed, or leave it alone?" \
+  || fail "the picker did not show the pending question as entry [1]"
+echo "$ANSWER_1_OUT" | grep -q "about: Answer-mode errand one: the pointer is hard to follow." \
+  || fail "the picker did not show an 'about:' line sourced from the root request"
+echo "$ANSWER_1_OUT" | grep -q "Second line of the question" \
+  || fail "the selected question's body was truncated — the full text must be shown before answering"
+echo "$ANSWER_1_OUT" | grep -q "Filed. Nothing picks this errand back up automatically yet." \
+  || fail "the confirmation did not say plainly that nothing resumes the errand"
+echo "$ANSWER_1_OUT" | grep -q "Press Enter to close" \
+  || fail "answer mode did not hold the window open until dismissed"
+ANSWER_1_FILE="$(answers_naming "$Q_ANS_1" | head -1)"
+[ -n "$ANSWER_1_FILE" ] || fail "no answer record naming $Q_ANS_1 was written"
+grep -q "^refs: $Q_ANS_1\$" "$ANSWER_1_FILE" || fail "$ANSWER_1_FILE's refs is not exactly the question it closes"
+grep -q "^seat: intake\$" "$ANSWER_1_FILE" || fail "$ANSWER_1_FILE should carry seat=intake, like every other intake write"
+grep -q "Cap it." "$ANSWER_1_FILE" || fail "$ANSWER_1_FILE did not capture the typed answer body"
+[ ! -f "$CASTLE_STATE_DIR/resident-model.md" ] \
+  || fail "answering a question that carries no 'fact' field wrote a resident-model entry anyway"
+
+# Test 4, the positive assertion: every id involved is absent from what
+# the resident actually saw, and so is the journal's own vocabulary.
+ANSWER_1_ID="$(basename "$ANSWER_1_FILE" .md)"
+for LEAKED in "$Q_ANS_1" "$REQ_ANS_1" "$ANSWER_1_ID"; do
+  refute "$ANSWER_1_OUT" "$LEAKED" "answer mode printed the record id $LEAKED — no internal identifier may reach this surface"
+done
+for LEAKED in seat provenance refs journal record channel evidence; do
+  refute "$ANSWER_1_OUT" "$LEAKED" "answer mode printed the internal word '$LEAKED' — this surface speaks plain language only"
+done
+
+log "answer mode: with two pending, pressing 2 answers the SECOND and leaves the first pending (test 3)"
+REQ_ANS_2="$("$CASTLE" ask "Answer-mode errand two: the fan runs loud after suspend.")"
+REQ_ANS_3="$("$CASTLE" ask "Answer-mode errand three: the display wakes dim.")"
+Q_ANS_2="$(plant_question "$REQ_ANS_2" 20260201T000200Z "Cap the fan curve, or leave it?")"
+Q_ANS_3="$(plant_question "$REQ_ANS_3" 20260201T000300Z "Raise the wake brightness, or leave it?")"
+"$CASTLE" validate || fail "the two-question fixtures do not validate"
+drive_modal "$WORKDIR/answer-2.txt" --mode answer -- \
+  "wait:any other key to close" "key:2" "wait:End with a line containing just" \
+  "send:Raise it.\n.\n" "wait:Press Enter to close" "send:\n"
+ANSWER_2_OUT="$(cat "$WORKDIR/answer-2.txt")"
+[ "$(transcript_rc "$WORKDIR/answer-2.txt")" = "0" ] || fail "answer mode did not exit 0 after answering the second question"
+echo "$ANSWER_2_OUT" | grep -q "\[1\] Cap the fan curve, or leave it?" \
+  || fail "oldest-first ordering broke: the older question is not entry [1]"
+echo "$ANSWER_2_OUT" | grep -q "\[2\] Raise the wake brightness, or leave it?" \
+  || fail "the newer question is not entry [2]"
+[ -n "$(answers_naming "$Q_ANS_3")" ] || fail "pressing 2 did not answer the second question"
+[ -z "$(answers_naming "$Q_ANS_2")" ] \
+  || fail "pressing 2 answered the FIRST question as well — the picker index selected the wrong record"
+
+log "answer mode: reopening it afterwards offers only the question that is still pending"
+drive_modal "$WORKDIR/answer-3.txt" --mode answer -- \
+  "wait:any other key to close" "key:q"
+ANSWER_3_OUT="$(cat "$WORKDIR/answer-3.txt")"
+echo "$ANSWER_3_OUT" | grep -q "\[1\] Cap the fan curve, or leave it?" \
+  || fail "the still-pending question is not offered on a second opening"
+refute "$ANSWER_3_OUT" "^  \[2\]" "an already-answered question is still being offered"
+
+log "answer mode: dismissal writes nothing at all, anywhere (test 5)"
+FILES_BEFORE="$(journal_file_count)"
+MODEL_BEFORE="$(model_byte_count)"
+drive_modal "$WORKDIR/answer-dismiss.txt" --mode answer -- \
+  "wait:any other key to close" "key:x"
+[ "$(transcript_rc "$WORKDIR/answer-dismiss.txt")" = "0" ] \
+  || fail "dismissing the picker did not exit 0 — looking and declining is a successful use of this surface, not a failure"
+refute "$(cat "$WORKDIR/answer-dismiss.txt")" "Press Enter to close" \
+  "dismissal asked for a second keypress to confirm — the keypress IS the dismissal"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "dismissing the picker wrote a journal record"
+[ "$(model_byte_count)" = "$MODEL_BEFORE" ] || fail "dismissing the picker wrote to the resident model"
+"$CASTLE" validate || fail "the journal does not validate after a dismissal"
+
+log "answer mode: an empty answer body is refused, and nothing is filed (test 6)"
+FILES_BEFORE="$(journal_file_count)"
+drive_modal "$WORKDIR/answer-empty.txt" --mode answer -- \
+  "wait:any other key to close" "key:1" "wait:End with a line containing just" \
+  "send:.\n" "wait:Press Enter to close" "send:\n"
+[ "$(transcript_rc "$WORKDIR/answer-empty.txt")" = "1" ] || fail "an empty answer did not exit 1"
+grep -q "empty answer, nothing filed" "$WORKDIR/answer-empty.txt" \
+  || fail "the empty-answer refusal did not use compose mode's existing 'nothing filed' vocabulary"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "an empty answer wrote a record anyway"
+
+# Everything above deliberately left one question pending — the second
+# opening, the dismissal and the empty answer all need a non-empty fold
+# to exercise anything. Clear it here so every test below starts from a
+# fold it fully controls, and its picker indices mean what they say.
+printf 'Answered, so the tests below start from a fold they control.\n.\n' \
+  | "$MODAL" --mode answer --question "$Q_ANS_2" >/dev/null
+
+log "answer mode: --question is the script path, and every refusal on it exits 1 without writing (test 7)"
+REQ_ANS_4="$("$CASTLE" ask "Answer-mode errand four: the lock screen takes a moment.")"
+# Two questions: one for the script path to answer, and one left
+# pending throughout, because the fold is checked before anything else
+# — with nothing waiting, every invocation below would correctly say so
+# and exit 0 rather than exercising the refusal it is here to test.
+Q_ANS_4="$(plant_question "$REQ_ANS_4" 20260201T000400Z "Shorten the lock delay, or leave it?")"
+Q_HELD="$(plant_question "$REQ_ANS_4" 20260201T000401Z "Held pending on purpose, so the fold is never empty here?")"
+"$CASTLE" validate || fail "the script-path question fixtures do not validate"
+SCRIPTED_ANSWER_ID="$(printf 'Shorten it.\n.\n' | "$MODAL" --mode answer --question "$Q_ANS_4")"
+[ -n "$SCRIPTED_ANSWER_ID" ] || fail "--question printed no answer id on stdout"
+[ -f "$CASTLE_STATE_DIR/journal/$SCRIPTED_ANSWER_ID.md" ] \
+  || fail "--question printed $SCRIPTED_ANSWER_ID but no such record exists"
+FILES_BEFORE="$(journal_file_count)"
+if printf 'Too late.\n.\n' | "$MODAL" --mode answer --question "$Q_ANS_4" 2>"$WORKDIR/answer-again-err"; then
+  fail "--question on an already-answered question was accepted"
+fi
+grep -q "nothing filed" "$WORKDIR/answer-again-err" \
+  || fail "the already-answered refusal did not read like the others: $(cat "$WORKDIR/answer-again-err")"
+if printf 'Nowhere.\n.\n' | "$MODAL" --mode answer --question "20260201T000000Z-question-nope" 2>/dev/null; then
+  fail "--question naming a record that does not exist was accepted"
+fi
+if printf 'Not a question.\n.\n' | "$MODAL" --mode answer --question "$REQ_ANS_4" 2>/dev/null; then
+  fail "--question naming a request record was accepted"
+fi
+if printf 'Which one?\n.\n' | "$MODAL" --mode answer 2>"$WORKDIR/answer-noflag-err"; then
+  fail "a piped session with pending questions and no --question guessed one instead of refusing"
+fi
+grep -q "no terminal" "$WORKDIR/answer-noflag-err" \
+  || fail "the piped-without---question refusal did not explain itself: $(cat "$WORKDIR/answer-noflag-err")"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "a refused --question invocation wrote a record anyway"
+printf 'Answered, so the next test starts from an empty fold.\n.\n' \
+  | "$MODAL" --mode answer --question "$Q_HELD" >/dev/null
+
+log "answer mode: an interactive session ignores --question and shows the picker anyway (test 8)"
+REQ_ANS_5="$("$CASTLE" ask "Answer-mode errand five: the terminal font looks thin.")"
+REQ_ANS_6="$("$CASTLE" ask "Answer-mode errand six: the clock is hard to read.")"
+Q_ANS_5="$(plant_question "$REQ_ANS_5" 20260201T000500Z "Thicken the terminal font, or leave it?")"
+Q_ANS_6="$(plant_question "$REQ_ANS_6" 20260201T000600Z "Enlarge the clock, or leave it?")"
+"$CASTLE" validate || fail "the ignore---question fixtures do not validate"
+drive_modal "$WORKDIR/answer-ignore.txt" --mode answer --question "$Q_ANS_6" -- \
+  "wait:any other key to close" "key:1" "wait:End with a line containing just" \
+  "send:Thicken it.\n.\n" "wait:Press Enter to close" "send:\n"
+grep -q "\[2\] Enlarge the clock, or leave it?" "$WORKDIR/answer-ignore.txt" \
+  || fail "--question preselected a question in an interactive session instead of showing the whole picker"
+[ -n "$(answers_naming "$Q_ANS_5")" ] \
+  || fail "pressing 1 did not answer the oldest pending question — --question was not ignored"
+[ -z "$(answers_naming "$Q_ANS_6")" ] \
+  || fail "the interactive session answered the --question target instead of the one the resident picked"
+printf 'Answered, so the next test starts from an empty fold.\n.\n' \
+  | "$MODAL" --mode answer --question "$Q_ANS_6" >/dev/null
+
+log "answer mode: a fact-carrying question writes the elicited entry, and says so in plain language (test 9)"
+REQ_ANS_7="$("$CASTLE" ask "Answer-mode errand seven: the notification sound is startling.")"
+Q_ANS_7="$(plant_question "$REQ_ANS_7" 20260201T000700Z \
+  "Silence the notification sound, or keep it?" "notification-sound-posture")"
+"$CASTLE" validate || fail "the fact-carrying question fixture does not validate"
+drive_modal "$WORKDIR/answer-fact.txt" --mode answer -- \
+  "wait:any other key to close" "key:1" "wait:End with a line containing just" \
+  "send:Silence it.\n.\n" "wait:Press Enter to close" "send:\n"
+ANSWER_FACT_OUT="$(cat "$WORKDIR/answer-fact.txt")"
+[ "$(transcript_rc "$WORKDIR/answer-fact.txt")" = "0" ] || fail "answering a fact-carrying question did not exit 0"
+ANSWER_FACT_FILE="$(answers_naming "$Q_ANS_7" | head -1)"
+[ -n "$ANSWER_FACT_FILE" ] || fail "the fact-carrying question was not the one answered"
+ANSWER_FACT_ID="$(basename "$ANSWER_FACT_FILE" .md)"
+MODEL_FILE="$CASTLE_STATE_DIR/resident-model.md"
+[ -f "$MODEL_FILE" ] || fail "answering a fact-carrying question through the modal wrote no resident-model entry"
+grep -q "^fact: notification-sound-posture\$" "$MODEL_FILE" || fail "$MODEL_FILE does not name the fact the question declared"
+grep -q "^asked: $Q_ANS_7\$" "$MODEL_FILE" || fail "$MODEL_FILE's entry does not cite the question it was elicited by"
+grep -q "^answered: $ANSWER_FACT_ID\$" "$MODEL_FILE" || fail "$MODEL_FILE's entry does not cite the answer just written"
+echo "$ANSWER_FACT_OUT" | grep -q "Noted — I'll remember that." \
+  || fail "the modal did not tell the resident, in plain language, that something was written to their model"
+refute "$ANSWER_FACT_OUT" "recorded resident-model entry" "the modal printed the CLI's internal resident-model line"
+refute "$ANSWER_FACT_OUT" "notification-sound-posture" "the modal printed the internal fact name"
+
+log "castle answer: a second answer on the same question is refused, and exactly one answer record survives (test 10)"
+REQ_ANS_8="$("$CASTLE" ask "Answer-mode errand eight: the CLI must refuse a double answer.")"
+Q_ANS_8="$(plant_question "$REQ_ANS_8" 20260201T000800Z "Answer me once, and only once?")"
+"$CASTLE" answer "$Q_ANS_8" "Once." >/dev/null || fail "the first castle answer was refused"
+if "$CASTLE" answer "$Q_ANS_8" "Twice." 2>"$WORKDIR/answer-twice-err"; then
+  fail "castle answer accepted a second answer on an already-answered question"
+fi
+grep -q "was already answered by" "$WORKDIR/answer-twice-err" \
+  || fail "the CLI's already-answered refusal did not name the existing answer: $(cat "$WORKDIR/answer-twice-err")"
+ANSWERS_FOR_Q8="$(answers_naming "$Q_ANS_8" | wc -l | tr -d ' ')"
+[ "$ANSWERS_FOR_Q8" = "1" ] || fail "expected exactly one answer record for $Q_ANS_8, found $ANSWERS_FOR_Q8"
+"$CASTLE" validate || fail "the journal does not validate after the double-answer refusal"
+
+log "answer mode: more than nine pending shows nine and names the rest honestly (test 11)"
+REQ_ANS_9="$("$CASTLE" ask "Answer-mode errand nine: ten questions at once.")"
+for N in 01 02 03 04 05 06 07 08 09 10; do
+  plant_question "$REQ_ANS_9" "20260201T0009${N}Z" "Overflow question number $N?" >/dev/null
+done
+"$CASTLE" validate || fail "the overflow question fixtures do not validate"
+drive_modal "$WORKDIR/answer-overflow.txt" --mode answer -- \
+  "wait:any other key to close" "key:x"
+ANSWER_OVERFLOW_OUT="$(cat "$WORKDIR/answer-overflow.txt")"
+echo "$ANSWER_OVERFLOW_OUT" | grep -q "\[9\] Overflow question number 09?" \
+  || fail "the picker did not show a ninth entry: $ANSWER_OVERFLOW_OUT"
+refute "$ANSWER_OVERFLOW_OUT" "\[10\]" "the picker showed a tenth entry — the cap is nine"
+echo "$ANSWER_OVERFLOW_OUT" | grep -q "…and 1 more waiting." \
+  || fail "the picker did not name the overflow count honestly: $ANSWER_OVERFLOW_OUT"
+
+log "status mode: it now holds its window open until dismissed, on both exit paths (test 12)"
+drive_modal "$WORKDIR/status-pause.txt" --mode status -- \
+  "wait:Press Enter to close" "send:\n"
+[ "$(transcript_rc "$WORKDIR/status-pause.txt")" = "0" ] || fail "status mode did not exit 0 after dismissal"
+grep -q "asked: Answer-mode errand nine" "$WORKDIR/status-pause.txt" \
+  || fail "the status listing did not render before the pause"
+grep -q "waiting on you — press Mod4+Shift+a to answer" "$WORKDIR/status-pause.txt" \
+  || fail "the status overlay does not name the chord that answers the question it is reporting"
+EMPTY_STATUS_STATE="$WORKDIR/empty-status-state"
+mkdir -p "$EMPTY_STATUS_STATE"
+CASTLE_STATE_DIR="$EMPTY_STATUS_STATE" python3 "$WORKDIR/pty-drive.py" "$MODAL" --mode status -- \
+  "wait:Press Enter to close" "send:\n" > "$WORKDIR/status-empty.txt" \
+  || { cat "$WORKDIR/status-empty.txt" >&2; fail "status mode's empty-journal path did not hold its window open"; }
+grep -q "No errands yet" "$WORKDIR/status-empty.txt" \
+  || fail "the empty-journal status path did not print its message before pausing"
+[ "$(transcript_rc "$WORKDIR/status-empty.txt")" = "0" ] || fail "empty-journal status mode did not exit 0"
 
 log "all assertions passed"

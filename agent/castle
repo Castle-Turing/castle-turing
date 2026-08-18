@@ -1358,7 +1358,38 @@ def _route_journal_locked() -> int:
         appended.append((decision_id, rec.id, channel))
         if channel == "notify":
             summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
-            _fire_notification(f"Castle Turing — {rec.type}", summary[:200])
+            notification_body = summary[:200]
+            if rec.type == "question":
+                # The notification is the only *push* channel this system
+                # has, so a resident who never opens a surface on their
+                # own would otherwise learn that a question exists but
+                # not how to close it — and would fall back to `castle
+                # answer <id>`, the exact CLI dependency
+                # docs/tasks/0022-answer-in-ui.md exists to remove. Only
+                # `question` gets the suffix: there is nothing for a
+                # `result` to be answered, and an unconditional suffix
+                # would be noise on the case it does not apply to.
+                #
+                # CHORD COUPLING: "Mod4+Shift+a" is prose here and a real
+                # binding in modules/home/default.nix's keybindings
+                # attrset. Change one and grep for the other — two
+                # hardcoded mentions of the *compose* chord went stale
+                # exactly this way when docs/tasks/0019 moved it, and
+                # were only found two tasks later. run_status's "Press
+                # Mod4+Shift+Return and describe one." line and
+                # castle-modal's answer mode carry the same coupling.
+                #
+                # Appended with a space rather than a newline: the
+                # notify command is invoked as `<command> <title>
+                # <body>`, and a body carrying an embedded newline is
+                # one argument to the daemon but two lines to anything
+                # logging it — test/agent-loop/notify-stub.sh counts
+                # lines to prove the channel fired exactly twice. A
+                # notification body is wrapped by the daemon anyway, so
+                # the newline bought nothing and cost a false failure in
+                # a harness this task does not otherwise touch.
+                notification_body += " Press Mod4+Shift+a to answer."
+            _fire_notification(f"Castle Turing — {rec.type}", notification_body)
 
     if not appended:
         print("route: nothing unrouted; no decision records appended")

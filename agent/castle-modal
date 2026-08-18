@@ -9,7 +9,7 @@ binary. It is deliberately NOT a GTK app, a wofi/fuzzel script, or
 written in a second language; it's a terminal program because the
 terminal is already the substrate this whole project is built on.
 
-Two modes, both just callers of agent/castle's own record-writing and
+Three modes, all just callers of agent/castle's own record-writing and
 record-reading functions — this file adds no judgment of its own,
 exactly like `castle ask`/`castle digest` add none (Proposal 03):
 
@@ -31,9 +31,17 @@ exactly like `castle ask`/`castle digest` add none (Proposal 03):
            "come back and check in later" surface. Corrections never
            appear here — they aren't errands, and there's nothing for
            the resident to check back on.
+  answer   The questions the system is waiting on, and one of them
+           answered (Mod4+Shift+a; docs/tasks/0022-answer-in-ui.md).
+           Oldest first, chosen by a single keypress, answered in the
+           same text-entry grammar compose uses, filed through castle's
+           file_answer() — the same write `castle answer` performs. The
+           resident never types or reads a record id to do any of it,
+           and nothing at all is written unless a question was chosen
+           and a body typed.
 
-Headless by construction, not by special-casing: both modes read
-stdin and write stdout/stderr with no dependency on a terminal at all.
+Headless by construction, not by special-casing: every mode reads
+stdin and writes stdout/stderr with no dependency on a terminal at all.
 Nothing here calls `curses` or emits raw ANSI codes except a couple of
 purely cosmetic prompts guarded by `sys.stdin.isatty()` — delete those
 lines and the program still does exactly the same work, which is the
@@ -139,6 +147,24 @@ def _classify_interactively(out=sys.stdout) -> str:
     return "correction" if answer.lower() == "t" else "request"
 
 
+def _read_typed_body() -> str:
+    """This surface's one text-entry grammar: read stdin until a line
+    containing exactly '.' (or EOF), then strip.
+
+    Shared by compose and answer mode rather than written twice. One
+    window, one way to type into it — a second grammar would be a second
+    thing to learn about the same box, and the '.' terminator is already
+    the thing a resident's fingers know.
+    """
+    lines: list[str] = []
+    for raw_line in sys.stdin:
+        line = raw_line.rstrip("\n")
+        if line.strip() == ".":
+            break
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
     interactive = sys.stdin.isatty()
     if interactive:
@@ -146,13 +172,7 @@ def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
         print("End with a line containing just '.' (or Ctrl-D).", file=out)
         print(file=out)
 
-    lines: list[str] = []
-    for raw_line in sys.stdin:
-        line = raw_line.rstrip("\n")
-        if line.strip() == ".":
-            break
-        lines.append(line)
-    body = "\n".join(lines).strip()
+    body = _read_typed_body()
 
     if not body:
         print("castle-modal: empty request, nothing filed.", file=sys.stderr)
@@ -182,6 +202,244 @@ def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
         print(record_id, file=out)
         if interactive:
             print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    _pause_for_dismissal(out)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Answer mode (docs/tasks/0022-answer-in-ui.md). The third kind of
+# resident speech this window carries: describing a problem (compose),
+# volunteering feedback nobody asked for (compose's classification
+# step), and — here — closing a question the system opened. Proposal 05
+# says only the resident may close one; this mode's whole job is making
+# that cheap without widening what counts as an answer.
+#
+# Everything this mode prints obeys one vocabulary rule: no record ids,
+# and none of the words seat, provenance, refs, journal, record,
+# channel, evidence, and no fact names. That binds the text this tool
+# *adds*. The question and root-request bodies it shows are the worker's
+# or the resident's own prose, shown verbatim and unfiltered.
+# ---------------------------------------------------------------------------
+
+# Nine, because this is a picker meant to fit one screen, not a
+# paginated list. Past nine, the overflow line names the count honestly
+# rather than silently truncating.
+ANSWER_PICKER_LIMIT = 9
+
+
+def _first_line(text: str) -> str:
+    stripped = text.strip()
+    return stripped.splitlines()[0] if stripped else ""
+
+
+def _pending_questions(records: dict) -> list:
+    """Every `question` no answer names, oldest first.
+
+    A flat pass over the journal, deliberately NOT the transitive errand
+    walk `run_status` does: `_collect_downstream` follows `refs` from a
+    root request, so a question whose refs chain never reaches one —
+    which `castle record --type question` can legitimately produce, with
+    no --refs at all — would never appear in an errand-keyed fold. A
+    surface whose entire job is "nothing you are supposed to answer stays
+    silently unanswerable" cannot inherit a fold that can hide a question
+    by construction.
+
+    Pending is the direct predicate, exact rather than heuristic:
+    file_answer guarantees every answer's refs is exactly the one
+    question it closes, so there is no ambiguity to approximate around.
+    It is the same test castle's own pendingness check and the status
+    surface's "waiting on you" overlay apply.
+
+    Oldest first by id: ids are timestamp-prefixed and therefore
+    chronologically sortable by construction, the same property
+    `castle dispatch`'s oldest-first loop already relies on.
+    """
+    answered = {ref for rec in records.values() if rec.type == "answer" for ref in rec.refs}
+    return sorted(
+        (rec for rec in records.values() if rec.type == "question" and rec.id not in answered),
+        key=lambda rec: rec.id,
+    )
+
+
+def _about_line(castle, records: dict, question) -> str:
+    """The first line of the request this question came out of, or "" if
+    the walk reaches no request. No placeholder and no error in that
+    case — a question filed by hand with no chain to an errand is
+    exactly the kind this mode must still be able to show."""
+    root = castle._find_root_request(records, question)
+    if root is None:
+        return ""
+    return _first_line(root.body)
+
+
+def _show_picker(castle, records: dict, pending: list, out=sys.stdout):
+    """Print the picker and read the one keypress that answers it.
+    Returns the chosen question record, or None for "close without
+    answering."
+
+    cbreak is engaged *before* anything is printed, for the reason
+    `_classify_interactively` documents at length and this reuses
+    verbatim: printing is I/O — a syscall reaching the pty — and a
+    keypress landing in the gap between "prompt printed" and "cbreak
+    engaged" is held by the kernel's still-canonical line discipline
+    until a newline arrives, which a bare digit keypress never sends,
+    hanging the read forever.
+
+    The keypress is a screen-relative index, never a record id: 1..9 is
+    what satisfies "no internal identifiers as required input", and it
+    is safe to treat as stable *because* the ordering is deterministic
+    and recomputed once per invocation, not because the numbers mean
+    anything durable.
+    """
+    import termios
+    import tty
+
+    shown = pending[:ANSWER_PICKER_LIMIT]
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        print("Waiting on you:", file=out)
+        print(file=out)
+        for index, question in enumerate(shown, start=1):
+            print(f"  [{index}] {_first_line(question.body) or '(no text)'}", file=out)
+            about = _about_line(castle, records, question)
+            if about:
+                print(f"      about: {about}", file=out)
+        if len(pending) > len(shown):
+            print(file=out)
+            print(f"…and {len(pending) - len(shown)} more waiting.", file=out)
+        print(file=out)
+        print("Press a number to answer that one, or any other key to close.", file=out)
+        key = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    print(file=out)
+
+    # Always the picker, even when exactly one question is pending: a
+    # uniform grammar, with an explicit selection every single time,
+    # keeps "answering something you did not choose" impossible by
+    # construction rather than by luck.
+    if key.isdigit() and 1 <= int(key) <= len(shown):
+        return shown[int(key) - 1]
+    return None
+
+
+def _answer_refusal(exc) -> str:
+    """Plain-language wording for each AnswerRefused kind, in compose
+    mode's existing "nothing filed" vocabulary and naming no ids — the
+    same refusal `castle answer` renders with the record id in it, said
+    the way this surface is allowed to say it."""
+    if exc.kind == "already_answered":
+        return "castle-modal: that question was already answered elsewhere, nothing filed."
+    if exc.kind == "no_such_record":
+        return "castle-modal: no such question, nothing filed."
+    if exc.kind == "wrong_type":
+        return "castle-modal: that is not a question, nothing filed."
+    return "castle-modal: empty answer, nothing filed."
+
+
+def _run_answer_scripted(castle, question_id: str | None, out=sys.stdout) -> int:
+    """The no-tty half of answer mode: --question or nothing.
+
+    Guessing the oldest pending question in a script context would be a
+    silent wrong-record path with no resident present to notice — worse
+    than refusing outright. On success the answer's id goes to stdout:
+    that is script output meant to be asserted on by a caller, not
+    resident-facing prose, the same distinction `castle answer`'s own
+    stdout already draws.
+    """
+    if not question_id:
+        print(
+            "castle-modal: questions are waiting, but this session has no terminal to "
+            "choose one at — pass --question ID (scripts and CI only), or open the "
+            "modal and pick.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        answer_id, _ = castle.file_answer(question_id=question_id, body=_read_typed_body())
+    except castle.AnswerRefused as exc:
+        print(_answer_refusal(exc), file=sys.stderr)
+        return 1
+    print(answer_id, file=out)
+    return 0
+
+
+def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
+    records = castle.load_all(castle.journal_dir())
+    # Computed first, before interactive and piped part ways: "nothing
+    # is waiting" is the same true answer either way.
+    pending = _pending_questions(records)
+    if not pending:
+        print("Nothing is waiting on you.", file=out)
+        _pause_for_dismissal(out)
+        return 0
+
+    if not sys.stdin.isatty():
+        return _run_answer_scripted(castle, question_id, out)
+
+    # An interactive session always shows the picker and always ignores
+    # --question. A flag that preselects a question in a session a human
+    # is looking at is precisely the "answering the wrong one" hazard
+    # this design exists to prevent; --question exists for a context
+    # with no human present to choose, and this is not that context.
+    question = _show_picker(castle, records, pending, out)
+    if question is None:
+        # The keypress itself IS the dismissal — exit 0, no pause,
+        # nothing written anywhere. Dismissal is a successful use of
+        # this surface (the resident looked and chose not to act), and
+        # there is no code path from here to a write: file_answer is
+        # called only below, after a question was chosen and a body
+        # typed. Demanding a second "press Enter to confirm you meant to
+        # leave" after a deliberate choice is the friction this surface
+        # exists to avoid.
+        return 0
+
+    # The full body, verbatim, never truncated. The picker's first-line
+    # preview is a convenience for choosing among several; letting a
+    # resident answer on a truncated understanding of the question is a
+    # different thing entirely, and docs/tasks/0010's "no seat
+    # paraphrases" extends to a read as naturally as to a write.
+    print(question.body.strip() or "(no text)", file=out)
+    about = _about_line(castle, records, question)
+    if about:
+        print(f"about: {about}", file=out)
+    print(file=out)
+    print("Answer in your own words.", file=out)
+    print("End with a line containing just '.' (or Ctrl-D).", file=out)
+    print(file=out)
+
+    try:
+        _, recorded_fact = castle.file_answer(question_id=question.id, body=_read_typed_body())
+    except castle.AnswerRefused as exc:
+        # Empty body, or the raced case: the question was answered by
+        # another window or another process between the picker showing
+        # it and this keypress landing. No re-prompt loop — that is a
+        # state machine this surface does not need and a hang risk on a
+        # pty-driven program; the chord is one keypress away.
+        print(_answer_refusal(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
+
+    print(file=out)
+    # No record id (compose mode's "Filed as {id}." is the pattern being
+    # deliberately broken here, not copied) and no promise of
+    # resumption: until something picks an answered errand back up,
+    # saying otherwise would be docs/tasks/0015's defect committed one
+    # level up — a label causing the inaction it describes. When
+    # docs/backlog/errand-resume-after-answer.md is finally built, the
+    # second sentence below is the line that gets deleted.
+    print("Filed. Nothing picks this errand back up automatically yet.", file=out)
+    if recorded_fact is not None:
+        # A write into the resident's own model that the resident is
+        # never told about is authority exercised invisibly. One plain
+        # line is the minimum that makes it real to the person it is
+        # about — and the internal "recorded resident-model entry for
+        # fact '...'" line, which names the fact key, must never reach
+        # this surface. When nothing was written, silence is the honest
+        # report that nothing else happened.
+        print("Noted — I'll remember that.", file=out)
     _pause_for_dismissal(out)
     return 0
 
@@ -379,8 +637,19 @@ def _errand_state(castle, request, downstream: list) -> str:
         # what is true and what to do about it.
         base = f"filed during a worker turn — castle work {request_id} to run it"
 
+    # Naming the remedy, the same way every outcome label above does:
+    # docs/tasks/0015's rule is that a label must not cause the inaction
+    # it describes, and "waiting on you" was the one label on this
+    # surface that told the resident something was wrong without telling
+    # them what to do about it. CHORD COUPLING: Mod4+Shift+a is prose
+    # here and a real binding in modules/home/default.nix's keybindings
+    # attrset — change one and grep for the other (agent/castle's
+    # notification carries the identical coupling, and the compose
+    # chord's own mentions went stale exactly this way once already,
+    # docs/tasks/0019).
     if waiting:
-        return f"{base}, waiting on you" if base else "waiting on you"
+        hint = "waiting on you — press Mod4+Shift+a to answer"
+        return f"{base}, {hint}" if base else hint
     return base or "awaiting a worker"
 
 
@@ -394,6 +663,14 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
 
     if not requests:
         print("No errands yet. Press Mod4+Shift+Return and describe one.", file=out)
+        # Both of this mode's exits pause, for the reason compose mode
+        # already does (0009 review pass finding 5): the instant
+        # anything binds status to a chord, a window with no pause opens
+        # and closes in zero human-perceptible frames. Nothing binds one
+        # today, but this task's own chord makes that shape one
+        # keystroke away, and _pause_for_dismissal is isatty-gated
+        # internally, so no piped caller changes behaviour.
+        _pause_for_dismissal(out)
         return 0
 
     for req in requests:
@@ -422,6 +699,7 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
                 # for why nothing is happening on its own.
                 print(f"    noted: {evidence}", file=out)
         print(file=out)
+    _pause_for_dismissal(out)
     return 0
 
 
@@ -429,9 +707,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="castle-modal", description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("compose", "status"),
+        choices=("compose", "status", "answer"),
         default="compose",
-        help="compose a new request, or fold recent errands (default: compose)",
+        help=(
+            "compose a new request, fold recent errands, or answer a question the "
+            "system is waiting on (default: compose)"
+        ),
     )
     parser.add_argument(
         "--limit",
@@ -452,6 +733,19 @@ def build_parser() -> argparse.ArgumentParser:
             "to the resident (docs/tasks/0010-correction-record.md scope 6)."
         ),
     )
+    parser.add_argument(
+        "--question",
+        default=None,
+        help=(
+            "answer mode, non-interactive callers only: the id of the question to "
+            "answer, read from stdin in the same '.'-terminated grammar. For scripts "
+            "and CI, never shown to the resident — an interactive session ignores "
+            "this flag entirely and always shows the picker, because preselecting a "
+            "question for a human who is looking at the screen is exactly the "
+            "answering-the-wrong-one hazard the picker exists to prevent "
+            "(docs/tasks/0022-answer-in-ui.md scope 2)."
+        ),
+    )
     return parser
 
 
@@ -460,6 +754,8 @@ def main(argv: list[str] | None = None) -> int:
     castle = _load_castle_module()
     if args.mode == "compose":
         return run_compose(castle, kind=args.kind)
+    if args.mode == "answer":
+        return run_answer(castle, question_id=args.question)
     return run_status(castle, args.limit)
 
 
