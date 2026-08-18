@@ -201,7 +201,31 @@ def _started_at(castle, claim) -> str:
     return when.astimezone().strftime("%H:%M")
 
 
-def _errand_state(castle, request_id: str, downstream: list) -> str:
+def _outcome_label(outcome: str, request_id: str) -> str:
+    """One result's `outcome` as a resident-facing label.
+
+    Every non-completed value names the retry command explicitly. That
+    is docs/tasks/0015's lesson restated — "the label must not cause
+    the inaction it describes": a label honest about failure but silent
+    about what to do next repeats the same mistake in the other
+    direction. An absent `outcome` means "done", deliberately and
+    forever: every result written before that field existed is already
+    permanent in an append-only journal and cannot be backfilled, so a
+    pre-existing result whose body says "FAILED" in prose keeps reading
+    as "done" — the same backward-compatibility posture
+    `considered`/`propensity` already established. Nothing here greps a
+    body for a word like "FAILED"; the field is the fact.
+    """
+    if outcome == "failed":
+        return f"failed — castle work {request_id} to retry"
+    if outcome == "timeout":
+        return f"timed out — castle work {request_id} to retry"
+    if outcome == "interrupted":
+        return f"interrupted — castle work {request_id} to retry"
+    return "done"
+
+
+def _errand_state(castle, request, downstream: list) -> str:
     """`result` was checked before question/answer, so 'done' won any
     errand that also had an unanswered question — but the worker prompt
     (agent/castle-worker-claude) explicitly tells tenants to "file the
@@ -214,71 +238,72 @@ def _errand_state(castle, request_id: str, downstream: list) -> str:
     strictly more honest than picking one. The ", waiting on you"
     overlay below composes exactly as it always has.
 
-    "in progress" is now *earnable* (docs/tasks/0021-auto-dispatch.md
-    §4), which docs/tasks/0015 deliberately left it not being: a
-    `claim` record says a worker turn began, and a live `flock` on that
-    errand's lease says one is running right this second. Both, not
-    either — a claim with a dead lease is an interrupted turn, and
-    saying "in progress" about it would be exactly the absence-of-
-    evidence guess 0015 removed. It is also checked **first**, ahead of
-    any result: an errand whose failed turn the resident is retrying
-    right now must not be labelled with advice to run the very command
-    that is already running (and would be refused the lease). The narrow race this live probe
-    shares with the dispatch reaper's own probe is documented on
-    agent/castle's `lock_is_held`, and accepted there.
+    **The errand's state is the state of its newest turn.** Since
+    docs/tasks/0021-auto-dispatch.md a result names the `claim` it
+    closes, so "which turn are we talking about" is answerable — and it
+    has to be asked, because keying on the newest *result* gets two
+    real cases backwards. An errand whose retry completed, and whose
+    older abandoned turn was reaped afterwards, has a newer
+    `interrupted` result than its `completed` one: keyed on results it
+    reads as interrupted forever, though it is finished. And an errand
+    with a second turn that died leaves a claim no result closes, which
+    an older result masks entirely. Older turns' accounts — reaped ones
+    included — are history; the newest turn is the current truth. A
+    journal with no `claim` records at all (everything written before
+    this task) keeps the old newest-result behavior unchanged.
 
-    A result's `outcome` field decides the rest. Absence keeps meaning
-    "done", deliberately and forever: every result written before that
-    field existed is already permanent in an append-only journal and
-    cannot be backfilled, so a pre-existing result whose body says
-    "FAILED" in prose will keep reading as "done" here — the same
-    backward-compatibility posture `considered`/`propensity` already
-    established, applied on purpose rather than by oversight. Nothing
-    here greps a body for a word like "FAILED"; the field is the fact.
+    "in progress" is now *earnable* (docs/tasks/0021 §4), which
+    docs/tasks/0015 deliberately left it not being: a `claim` record
+    says a worker turn began, and a live `flock` on that errand's lease
+    says one is running right this second. Both, not either — a claim
+    with a dead lease is an interrupted turn, and saying "in progress"
+    about it would be exactly the absence-of-evidence guess 0015
+    removed. It is also checked **first**, ahead of any result: an
+    errand whose failed turn the resident is retrying right now must
+    not be labelled with advice to run the very command that is already
+    running (and would be refused the lease).
 
-    Every non-completed label names the retry command explicitly. That
-    is 0015's own lesson restated — "the label must not cause the
-    inaction it describes": a label honest about failure but silent
-    about what to do next repeats the same mistake in the other
-    direction.
+    The narrow race this live probe shares with the dispatch reaper's
+    own probe is documented on agent/castle's `lock_is_held`, and
+    accepted there.
     """
+    request_id = request.id
     types = {rec.type for rec in downstream}
     waiting = "question" in types and "answer" not in types
     results = sorted(
         (rec for rec in downstream if rec.type == "result"), key=lambda rec: rec.id
     )
-    claims = [rec for rec in downstream if rec.type == "claim"]
+    claims = sorted(
+        (rec for rec in downstream if rec.type == "claim"), key=lambda rec: rec.id
+    )
 
     base = None
-    if claims and castle.lease_is_held(request_id):
-        # A held lease outranks everything, including a result that
-        # already exists. Results used to win outright, and the errand
-        # that exposed it is the one this whole label set is for: a
-        # failed errand the resident is retrying *right now* rendered
-        # "failed — castle work <id> to retry", which is advice to run
-        # a command that would be refused, because the retry it is
-        # advising already holds the lease. A live turn is the most
-        # specific true thing about an errand; the last turn's account
-        # is only the most recent one.
-        started = _started_at(castle, max(claims, key=lambda rec: rec.id))
-        base = f"in progress (started {started})"
-    elif results:
-        # The newest result is this errand's latest account of itself —
-        # a hand-run retry appends rather than replacing.
-        outcome = results[-1].fields.get("outcome", "")
-        if outcome == "failed":
-            base = f"failed — castle work {request_id} to retry"
-        elif outcome == "timeout":
-            base = f"timed out — castle work {request_id} to retry"
-        elif outcome == "interrupted":
-            base = f"interrupted — castle work {request_id} to retry"
+    if claims:
+        newest_claim = claims[-1]
+        if castle.lease_is_held(request_id):
+            base = f"in progress (started {_started_at(castle, newest_claim)})"
         else:
-            base = "done"
-    elif claims:
-        # The window between "the lease died" and "the next dispatch
-        # sweep reaps it into a result". Nothing is running, so
-        # "interrupted" is the honest label, not "in progress".
-        base = f"interrupted — castle work {request_id} to retry"
+            # The result that closes *this* turn, not merely the newest
+            # result on the errand.
+            closing = [rec for rec in results if newest_claim.id in rec.refs]
+            if closing:
+                base = _outcome_label(closing[-1].fields.get("outcome", ""), request_id)
+            else:
+                # The window between "the lease died" and "the next
+                # dispatch sweep reaps it into a result". Nothing is
+                # running, so "interrupted" is the honest label.
+                base = f"interrupted — castle work {request_id} to retry"
+    elif results:
+        # No claim records anywhere on this errand: a journal from
+        # before docs/tasks/0021, where nothing recorded turns at all.
+        base = _outcome_label(results[-1].fields.get("outcome", ""), request_id)
+    elif request.fields.get(castle.FILED_DURING_TURN_FIELD, "").strip():
+        # A request a worker tenant filed during its own turn
+        # (docs/tasks/0021 §2.4(e)). "Awaiting a worker" would be the
+        # 0015 failure exactly: a label promising a start that is never
+        # coming, because dispatch deliberately never starts these. Say
+        # what is true and what to do about it.
+        base = f"filed during a worker turn — castle work {request_id} to run it"
 
     if waiting:
         return f"{base}, waiting on you" if base else "waiting on you"
@@ -299,7 +324,7 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
 
     for req in requests:
         downstream = castle._collect_downstream(records, req.id)
-        state = _errand_state(castle, req.id, downstream)
+        state = _errand_state(castle, req, downstream)
         first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
         print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
         print(f"    asked: {first_line}", file=out)

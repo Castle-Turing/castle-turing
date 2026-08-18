@@ -321,21 +321,46 @@ fi
 # field is written by the code paths that observe an outcome, never
 # passed in by a caller). Planting a record directly is the same
 # technique run.sh already uses for its malformed-propensity fixtures.
+# $4 (optional) is the claim this result closes, and $5 (optional) an
+# id timestamp for ordering. Both matter since docs/tasks/0021 made the
+# ledger per turn: a result closes the claim it names, and "newest"
+# is decided by id, so a fixture that wants to be the newest turn's
+# account has to say so.
 plant_result_with_outcome() {
-  local request_id="$1" outcome="$2" suffix="$3"
-  local id="20260101T000000Z-result-$suffix"
+  local request_id="$1" outcome="$2" suffix="$3" claim_id="${4:-}" stamp="${5:-20260101T000000Z}"
+  local id="$stamp-result-$suffix"
+  local refs="$request_id"
+  [ -n "$claim_id" ] && refs="$request_id,$claim_id"
   cat > "$CASTLE_STATE_DIR/journal/$id.md" <<EOF
 ---
 id: $id
 type: result
 provenance: requested
-refs: $request_id
+refs: $refs
 seat: worker
 created: 2026-01-01T00:00:00Z
 outcome: $outcome
 ---
 
 Planted fixture: a result carrying outcome: $outcome (docs/tasks/0021).
+EOF
+  echo "$id"
+}
+
+plant_claim() {
+  local request_id="$1" suffix="$2" stamp="${3:-20260101T000000Z}"
+  local id="$stamp-claim-$suffix"
+  cat > "$CASTLE_STATE_DIR/journal/$id.md" <<EOF
+---
+id: $id
+type: claim
+provenance: requested
+refs: $request_id
+seat: worker
+created: 2026-01-01T00:00:00Z
+---
+
+Planted fixture: a worker turn began here (docs/tasks/0021).
 EOF
   echo "$id"
 }
@@ -416,7 +441,12 @@ log "status mode: a live turn outranks an existing result — a failed errand be
 # moment rendered "failed — castle work <id> to retry": advice to run a
 # command that was already running, and that would be refused the lease
 # if the resident took it.
-plant_result_with_outcome "$REQ_CLAIMED" failed 0c0005 >/dev/null
+# Closing $CLAIM_ID specifically: since the ledger is per turn, a
+# result that named only the request would leave this errand's newest
+# claim unclosed, and the honest label for that is "interrupted", not
+# "failed" — which is a different assertion than the one this section
+# is making.
+plant_result_with_outcome "$REQ_CLAIMED" failed 0c0005 "$CLAIM_ID" >/dev/null
 STATUS_FAILED_CLAIM="$("$MODAL" --mode status --limit 40)"
 echo "$STATUS_FAILED_CLAIM" | grep -q "^\[$REQ_CLAIMED\] requested — failed — castle work $REQ_CLAIMED to retry$" \
   || fail "with a failed result and no live lease, the errand should read as failed"
@@ -432,6 +462,51 @@ echo "$STATUS_LIVE_RETRY" | grep -qE "^\[$REQ_CLAIMED\] requested — in progres
   || fail "a live turn on an errand that already has a failed result did not read as 'in progress': $(echo "$STATUS_LIVE_RETRY" | grep "$REQ_CLAIMED" || true)"
 kill "$LEASE_HOLDER_2" 2>/dev/null || true
 wait "$LEASE_HOLDER_2" 2>/dev/null || true
+
+log "status mode: the errand's state is its NEWEST turn's state, not its newest result's (docs/tasks/0021 §4)"
+# Scenario (a), verified as a real misreport before the fix: an errand
+# whose retry completed, and whose older abandoned turn was reaped
+# afterwards, carries an `interrupted` result NEWER than its
+# `completed` one — because the reaper wrote it later. Keyed on the
+# newest result it read as interrupted forever, though it was finished.
+REQ_TWO_TURNS="$("$CASTLE" ask "Two turns: an old one reaped after a newer one completed.")"
+CLAIM_A="$(plant_claim "$REQ_TWO_TURNS" 0a0001 20260101T000100Z)"
+CLAIM_B="$(plant_claim "$REQ_TWO_TURNS" 0a0002 20260101T000200Z)"
+plant_result_with_outcome "$REQ_TWO_TURNS" completed 0a0003 "$CLAIM_B" 20260101T000300Z >/dev/null
+# The reaper's account of the OLDER turn, written last of all.
+plant_result_with_outcome "$REQ_TWO_TURNS" interrupted 0a0004 "$CLAIM_A" 20260101T000400Z >/dev/null
+"$CASTLE" validate || fail "the two-turn fixtures do not validate"
+STATUS_TWO_TURNS="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_TWO_TURNS" | grep -q "^\[$REQ_TWO_TURNS\] requested — done$" \
+  || fail "an errand whose newest turn completed reads as something else because an older turn was reaped later: $(echo "$STATUS_TWO_TURNS" | grep "$REQ_TWO_TURNS" || true)"
+
+log "status mode: and an open newest turn is not masked by an older turn's result"
+# Scenario (b), the same bug from the other side: a second turn that
+# died leaves a claim no result closes, and an older result hid it
+# entirely.
+REQ_OPEN_TURN="$("$CASTLE" ask "Two turns: the newer one died and nothing closed it.")"
+CLAIM_C="$(plant_claim "$REQ_OPEN_TURN" 0b0001 20260101T000100Z)"
+plant_result_with_outcome "$REQ_OPEN_TURN" completed 0b0002 "$CLAIM_C" 20260101T000200Z >/dev/null
+plant_claim "$REQ_OPEN_TURN" 0b0003 20260101T000300Z >/dev/null
+"$CASTLE" validate || fail "the open-turn fixtures do not validate"
+STATUS_OPEN_TURN="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_OPEN_TURN" | grep -q "^\[$REQ_OPEN_TURN\] requested — interrupted — castle work $REQ_OPEN_TURN to retry$" \
+  || fail "an unclosed newest turn was masked by an older turn's result: $(echo "$STATUS_OPEN_TURN" | grep "$REQ_OPEN_TURN" || true)"
+
+log "status mode: a request a tenant filed during its own turn says so, instead of promising a worker that is never coming"
+# docs/tasks/0021 §2.4(e): dispatch deliberately never starts these, so
+# "awaiting a worker" would be 0015's exact failure — a label promising
+# a start that will not happen. Filed through the real mechanism (the
+# tenant's inherited CASTLE_WORKER_CLAIM), not by hand-editing a record.
+REQ_STAMPED="$(CASTLE_WORKER_CLAIM="$CLAIM_A" "$CASTLE" ask "Filed by a tenant mid-turn: should not claim to be awaiting a worker.")"
+grep -q "^filed-during-turn: $CLAIM_A\$" "$CASTLE_STATE_DIR/journal/$REQ_STAMPED.md" \
+  || fail "$REQ_STAMPED carries no filed-during-turn stamp — the fixture is not exercising what it claims to"
+STATUS_STAMPED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_STAMPED" | grep -q "^\[$REQ_STAMPED\] requested — filed during a worker turn — castle work $REQ_STAMPED to run it$" \
+  || fail "a tenant-filed request did not say so: $(echo "$STATUS_STAMPED" | grep "$REQ_STAMPED" || true)"
+echo "$STATUS_STAMPED" | grep -q "^\[$REQ_STAMPED\] requested — awaiting a worker$" \
+  && fail "a tenant-filed request still claims to be awaiting a worker — nothing will ever start it automatically"
+"$CASTLE" validate || fail "the journal does not validate after the tenant-filed request fixture"
 
 log "status mode: an unanswered question still overlays every one of these states unchanged"
 "$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
