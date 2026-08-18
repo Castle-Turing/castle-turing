@@ -415,6 +415,64 @@ jobs:
           fi
           echo "found $CONSOLE_FONT in $SPLEEN"
 
+      - name: Assert the ergonomics wiring reaches the generated configs
+        run: |
+          # docs/tasks/0020. Everything this task adds is an unobserved
+          # default of exactly the class 0019 and 0017 were about: a
+          # keybinding that silently vanishes, or a status entry that
+          # silently returns, produces no error anywhere. sway --validate
+          # is happy either way, so these are grep assertions against the
+          # real generated artifacts.
+          missing=0
+          need() {
+            if ! grep -qF "$2" "$1"; then
+              echo "MISSING in $(basename "$1"): $2"
+              missing=1
+            fi
+          }
+          refuse() {
+            if grep -qF "$2" "$1"; then
+              echo "UNEXPECTEDLY PRESENT in $(basename "$1"): $2"
+              missing=1
+            fi
+          }
+
+          # Media and brightness keys. Asserted by keysym rather than by
+          # store path, which would pin a hash and churn on every bump.
+          for k in XF86MonBrightnessUp XF86MonBrightnessDown \
+                   XF86AudioRaiseVolume XF86AudioLowerVolume \
+                   XF86AudioMute XF86AudioMicMute
+          do
+            need "$SWAY_CONFIG" "bindsym $k exec"
+          done
+          # The volume ceiling: without -l 1.0 a held key pushes the sink
+          # into software boost, which distorts rather than getting louder.
+          need "$SWAY_CONFIG" "set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"
+          # The default set must still be there alongside them — the
+          # finding-1 lockout guard, restated for this task's additions.
+          need "$SWAY_CONFIG" 'bindsym Mod1+Return exec'
+
+          I3_CONFIG=$(nix build --no-link --print-out-paths \
+            '.#nixosConfigurations.example.config.home-manager.users.resident.xdg.configFile."i3status/config".source')
+          echo "--- generated i3status config ($I3_CONFIG) ---"
+          cat "$I3_CONFIG"
+          # .example imports host-xps9370, which declares no ethernet
+          # port — so both false faults must be gone while battery stays.
+          need   "$I3_CONFIG" 'order += "battery all"'
+          refuse "$I3_CONFIG" 'order += "ipv6"'
+          refuse "$I3_CONFIG" 'order += "ethernet _first_"'
+
+          if [ "$missing" -ne 0 ]; then
+            echo
+            echo "The ergonomics wiring no longer reaches the generated configs."
+            echo "If this is deliberate, update these expectations AND"
+            echo "docs/tasks/0020-laptop-ergonomics.md. Note that a missing"
+            echo "XF86 binding or a returning ipv6/ethernet entry is invisible"
+            echo "to sway --validate and to nix flake check — this step is the"
+            echo "only thing that sees it."
+            exit 1
+          fi
+
       - name: Run foot --check-config over the generated config
         run: |
           # foot ships its own config-check mode (-C/--check-config):

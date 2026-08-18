@@ -64,6 +64,65 @@ in
     };
   };
 
+  # Chassis composition facts, declared here rather than in
+  # modules/desktop even though today's only consumer is the desktop's
+  # status bar (task 0020 item 3): castle.display is named for its
+  # consumer, but castle.hardware is named for the *fact*, and a
+  # headless host must be able to state the same fact — 0003 finding
+  # #10 reasons about recovery exactly in terms of "does this machine
+  # have a non-Wi-Fi network path", a plausible second consumer.
+  options.castle.hardware = {
+    hasEthernet = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Whether the chassis has a wired ethernet port. A machine fact,
+        set `false` with `lib.mkDefault` by host modules for portless
+        chassis (hosts/xps9370). Consumed by modules/home's status-bar
+        config: a machine that has a port should show its state — an
+        unplugged cable is real information — while a machine that
+        cannot have one must not render a permanent fault for hardware
+        that does not exist (task 0020 item 3). Default `true` because
+        showing a wired port's state is correct wherever one exists;
+        declaring the absence is the host's job, not the framework's
+        guess.
+      '';
+    };
+  };
+
+  # Declared here rather than in modules/desktop, even though
+  # modules/desktop is what consumes it (services.upower): whether a
+  # machine can complete a hibernate is a fact about its disk layout,
+  # which a headless host knows just as well as a graphical one — and
+  # hosts/vm-test proved it, being unable to state the fact at all
+  # while the option lived in a module it does not import.
+  options.castle.power = {
+    criticalPowerAction = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.enum [
+          "PowerOff"
+          "Hibernate"
+          "HybridSleep"
+          "Suspend"
+          "Ignore"
+        ]
+      );
+      default = null;
+      description = ''
+        What upower does when the battery reaches its action level,
+        wired to `services.upower.criticalPowerAction`. `null` leaves
+        upower's own default (`HybridSleep` at this nixpkgs pin)
+        alone. The framework deliberately picks no value: whether a
+        machine can hibernate is a fact about its disk layout, so a
+        host module supplies this with `lib.mkDefault` (hosts/xps9370
+        sets `PowerOff` — zram-only swap, nowhere to write a
+        hibernation image) and the private layer may still override.
+        The assertion below refuses the hibernate-family actions on a
+        swapless machine, whichever layer asked for them.
+      '';
+    };
+  };
+
   config = {
     # Both fields default to empty (rather than being left without a
     # default) so a missing private layer fails here, with this message,
