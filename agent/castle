@@ -35,6 +35,11 @@ Subcommands:
             addressed to the resident.
   work      worker: run the configured worker-tenant command against a
             request and write back its result (docs/tasks/0009).
+  dispatch  the dispatch seat's hands: one sweep of the journal —
+            reap interrupted turns, work every eligible request, then
+            route once (docs/tasks/0021-auto-dispatch.md). Plumbing,
+            not a reasoning seat: it chooses nothing a re-run of the
+            same fold over the same journal wouldn't choose again.
   digest    fold the journal into a human-readable report.
   validate  schema-check a journal (this is what CI asserts with).
   show      print one record, journal or spool.
@@ -44,9 +49,11 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import os
 import pathlib
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -55,8 +62,34 @@ import tempfile
 # Record schema (docs/architecture.md's "Records" section)
 # ---------------------------------------------------------------------------
 
-RECORD_TYPES = ("request", "decision", "result", "question", "answer", "correction")
+# `claim` is the seventh type (docs/tasks/0021-auto-dispatch.md §3.2),
+# and it answers a question docs/tasks/0015-filed-not-in-progress.md
+# deliberately left open in its own non-goals — "do not add a
+# started/claimed record type… it belongs with the first asynchronous
+# worker." Automatic dispatch is that first asynchronous worker, so the
+# record now has a job: written the instant `castle work` takes an
+# errand's lease, it is the ONLY surviving evidence that a turn ever
+# began once the lease dies with $XDG_RUNTIME_DIR at reboot. It exists
+# for observability across a restart, never for mutual exclusion —
+# flock already provides exclusion, for free (see cmd_work's lease).
+RECORD_TYPES = ("request", "decision", "result", "question", "answer", "correction", "claim")
 PROVENANCE_VALUES = ("requested", "initiated")
+
+# The closed vocabulary of the `outcome` field on `result` records
+# (docs/tasks/0021 §3.5). `completed`/`failed`/`timeout` are written by
+# whichever invoker watched the tenant finish, fail, or hang;
+# `interrupted` is reserved for the one case no invoker could write for
+# itself — the process running the turn died before it could write
+# anything, and `castle dispatch`'s reaper supplies the account
+# retroactively from the surviving `claim` record.
+#
+# This is a named cross-task contract, not a local detail: tasks 0026
+# and 0027 are expected to reuse this exact field and these exact four
+# values rather than each inventing a sibling field, and 0028 reads it
+# directly. No surface may ever infer failure by grepping a body for a
+# word like "FAILED" — the exit code is the fact, and it lives here;
+# the body carries the reasoning, never the machine-readable signal.
+OUTCOME_VALUES = ("completed", "failed", "timeout", "interrupted")
 
 # The router's channel vocabulary (docs/architecture.md's Router
 # section). Named once, here, so `cmd_route` and the `considered` field
@@ -88,6 +121,14 @@ CHANNELS = ("notify", "digest")
 # tuple, unchanged from before this addition: it lands after `propensity`
 # by the pre-existing sorted-remainder fallback below, and touching that
 # ordering isn't this change's business.
+#
+# `outcome` (result-only) and `watermark` (on the one dispatch decision
+# record that carries it — docs/tasks/0021 §2.2) are new here.
+# `outcome` sits directly after the six required fields because it is
+# the machine-readable half of what a result record says about itself,
+# and a reader skimming a result should meet it before the prose;
+# `watermark` sits at the end, beside the other decision-only fields,
+# where it leaves `channel`'s sorted-remainder placement untouched.
 FIELD_ORDER = (
     "id",
     "type",
@@ -95,6 +136,7 @@ FIELD_ORDER = (
     "refs",
     "seat",
     "created",
+    "outcome",
     "surface",
     "context-local-created",
     "context-last-notify",
@@ -103,6 +145,7 @@ FIELD_ORDER = (
     "evidence",
     "considered",
     "propensity",
+    "watermark",
 )
 
 REQUIRED_FIELDS = ("id", "type", "provenance", "refs", "seat", "created")
@@ -259,14 +302,111 @@ def journal_dir() -> pathlib.Path:
     return d
 
 
-def spool_dir() -> pathlib.Path:
+def runtime_dir() -> pathlib.Path:
+    """`$XDG_RUNTIME_DIR/castle`, falling back to `/tmp/castle-$UID`.
+
+    The machine-local, login-session-lifetime root: the spool lives
+    under it, and so do the locks docs/tasks/0021-auto-dispatch.md
+    adds. Nothing durable is ever kept here — a reboot wipes it, and
+    every piece of this tool treats that as normal rather than as data
+    loss (see `leases_dir`).
+    """
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
-        d = pathlib.Path(runtime) / "castle" / "spool"
-    else:
-        d = pathlib.Path(f"/tmp/castle-{os.getuid()}") / "spool"
+        return pathlib.Path(runtime) / "castle"
+    return pathlib.Path(f"/tmp/castle-{os.getuid()}")
+
+
+def spool_dir() -> pathlib.Path:
+    d = runtime_dir() / "spool"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def leases_dir() -> pathlib.Path:
+    """Where per-request worker leases live (docs/tasks/0021 §3.1).
+
+    A sibling of `spool/`, deliberately NOT part of it and deliberately
+    not a record type: `RECORD_TYPES` is schema forever — every entry
+    is a durable commitment about what a journal may contain — and "a
+    worker currently holds this errand" is an ephemeral liveness fact
+    with the lifetime of a login session, not a message any seat is
+    sending any other. It is a lock, not a record. The durable account
+    of what actually happened is the `claim` record.
+    """
+    d = runtime_dir() / "leases"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def lease_path(request_id: str) -> pathlib.Path:
+    return leases_dir() / f"{request_id}.lock"
+
+
+def dispatch_lock_path() -> pathlib.Path:
+    """The global sweep lock (docs/tasks/0021 §2.1) — one sweep at a
+    time, machine-wide, per login session."""
+    d = runtime_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "dispatch.lock"
+
+
+def acquire_lock(path: pathlib.Path):
+    """Take `flock(LOCK_EX | LOCK_NB)` on `path`, returning the open
+    file object that holds it, or None if somebody else holds it now.
+
+    `flock` on a plain file, never a PID file with a manual staleness
+    check (docs/tasks/0021 §3.1): the kernel releases a flock the
+    instant the holding process exits, for any reason including a
+    crash, so a stale lock is detectable race-free by the next
+    acquirer. A PID file needs a second mechanism (read /proc/<pid>,
+    race against PID reuse) to answer the same question less reliably.
+
+    The caller keeps the returned handle open for as long as it holds
+    the lock; closing it releases the lock.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def lock_is_held(path: pathlib.Path) -> bool:
+    """Probe whether somebody currently holds the lock on `path`.
+
+    A probe is a nonblocking acquire immediately followed by a release
+    — which means the probe itself briefly HOLDS the lock while it
+    checks. That opens a narrow window in which a probe (a reaping
+    sweep, or castle-modal's status fold) contends with a hand-run
+    `castle work` starting at almost exactly the same instant, and the
+    human's `castle work` can lose that race and see the lease as
+    momentarily held. Accepted, not engineered around
+    (docs/tasks/0021 §2.3): the resulting refusal is loud, an immediate
+    retry succeeds because the probe released within microseconds, and
+    a second locking protocol whose only job is making probes
+    non-contending is not worth the complexity for a window this
+    narrow. Resist the temptation to invent something more elaborate.
+    """
+    if not path.exists():
+        # The normal case after a reboot: $XDG_RUNTIME_DIR is wiped, so
+        # an interrupted turn's lease file is simply gone. Absence is
+        # not "held," and the journal — not this directory — is what
+        # says whether the turn ever finished.
+        return False
+    handle = acquire_lock(path)
+    if handle is None:
+        return True
+    handle.close()
+    return False
+
+
+def lease_is_held(request_id: str) -> bool:
+    """Is a worker running this errand right now? (docs/tasks/0021 §4)"""
+    return lock_is_held(lease_path(request_id))
 
 
 def load_all(directory: pathlib.Path) -> dict[str, Record]:
@@ -597,6 +737,13 @@ def cmd_record(args: argparse.Namespace) -> int:
     # the whole premise of docs/tasks/0010-correction-record.md; the one
     # path that can honor it is castle correct / castle-modal, both of
     # which call file_correction() rather than this function.
+    #
+    # `claim` (docs/tasks/0021 §3.2) is deliberately NOT refused the
+    # same way: none of the reasoning above applies to it. A claim is a
+    # mechanical observation — "a turn began at this time, running this
+    # command" — not resident speech with guarantees only one write
+    # path can honor, so a human holding the worker seat by hand must
+    # be able to write one exactly like any other seat's hands can.
     if args.type == "correction":
         print(
             "castle record: refusing to write a correction record directly — "
@@ -815,6 +962,14 @@ def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None
 
 
 def cmd_route(args: argparse.Namespace) -> int:
+    """argparse entry point for the router; the fold itself is
+    `route_journal()`, so `castle dispatch`'s tail step (docs/tasks/0021
+    §2.6) can invoke the identical fold in-process without inventing an
+    argparse Namespace to pass it."""
+    return route_journal()
+
+
+def route_journal() -> int:
     """The router's first rule set: provenance alone (docs/architecture.md).
 
     `requested` -> notify (a real interruption, docs/tasks/0009 item 5).
@@ -936,15 +1091,103 @@ def cmd_route(args: argparse.Namespace) -> int:
 
 DEFAULT_WORKER_COMMAND = "claude -p"
 
+# Fifteen minutes: a chosen value, not derived from anything
+# (docs/tasks/0021 §3.3) — long enough for a real `claude -p` errand,
+# short enough that a hung tenant does not silently occupy the worker
+# seat for the rest of the day. `castle.agent.worker.timeoutSeconds`
+# (modules/agent) wires CASTLE_WORKER_TIMEOUT to whatever a resident
+# prefers instead.
+DEFAULT_WORKER_TIMEOUT_SECONDS = 900
 
-def cmd_work(args: argparse.Namespace) -> int:
-    """The worker seat's hands (docs/tasks/0009-ambient-intake.md item 4).
+# The seat value on records dispatch writes for itself: the watermark
+# (§2.2) and reaped `interrupted` results (§2.3). Plumbing, not a
+# reasoning seat — see docs/architecture.md's Seats section.
+DISPATCH_SEAT = "dispatch"
+
+WORKER_PROPOSES_NOTE = (
+    "This result was produced by the worker seat. Per "
+    "docs/tasks/0009-ambient-intake.md's non-goals, the worker "
+    "proposes; it does not deploy — nothing above was applied to any "
+    "running system or committed to any repo by this seat."
+)
+
+
+class LeaseHeld(Exception):
+    """Another live process already holds this request's worker lease.
+
+    Raised by `run_worker_turn` before anything at all is written:
+    nothing began, so nothing should look like it did. `castle work`
+    turns this into a loud refusal; `castle dispatch` treats it as a
+    skip, not an error (docs/tasks/0021 §2.5).
+    """
+
+
+def worker_timeout_seconds() -> int:
+    """CASTLE_WORKER_TIMEOUT, tolerantly (docs/tasks/0021 §3.3).
+
+    Same shape `_fire_notification` already uses for an unparseable
+    CASTLE_NOTIFY_COMMAND: warn on stderr, fall back to the default,
+    never refuse to do the work. A misconfigured timeout must not be
+    the reason an errand doesn't run.
+    """
+    raw = os.environ.get("CASTLE_WORKER_TIMEOUT")
+    if raw is None or not raw.strip():
+        return DEFAULT_WORKER_TIMEOUT_SECONDS
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        print(
+            f"castle work: could not parse CASTLE_WORKER_TIMEOUT ({raw!r}) as a "
+            f"whole number of seconds; using {DEFAULT_WORKER_TIMEOUT_SECONDS}",
+            file=sys.stderr,
+        )
+        return DEFAULT_WORKER_TIMEOUT_SECONDS
+    if value <= 0:
+        print(
+            f"castle work: CASTLE_WORKER_TIMEOUT ({raw!r}) is not positive; "
+            f"using {DEFAULT_WORKER_TIMEOUT_SECONDS}",
+            file=sys.stderr,
+        )
+        return DEFAULT_WORKER_TIMEOUT_SECONDS
+    return value
+
+
+def _write_worker_result(request: Record, *, outcome: str, body_lines: list[str]) -> str:
+    """Every result `run_worker_turn` writes goes through here, so the
+    `outcome` field cannot be forgotten on one branch and remembered on
+    another. Provenance is inherited from the request, unchanged, no
+    matter who or what started the turn (docs/tasks/0021 §5):
+    provenance records who *wanted* the work, never who started it."""
+    body_lines = list(body_lines)
+    body_lines.append("")
+    body_lines.append(WORKER_PROPOSES_NOTE)
+    return write_record(
+        journal_dir(),
+        type="result",
+        provenance=request.fields.get("provenance", "requested"),
+        seat="worker",
+        refs=[request.id],
+        body="\n".join(body_lines),
+        extra={"outcome": outcome},
+    )
+
+
+def run_worker_turn(request: Record) -> tuple[str, str]:
+    """One worker turn: take the lease, record the claim, run the
+    tenant, write the result. Returns `(result_record_id, outcome)`.
+
+    Shared in-process by `castle work <id>` and `castle dispatch`
+    (docs/tasks/0021 §2.5) rather than one shelling out to the other,
+    so a hand-held worker seat and an automatically-dispatched one are
+    the same code path by construction — including the lease, which is
+    a guarantee only if it holds for *every* caller, not just the ones
+    that remember to take it.
 
     The contract sits at the errand boundary, not the model-call
     boundary (Proposal 03): a request record in, a result record out.
-    What runs in between is `castle.agent.worker.command` — CI overrides
-    it with a scripted stand-in; a real deployment defaults to
-    agent/castle-worker-claude, a thin wrapper around a headless
+    What runs in between is `castle.agent.worker.command` — CI
+    overrides it with a scripted stand-in; a real deployment defaults
+    to agent/castle-worker-claude, a thin wrapper around a headless
     `claude -p` that this function knows nothing about beyond its
     contract: read the request body on stdin, write reasoning to
     stdout, write a diff (or nothing) to $CASTLE_DIFF_FILE, and — this
@@ -953,9 +1196,259 @@ def cmd_work(args: argparse.Namespace) -> int:
     THE WORKER MUST NOT DEPLOY. This function never runs nixos-rebuild,
     never commits, never applies the diff it collects; it only ever
     folds that diff into a result record for the resident to review.
+    That containment is a code fact, not a systemd directive — see
+    modules/agent's comment on why the dispatch unit is deliberately
+    unhardened beyond `Type = oneshot`.
+    """
+    # The lease first, before any record is written: that ordering is
+    # what makes three states cleanly distinguishable across a restart
+    # (docs/tasks/0021 §3.2) — claim + live lease = running right now;
+    # claim + dead lease + no result = interrupted and reapable; no
+    # claim = nothing ever touched this errand. A claim written before
+    # the lease was taken would create a fourth, meaningless state.
+    lease = acquire_lock(lease_path(request.id))
+    if lease is None:
+        raise LeaseHeld(request.id)
+
+    try:
+        command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
+        started = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+
+        # The lease file's contents are informational only — a human
+        # looking at $XDG_RUNTIME_DIR/castle/leases/ deserves to see
+        # what is holding it. The durable account is the claim record
+        # below; nothing ever reads this text back.
+        try:
+            lease.seek(0)
+            lease.truncate()
+            lease.write(f"request: {request.id}\nstarted: {started}\ntenant: {command}\n")
+            lease.flush()
+        except OSError:
+            pass
+
+        write_record(
+            journal_dir(),
+            type="claim",
+            provenance=request.fields.get("provenance", "requested"),
+            seat="worker",
+            refs=[request.id],
+            body="\n".join(
+                [
+                    f"Worker turn on errand `{request.id}` began at {started}.",
+                    "",
+                    f"Tenant command: `{command}`",
+                    "",
+                    "This record exists so an interrupted turn stays visible "
+                    "after the machine that was running it is gone: the lease "
+                    "that guarantees exclusion lives in $XDG_RUNTIME_DIR and "
+                    "dies at reboot, but this record does not "
+                    "(docs/tasks/0021-auto-dispatch.md §3.2, answering "
+                    "docs/tasks/0015-filed-not-in-progress.md's deferred "
+                    "\"started/claimed record type\" question).",
+                ]
+            ),
+        )
+
+        # The three recordless failure paths this task fixes
+        # (docs/tasks/0021 §3.4). Under a human typing `castle work`
+        # these were a minor inconvenience — the error was right there
+        # on the terminal. Under a path unit and a timer re-running
+        # `castle dispatch` against the same misconfigured tenant they
+        # are an unbounded, silent retry loop: no result was ever
+        # written, so the request stays eligible forever. Writing a
+        # result makes the request ineligible (bounding the retry to
+        # exactly one automatic attempt) and tells the resident through
+        # the ordinary router path instead of leaving them to notice a
+        # growing pile of nothing.
+        if not command.strip():
+            print(
+                "castle work: no worker command configured (CASTLE_WORKER_COMMAND is empty)",
+                file=sys.stderr,
+            )
+            return (
+                _write_worker_result(
+                    request,
+                    outcome="failed",
+                    body_lines=[
+                        f"Errand `{request.id}` could not start: no worker tenant is "
+                        "configured (CASTLE_WORKER_COMMAND is empty).",
+                        "",
+                        "Nothing ran. Set `castle.agent.worker.command` (modules/agent) "
+                        "to whatever should hold the worker seat, then re-run "
+                        f"`castle work {request.id}`.",
+                    ],
+                ),
+                "failed",
+            )
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            print(
+                f"castle work: could not parse CASTLE_WORKER_COMMAND ({command!r}): {exc}",
+                file=sys.stderr,
+            )
+            return (
+                _write_worker_result(
+                    request,
+                    outcome="failed",
+                    body_lines=[
+                        f"Errand `{request.id}` could not start: the configured worker "
+                        f"tenant `{command}` does not parse as a command line ({exc}).",
+                        "",
+                        "Nothing ran. Fix `castle.agent.worker.command` (modules/agent) "
+                        f"and re-run `castle work {request.id}`.",
+                    ],
+                ),
+                "failed",
+            )
+
+        diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
+        os.close(diff_fd)
+        diff_path = pathlib.Path(diff_path_str)
+        timeout = worker_timeout_seconds()
+        try:
+            env = dict(os.environ)
+            env["CASTLE_REQUEST_ID"] = request.id
+            env["CASTLE_REQUEST_BODY"] = request.body
+            env["CASTLE_DIFF_FILE"] = str(diff_path)
+            env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
+
+            try:
+                # start_new_session=True puts the tenant in its own
+                # process group so the timeout below can kill the WHOLE
+                # group: `claude -p` and similar tenants spawn their own
+                # subprocesses, and killing only the direct child leaves
+                # those running — possibly still writing to the diff
+                # file this function is about to read.
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                print(
+                    f"castle work: could not run worker command {command!r}: {exc}",
+                    file=sys.stderr,
+                )
+                return (
+                    _write_worker_result(
+                        request,
+                        outcome="failed",
+                        body_lines=[
+                            f"Errand `{request.id}` could not start: the configured "
+                            f"worker tenant `{command}` could not be run ({exc}).",
+                            "",
+                            "Nothing ran. Check that the command exists and is "
+                            "executable, then re-run "
+                            f"`castle work {request.id}`.",
+                        ],
+                    ),
+                    "failed",
+                )
+
+            timed_out = False
+            try:
+                stdout, stderr = proc.communicate(input=request.body, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except OSError:
+                    pass
+                stdout, stderr = proc.communicate()
+
+            diff_text = ""
+            try:
+                diff_text = diff_path.read_text().strip()
+            except OSError:
+                diff_text = ""
+        finally:
+            try:
+                diff_path.unlink()
+            except OSError:
+                pass
+
+        if timed_out:
+            outcome = "timeout"
+        elif proc.returncode == 0:
+            outcome = "completed"
+        else:
+            # Including a tenant killed by a signal (returncode < 0):
+            # this invoker survived to watch it die and write the
+            # account, which is exactly what separates `failed` from
+            # `interrupted` (docs/tasks/0021 §3.5).
+            outcome = "failed"
+
+        reasoning = (stdout or "").strip()
+        body_lines = []
+        if outcome == "completed":
+            body_lines.append(f"Errand `{request.id}` completed by worker tenant `{command}`.")
+        elif outcome == "timeout":
+            body_lines.append(
+                f"Errand `{request.id}` TIMED OUT in worker tenant `{command}` after "
+                f"{timeout}s; the tenant's whole process group was killed."
+            )
+        elif proc.returncode is not None and proc.returncode < 0:
+            body_lines.append(
+                f"Errand `{request.id}` FAILED in worker tenant `{command}`: the "
+                f"process was killed by signal {-proc.returncode}."
+            )
+        else:
+            body_lines.append(
+                f"Errand `{request.id}` FAILED in worker tenant `{command}` "
+                f"(exit {proc.returncode})."
+            )
+        body_lines.append("")
+        if reasoning:
+            body_lines.append(reasoning)
+            body_lines.append("")
+        if outcome != "completed" and (stderr or "").strip():
+            body_lines += ["stderr:", "```", stderr.strip(), "```", ""]
+        if diff_text:
+            body_lines += ["```diff", diff_text, "```"]
+        else:
+            body_lines.append(
+                "(no diff produced — either no change was proposed, or the worker "
+                "tenant did not write one to $CASTLE_DIFF_FILE)"
+            )
+        if timed_out:
+            body_lines.append("")
+            body_lines.append(
+                "Anything above was read from $CASTLE_DIFF_FILE as it stood when the "
+                "tenant was killed, so it may be partial."
+            )
+        return _write_worker_result(request, outcome=outcome, body_lines=body_lines), outcome
+    finally:
+        # Releasing the lease is closing the handle — the kernel would
+        # do it anyway when this process exits, including if it dies.
+        # The file itself is left behind on purpose: an unlink here
+        # would race a concurrent probe that already opened the path,
+        # and a leftover, unheld lease file means nothing on its own.
+        # The journal, not this directory, says what happened.
+        lease.close()
+
+
+def cmd_work(args: argparse.Namespace) -> int:
+    """The worker seat's hands (docs/tasks/0009-ambient-intake.md item 4).
+
+    Validates the request, then hands off to `run_worker_turn` — the
+    same turn `castle dispatch` runs. Re-running this on a request that
+    already carries a result is deliberately still allowed: that IS the
+    retry path (docs/tasks/0021's retry policy), and automatic dispatch
+    never re-runs anything by construction of its eligibility fold.
     """
     jdir = journal_dir()
     request_path = jdir / f"{args.request_id}.md"
+    # These two failure paths stay recordless, unchanged
+    # (docs/tasks/0021 §3.4): both are caller errors, no dispatcher can
+    # ever produce either (the eligibility fold only ever hands
+    # `run_worker_turn` a request id it just read out of the journal),
+    # so there is no silent-retry-loop to fix — and a journal record
+    # for someone's typo would be noise with nothing to say.
     if not request_path.exists():
         print(f"castle work: no such request: {args.request_id}", file=sys.stderr)
         return 1
@@ -968,90 +1461,377 @@ def cmd_work(args: argparse.Namespace) -> int:
         print(f"castle work: {args.request_id} is not a request record (type={request.type!r})", file=sys.stderr)
         return 1
 
-    command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
-    if not command.strip():
-        print("castle work: no worker command configured (CASTLE_WORKER_COMMAND is empty)", file=sys.stderr)
-        return 1
     try:
-        argv = shlex.split(command)
-    except ValueError as exc:
-        print(f"castle work: could not parse CASTLE_WORKER_COMMAND ({command!r}): {exc}", file=sys.stderr)
+        record_id, outcome = run_worker_turn(request)
+    except LeaseHeld:
+        print(
+            f"castle work: a worker already holds this errand's lease ({args.request_id}); "
+            "nothing was written. Wait for it to finish, or check "
+            "`castle-modal --mode status`.",
+            file=sys.stderr,
+        )
         return 1
+    print(record_id)
+    return 0 if outcome == "completed" else 1
 
-    diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
-    os.close(diff_fd)
-    diff_path = pathlib.Path(diff_path_str)
-    try:
-        env = dict(os.environ)
-        env["CASTLE_REQUEST_ID"] = request.id
-        env["CASTLE_REQUEST_BODY"] = request.body
-        env["CASTLE_DIFF_FILE"] = str(diff_path)
-        env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
 
+# ---------------------------------------------------------------------------
+# The dispatch seat (docs/tasks/0021-auto-dispatch.md)
+#
+# A subcommand, not a shell script embedded in a systemd unit: that
+# keeps it testable by the existing no-Nix harness (test/agent-loop/),
+# readable top to bottom the way every other seat's hands are, and
+# runnable by hand by a human holding the dispatch seat — the same "any
+# seat can be held by a human" property every other subcommand has.
+#
+# Dispatch chooses nothing. Which request runs next is a total function
+# of the journal (the eligibility fold plus oldest-first order), so
+# there is deliberately NO per-errand decision record: a record that
+# would carry identical evidence text on every invocation forever is
+# the "ritual" docs/architecture.md's Proposal 06 already warns about.
+# The one exception is the watermark, which records a fact — the
+# instant dispatch began existing on this journal — that nothing else
+# can ever recover.
+# ---------------------------------------------------------------------------
+
+
+def _refs_request(rec: Record, request_id: str) -> bool:
+    return request_id in rec.refs
+
+
+def _requests_with_results(records: dict[str, Record]) -> set[str]:
+    """Every request id some `result` record references. Any result at
+    all makes a request permanently ineligible regardless of its
+    `outcome` — that is what makes the retry bound structural rather
+    than a counter somebody could reset (docs/tasks/0021 §2.4(b))."""
+    answered: set[str] = set()
+    for rec in records.values():
+        if rec.type == "result":
+            answered.update(rec.refs)
+    return answered
+
+
+def _outstanding_requests(records: dict[str, Record]) -> list[Record]:
+    """Requests with no result and nothing currently running on them."""
+    answered = _requests_with_results(records)
+    return [
+        rec
+        for rec in records.values()
+        if rec.type == "request" and rec.id not in answered and not lease_is_held(rec.id)
+    ]
+
+
+def _find_watermark(records: dict[str, Record]) -> Record | None:
+    candidates = [
+        rec
+        for rec in records.values()
+        if rec.type == "decision"
+        and rec.fields.get("seat") == DISPATCH_SEAT
+        and rec.fields.get("watermark", "").strip()
+    ]
+    if not candidates:
+        return None
+    # The earliest one ever written is the real boundary, if a second
+    # somehow exists — ids sort chronologically by construction.
+    return min(candidates, key=lambda rec: rec.id)
+
+
+def _write_watermark(records: dict[str, Record]) -> str:
+    """The one decision record dispatch writes about itself (§2.2).
+
+    Journal-resident, not a machine-local marker file: a marker file is
+    invisible to a cold reader of the journal — the entire premise of
+    this layer — and would be silently lost on a reinstall, exactly the
+    failure docs/architecture.md's "Where runtime state lives" exists to
+    prevent for everything else durable. It is an observation, not a
+    judgment: dispatch began existing at this instant, with this many
+    requests already outstanding. It judges nothing about them.
+    """
+    now = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+    outstanding = len(_outstanding_requests(records))
+    evidence = (
+        f"automatic dispatch began operating on this journal at {now}, with "
+        f"{outstanding} request record(s) outstanding (no result, nothing running) "
+        "at that instant"
+    )
+    return write_record(
+        journal_dir(),
+        type="decision",
+        provenance="initiated",
+        seat=DISPATCH_SEAT,
+        refs=[],
+        evidence=evidence,
+        body="\n".join(
+            [
+                f"Automatic dispatch started existing on this journal at {now}.",
+                "",
+                f"There were {outstanding} request record(s) outstanding at that "
+                "instant — filed, with no result, and with nothing running on "
+                "them. Requests created **before** this moment are deliberately "
+                "not started automatically: dispatch did not exist when they were "
+                "filed, nobody chose to have them run unattended, and quietly "
+                "spending a model call on each one now would be a decision this "
+                "seat has no authority to make.",
+                "",
+                "They remain runnable by hand at any time with "
+                "`castle work <request-id>`. Everything filed from this moment on "
+                "is picked up automatically.",
+                "",
+                "This record exists because it is the one fact nothing else can "
+                "recover: without it, a later reader has no way to tell \"filed "
+                "before automatic dispatch existed\" from \"filed after, but "
+                "somehow never picked up\" "
+                "(docs/tasks/0021-auto-dispatch.md §2.2).",
+            ]
+        ),
+        extra={"watermark": now},
+    )
+
+
+def _reap_interrupted(records: dict[str, Record]) -> list[str]:
+    """Give every interrupted turn a result (docs/tasks/0021 §2.3).
+
+    A `claim` whose request has no `result` and whose lease is not held
+    by anybody means the process running that turn died without writing
+    anything — a reboot (which wipes $XDG_RUNTIME_DIR outright), a
+    crash, a killed unit. Only a later sweep can supply the account,
+    and it does so from the surviving claim record. The journal is the
+    authority here; the lease is only ever a liveness probe, never the
+    record of what happened.
+    """
+    reaped: list[str] = []
+    answered = _requests_with_results(records)
+    claims = sorted(
+        (rec for rec in records.values() if rec.type == "claim"), key=lambda rec: rec.id
+    )
+    for claim in claims:
+        refs = claim.refs
+        if not refs:
+            continue
+        request_id = refs[0]
+        request = records.get(request_id)
+        if request is None or request.type != "request":
+            continue
+        if request_id in answered:
+            continue
+
+        # Acquiring is the probe: held means a worker is running this
+        # errand right now, and there is nothing to reap.
+        lease = acquire_lock(lease_path(request_id))
+        if lease is None:
+            continue
         try:
-            proc = subprocess.run(
-                argv,
-                input=request.body,
-                capture_output=True,
-                text=True,
-                env=env,
+            # Re-check under the lock. A turn can legitimately finish
+            # between the moment this sweep loaded the journal and the
+            # moment it took the lease; writing an `interrupted` result
+            # over a turn that actually completed would be a permanent
+            # lie in an append-only log.
+            fresh = load_all(journal_dir())
+            if any(
+                rec.type == "result" and _refs_request(rec, request_id)
+                for rec in fresh.values()
+            ):
+                continue
+            started = claim.fields.get("created", "unknown")
+            record_id = write_record(
+                journal_dir(),
+                type="result",
+                provenance=request.fields.get("provenance", "requested"),
+                seat=DISPATCH_SEAT,
+                refs=[request_id, claim.id],
+                body="\n".join(
+                    [
+                        f"Errand `{request_id}` was INTERRUPTED: a worker turn began "
+                        f"at {started} (claim `{claim.id}`) and no process ever "
+                        "completed it.",
+                        "",
+                        "The turn's lease is gone — the machine rebooted, the unit "
+                        "was killed, or the process died — so nothing survived to "
+                        "write an account of its own. This result is that account, "
+                        "supplied by the dispatch seat on a later sweep from the "
+                        "claim record alone.",
+                        "",
+                        "Nothing is re-run automatically: one automatic attempt per "
+                        "request, always, by construction of the eligibility rule "
+                        "(docs/tasks/0021-auto-dispatch.md). Re-run it by hand with "
+                        f"`castle work {request_id}` if it is still worth doing.",
+                    ]
+                ),
+                extra={"outcome": "interrupted"},
             )
+            reaped.append(record_id)
+            answered.add(request_id)
+            # The lease file is stale by definition now; removing it
+            # keeps the directory honest. Unlinking while still holding
+            # the lock is safe: a concurrent probe that already opened
+            # the old path simply locks an unlinked inode, sees nothing
+            # held, and consults the journal — which now has a result.
+            try:
+                lease_path(request_id).unlink()
+            except OSError:
+                pass
+        finally:
+            lease.close()
+    return reaped
+
+
+def _eligible_requests(records: dict[str, Record], watermark: str) -> list[Record]:
+    """The eligibility fold — the authority the wakeup is only a hint
+    for (docs/tasks/0021 §2.4). A request is eligible iff it is a
+    request, no result references it, nothing is running on it, and it
+    was created at or after the watermark.
+
+    Deliberately NOT conditions here, each recorded so a future reader
+    does not "fix" the omission: **provenance** (an `initiated` request
+    is still work that needs doing — provenance decides the delivery
+    channel, never whether the errand runs); **an unanswered question
+    on the errand** (that is the errand-resume problem
+    docs/backlog/errand-resume-after-answer.md names and task 0023
+    owns — an `answer` must not make a worked errand eligible again);
+    and **staleness** (a request filed a week ago that nothing picked
+    up is exactly as eligible as one filed a minute ago; the loop runs
+    oldest-first, so it gets there).
+    """
+    answered = _requests_with_results(records)
+    eligible = [
+        rec
+        for rec in records.values()
+        if rec.type == "request"
+        and rec.id not in answered
+        # `created` is CREATED_FMT, which is lexicographically ordered,
+        # so a string comparison is the same comparison a parse would
+        # make. `>=`, not `>`: a request filed in the same second as
+        # the watermark is picked up rather than stranded forever.
+        and rec.fields.get("created", "") >= watermark
+        # Checked last, because it is the only condition that costs a
+        # syscall — and it subsumes §2.4(c)'s "no claim currently holds
+        # a live lease": the lease is taken before the claim is
+        # written, so a held lease is the earlier, stricter signal.
+        and not lease_is_held(rec.id)
+    ]
+    eligible.sort(key=lambda rec: rec.id)
+    return eligible
+
+
+def cmd_dispatch(args: argparse.Namespace) -> int:
+    """One dispatch sweep (docs/tasks/0021-auto-dispatch.md §2).
+
+    Exit code 0 whenever the sweep ran and recorded outcomes for
+    whatever it found — including errands that themselves failed.
+    Failure is visible in the `outcome` field, through the router, and
+    on the status surfaces; it is not a *mechanism* failure. Nonzero is
+    reserved for mechanism faults (an unreadable journal, an
+    unparseable watermark), which is what keeps the systemd unit's own
+    failed state meaning "dispatch itself broke" rather than "an errand
+    the tenant attempted didn't go well."
+    """
+    sweep_lock = acquire_lock(dispatch_lock_path())
+    if sweep_lock is None:
+        # Not an error: another sweep is already running. The hint this
+        # drops (a request filed after the running sweep's last fold
+        # but before it exits) is bounded by the timer backstop in
+        # modules/agent — worst case it waits for the next tick.
+        #
+        # This lock is not redundant with the per-request lease. The
+        # lease guarantees one *worker* per request; it does not stop
+        # two sweeps from re-scanning and re-deciding the same fold
+        # concurrently, and — because `castle work` deliberately has no
+        # built-in refusal to run on a request that already has a
+        # result (that IS the hand-retry path) — two sweeps racing at
+        # the boundary between "sweep A just wrote a result" and "sweep
+        # B's snapshot predates that write" could each dispatch the
+        # same request as its own turn. Serializing sweeps removes that
+        # by construction.
+        print("dispatch: another sweep is already running; nothing to do")
+        return 0
+    try:
+        try:
+            records = load_all(journal_dir())
         except OSError as exc:
-            print(f"castle work: could not run worker command {command!r}: {exc}", file=sys.stderr)
+            print(f"castle dispatch: cannot read the journal: {exc}", file=sys.stderr)
             return 1
 
-        diff_text = ""
+        watermark_record = _find_watermark(records)
+        if watermark_record is None:
+            watermark_id = _write_watermark(records)
+            records = load_all(journal_dir())
+            watermark_record = records.get(watermark_id)
+            if watermark_record is None:
+                print(
+                    "castle dispatch: wrote a watermark record but could not read it "
+                    "back — refusing to dispatch anything against an unknown boundary",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"dispatch: wrote the dispatch watermark {watermark_id}")
+        watermark = watermark_record.fields.get("watermark", "").strip()
         try:
-            diff_text = diff_path.read_text().strip()
-        except OSError:
-            diff_text = ""
+            dt.datetime.strptime(watermark, CREATED_FMT)
+        except ValueError:
+            # A mechanism fault, not an errand failure: with no
+            # trustworthy boundary, dispatching anything risks starting
+            # work nobody asked to have started automatically.
+            print(
+                f"castle dispatch: watermark record {watermark_record.id} carries an "
+                f"unparseable watermark ({watermark!r})",
+                file=sys.stderr,
+            )
+            return 1
+
+        reaped = _reap_interrupted(records)
+        for record_id in reaped:
+            print(f"dispatch: reaped an interrupted turn -> {record_id}")
+
+        # The loop re-reads the journal each pass rather than working a
+        # single snapshot: a request filed *during* this sweep (the
+        # path unit re-fires, but this sweep still holds the sweep
+        # lock) is caught on the next iteration instead of stranded
+        # until the next wakeup. Oldest first; one at a time, with no
+        # concurrency cap — a frontier-model tenant makes parallelism a
+        # cost multiplier, not a throughput win (§2.5).
+        skip: set[str] = set()
+        worked: list[tuple[str, str]] = []
+        while True:
+            records = load_all(journal_dir())
+            eligible = [
+                rec for rec in _eligible_requests(records, watermark) if rec.id not in skip
+            ]
+            if not eligible:
+                break
+            request = eligible[0]
+            try:
+                record_id, outcome = run_worker_turn(request)
+            except LeaseHeld:
+                # A human running `castle work` by hand reached this
+                # request first. A skip, not an error.
+                print(f"dispatch: {request.id} is already being worked; skipping")
+                skip.add(request.id)
+                continue
+            worked.append((request.id, outcome))
+            print(f"dispatch: worked {request.id} -> {record_id} (outcome: {outcome})")
+            # Belt and braces against an unterminating sweep: every
+            # path through run_worker_turn writes a result, so the
+            # request cannot still be eligible — but if that ever
+            # stopped being true, this loop would spend a model call
+            # per iteration forever.
+            skip.add(request.id)
+
+        if not reaped and not worked:
+            print("dispatch: nothing eligible")
+
+        # Exactly one route pass, over the whole journal, after the
+        # loop empties (§2.6): `cmd_route` is already an idempotent
+        # whole-journal fold, so invoking it per dispatched errand
+        # would buy nothing beyond N times the work. Worth stating
+        # because it is easy to read this design as "dispatch only
+        # routes what it just worked": since the path unit fires on any
+        # journal change, a result written by a hand-run `castle work`
+        # gets routed by the very next sweep too, with no special
+        # casing anywhere. Corrections stay unrouted by construction —
+        # `route_journal` never walks them.
+        return route_journal()
     finally:
-        try:
-            diff_path.unlink()
-        except OSError:
-            pass
-
-    ok = proc.returncode == 0
-    reasoning = proc.stdout.strip()
-
-    body_lines = []
-    if ok:
-        body_lines.append(f"Errand `{request.id}` completed by worker tenant `{command}`.")
-    else:
-        body_lines.append(
-            f"Errand `{request.id}` FAILED in worker tenant `{command}` (exit {proc.returncode})."
-        )
-    body_lines.append("")
-    if reasoning:
-        body_lines.append(reasoning)
-        body_lines.append("")
-    if not ok and proc.stderr.strip():
-        body_lines += ["stderr:", "```", proc.stderr.strip(), "```", ""]
-    if diff_text:
-        body_lines += ["```diff", diff_text, "```"]
-    else:
-        body_lines.append(
-            "(no diff produced — either no change was proposed, or the worker "
-            "tenant did not write one to $CASTLE_DIFF_FILE)"
-        )
-    body_lines.append("")
-    body_lines.append(
-        "This result was produced by the worker seat. Per "
-        "docs/tasks/0009-ambient-intake.md's non-goals, the worker "
-        "proposes; it does not deploy — nothing above was applied to any "
-        "running system or committed to any repo by this seat."
-    )
-
-    record_id = write_record(
-        jdir,
-        type="result",
-        provenance=request.fields.get("provenance", "requested"),
-        seat="worker",
-        refs=[request.id],
-        body="\n".join(body_lines),
-    )
-    print(record_id)
-    return 0 if ok else 1
+        sweep_lock.close()
 
 
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
@@ -1123,6 +1903,20 @@ def cmd_digest(args: argparse.Namespace) -> int:
             if rec.type == "decision":
                 print(f"- channel: {rec.fields.get('channel', '?')}")
                 print(f"- evidence: {rec.fields.get('evidence', '')}")
+            # `outcome` rendered inline wherever a result carries one
+            # (docs/tasks/0021 §4), beside the decision fields above.
+            # The digest deliberately grows no lease reader to go with
+            # it, and that asymmetry with castle-modal's `_errand_state`
+            # is not the two surfaces disagreeing: a digest is a
+            # historical account of a period that has already happened,
+            # not a live view of what is running right now. Rendering
+            # "in progress" here for an errand that finished between
+            # the fold and the resident reading it would be exactly the
+            # stale claim docs/tasks/0015 fixed the modal for. The live
+            # check belongs only on the surface that is actually read
+            # live.
+            if rec.type == "result" and rec.fields.get("outcome"):
+                print(f"- outcome: {rec.fields['outcome']}")
             if rec.body.strip():
                 print()
                 print(rec.body.strip())
@@ -1200,6 +1994,21 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # required because it existed from the schema's first commit;
         # these two cannot claim the same thing, so they get "well-formed
         # if present" instead of "must be present."
+        # `outcome` (result-only, docs/tasks/0021 §3.5) gets exactly the
+        # treatment `considered`/`propensity` already get, for exactly
+        # the reason spelled out below them: validated when present,
+        # checked for membership in the closed set, never required.
+        # Every result written before this field existed is already
+        # permanent in an append-only journal, and a validator that
+        # suddenly demanded a field no writer at the time could supply
+        # would fail the entire pre-existing journal retroactively.
+        outcome_raw = rec.fields.get("outcome")
+        if outcome_raw is not None and outcome_raw not in OUTCOME_VALUES:
+            errors.append(
+                f"{path.name}: 'outcome' ({outcome_raw!r}) is not one of "
+                f"{', '.join(OUTCOME_VALUES)}"
+            )
+
         considered_raw = rec.fields.get("considered")
         considered_list: list[str] | None = None
         if considered_raw is not None:
@@ -1344,6 +2153,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_work = sub.add_parser("work", help="worker: run the configured tenant against a request")
     p_work.add_argument("request_id", help="id of the request record to work")
     p_work.set_defaults(func=cmd_work)
+
+    p_dispatch = sub.add_parser(
+        "dispatch",
+        help="dispatch: one sweep — reap interrupted turns, work every eligible request, route once",
+    )
+    p_dispatch.set_defaults(func=cmd_dispatch)
 
     p_digest = sub.add_parser("digest", help="fold the journal into a report")
     p_digest.add_argument("--since", default=None, help="only errands created at/after this timestamp")

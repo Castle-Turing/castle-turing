@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """castle-modal — the ambient-intake surface (docs/tasks/0009-ambient-intake.md).
 
-The keybinding ($mod+Shift+space, see modules/home) opens a floating
+The keybinding (Mod4+Shift+Return, see modules/home) opens a floating
 `foot` terminal running this script. Stdlib Python only, same
 constraint as agent/castle (agent/README.md) — and for the same reason:
 this has to keep working with nothing installed beyond a python3
@@ -44,6 +44,7 @@ no foot, and no Sway involved (docs/tasks/0009's verification plan).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import importlib.machinery
 import importlib.util
 import pathlib
@@ -185,7 +186,22 @@ def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
     return 0
 
 
-def _errand_state(downstream: list) -> str:
+def _started_at(castle, claim) -> str:
+    """A claim's start time as local wall-clock `HH:MM`.
+
+    `created` is UTC, always (agent/castle's CREATED_FMT), and "started
+    14:03" means nothing to a resident if 14:03 is in a timezone they
+    don't live in. Falls back to the raw field if it doesn't parse —
+    this is a status line, not a validator."""
+    raw = claim.fields.get("created", "")
+    try:
+        when = dt.datetime.strptime(raw, castle.CREATED_FMT).replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return raw or "?"
+    return when.astimezone().strftime("%H:%M")
+
+
+def _errand_state(castle, request_id: str, downstream: list) -> str:
     """`result` was checked before question/answer, so 'done' won any
     errand that also had an unanswered question — but the worker prompt
     (agent/castle-worker-claude) explicitly tells tenants to "file the
@@ -195,36 +211,67 @@ def _errand_state(downstream: list) -> str:
     you" — the one state this whole modal exists to surface — silently
     unreachable in exactly the flow the worker is instructed to use
     (0009 review pass finding 4). Reporting both when both apply is
-    strictly more honest than picking one.
+    strictly more honest than picking one. The ", waiting on you"
+    overlay below composes exactly as it always has.
 
-    The fallthrough below used to read "in progress". Read that as
-    plain English and it claims a worker is running; read it as what
-    the code actually does and it is just "no result, no unanswered
-    question" — the state of a request record in the instant after it's
-    written, before anything has looked at it, because no record type
-    here means *a tenant claimed this errand*. That type doesn't exist
-    yet, so this branch can never observe a claim — only its absence.
-    On the reference host, where `castle work` is invoked by hand
-    rather than scheduled, that absence is the steady state: every
-    filed request reads "in progress" forever, including ones nothing
-    will ever pick up, and a resident who trusts the label has no
-    reason to run the worker that would make it true (docs/tasks/0015).
-    "awaiting a worker" says only what the journal actually shows. A
-    real in-progress state needs a record written when a tenant claims
-    the errand — deliberately not added here, because it belongs with
-    the first *asynchronous* worker: `castle work` today runs
-    synchronously from a shell, so a claimed record would be written
-    and read microseconds apart."""
+    "in progress" is now *earnable* (docs/tasks/0021-auto-dispatch.md
+    §4), which docs/tasks/0015 deliberately left it not being: a
+    `claim` record says a worker turn began, and a live `flock` on that
+    errand's lease says one is running right this second. Both, not
+    either — a claim with a dead lease is an interrupted turn, and
+    saying "in progress" about it would be exactly the absence-of-
+    evidence guess 0015 removed. The narrow race this live probe
+    shares with the dispatch reaper's own probe is documented on
+    agent/castle's `lock_is_held`, and accepted there.
+
+    A result's `outcome` field decides the rest. Absence keeps meaning
+    "done", deliberately and forever: every result written before that
+    field existed is already permanent in an append-only journal and
+    cannot be backfilled, so a pre-existing result whose body says
+    "FAILED" in prose will keep reading as "done" here — the same
+    backward-compatibility posture `considered`/`propensity` already
+    established, applied on purpose rather than by oversight. Nothing
+    here greps a body for a word like "FAILED"; the field is the fact.
+
+    Every non-completed label names the retry command explicitly. That
+    is 0015's own lesson restated — "the label must not cause the
+    inaction it describes": a label honest about failure but silent
+    about what to do next repeats the same mistake in the other
+    direction.
+    """
     types = {rec.type for rec in downstream}
-    has_result = "result" in types
     waiting = "question" in types and "answer" not in types
-    if has_result and waiting:
-        return "done, waiting on you"
+    results = sorted(
+        (rec for rec in downstream if rec.type == "result"), key=lambda rec: rec.id
+    )
+    claims = [rec for rec in downstream if rec.type == "claim"]
+
+    base = None
+    if results:
+        # The newest result is this errand's latest account of itself —
+        # a hand-run retry appends rather than replacing.
+        outcome = results[-1].fields.get("outcome", "")
+        if outcome == "failed":
+            base = f"failed — castle work {request_id} to retry"
+        elif outcome == "timeout":
+            base = f"timed out — castle work {request_id} to retry"
+        elif outcome == "interrupted":
+            base = f"interrupted — castle work {request_id} to retry"
+        else:
+            base = "done"
+    elif claims:
+        if castle.lease_is_held(request_id):
+            started = _started_at(castle, max(claims, key=lambda rec: rec.id))
+            base = f"in progress (started {started})"
+        else:
+            # The window between "the lease died" and "the next dispatch
+            # sweep reaps it into a result". Nothing is running, so
+            # "interrupted" is the honest label, not "in progress".
+            base = f"interrupted — castle work {request_id} to retry"
+
     if waiting:
-        return "waiting on you"
-    if has_result:
-        return "done"
-    return "awaiting a worker"
+        return f"{base}, waiting on you" if base else "waiting on you"
+    return base or "awaiting a worker"
 
 
 def run_status(castle, limit: int, out=sys.stdout) -> int:
@@ -236,12 +283,12 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
     )[:limit]
 
     if not requests:
-        print("No errands yet. Press $mod+Shift+space and describe one.", file=out)
+        print("No errands yet. Press Mod4+Shift+Return and describe one.", file=out)
         return 0
 
     for req in requests:
         downstream = castle._collect_downstream(records, req.id)
-        state = _errand_state(downstream)
+        state = _errand_state(castle, req.id, downstream)
         first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
         print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
         print(f"    asked: {first_line}", file=out)
