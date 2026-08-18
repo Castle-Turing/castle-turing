@@ -155,6 +155,15 @@ in
 
       system.stateVersion = "26.11";
 
+      # This node imports modules/desktop but no host module, so nothing
+      # else states what a swapless machine should do at critical
+      # battery. modules/desktop asserts that upower's default
+      # (HybridSleep) cannot stand on a machine with no swap — see task
+      # 0020 — and this VM has none. A test VM has no battery either, so
+      # the value is inert here; it is declared to satisfy the same
+      # honesty the assertion enforces everywhere else.
+      castle.power.criticalPowerAction = "PowerOff";
+
       castle.admin = {
         username = "resident";
         sshKeys = [ "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key" ];

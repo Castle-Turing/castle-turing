@@ -5,7 +5,7 @@
 # facts only, same shape as hosts/xps9370 — the resident (castle.admin)
 # comes from outside this module; the harness (test/vm-install/) supplies
 # a throwaway key generated fresh per run, never committed here.
-{ ... }:
+{ lib, ... }:
 
 {
   imports = [ ./disko.nix ];
@@ -55,4 +55,15 @@
   # Never a real machine anyone upgrades in place; pinned to match the
   # framework's current nixpkgs so the harness stays boring.
   system.stateVersion = "26.11";
+
+  # No swap of any kind in this VM, so upower's default critical action
+  # (HybridSleep) could never complete — modules/desktop asserts exactly
+  # that. PowerOff is the honest action here for the same reason it is
+  # on hosts/xps9370, and a test VM losing power on a critical battery
+  # it does not have is inert either way.
+  #
+  # This is not ceremony to silence a check: the assertion found a real
+  # misconfiguration in this repo's own test host the moment it existed
+  # (task 0020).
+  castle.power.criticalPowerAction = lib.mkDefault "PowerOff";
 }

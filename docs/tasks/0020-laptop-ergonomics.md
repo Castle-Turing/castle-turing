@@ -585,3 +585,77 @@ it is for — and file the framework-level question as its own brief.
 - **Changing `HandlePowerKey`.** Record what it is; do not change it.
 - **Anything on the greeter session**, and **external displays,
   docking, or output hotplug.**
+
+## Implementation notes (corrections discovered while building it)
+
+**Item 2's establish step, which was itself the deliverable.** Nothing
+in this repo sets any `services.logind.settings`, so upstream defaults
+apply. Queried from the running reference host over the logind bus
+rather than read out of a config file:
+
+```
+HandleLidSwitch               "suspend"
+HandleLidSwitchExternalPower  ""
+HandlePowerKey                "poweroff"
+```
+
+Closing the lid suspends, and the power button powers off — which is
+what was wanted. **So no `services.logind.settings` is added**, per the
+item's own instruction that a declaration merely restating upstream is
+config noise implying a decision nobody made. The empty
+`HandleLidSwitchExternalPower` is systemd's "follow `HandleLidSwitch`"
+sentinel, so the machine also suspends on lid close while on AC; noted
+rather than changed, since nobody asked for the on-AC case to differ.
+
+**Two options moved to `modules/base`, and the second move was forced
+by a failure rather than a review.** `castle.hardware.hasEthernet` was
+specced for `modules/desktop`; it went to `modules/base` instead,
+because a namespace named for a *fact* must be stateable by a host that
+has no graphical session (`0003` finding #10 reasons about recovery in
+exactly those terms). `castle.power.criticalPowerAction` then had to
+follow it for a blunter reason: with the option declared in
+`modules/desktop`, `hosts/vm-test` could not set it at all — the module
+that declares it is one that host does not import — and the error said
+so. Whether a machine can complete a hibernate is a disk-layout fact, so
+`modules/base` is where it belongs; `modules/desktop` still owns the
+wiring to `services.upower` and the assertion.
+
+**The upower assertion found two real misconfigurations inside this
+repo the moment it existed**, which is the best evidence it is worth
+having: `hosts/vm-test` and the `test/desktop-loop` node both import a
+desktop, both have no swap, and both would therefore have inherited
+upower's `HybridSleep` default and been unable to complete it. Both now
+declare `PowerOff`.
+
+**But the assertion is broader than the problem, and this is recorded
+as a known sharp edge rather than fixed.** It fires on *any* swapless
+host importing `modules/desktop`, including VMs that have no battery
+and will never reach a critical-battery event. That is why two of its
+three current consumers are test machines declaring a value that is
+inert for them. A narrower predicate — assert only where a battery
+exists — would need a fact nothing in the module system knows at
+evaluation time, so the honest options are the present over-broad check
+or none. Left as-is deliberately; if the ceremony spreads to more test
+nodes, revisit.
+
+**Verification actually performed**, beyond `nix flake check` passing:
+
+- Generated Sway config carries six `XF86` bindings, each pointing at
+  an absolute store path (`brightnessctl`, and `wpctl` from the
+  *configured* wireplumber package, not a bare `pkgs.wireplumber`).
+- Generated `i3status/config` on the reference host: `ipv6` gone,
+  `ethernet _first_` gone, `battery all` still present.
+- The ethernet conditional was proved in **both** directions, not just
+  the one that matters here: flipping `hosts/xps9370`'s
+  `hasEthernet` to `true` brings `ethernet _first_` back, confirming
+  the framework maps a hardware fact to presentation rather than
+  hard-coding a chassis assumption.
+
+**Not verified, and outstanding.** Nothing here has been deployed. The
+media keys have not been pressed on real hardware, so the brightnessctl
+permission path (item 1 predicts the logind one) is still a prediction;
+the lid has not been closed and no resume has been observed, which is
+item 2's whole point and the risk `docs/tasks/0003-findings.md` warns
+about on this chassis; and `services.swayidle` has never run, because
+`idleBlankSeconds` is null everywhere by design and no private layer
+has set it yet.

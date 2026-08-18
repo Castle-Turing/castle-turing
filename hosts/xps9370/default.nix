@@ -150,4 +150,24 @@
     cursorSize = lib.mkDefault 18;
     consoleFont = lib.mkDefault "spleen-16x32";
   };
+
+  # Chassis facts consumed by the desktop's ergonomics (task 0020).
+  #
+  # No wired ethernet port: this chassis's only network path is Wi-Fi,
+  # as the networkmanager comment above already says. modules/home uses
+  # this to drop i3status's `ethernet _first_` entry, which otherwise
+  # renders a permanent red fault for hardware that does not exist. The
+  # framework cannot assume this — a desktop with an unplugged cable
+  # should show that fault — so the fact is stated here and the mapping
+  # from fact to presentation stays in modules/.
+  castle.hardware.hasEthernet = lib.mkDefault false;
+
+  # zramSwap only (see above): compressed RAM swap, no swap partition,
+  # so there is nowhere to write a hibernation image. upower's own
+  # default critical action is HybridSleep, which needs one — on this
+  # machine that would mean a battery-critical event doing nothing
+  # useful, or worse. PowerOff is the honest action for a swapless
+  # host. modules/desktop asserts the hibernate-family actions are
+  # refused on a machine with no swapDevices, whichever layer asked.
+  castle.power.criticalPowerAction = lib.mkDefault "PowerOff";
 }

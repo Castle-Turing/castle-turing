@@ -249,6 +249,26 @@ in
         built-in 8x16 font applies.
       '';
     };
+    idleBlankSeconds = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        Seconds of inactivity after which the session's outputs are
+        powered off (swayidle, wired in modules/home), powering back
+        on at the first activity. `null` — the framework default —
+        means no idle handling at all: no swayidle unit runs and the
+        screen never blanks on its own. That default is deliberate
+        and must stay null: idle policy (and anything lock-shaped)
+        belongs to the attention-management work docs/vision.md
+        describes, not to this module — see task 0020's non-goals
+        before "finishing" this with a sensible-looking default
+        timeout. Mechanism here, policy in the private layer: a
+        resident who wants a blanking screen sets a number in
+        resident.nix. Kept under castle.display rather than
+        castle.power because it names what happens — the screen goes
+        dark — not why (task 0020 item 4/5 records the choice).
+      '';
+    };
     wallpaper = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -284,6 +304,39 @@ in
     };
   };
 
+  # Sibling namespaces to castle.display, per concern (task 0020 item
+  # 5): castle.display is how the session looks, castle.input is how it
+  # is driven, castle.power is what happens when the machine runs out
+  # of energy, castle.hardware is what the chassis physically has.
+  options.castle.input.touchpad = {
+    naturalScroll = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = ''
+        Whether scrolling on the touchpad moves content in the
+        direction of finger travel, wired to Sway's
+        `input type:touchpad natural_scroll` in modules/home. `null`
+        (the framework default) sets nothing, leaving Sway's own
+        default (off). Deliberately no framework or host default
+        beyond null: this is pure taste, held strongly in both
+        directions, so the value belongs in the private layer
+        (task 0020 item 5 argues this against the wallpaper
+        precedent). A bool, rendered to Sway's `enabled`/`disabled`
+        words by modules/home.
+      '';
+    };
+    tapToClick = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = ''
+        Whether a touchpad tap counts as a click, wired to Sway's
+        `input type:touchpad tap`. Same null-means-unset,
+        taste-belongs-private reasoning as `naturalScroll` above.
+      '';
+    };
+  };
+
+
   config = {
     # The one non-`mkOption`-default value this module sets for itself
     # rather than leaving to a host or the private layer — see
@@ -303,6 +356,37 @@ in
           docs/tasks/0003-findings.md finding #1 describes. Generate a
           hash with `mkpasswd -m sha-512`; it belongs in the private
           layer, never this repo — see docs/private-layer.md.
+        '';
+      }
+      {
+        # upower's own default criticalPowerAction is HybridSleep at
+        # this nixpkgs pin, which needs a swap partition to write a
+        # hibernation image into — on a swapless machine it cannot
+        # complete, at exactly the moment the battery is about to die
+        # (task 0020 item 3). zram swap does not help: it lives in the
+        # RAM whose contents hibernation is trying to save, and never
+        # appears in `swapDevices` anyway. This reads resolved
+        # configuration, not hardware, so it is generic and belongs
+        # here; nixpkgs' own assertion covers the risky actions
+        # (Suspend/Ignore) but not this case.
+        assertion =
+          !(
+            lib.elem config.services.upower.criticalPowerAction [
+              "Hibernate"
+              "HybridSleep"
+            ]
+            && config.swapDevices == [ ]
+          );
+        message = ''
+          services.upower.criticalPowerAction resolves to a
+          hibernate-family action (${config.services.upower.criticalPowerAction})
+          on a machine with no swap devices — there is nowhere to write
+          the hibernation image, so the action cannot complete when the
+          battery reaches its action level. Set
+          castle.power.criticalPowerAction (the host module is the
+          right layer for "this machine cannot hibernate" — see
+          hosts/xps9370) to an action this machine can finish, e.g.
+          "PowerOff", or give the machine a real swap partition.
         '';
       }
     ];
@@ -340,6 +424,23 @@ in
       earlySetup = lib.mkDefault true;
     };
 
+    # Low-battery handling (task 0020 item 3). upower is generic —
+    # a machine with no battery reports no battery — and this module
+    # already owns the graphical session's daemons. The critical
+    # action is only wired when a host or private layer chose one;
+    # null leaves upower's own default alone, and the assertion above
+    # refuses the combinations that cannot work. Thresholds
+    # (percentageLow/Critical/Action) are deliberately not surfaced:
+    # a threshold is a taste judgment about a specific battery, and
+    # upower's defaults (20/5/2) are sane — a private layer can still
+    # set services.upower.* directly.
+    services.upower = {
+      enable = true;
+      criticalPowerAction = lib.mkIf (
+        config.castle.power.criticalPowerAction != null
+      ) config.castle.power.criticalPowerAction;
+    };
+
     programs.sway = {
       enable = true;
       wrapperFeatures.gtk = true;
@@ -348,6 +449,11 @@ in
     environment.systemPackages = [
       pkgs.foot
       pkgs.firefox
+      # Backlight control for the XF86MonBrightness bindings in
+      # modules/home. Referenced there by absolute store path, so this
+      # entry is not what makes the binding work - it is here so the
+      # command also exists for a human at a shell.
+      pkgs.brightnessctl
       # The router's real interruption channel (docs/tasks/0009 item 5):
       # mako is the notification daemon that actually renders a
       # notify-send call on screen, and libnotify is what provides the

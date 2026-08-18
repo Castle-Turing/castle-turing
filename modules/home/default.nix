@@ -37,6 +37,7 @@ let
     uiFont = null;
     uiFontSize = null;
     consoleFont = null;
+    idleBlankSeconds = null;
     wallpaper = null;
   };
 
@@ -57,6 +58,40 @@ let
     # `10.000000`, which is what the generated config carries.
     size = displayCfg.uiFontSize * 1.0;
   };
+
+  # Same or-fallback idiom for the namespaces task 0020 added: every
+  # key each namespace declares must be listed here, or a headless
+  # host that skips the declaring module fails at eval instead of
+  # getting the inert default. castle.input/castle.power live in
+  # modules/desktop; castle.hardware lives in modules/base (see its
+  # comment there for why), so its fallback only fires on a host
+  # assembled without modules/base at all.
+  inputCfg = config.castle.input or {
+    touchpad = {
+      naturalScroll = null;
+      tapToClick = null;
+    };
+  };
+  hardwareCfg = config.castle.hardware or {
+    hasEthernet = true;
+  };
+
+  # Sway's input options take the words enabled/disabled, but a bool is
+  # what these settings *are* — the castle.input options take a bool
+  # and this module does the rendering, so a stranger cannot write
+  # "true" and get a config Sway rejects at load (task 0020 item 5).
+  swayBool = b: if b then "enabled" else "disabled";
+
+  touchpadCfg = inputCfg.touchpad;
+  touchpadConfigured = touchpadCfg.naturalScroll != null || touchpadCfg.tapToClick != null;
+
+  # The control tool must match the daemon it drives: the same
+  # wireplumber package services.pipewire runs, not a bare
+  # pkgs.wireplumber a private layer's daemon override would silently
+  # diverge from. The option path exists whether or not pipewire is
+  # enabled (it is a stock nixpkgs module), and the reference is only
+  # rendered inside the swayEnabled-gated block below.
+  wpctl = "${config.services.pipewire.wireplumber.package}/bin/wpctl";
 
   # `programs.sway.enable` is a plain NixOS option (from nixpkgs' own
   # Sway module, not one this repo defines) that only modules/desktop
@@ -262,6 +297,60 @@ in
           # the `resize` mode) is present alongside this binding.
           keybindings = lib.mkOptionDefault {
             "Mod4+Shift+Return" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
+
+            # Media and brightness keys (task 0020 item 1). Sway has no
+            # built-in handling for these: an XF86 keysym does nothing
+            # until something binds it.
+            #
+            # They land in this same attrset on purpose. A second,
+            # unwrapped `keybindings` definition would sit at normal
+            # priority and silently discard home-manager's entire
+            # default set — the 0009 finding-1 lockout the long comment
+            # above describes. XF86 keysyms collide with nothing
+            # home-manager ships (its defaults are all Mod-prefixed
+            # chords), so the per-key merge is a clean union.
+            #
+            # Absolute store paths, NOT bare names on $PATH — a
+            # deliberate difference from the castle-modal binding above,
+            # which stays bare to keep this module decoupled from
+            # modules/agent at the Nix level. No such decoupling applies
+            # here, and a media key that silently does nothing because a
+            # binary is missing from $PATH is exactly the "option
+            # pointing at nothing" failure 0014 item 5 exists to avoid.
+            "XF86MonBrightnessUp" = "exec ${pkgs.brightnessctl}/bin/brightnessctl set 5%+";
+            "XF86MonBrightnessDown" = "exec ${pkgs.brightnessctl}/bin/brightnessctl set 5%-";
+
+            # wpctl comes from the *configured* wireplumber package
+            # rather than a bare pkgs.wireplumber, so a private layer
+            # overriding the daemon does not end up driving it with a
+            # mismatched control tool.
+            #
+            # `-l 1.0` caps the ceiling: without it a held volume-up key
+            # pushes the sink into software boost, which distorts rather
+            # than getting louder.
+            "XF86AudioRaiseVolume" = "exec ${wpctl} set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+";
+            "XF86AudioLowerVolume" = "exec ${wpctl} set-volume @DEFAULT_AUDIO_SINK@ 5%-";
+            "XF86AudioMute" = "exec ${wpctl} set-mute @DEFAULT_AUDIO_SINK@ toggle";
+            "XF86AudioMicMute" = "exec ${wpctl} set-mute @DEFAULT_AUDIO_SOURCE@ toggle";
+          };
+
+          # Touchpad. Emitted only when the private layer actually asked
+          # for something: both options default to null (pure taste, held
+          # strongly in both directions — see their descriptions in
+          # modules/desktop), and an empty `input` stanza would be noise
+          # in the generated config.
+          #
+          # `type:touchpad` rather than a device identifier, so this
+          # survives a hardware change without anyone reading
+          # `swaymsg -t get_inputs`.
+          input = lib.optionalAttrs touchpadConfigured {
+            "type:touchpad" =
+              (lib.optionalAttrs (touchpadCfg.naturalScroll != null) {
+                natural_scroll = swayBool touchpadCfg.naturalScroll;
+              })
+              // (lib.optionalAttrs (touchpadCfg.tapToClick != null) {
+                tap = swayBool touchpadCfg.tapToClick;
+              });
           };
 
           # Window titles *and* swaynag — one setting in Sway, not two
@@ -401,6 +490,59 @@ in
           name = displayCfg.uiFont;
           size = displayCfg.uiFontSize;
         };
+      };
+
+      # The status bar's contents (task 0020 item 3). modules/home
+      # already names i3status as the bar's statusCommand but never
+      # configured it, so every desktop got i3status's compiled-in
+      # defaults — which report two non-faults as faults: `ethernet
+      # _first_` renders a permanent red error on a chassis with no
+      # wired port, and `ipv6` renders red whenever the network has no
+      # IPv6. A status surface that cries wolf about non-faults is the
+      # wrong foundation for the "status bar turning amber"
+      # intervention channel docs/vision.md names: the bar's idle state
+      # has to be quiet before colour can mean anything.
+      #
+      # This writes the user-level config file, which i3status reads
+      # ($XDG_CONFIG_HOME/i3status/config) before its compiled-in
+      # fallback — so the `bars` block above is left completely alone.
+      #
+      # ipv6 is dropped unconditionally, ethernet only when the chassis
+      # says it has no port. That asymmetry is the point: IPv6 presence
+      # is a property of the *network environment*, false-alarming on
+      # every host, so it is a framework-level fix; a missing ethernet
+      # port is a hardware fact only a host module can state, and a
+      # desktop with an unplugged cable SHOULD show that fault.
+      # Encoding "no ethernet" in modules/ would be exactly the
+      # hardware assumption CLAUDE.md forbids.
+      programs.i3status = lib.mkIf swayEnabled {
+        enable = true;
+        enableDefault = true;
+        modules = {
+          "ipv6".enable = false;
+          "ethernet _first_".enable = hardwareCfg.hasEthernet;
+        };
+      };
+
+      # Idle blanking (task 0020 item 4). Mechanism only: this runs at
+      # all only when the private layer sets a number, and there is no
+      # framework or host default — castle.display.idleBlankSeconds is
+      # null everywhere by design.
+      #
+      # Do NOT "finish" this by adding a sensible-looking default
+      # timeout, and do not add a lock. Idle policy belongs to the
+      # attention-management work docs/vision.md describes (deep-focus
+      # mode, graduated interventions), which would have to renegotiate
+      # any policy written here first. See task 0020's non-goals.
+      services.swayidle = lib.mkIf (swayEnabled && displayCfg.idleBlankSeconds != null) {
+        enable = true;
+        timeouts = [
+          {
+            timeout = displayCfg.idleBlankSeconds;
+            command = "${config.programs.sway.package}/bin/swaymsg 'output * power off'";
+            resumeCommand = "${config.programs.sway.package}/bin/swaymsg 'output * power on'";
+          }
+        ];
       };
 
       # home.pointerCursor is the one option that covers Sway's own
