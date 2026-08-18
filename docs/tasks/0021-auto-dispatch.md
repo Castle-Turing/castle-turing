@@ -982,6 +982,16 @@ diffs a normalized journal fingerprint between two differently-shaped
 workers; that comparison is only meaningful if neither harness's
 existing behavior moved out from under it).
 
+*One housekeeping consequence of this task's harnesses, recorded
+because it bit during implementation:* running them locally leaves an
+`agent/__pycache__/` behind — `castle-modal` imports `castle` as a
+module, so Python writes bytecode next to it — and one of those `.pyc`
+files was committed by an over-broad `git add -A` before being caught.
+`.gitignore` now carries `__pycache__/`. It matters slightly more here
+than ordinary tidiness: `modules/agent`'s `castleCli` derivation takes
+`agent/` as its `src`, so a stray `.pyc` changes a store path for
+nothing.
+
 **New `test/agent-loop/dispatch-test.sh`** — no Nix, plain bash and
 python3 like every other harness in this directory, its own CI job in
 `.github/workflows/check.yml` next to `agent-loop-test` and
