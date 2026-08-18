@@ -1,13 +1,59 @@
 name: check
 
 on:
+  # docs/tasks/0018: a PR that only changes prose (a backlog entry, a
+  # task brief, two files under docs/) still ran all four jobs below in
+  # full — flake-check alone took over four minutes, measured on PR #42.
+  # vm-install-test.yml and desktop-loop-test.yml already skip that PR
+  # via their own allowlist `paths:` filters, and claude-code-review.yml
+  # already skips it via its own paths-ignore (see that file's comment)
+  # — this workflow was the one gate still firing on pure prose, because
+  # it carried no path filter at all. paths-ignore below closes that gap
+  # without touching the two allowlisted workflows (out of scope here;
+  # see the brief's Non-goals) or claude-code-review.yml's own filter.
+  #
+  # This is deliberately NOT `**/*.md` — that would also match, and
+  # therefore skip the build gate for, two READMEs that sit *inside* Nix
+  # derivation sources rather than being pure documentation:
+  #   * agent/README.md            (modules/agent: src = ../../agent)
+  #   * modules/desktop/wallpapers/README.md
+  #                                 (modules/desktop: src = ./wallpapers)
+  # Editing either changes the derivation's store path, so a change
+  # there must still trigger flake-check and friends. `*.md` (no `**`)
+  # matches only top-level files — `*` does not cross a `/` in GitHub's
+  # path-filter syntax — so it skips top-level prose like README.md and
+  # CLAUDE.md while leaving both derivation-source READMEs unmatched and
+  # the gate intact for them. See docs/tasks/0018-docs-only-ci-skip.md
+  # for the directory-hash proof that those two paths are build-relevant.
+  #
+  # Depends on `main` having no branch protection today (confirmed via
+  # the GitHub API returning 404 for branch protection on `main` — no
+  # required status checks exist to strand). If `check` is ever made a
+  # required status, this filter turns a docs-only PR into one
+  # permanently pending on a check that never reports. The fix at that
+  # point is not to revert this: it's the always-report shim — keep this
+  # workflow triggering on everything (drop paths-ignore) and instead
+  # gate each job internally on the changed paths, so the `check` status
+  # itself still always reports rather than sitting silent.
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
   push:
     branches:
       - main
+    # Same paths-ignore and same reasoning as pull_request above — this
+    # only covers direct pushes/merges to main, so a docs-only merge
+    # skips flake-check here too instead of only on the PR that preceded it.
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
   # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
   # via `gh workflow run` — needed to get real CI results while
   # iterating on a feature branch before opening a PR against it.
+  # Unaffected by paths-ignore above: workflow_dispatch has no path
+  # filter and stays the escape hatch for forcing a run on a docs-only
+  # branch by hand.
   workflow_dispatch: {}
 
 jobs:
