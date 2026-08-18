@@ -98,12 +98,45 @@ PROVENANCE_VALUES = ("requested", "initiated")
 # `castle work <id>` runs it.
 FILED_DURING_TURN_FIELD = "filed-during-turn"
 
+# The marker a worker puts on a `question` record to say that this
+# question, unlike an ordinary one, genuinely stopped the errand
+# (docs/tasks/0023-resume-cold.md §2). Written once, at question
+# creation, by the only party who could know it — the writer of the
+# turn that stopped — and never mutated afterward. Its absence means
+# false, which is what makes every question written before this field
+# existed permanently non-resuming: a private journal accumulated over
+# months does not start producing worker turns the first time this
+# code runs against it.
+#
+# It is emphatically not a status field. "Is this question answered"
+# stays the fold it always was (does any `answer` record name it);
+# `blocking` answers the different, permanent question of whether its
+# own writer could proceed without an answer — the same epistemic
+# shape `outcome` has, an observation about the writer's own turn
+# rather than a judgment about anyone else's.
+BLOCKING_FIELD = "blocking"
+
 # The environment variable that carries the running turn's claim id
 # into the tenant's own environment, and from there into any `castle`
 # the tenant invokes. Set on the tenant's env dict only — never on
 # os.environ of the dispatching process, which would stamp every
 # request the dispatcher itself later wrote.
 WORKER_CLAIM_ENV = "CASTLE_WORKER_CLAIM"
+
+# Set on a resumed turn's tenant environment only — absent, never
+# empty, on a first turn, the same "absence means nothing to signal"
+# convention FILED_DURING_TURN_FIELD uses on the record side. Its value
+# is every answer id this turn is resuming, comma-separated in the same
+# flat-list shape `refs` uses (split_refs parses it). Normally exactly
+# one id, since `file_answer` refuses a second answer to one question —
+# but a consumer must not assume that (docs/tasks/0023 §5, §8).
+#
+# It carries no prose: the continuation packet on stdin is where the
+# actual prior context lives. This exists so a tenant can detect "this
+# is a resumed turn" mechanically, without parsing the packet's own
+# heading text, exactly as WORKER_CLAIM_ENV exists so a tenant's writes
+# can be attributed without parsing anything.
+RESUME_ANSWER_IDS_ENV = "CASTLE_RESUME_ANSWER_IDS"
 
 # The closed vocabulary of the `outcome` field on `result` records
 # (docs/tasks/0021 §3.5). `completed`/`failed`/`timeout` are written by
@@ -172,6 +205,13 @@ FIELD_ORDER = (
     # circumstances, and a reader skimming a request should meet it
     # before the prose.
     "filed-during-turn",
+    # Question-only, in the same spirit and for the same reason
+    # (docs/tasks/0023 §9). This placement is presentation-only:
+    # `render_record` skips any FIELD_ORDER key a record does not
+    # carry, and parsing never consults field order at all, so nothing
+    # about resumption depends on `blocking` sitting here rather than
+    # falling out in the sorted remainder the way `channel` does.
+    "blocking",
     "surface",
     "context-local-created",
     "context-last-notify",
@@ -1083,6 +1123,37 @@ def cmd_record(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    refs = split_refs(args.refs or "")
+
+    # A hard refusal, unlike the soft "question records only, by
+    # convention" posture `--fact` and `--outcome` take about *which
+    # type* they land on. What this prevents is not cosmetic: a
+    # blocking question that no fold can attribute to a request —
+    # empty `refs`, so `_find_root_request` returns None on the first
+    # hop — is unresumable forever and looks exactly like a working one
+    # from the outside. The resident answers it, the journal records
+    # the answer, and nothing ever finds the errand it was meant to
+    # unblock: a permanent, silent dead end produced at the exact
+    # moment a tenant reached for the one flag that exists to make
+    # resumption happen (docs/tasks/0023 §9).
+    #
+    # Deliberately narrower than what `cmd_ask`/`file_answer`/
+    # `cmd_correct` do — they resolve every ref against the journal
+    # before writing. This refuses only the empty case, the one trap
+    # the new flag itself introduces. `castle record`'s general failure
+    # to resolve its refs at all, for any type and any caller, is a
+    # real and separate gap: docs/backlog/record-does-not-resolve-refs.md.
+    if getattr(args, "blocking", False) and not refs:
+        print(
+            "castle record: refusing to write a --blocking question with no --refs. "
+            "A blocking question is resumable only if some request can be reached "
+            "from its refs; with none, answering it would unblock nothing, silently "
+            "and permanently (docs/tasks/0023-resume-cold.md §9). Pass "
+            "--refs \"$CASTLE_REQUEST_ID\".",
+            file=sys.stderr,
+        )
+        return 1
+
     body = args.body
     if args.body_file:
         body = pathlib.Path(args.body_file).read_text()
@@ -1094,12 +1165,16 @@ def cmd_record(args: argparse.Namespace) -> int:
         extra["fact"] = args.fact
     if getattr(args, "outcome", None):
         extra["outcome"] = args.outcome
+    if getattr(args, "blocking", False):
+        # The literal the validator checks for, and the only spelling
+        # any writer in this repo produces.
+        extra[BLOCKING_FIELD] = "true"
     record_id = write_record(
         target,
         type=args.type,
         provenance=args.provenance,
         seat=args.seat,
-        refs=split_refs(args.refs or ""),
+        refs=refs,
         evidence=args.evidence,
         body=body or "",
         extra=extra or None,
@@ -2984,6 +3059,31 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 f"{', '.join(OUTCOME_VALUES)}"
             )
 
+        # `blocking` (question-only, docs/tasks/0023 §9) gets the same
+        # treatment for the same append-only reason: checked when
+        # present, never required, so no pre-existing question record
+        # is failed retroactively by a field no writer could have
+        # supplied. The check itself is narrower than `outcome`'s —
+        # there is no vocabulary to test membership against, only the
+        # one spelling this repo's only writer produces.
+        #
+        # Strict about that one spelling on purpose. The eligibility
+        # fold reads `blocking` as non-blank-means-blocking, so a
+        # hand-written `blocking: false` would resume the errand while
+        # reading as though it would not — a record whose own text
+        # contradicts what it does. Refusing every spelling but `true`
+        # is what keeps the fold's cheap test honest, and it costs
+        # nothing retroactively: the field is new, so nothing already
+        # written can carry it.
+        blocking_raw = rec.fields.get(BLOCKING_FIELD)
+        if blocking_raw is not None and blocking_raw != "true":
+            errors.append(
+                f"{path.name}: '{BLOCKING_FIELD}' ({blocking_raw!r}) is present but "
+                "is not the literal 'true' — the only spelling `castle record "
+                "--blocking` writes. Absent means not blocking; there is no "
+                "other value."
+            )
+
         considered_raw = rec.fields.get("considered")
         considered_list: list[str] | None = None
         if considered_raw is not None:
@@ -3125,6 +3225,18 @@ def build_parser() -> argparse.ArgumentParser:
             "holding the worker seat by hand should pass this: no surface may "
             "read failure out of prose, so a failed errand with no `outcome` "
             "field reads as done, forever (docs/tasks/0021-auto-dispatch.md)."
+        ),
+    )
+    p_record.add_argument(
+        "--blocking",
+        action="store_true",
+        help=(
+            "this question stopped the errand (question records only, by "
+            "convention — the same way --fact and --outcome are). An answered "
+            "blocking question makes its errand eligible for one more worker "
+            "turn, exactly once (docs/tasks/0023-resume-cold.md). Requires "
+            "--refs: a blocking question no fold can attribute to a request is "
+            "unresumable forever."
         ),
     )
     p_record.add_argument("--body", default=None, help="record body text")
