@@ -31,11 +31,16 @@ deliberately does not build, and the honest sentence its confirmation
 text has to say instead). Work on branch `sprint/0022-answer-in-ui`,
 based on `sprint/0021-auto-dispatch` (this task reads dispatch's
 `claim`/`outcome`/eligibility machinery and must not diverge from it).
-This brief rides the branch. The PR this branch opens is stacked on
-0021's own, still-open PR: its base is `sprint/0021-auto-dispatch`, not
-`main`, and it must not be merged before 0021's PR is. It retargets to
-`main` only if and when 0021 merges first — the human makes every merge
-decision, including the order these two land in.
+This brief rides the branch.
+
+**Overtaken by events, 2026-08-18:** this paragraph originally said the
+PR was stacked on 0021's still-open PR, based on
+`sprint/0021-auto-dispatch` rather than `main`, and must not merge
+before 0021's did. 0021's PR (#49) merged mid-implementation, as
+`bed80c3`, and the remote branch was deleted. `origin/main` now
+contains this branch's entire base, so **the PR targets `main`**, the
+ordering constraint is discharged, and there is nothing left to stack
+on. The human still makes every merge decision.
 
 **Goal.** A resident who is told Castle needs input can read the actual
 question and answer it from the same modal they already use for
@@ -218,6 +223,20 @@ duplicate answer could theoretically land, on a single-resident machine,
 in a window measured in microseconds, and the cost of closing it (a lock
 around a data model that was built specifically to need none) is larger
 than the residual risk.
+
+**What this guard costs, stated rather than left to be discovered:** an
+answer, once filed, cannot be revised or superseded. The journal is
+append-only, a `correction` does not reopen a question, and a
+fact-carrying question's resident-model entry stands as written. A
+resident who answers wrongly can file a correction referencing the
+answer — volunteered speech, which preserves the account rather than
+rewriting it — but nothing reopens the question, and no surface offers
+to. That is accepted for now, not an oversight: amendment semantics on
+an append-only log (does a superseding answer void the first, or sit
+beside it? what happens to the model entry the first one elicited?) are
+a real design question, and improvising an answer to it inside a UI task
+is exactly how a second source of truth gets built by accident. It is
+left to a future task deliberately.
 
 `castle answer --fact` stays exactly as it is today, CLI-only. The modal
 exposes no way to supply or edit a fact name at answer time — see §2's
@@ -935,13 +954,18 @@ redirected to a log file — never chain a background invocation with
 `;`; use `&&`/`||` or separate tool calls, so a failure in an earlier
 step is not silently swallowed by a later one running anyway.
 
-Scope every diff and every review pass against `sprint/0021-auto-dispatch`,
-never `origin/main` — this branch is based on 0021's branch, not on
-`main`, and a diff against `origin/main` would show 0021's entire
-(already-reviewed, separately landing) changeset as if it were this
-task's own. `git fetch` first, and confirm the real scope with
-`git diff sprint/0021-auto-dispatch...HEAD --stat` before trusting any
-review output, per `CLAUDE.md`'s rule on stale-ref reviews.
+Scope every diff and every review pass against `origin/main`.
+
+**Overtaken by events, 2026-08-18:** this originally said to scope
+against `sprint/0021-auto-dispatch` and *never* `origin/main`, which
+was right while 0021 was unmerged — a diff against `main` would have
+shown 0021's entire separately-landing changeset as this task's own.
+0021 merged as `bed80c3` mid-implementation and its branch was deleted,
+so `origin/main` now *is* the base and is the correct scope. `git
+fetch` first and confirm with `git diff origin/main...HEAD --stat`
+before trusting any review output, per `CLAUDE.md`'s rule on stale-ref
+reviews — the rule that made the original instruction right is the same
+one that makes this replacement right.
 
 Commit in reviewable slices, with this brief file itself committed
 alongside the work rather than separately — the brief's owner will have

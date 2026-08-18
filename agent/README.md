@@ -73,7 +73,12 @@ castle show ID
   than silently gaining a second `answer` record naming it. Two answers
   on one question make "is this still open" unanswerable for every
   later reader, and the refusal names the existing answer's id so the
-  first one is easy to find.
+  first one is easy to find. The cost, stated plainly: an answer cannot
+  currently be revised or superseded — a resident who answered wrongly
+  can file a `correction` referencing it, which preserves the account,
+  but nothing reopens the question and the resident-model entry it
+  elicited stands as written; amendment semantics on an append-only log
+  are deliberately left to a future task rather than improvised here.
 - **`correct`** — also intake, and a second, different kind of speech:
   the resident volunteering how the system is doing, unbidden, rather
   than asking for anything or answering a question it posed

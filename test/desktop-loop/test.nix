@@ -157,9 +157,12 @@ in
   skipTypeCheck = true;
   # No structured signal exists before Sway itself starts (that is
   # what the brief calls "genuinely hard" about a headless compositor
-  # login) — OCR paces the two tuigreet prompts below. Everything after
-  # Sway starts asserts via its own IPC socket or the journal's own
-  # files, never pixels, per docs/tasks/0011's scope.
+  # login) — OCR paces the two tuigreet prompts below, and one moment
+  # after them: the answer picker, where a keypress sent before the
+  # program has engaged cbreak is discarded by TCSAFLUSH rather than
+  # merely mistimed (docs/tasks/0022, review round 1). Everything else
+  # after Sway starts asserts via its own IPC socket or the journal's
+  # own files, never pixels, per docs/tasks/0011's scope.
   enableOCR = true;
   # `runNixOSTest` passes `node.pkgs`, which by default makes every
   # `nixpkgs.*` option (including `nixpkgs.config`) read-only across all
@@ -593,12 +596,17 @@ in
     # Mod4+Shift+a to castle-modal --mode answer).
     machine.send_key("meta_l-shift-a")
     retry(lambda last: has_modal())
-    # The picker is read with the tty in cbreak mode, which castle-modal
-    # engages after the window exists — the same reason the correction
-    # flow above sleeps before sending its single keypress. A digit that
-    # lands before then is held by the kernel's canonical line
-    # discipline waiting for a newline that a bare keypress never sends.
-    machine.sleep(2)
+    # Waited for on screen, not slept past (review round 1, finding 6).
+    # has_modal() only proves the foot window exists, and a fixed sleep
+    # can lose the keypress outright: `tty.setcbreak` defaults to
+    # TCSAFLUSH, which *discards* anything already queued on the tty, so
+    # a digit sent between the window appearing and cbreak being engaged
+    # is not merely mistimed — it is thrown away. castle-modal engages
+    # cbreak BEFORE it prints the picker, so any picker text being
+    # visible is proof the flush has already happened and a keypress can
+    # no longer be eaten. Partial match, matching this file's existing
+    # OCR style.
+    machine.wait_for_text("aiting on you")
     # The one thing no headless test can show a human: what the picker
     # actually looks like on screen.
     machine.screenshot("08-modal-answer-picker")
@@ -608,6 +616,10 @@ in
     # one question out of several by a number they can see, never by a
     # record id they had to find first.
     machine.send_key("2")
+    # The sleeps below stay: once the keypress is read, the tty is
+    # restored with TCSADRAIN, which preserves anything queued rather
+    # than discarding it — so from here on a small timing miss costs
+    # nothing.
     machine.sleep(2)
     machine.send_chars("${answerBody}\n.\n")
     machine.sleep(2)

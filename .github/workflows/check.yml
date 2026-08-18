@@ -226,7 +226,11 @@ jobs:
           # chords — Mod4+Shift+Return (compose) and Mod4+Shift+a
           # (answer, docs/tasks/0022) — are present in the same
           # generated file. A second castle chord landing at the wrong
-          # priority is exactly the shape this check exists to catch. It is
+          # priority is exactly the shape this check exists to catch.
+          # Both castle entries name the FULL exec command including
+          # `--mode`: a prefix match would stay green if a binding
+          # regressed to the wrong mode, which is a live risk now that
+          # two chords differ only in that argument. It is
           # deliberately a sample, not an exhaustive re-listing of every
           # default binding — the point is to fail loudly if the whole
           # default set goes missing again, not to pin every keybind
@@ -250,8 +254,8 @@ jobs:
             'bindsym Mod1+Shift+e exec swaynag' \
             'bindsym Mod1+1 workspace number 1' \
             'bindsym Mod1+Shift+space floating toggle' \
-            'bindsym Mod4+Shift+Return exec foot --app-id=castle-modal' \
-            'bindsym Mod4+Shift+a exec foot --app-id=castle-modal'
+            'bindsym Mod4+Shift+Return exec foot --app-id=castle-modal -e castle-modal --mode compose' \
+            'bindsym Mod4+Shift+a exec foot --app-id=castle-modal -e castle-modal --mode answer'
           do
             if ! grep -qF "$expected" "$SWAY_CONFIG"; then
               echo "MISSING expected binding: $expected"
