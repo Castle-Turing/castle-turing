@@ -1735,12 +1735,26 @@ def _requests_with_results(records: dict[str, Record]) -> set[str]:
 
 
 def _outstanding_requests(records: dict[str, Record]) -> list[Record]:
-    """Requests with no result and nothing currently running on them."""
+    """Every request with no result — the watermark's exclusion list.
+
+    Deliberately does NOT skip requests whose lease is currently held.
+    It used to, and that was a hole in the watermark's own promise: a
+    pre-dispatch request a resident happened to be working by hand
+    during the very first sweep was left off the exclusion list, and if
+    that hand turn then died before writing a result, the request
+    passed every eligibility condition afterwards and was started
+    automatically — the one thing the watermark exists to stop, on the
+    one request it was most obviously supposed to protect.
+
+    Naming it costs nothing in the other direction: a hand-worked
+    request that finishes gets a result, and a result bars an automatic
+    attempt regardless of what any exclusion list says. This function
+    has exactly one caller, `_write_watermark`, so "outstanding" here
+    means only "predates dispatch and has no account yet."
+    """
     answered = _requests_with_results(records)
     return [
-        rec
-        for rec in records.values()
-        if rec.type == "request" and rec.id not in answered and not lease_is_held(rec.id)
+        rec for rec in records.values() if rec.type == "request" and rec.id not in answered
     ]
 
 
@@ -1787,14 +1801,14 @@ def _write_watermark(records: dict[str, Record]) -> str:
     evidence = (
         f"automatic dispatch began operating on this journal at {now}; the "
         f"{len(outstanding)} request record(s) outstanding at that instant (no "
-        "result, nothing running) are named in this record's refs and are "
-        "excluded from automatic dispatch"
+        "result of any kind) are named in this record's refs and are excluded "
+        "from automatic dispatch"
     )
     if outstanding:
         excluded_prose = (
             f"The {len(outstanding)} request record(s) named in this record's "
-            "`refs` were outstanding at that instant — filed, with no result, "
-            "and with nothing running on them. **Those requests, by name, are "
+            "`refs` were outstanding at that instant — filed, and with no "
+            "result of any kind. **Those requests, by name, are "
             "not started automatically.** Dispatch did not exist when they were "
             "filed, nobody chose to have them run unattended, and quietly "
             "spending a model call on each one now would be a decision this "

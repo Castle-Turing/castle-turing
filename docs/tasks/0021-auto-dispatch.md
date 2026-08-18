@@ -325,9 +325,17 @@ full stop.
 **2.2 — Watermark.** If no `decision` record with `seat: dispatch` and
 a `watermark:` field exists anywhere in the journal, write one:
 `type: decision`, `seat: dispatch`, `provenance: initiated`, and —
-this is the load-bearing part — **`refs` listing, by id, exactly the
-`request` records outstanding (no `result`, no live-lease `claim`) at
-that instant**. `evidence` names the timestamp and that count; a
+this is the load-bearing part — **`refs` listing, by id, every
+`request` record with no `result` at that instant**. *Not* "and
+nothing running on it": the first implementation skipped
+currently-leased requests, which left a hole in the watermark's own
+promise — a pre-dispatch request a resident happened to be working by
+hand during the very first sweep was omitted from the exclusion list,
+and if that hand turn then died before writing a result, the request
+passed every eligibility condition afterwards and was started
+automatically. Naming it costs nothing in the other direction: a
+hand-worked request that finishes has a result, and a result bars an
+automatic attempt regardless of any list. `evidence` names the timestamp and that count; a
 machine-readable `watermark: <timestamp>` field (UTC, `CREATED_FMT`)
 rides along as the thing `_find_watermark` recognises the record by,
 and as an honest statement of when dispatch began. The body explains,
