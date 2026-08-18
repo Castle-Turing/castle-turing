@@ -1516,3 +1516,79 @@ request body, a real complaint — into a fixture, a test, or a code
 comment; every example string in this brief and in the existing
 codebase it extends is invented and hardware-neutral, and new ones must
 be too.
+
+## As built — where the implementation departed from this brief
+
+Written by the implementing session, per `CLAUDE.md`'s rule that a brief
+overtaken by the work it rides gets corrected in place rather than left
+describing something that was not built. Nothing in the design above
+changed; these are the places the code is narrower, wider, or differently
+shaped than the text specifies, each with the reason.
+
+- **The validator accepts only the literal `true`, not "any truthy
+  spelling."** §9 says to check `blocking` against "the truthy/falsy
+  spellings `--blocking`'s own writer produces," and its own writer
+  produces exactly one: `true`. The fold in §4 reads the field as
+  *non-blank means blocking* — so a hand-written `blocking: false` would
+  resume an errand while reading as though it would not. Refusing every
+  spelling but `true` is what keeps the fold's cheap test honest, and it
+  costs nothing retroactively, since the field is new and nothing already
+  written can carry it. `dispatch-test.sh` plants a `blocking: false`
+  question and asserts `castle validate` rejects it.
+- **A resumed turn's `claim` body carries one extra paragraph.** §3 says
+  "nothing else about the claim record changes." A first turn's claim is
+  byte-identical to before, as specified; a resuming one gains a sentence
+  saying it is a resumption and that the ids after the request id are the
+  answers it spent. Without it a cold reader meets an unexplained second
+  ref in a record whose prose describes only a turn beginning. No
+  frontmatter field was added and no reader's keying changed.
+- **`CASTLE_RESUME_ANSWER_IDS` is explicitly removed from a non-resuming
+  tenant's environment.** §8 says "absent, not empty," which the brief
+  treats as a matter of not setting it. The tenant's environment starts
+  as a copy of the dispatching process's, so a stale value — exported by
+  hand, or inherited by a tenant that itself runs `castle work` — would
+  be passed through. Absence has to be made rather than assumed.
+- **`agent/castle-worker-claude`'s prompt lost the line "The resident's
+  request, in their own words."** §10 specifies the rewrite of item 4
+  only, and §7 notes the packet arrives where the request body used to.
+  Left alone, that label would introduce a resumed turn's prior results
+  and the resident's answer as though all of it were the request. The
+  replacement says what the text now is: the errand's records, verbatim
+  from the journal.
+- **The mid-errand tenant swap uses a new fixture rather than an
+  adapted `scripted-worker-alt.py`.** §11 offers "adapted, or driven via
+  a per-turn override," but adapting that file is not available —
+  `tenant-swap.sh` fingerprints its behavior and the brief also requires
+  it stay byte-for-byte untouched. `scripted-worker-blocking-alt.py` is
+  a new, differently-shaped (Python) contract tenant that holds the
+  resumed turn while the bash fixture holds the first.
+- **`resume.sh` covers three cases beyond the enumerated list**, each
+  because the design rests on it: a blocking question filed against its
+  own `result` rather than the request (the shape §4 says strict keying
+  would strand), a follow-up request's blocking question resuming the
+  follow-up and never its parent (the contamination §4 rejects
+  `_collect_downstream` over), and a `correction` planted against the
+  errand's request before the answer, which the resumed tenant refuses
+  outright if it ever reaches its stdin (§7's exclusion, enforced rather
+  than hoped for).
+- **The desktop-loop VM extends `dispatchWorker` rather than adding a
+  third Nix-level worker.** §11 recommends a separate fixture for
+  readability, but `castle.agent.worker.command` is one option for the
+  whole VM, so a second fixture would need the command swapped
+  mid-session — machinery worth more than the readability it buys. The
+  existing fixture instead branches on `CASTLE_RESUME_ANSWER_IDS`,
+  raising its blocking question only on a non-resumed turn, which
+  satisfies §11's "should not raise a further question on its resumed
+  turn" requirement directly. It also refuses its own resumed turn if
+  the resident's answer is missing from the packet.
+- **`test/desktop-loop/test.nix`'s existing single-path `ls` assertions
+  were left as they are.** §11 offers re-scoping them with `grep -l` as
+  the possibly-cleaner remedy. Appending the new segment strictly after
+  all of them was enough, and re-scoping assertions this task does not
+  otherwise touch would have widened the diff for no behavioral gain.
+  The constraint is now recorded in the new segment's own comment, where
+  the next person to add a segment will meet it.
+- **`test/agent-loop/modal-headless-test.sh` had two occurrences of the
+  deleted confirmation string, not one.** §10 names line 858; the piped-
+  stdout assertion later in the same file carried it too. Both were
+  updated.
