@@ -448,7 +448,20 @@ in
     # this proves the notify command ran without complaint, not that a
     # human saw a popup — mako cannot report reception, which is
     # docs/architecture.md's Proposal 06 receipt half, still unbuilt.
-    machine.fail("journalctl --no-pager | grep -q 'notify command'")
+    # Scoped to the dispatch unit's own log, not the whole system
+    # journal: a match anywhere else would be a different process's
+    # problem, and — the reason this is a `succeed` plus an `assert`
+    # rather than a `fail` on a grep — a mistyped journalctl filter
+    # exits nonzero all by itself, which would turn this into an
+    # assertion that passes because it checked nothing. The first
+    # assertion below is what keeps that honest: the unit's log has to
+    # contain the sweep's own report of the turn it ran, so we know we
+    # are reading a log that exists and belongs to the right unit.
+    dispatch_log = machine.succeed(
+        "journalctl --no-pager _SYSTEMD_USER_UNIT=castle-dispatch.service"
+    )
+    assert "dispatch: worked" in dispatch_log, dispatch_log
+    assert "notify command" not in dispatch_log, dispatch_log
     print("OK: the router's notify channel fired with no fallback warning")
 
     # --- Independent verification: check_assertions.py re-derives the

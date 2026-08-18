@@ -727,6 +727,22 @@ tells the resident through the ordinary router path — "seat empty, and
 the resident is told," per `docs/architecture.md`'s occupancy language
 — instead of leaving them to notice a growing pile of nothing.
 
+*A review finding, dispositioned rather than fixed:* these three now
+write a `result` for a **hand-run** `castle work` too, not only for a
+dispatched one, and that is deliberate. The obvious alternative — gate
+the record on some is-automatic flag — buys nothing and costs
+something. It buys nothing because the record is not noise: the
+failure is real, the resident hears about it through the ordinary
+router path rather than only on a terminal they may have walked away
+from, and §4's label names the retry command, so a misconfigured
+tenant is *more* visible than the bare stderr line it replaces, not
+less. It costs something because the claim record is already written
+by then (§3.2), so a suppressed result would leave a dangling claim
+that §2.3's reaper would later close as `interrupted` — a worse
+account of what happened than "failed, and here is the command that
+could not run." One shape of record for one shape of event, whoever
+invoked it.
+
 The two remaining failure paths in `cmd_work` — "no such request" and
 "not a request record" — **stay recordless**, unchanged. Both are
 caller errors: something passed a request id that doesn't exist or
