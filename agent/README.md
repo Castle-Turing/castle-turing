@@ -63,7 +63,17 @@ castle show ID
   (Proposal 05, `docs/tasks/0009`): if the question record carries a
   `fact` field (or one is passed with `--fact`), answering it appends
   an entry to `state/resident-model.md` alongside the journal `answer`
-  record — see "The resident model" below.
+  record — see "The resident model" below. Both the record and that
+  entry are written by `file_answer()` in `agent/castle`, which this
+  subcommand and `castle-modal`'s answer mode both call rather than
+  each performing the write in their own words
+  (`docs/tasks/0022-answer-in-ui.md`; the same shape `file_correction()`
+  already has). It owns every pre-write check, including one that is
+  new: **a question already closed by an answer is refused**, rather
+  than silently gaining a second `answer` record naming it. Two answers
+  on one question make "is this still open" unanswerable for every
+  later reader, and the refusal names the existing answer's id so the
+  first one is easy to find.
 - **`correct`** — also intake, and a second, different kind of speech:
   the resident volunteering how the system is doing, unbidden, rather
   than asking for anything or answering a question it posed
@@ -205,15 +215,16 @@ castle show ID
 
 ## `castle-modal` — the ambient intake
 
-A floating `foot` terminal (bound to `Mod4+Shift+Return` in
-`modules/home`'s Sway config — see that module for why this chord and
-not another) running `agent/castle-modal`, a second stdlib-only Python
-script that imports `agent/castle` in-process rather than shelling out
-to it. Two modes:
+A floating `foot` terminal (bound to `Mod4+Shift+Return` for compose
+and `Mod4+Shift+a` for answer in `modules/home`'s Sway config — see that
+module for why these chords and not others) running
+`agent/castle-modal`, a second stdlib-only Python script that imports
+`agent/castle` in-process rather than shelling out to it. Three modes:
 
 ```
 castle-modal --mode compose [--limit N] [--kind request|correction]
 castle-modal --mode status  [--limit N]
+castle-modal --mode answer  [--question ID]
 ```
 
 - **compose** (the default) — reads multi-line free text from stdin
@@ -271,11 +282,61 @@ castle-modal --mode status  [--limit N]
   here: they aren't errands, and there's nothing about one to "come
   back and check" on.
 
-Headless by construction: both modes only ever read `sys.stdin` and
-write `sys.stdout`/`sys.stderr`, with no `curses` and no compositor
-dependency anywhere in the control flow — the only place `sys.stdin.isatty()`
-is even checked is to decide whether to print a couple of purely
-cosmetic prompts in compose mode. That's what lets CI pipe canned
+- **answer** (`Mod4+Shift+a`) — the questions the system is waiting on,
+  and one of them answered (`docs/tasks/0022-answer-in-ui.md`). A
+  question is **pending iff no `answer` record's `refs` names it** —
+  a fold recomputed on every invocation, not a stored flag, which is
+  why nothing about a question is ever edited when it gets answered.
+  Nothing pending prints one plain line and exits. Otherwise the
+  pending questions are listed oldest first, `[1]` through at most
+  `[9]` (past nine, a trailing "…and N more waiting." names the rest
+  honestly), each showing the question's first line and, when its refs
+  chain reaches an originating request, an indented `about:` line
+  naming that errand. One keypress picks one; **any key that selects
+  nothing closes the window immediately, writing nothing anywhere** —
+  the keypress is the dismissal, and there is no code path from it to a
+  write. A picked question is then shown in full, verbatim and never
+  truncated, and answered in compose mode's own `.`-terminated grammar.
+  The answer goes through `file_answer()`, so the record and any
+  elicited resident-model entry are byte-identical to what
+  `castle answer` writes.
+
+  What this surface prints is bound by one rule: **no record ids, and
+  none of the words `seat`, `provenance`, `refs`, `journal`, `record`,
+  `channel`, `evidence`, and no fact names.** That binds the text the
+  tool adds — question and request bodies are shown exactly as their
+  authors wrote them. So the confirmation carries no id, and says only
+  what is true: `"Filed. Nothing picks this errand back up
+  automatically yet."` (answering resumes nothing until
+  `docs/backlog/errand-resume-after-answer.md` is built — a
+  confirmation implying otherwise would be `docs/tasks/0015`'s defect
+  one level up), plus `"Noted — I'll remember that."` if and only if an
+  entry really was written to the resident model. A write into the
+  resident's own model that the resident is never told about is
+  authority exercised invisibly; the CLI's `recorded resident-model
+  entry for fact '...'` line, which names the internal fact key, never
+  reaches this surface.
+
+  `--question ID` is the non-interactive contract, exactly parallel to
+  compose's `--kind`: scripts and CI only, never shown to the resident.
+  A piped session with questions pending and no `--question` **refuses**
+  (exit 1) rather than guessing which one was meant, and prints the
+  answer's id on stdout when given one. **An interactive session always
+  ignores `--question` and shows the picker** — preselecting a question
+  for a human who is looking at the screen is the answering-the-wrong-
+  one hazard the picker exists to remove. Exit 0 on filed, nothing
+  pending, or a deliberate dismissal (looking and declining is a
+  success, not an error); exit 1 on an empty body, an unresolvable or
+  missing `--question`, a target that is not a question, and an
+  already-answered question.
+
+Headless by construction: every mode only ever reads `sys.stdin` and
+writes `sys.stdout`/`sys.stderr`, with no `curses` and no compositor
+dependency anywhere in the control flow — `sys.stdin.isatty()` is
+checked only to decide whether to print a couple of purely cosmetic
+prompts, whether to hold the window open for a dismissal, and (in
+answer mode) whether there is a human present to show a picker to at
+all. That's what lets CI pipe canned
 input at it and assert on the request record it produces with zero
 Sway, zero foot, and zero display server involved.
 
@@ -657,13 +718,20 @@ carry — never both:
   answered. `docs/tasks/0008-agent-layer-skeleton.md` shipped the
   format with zero tooling; `docs/tasks/0009-ambient-intake.md` built
   the write path, and it is narrow on purpose: `append_model_entry()`
-  in `agent/castle` is called from `cmd_answer`, which only ever runs
-  because a human typed an answer at this CLI (or at `castle-modal`,
-  which calls the same code). The fact name comes from the `question`
-  record's own `fact` field by default (the seat that raised the
-  question is the one that knows what it's eliciting), or from
-  `castle answer --fact NAME` explicitly. The entry's body is the
-  literal question and answer text, not a summary.
+  in `agent/castle` is reached only through `file_answer()`, which has
+  exactly two callers — `cmd_answer` (a human typed an answer at this
+  CLI) and `castle-modal`'s answer mode (a human picked a question and
+  typed an answer at the modal). Both are narrow, and both reach the
+  same function rather than each performing the write, exactly as the
+  correction path's own two callers both reach `file_correction()`
+  (`docs/tasks/0022-answer-in-ui.md`). The fact name comes from the
+  `question` record's own `fact` field by default (the seat that raised
+  the question is the one that knows what it's eliciting), or from
+  `castle answer --fact NAME` explicitly — a CLI-only override, because
+  the fact is the declaring seat's to name and a resident typing one at
+  answer time would make the model's key space free text under neither
+  documented entry shape. The entry's body is the literal question and
+  answer text, not a summary.
 - **Volunteered** (`provenance: volunteered` / `stated`) — the resident
   spoke unbidden; nobody asked (`docs/tasks/0010-correction-record.md`).
   `stated` plays the role `asked`/`answered` play above: it's the id of
@@ -780,7 +848,7 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   journal. An exact match proves the worker seat was re-tenanted with
   no structural change, without running a real model in CI.
 - **`modal-headless-test.sh`** (the `modal-headless-test` CI job) pipes
-  canned stdin at `castle-modal` in both modes and asserts on the
+  canned stdin at `castle-modal` in all three modes and asserts on the
   request record compose mode produces and the fold status mode
   renders — no `foot`, no Sway, no display server anywhere in the
   script, proving the modal's logic is driveable independent of the
@@ -798,13 +866,33 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   reading as "in progress" while a helper process holds a real `flock`
   on the errand's lease, and as interrupted the moment that holder
   dies; and the `", waiting on you"` overlay still composing with an
-  outcome label. Two more came from a later review pass: an errand
+  outcome label (that overlay now reads `", waiting on you — press
+  Mod4+Shift+a to answer"`, and the assertions were updated with it —
+  docs/tasks/0022). Two more came from a later review pass: an errand
   never takes its state from a follow-up filed against it with
   `castle ask --refs` (the fold is transitive, the turn state is keyed
   to the request), and answering one question does not silence the
   next one raised on the same errand. Every pre-existing state
   assertion in the file is unchanged — in particular that a result
   with no `outcome` field still reads as "done".
+  `docs/tasks/0022-answer-in-ui.md` added twelve more, all of answer
+  mode, driven on the same pty pattern through one reusable driver:
+  nothing pending printing its friendly line; a question picked,
+  answered, and its record's `refs` naming exactly that question; two
+  pending questions with `2` answering the second and leaving the first
+  waiting; a positive assertion that no record id and none of the
+  journal's vocabulary appears in what the resident saw; a dismissal
+  leaving the journal's file count and the resident model's byte length
+  untouched; an empty answer refused; the `--question` script path and
+  each of its refusals; an interactive session ignoring `--question`;
+  a fact-carrying question producing the elicited entry while the modal
+  says only "Noted — I'll remember that."; the CLI refusing a second
+  answer; ten pending questions showing nine and naming the rest; and
+  status mode holding its window open on both of its exit paths. That
+  section runs against its own state directory with every question
+  planted at an explicit id, because a picker keyed to screen position
+  cannot be asserted on against a journal the tests above it are still
+  accumulating.
 - **`dispatch-test.sh`** (the `dispatch-test` CI job,
   `docs/tasks/0021-auto-dispatch.md`) drives `castle dispatch` — the
   sweep a systemd path unit and timer trigger on a real host — by hand.

@@ -133,11 +133,18 @@ adds no judgment — it captures the request and its provenance.
 The same surfaces also take a second kind of speech: a `correction`,
 the resident volunteering how the system is doing rather than asking
 for anything (`castle correct`; the modal's compose mode, after one
-plain-language keypress — docs/tasks/0010-correction-record.md). Intake
-stays judgment-free either way — the resident classifies which kind of
-speech this is, the surface never guesses — and transcription is
-mechanical and verbatim: no seat paraphrases a correction, at write
-time or ever.
+plain-language keypress — docs/tasks/0010-correction-record.md). And a
+third: closing a `question` the system opened, which is the modal's
+answer mode (`Mod4+Shift+a`, docs/tasks/0022-answer-in-ui.md) and
+`castle answer` underneath it — the resident picks a pending question
+out of a plain-language list and answers it in their own words, with no
+record id typed or shown, because a question economy that costs the
+resident the system's internal vocabulary to participate in is one they
+will stop participating in. Intake stays judgment-free through all
+three — the resident classifies which kind of speech this is, and
+chooses which question they are closing; the surface never guesses —
+and transcription is mechanical and verbatim: no seat paraphrases a
+correction, at write time or ever.
 
 **Router.** The seat the vision calls a core competence: "the
 interruption medium is itself a decision the AI makes." The router
