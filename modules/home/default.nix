@@ -177,7 +177,7 @@ in
           # two.
           defaultWorkspace = lib.mkDefault "workspace number 1";
 
-          # $mod+Shift+space opens the ambient intake: a floating foot
+          # Mod4+Shift+Return opens the ambient intake: a floating foot
           # terminal running castle-modal in compose mode
           # (docs/tasks/0009 item 3 — "press a key, describe a problem
           # in your own words, walk away"). `foot`/`castle-modal` are
@@ -185,8 +185,9 @@ in
           # deliberately, so this module stays decoupled from
           # modules/agent at the Nix level — the binding does nothing
           # useful without it, but building this module never requires
-          # Mod4 (the Super/Windows key) with Shift+Return. The chord is
-          # fixed rather than $mod-relative on purpose: this is the door
+          # it.
+          #
+          # The chord is fixed rather than $mod-relative on purpose: this is the door
           # into the agent layer, not a window-management command, and
           # agent/README.md, docs/architecture.md and the desktop-loop
           # harness all name it literally, so one stable spelling is

@@ -205,7 +205,7 @@ jobs:
           # so it can't be trusted alone to guard the regression. This
           # step grep-asserts that a representative sample of the
           # defaults home-manager ships (terminal, kill, exit, one
-          # workspace switch) and this repo's own $mod4+Shift+space
+          # workspace switch) and this repo's own Mod4+Shift+Return
           # binding are all present in the same generated file. It is
           # deliberately a sample, not an exhaustive re-listing of every
           # default binding — the point is to fail loudly if the whole
