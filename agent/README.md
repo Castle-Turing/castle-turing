@@ -236,7 +236,14 @@ castle-modal --mode status  [--limit N]
   — an errand whose failed turn is being retried at this moment must
   not be labelled with advice to run the command that is already
   running. A claim whose lease is dead reads as interrupted, because
-  nothing is actually running. A result's
+  nothing is actually running. The state is that of the errand's
+  **newest turn**: the result naming the newest `claim` is the one that
+  labels it, so an old turn reaped after a newer one completed does not
+  make a finished errand read as interrupted, and a second turn that
+  died is not masked by an older turn's result. A request a tenant
+  filed during its own turn reads "filed during a worker turn — `castle
+  work <id>` to run it", since nothing will ever start it
+  automatically. A result's
   `outcome` supplies the rest — `done`, or "failed / timed out /
   interrupted — castle work `<id>` to retry". Every non-done label
   names the retry command on purpose: 0015's lesson was that a label

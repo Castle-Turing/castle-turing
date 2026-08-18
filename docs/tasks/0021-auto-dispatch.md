@@ -887,8 +887,22 @@ only the reaping is per turn. The `claim` record already carries its own
 
 ### 4. Status surfaces (task 0015's scope-3 rule: the two must agree)
 
-**`_errand_state` (`agent/castle-modal`).** Results are now read with
-their `outcome` field:
+**`_errand_state` (`agent/castle-modal`).** **The errand's state is
+the state of its newest *turn*, not of its newest result** — a
+correction to the first implementation, which keyed on results and got
+two real cases backwards, in opposite directions. Since §3 makes every
+worker result name the `claim` it closes, "which turn are we talking
+about" is answerable, and it has to be asked: an errand whose retry
+completed and whose older abandoned turn was reaped *afterwards*
+carries an `interrupted` result newer than its `completed` one, so
+keyed on results it reads as interrupted forever though it is
+finished; and an errand whose second turn died leaves a claim no
+result closes, which an older result masks entirely. Older turns'
+accounts — reaped ones included — are history; the newest turn is the
+current truth. An errand with no `claim` records at all (every journal
+written before this task) keeps the newest-result behavior unchanged.
+
+The newest turn's account is read with its `outcome` field:
 
 - `outcome: completed`, **or `outcome` absent entirely** → `"done"`.
   Absence has to keep meaning `"done"`, because that is every result
@@ -929,7 +943,15 @@ shares with the reaper's own probe). A `claim` with
 a **dead** lease and no result reads as interrupted (the same case
 §2.3's reaper is racing to write a `result` for — between "the lease
 died" and "the next sweep reaps it," the honest label is "interrupted,"
-not "in progress," since nothing is actually running). The existing
+not "in progress," since nothing is actually running). A request carrying `filed-during-turn` (§2.4(e)) with no claims and no
+results → `"filed during a worker turn — castle work <id> to run it"`.
+Added with that stamp, and for the same reason the fallthrough was
+fixed in the first place: dispatch deliberately never starts these, so
+`"awaiting a worker"` would be 0015's exact failure — a label
+promising a start that is never coming. Say what is true, and what the
+resident can do about it.
+
+The existing
 `", waiting on you"` overlay for an unanswered `question` composes
 exactly as it does today — no change to that logic.
 
