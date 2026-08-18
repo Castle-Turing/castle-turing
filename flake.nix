@@ -416,6 +416,18 @@
                     unit != null
                     && unit.serviceConfig.Type == "oneshot"
                     && unit.serviceConfig.WorkingDirectory == "%h"
+                    # Pinned because losing it is silent and ugly:
+                    # systemd.user units are declared for every user
+                    # with a systemd instance, greetd's `greeter`
+                    # included, and without this the sweep runs — and
+                    # fails — at the login screen on every boot. Found
+                    # by running test/desktop-loop's VM, not by
+                    # reasoning (docs/tasks/0021 §1).
+                    && unit.unitConfig.ConditionUser == "!@system"
+                    && config.systemd.user.paths.castle-dispatch.unitConfig.ConditionUser
+                      == "!@system"
+                    && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser
+                      == "!@system"
                     && lib.elem "CASTLE_STATE_DIR=${dummyStateDir}" environment
                     && lib.elem "CASTLE_WORKER_TIMEOUT=900" environment
                     && lib.elem "CASTLE_REPO_ROOT=${dummyRepoRoot}" environment

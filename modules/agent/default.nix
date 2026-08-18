@@ -361,10 +361,28 @@ in
     # no path that runs nixos-rebuild, git commit, or anything else
     # that touches a running system (Proposal 03's "the worker
     # proposes, it never deploys").
+    #
+    # `ConditionUser=!@system` on all three, found by running
+    # test/desktop-loop's VM rather than reasoned out in advance:
+    # `systemd.user.*` units are declared for EVERY user with a
+    # systemd instance, and on a host that imports modules/desktop
+    # that includes greetd's own `greeter` system account. Its
+    # manager dutifully started castle-dispatch at the login screen,
+    # where the sweep exited 1 on a journal it has no business reading
+    # ("Permission denied: /home/resident/private/state/journal") and
+    # left a failed unit sitting in a session nobody inspects. The
+    # sweep's exit code is supposed to mean "dispatch itself broke,"
+    # so a guaranteed-failing instance of it on every boot is exactly
+    # the health signal a resident would learn to ignore. `!@system`
+    # is nixpkgs' own idiom for this — the same condition
+    # `nixos-activation.service` (the user-specific activation unit)
+    # carries — and it needs no username baked into this repo
+    # (Principle 02).
     # ---------------------------------------------------------------
     systemd.user.paths.castle-dispatch = lib.mkIf cfg.dispatch.enable {
       description = "Watch the castle journal for records that need dispatching";
       wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
       pathConfig = {
         # The whole journal directory, not `*-request-*.md`
         # specifically. A request-shaped watcher would satisfy this
@@ -386,6 +404,7 @@ in
     systemd.user.services.castle-dispatch = lib.mkIf cfg.dispatch.enable {
       description = "Run one castle dispatch sweep over the journal";
       wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${castleCli}/bin/castle dispatch";
@@ -421,6 +440,7 @@ in
     systemd.user.timers.castle-dispatch = lib.mkIf cfg.dispatch.enable {
       description = "Backstop for the castle dispatch path unit";
       wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
       # A backstop, not the primary trigger: the path unit above fires
       # within moments of a record landing, but a missed inotify event
       # — or a request filed while this user session was down — would
