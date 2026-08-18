@@ -204,6 +204,32 @@ cat "$WORKDIR/conc-a.out" "$WORKDIR/conc-b.out"
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
+log "a hand-run castle route racing a sweep's tail routes each record exactly once, and notifies once"
+# ---------------------------------------------------------------------
+# Routing had one invoker — a human — until this task gave it a second
+# one that runs unattended. Two folds in flight at the same instant
+# both see a record as unrouted, both append a decision for it, and
+# both fire a notification. The route lock serializes them; the loser
+# waits and then finds nothing to do, which is why blocking (not
+# skipping) is the right shape for a fold this cheap and this
+# idempotent.
+REQ_RACE="$("$CASTLE" ask "Dispatch test: a hand-run route racing the sweep's tail.")"
+NOTIFY_BEFORE_RACE="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
+"$CASTLE" dispatch >"$WORKDIR/race-dispatch.out" 2>&1 &
+RACE_DISPATCH=$!
+"$CASTLE" route >"$WORKDIR/race-route.out" 2>&1 &
+RACE_ROUTE=$!
+wait "$RACE_DISPATCH" || fail "the racing sweep exited nonzero: $(cat "$WORKDIR/race-dispatch.out")"
+wait "$RACE_ROUTE" || fail "the racing hand-run route exited nonzero: $(cat "$WORKDIR/race-route.out")"
+RESULT_RACE="$(basename "$(referencing result "$REQ_RACE")" .md)"
+[ -n "$RESULT_RACE" ] || fail "the raced sweep produced no result for $REQ_RACE"
+DECISIONS_FOR_RACE="$(referencing decision "$RESULT_RACE" | grep -c . || true)"
+[ "$DECISIONS_FOR_RACE" -eq 1 ] || fail "the raced result was routed $DECISIONS_FOR_RACE times, expected exactly 1 — a hand-run route and the sweep's tail both routed it"
+NOTIFY_AFTER_RACE="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
+[ "$(( NOTIFY_AFTER_RACE - NOTIFY_BEFORE_RACE ))" -eq 1 ] || fail "the raced result fired $(( NOTIFY_AFTER_RACE - NOTIFY_BEFORE_RACE )) notifications, expected exactly 1"
+"$CASTLE" validate
+
+# ---------------------------------------------------------------------
 log "a hand-run castle work is refused while another turn holds the errand's lease, and writes nothing"
 # ---------------------------------------------------------------------
 REQ_LEASE="$("$CASTLE" ask "Dispatch test: the lease refusal path.")"

@@ -395,12 +395,50 @@ def lease_path(request_id: str) -> pathlib.Path:
     return leases_dir() / f"{request_id}.lock"
 
 
+def route_lock_path() -> pathlib.Path:
+    """The router's serialization lock (docs/tasks/0021 §2.6).
+
+    Routing was a single-invoker fold until this task: one human typing
+    `castle route`. Now a sweep's tail step runs it unattended, so a
+    resident who types the command at the wrong instant can have their
+    invocation and the sweep's fold the same unrouted record in
+    parallel — both see it as unrouted, both append a decision, and
+    both fire a notification for it. Serializing the whole fold is the
+    cheap fix, and it is cheap: routing is fast and idempotent, so the
+    loser of the race just finds nothing to do.
+    """
+    d = runtime_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "route.lock"
+
+
 def dispatch_lock_path() -> pathlib.Path:
     """The global sweep lock (docs/tasks/0021 §2.1) — one sweep at a
     time, machine-wide, per login session."""
     d = runtime_dir()
     d.mkdir(parents=True, exist_ok=True)
     return d / "dispatch.lock"
+
+
+def acquire_lock_blocking(path: pathlib.Path):
+    """Take `flock(LOCK_EX)` on `path`, waiting for it if held.
+
+    Blocking, unlike `acquire_lock`, and the difference is a judgment
+    about what the caller should do when somebody else holds the lock.
+    For the sweep and for a per-request lease, "somebody else is on it"
+    means there is nothing useful left to do, so they skip. For routing
+    it means "wait a moment": the fold is fast, idempotent, and a
+    resident who typed `castle route` wants it to have run when the
+    command returns, not to have quietly declined.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except BaseException:
+        handle.close()
+        raise
+    return handle
 
 
 def acquire_lock(path: pathlib.Path):
@@ -1074,6 +1112,17 @@ def route_journal() -> int:
     see the comment on `to_route`, below, for why that's load-bearing
     now rather than incidental.
 
+    The whole fold runs under a blocking lock on `route.lock`
+    (docs/tasks/0021 §2.6). Before this task the router had exactly one
+    invoker — a human typing the command — so nothing could race it;
+    now a dispatch sweep runs it unattended, and a resident typing
+    `castle route` at the wrong instant would otherwise have their fold
+    and the sweep's both see the same record as unrouted, both append a
+    decision for it, and both fire a notification. **Lock order, stated
+    once so nothing inverts it:** the sweep takes `dispatch.lock`
+    first and this one second (via its tail step), and nothing anywhere
+    takes them in the other order.
+
     `already_routed` is built only from decision records whose own
     `seat` is `router` — docs/tasks/0009-ambient-intake.md item 7's bug
     fix. Before this filter, a decision written by *any* seat that
@@ -1084,6 +1133,14 @@ def route_journal() -> int:
     today because only the router writes decisions, but the bug was
     real and waiting — see test/agent-loop/run.sh's regression test.
     """
+    route_lock = acquire_lock_blocking(route_lock_path())
+    try:
+        return _route_journal_locked()
+    finally:
+        route_lock.close()
+
+
+def _route_journal_locked() -> int:
     jdir = journal_dir()
     records = load_all(jdir)
 

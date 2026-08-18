@@ -563,7 +563,18 @@ seat holds the simplest tenant that suffices," escalation to more
 machinery is a justified choice, never a default.
 
 **2.6 — Tail: exactly one `castle route` invocation**, over the whole
-journal, once, after the dispatch loop empties. `cmd_route` is already
+journal, once, after the dispatch loop empties. *Routing now runs
+under a blocking lock on `route.lock`* — added after review, and it is
+this task that makes it necessary: the router had exactly one invoker
+(a human typing the command) until a sweep began running it
+unattended, so nothing could race it before. A resident typing
+`castle route` at the wrong instant would otherwise have their fold
+and the sweep's both see a record as unrouted, both append a decision
+for it, and both fire a notification. Blocking rather than skipping,
+because the fold is fast and idempotent and a person who typed the
+command wants it to have run when it returns. **Lock order, stated
+once:** the sweep takes `dispatch.lock` first and `route.lock` second,
+and nothing anywhere takes them in the other order. `cmd_route` is already
 a whole-journal, idempotent fold (`agent/README.md`: "run it again over
 an already-routed journal and it does nothing") — invoking it once per
 dispatched errand would buy nothing beyond N times the work. A useful
