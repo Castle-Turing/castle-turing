@@ -306,4 +306,116 @@ then
   fail "interactive classification regression test failed (see output above)"
 fi
 
+# ---------------------------------------------------------------------
+# docs/tasks/0021-auto-dispatch.md §4: _errand_state now reads a
+# result's `outcome` field and probes the live lease behind a `claim`.
+# Every pre-existing assertion above stays exactly as it was — in
+# particular "a result with no outcome field reads as done", which is
+# every result written before that field existed and must keep reading
+# that way forever in an append-only journal.
+# ---------------------------------------------------------------------
+
+# The four fixtures below are hand-written rather than produced by
+# running a real worker: this file's subject is `_errand_state`'s
+# reading of the field, and `castle record` has no --outcome flag (the
+# field is written by the code paths that observe an outcome, never
+# passed in by a caller). Planting a record directly is the same
+# technique run.sh already uses for its malformed-propensity fixtures.
+plant_result_with_outcome() {
+  local request_id="$1" outcome="$2" suffix="$3"
+  local id="20260101T000000Z-result-$suffix"
+  cat > "$CASTLE_STATE_DIR/journal/$id.md" <<EOF
+---
+id: $id
+type: result
+provenance: requested
+refs: $request_id
+seat: worker
+created: 2026-01-01T00:00:00Z
+outcome: $outcome
+---
+
+Planted fixture: a result carrying outcome: $outcome (docs/tasks/0021).
+EOF
+  echo "$id"
+}
+
+log "status mode: each outcome value produces its own label, and every failure label names the retry command (docs/tasks/0021 §4)"
+REQ_COMPLETED="$("$CASTLE" ask "Outcome fixture: a completed errand.")"
+REQ_FAILED="$("$CASTLE" ask "Outcome fixture: a failed errand.")"
+REQ_TIMEOUT="$("$CASTLE" ask "Outcome fixture: a timed-out errand.")"
+REQ_INTERRUPTED="$("$CASTLE" ask "Outcome fixture: an interrupted errand.")"
+plant_result_with_outcome "$REQ_COMPLETED" completed 0c0001 >/dev/null
+plant_result_with_outcome "$REQ_FAILED" failed 0c0002 >/dev/null
+plant_result_with_outcome "$REQ_TIMEOUT" timeout 0c0003 >/dev/null
+plant_result_with_outcome "$REQ_INTERRUPTED" interrupted 0c0004 >/dev/null
+"$CASTLE" validate || fail "the planted outcome fixtures do not validate"
+
+# --limit well above the default 10: this file has filed more errands
+# than the status fold shows by default.
+STATUS_OUTCOMES="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_COMPLETED\] requested — done$" \
+  || fail "outcome: completed did not render as 'done'"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry$" \
+  || fail "outcome: failed did not render a label naming the retry command"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_TIMEOUT\] requested — timed out — castle work $REQ_TIMEOUT to retry$" \
+  || fail "outcome: timeout did not render a label naming the retry command"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_INTERRUPTED\] requested — interrupted — castle work $REQ_INTERRUPTED to retry$" \
+  || fail "outcome: interrupted did not render a label naming the retry command"
+
+log "status mode: a claim with a DEAD lease reads as interrupted, not 'in progress' — nothing is actually running"
+REQ_CLAIMED="$("$CASTLE" ask "Claim fixture: a worker turn that began.")"
+CLAIM_ID="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ_CLAIMED" \
+  --body "Planted claim: a turn began here.")"
+[ -n "$CLAIM_ID" ] || fail "could not plant a claim record"
+STATUS_DEAD_LEASE="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_DEAD_LEASE" | grep -q "^\[$REQ_CLAIMED\] requested — interrupted — castle work $REQ_CLAIMED to retry$" \
+  || fail "a claim with no live lease did not read as interrupted"
+
+log "status mode: the same claim with a LIVE lease reads as 'in progress (started HH:MM)' — backed by a held flock, not by absence of evidence"
+cat > "$WORKDIR/hold-lease.py" <<'PYEOF'
+"""Hold a real flock on an errand's lease file, the way a running
+`castle work` would, so the modal's live-lease probe has something
+genuine to find. Deliberately does not import agent/castle: this is
+the harness checking the tool from the outside, same reasoning
+check_assertions.py's header gives."""
+import fcntl
+import pathlib
+import sys
+import time
+
+runtime_dir, request_id, ready_path = sys.argv[1], sys.argv[2], sys.argv[3]
+leases = pathlib.Path(runtime_dir) / "castle" / "leases"
+leases.mkdir(parents=True, exist_ok=True)
+handle = (leases / f"{request_id}.lock").open("a+")
+fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+pathlib.Path(ready_path).write_text("held\n")
+time.sleep(60)
+PYEOF
+python3 "$WORKDIR/hold-lease.py" "$XDG_RUNTIME_DIR" "$REQ_CLAIMED" "$WORKDIR/lease-held" &
+LEASE_HOLDER=$!
+for _ in $(seq 1 50); do
+  [ -f "$WORKDIR/lease-held" ] && break
+  sleep 0.2
+done
+[ -f "$WORKDIR/lease-held" ] || fail "the lease-holder helper never took the lock"
+STATUS_LIVE_LEASE="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_LIVE_LEASE" | grep -qE "^\[$REQ_CLAIMED\] requested — in progress \(started [0-9]{2}:[0-9]{2}\)$" \
+  || fail "a claim with a live lease did not read as 'in progress (started HH:MM)': $(echo "$STATUS_LIVE_LEASE" | grep "$REQ_CLAIMED" || true)"
+kill "$LEASE_HOLDER" 2>/dev/null || true
+wait "$LEASE_HOLDER" 2>/dev/null || true
+
+log "status mode: once the lease dies with its holder, the same errand reads as interrupted again"
+STATUS_AFTER_LEASE="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_AFTER_LEASE" | grep -q "^\[$REQ_CLAIMED\] requested — interrupted — castle work $REQ_CLAIMED to retry$" \
+  || fail "the errand still claimed to be in progress after its lease holder died"
+
+log "status mode: an unanswered question still overlays every one of these states unchanged"
+"$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
+  --body "Should I try a different approach?" >/dev/null
+STATUS_OVERLAY="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you$" \
+  || fail "the ', waiting on you' overlay did not compose with an outcome label"
+"$CASTLE" validate || fail "the journal did not validate after the outcome/claim fixtures"
+
 log "all assertions passed"
