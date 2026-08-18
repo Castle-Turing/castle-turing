@@ -903,6 +903,21 @@ between the digest's fold and the resident reading it would be exactly
 the kind of stale claim 0015 fixed the modal for. `_errand_state`'s
 live-lease check belongs only on the surface that's actually read live.
 
+**Both surfaces also learn to render a decision that routed nothing.**
+Putting the excluded requests in the watermark's `refs` (§2.2) pulls
+that decision into every excluded request's transitive-downstream fold
+— which is a feature, not an accident: an excluded request's status
+entry is exactly where the resident wants the explanation for why
+nothing is happening on its own. But both surfaces previously assumed
+every decision carries a `channel`, and would have rendered the
+watermark as `channel: ?` / `decided -> ?` — inventing a routing that
+never happened. The digest now prints the channel line only when the
+field is present, and the modal prints `noted: <evidence>` for a
+channel-less decision instead of `decided -> ?`. This is a small,
+resident-visible rendering change beyond the original design, adopted
+during implementation because the refs-based watermark made a
+channel-less decision reachable for the first time.
+
 **In passing** (`agent/castle-modal` is already being edited): fix the
 two stale `$mod+Shift+space` strings still in the file — one in a
 comment, one in the empty-status hint printed by `run_status` — to the
