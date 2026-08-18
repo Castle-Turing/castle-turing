@@ -3,7 +3,7 @@ name: desktop-loop-test
 # docs/tasks/0011: boots the real desktop stack (modules/base, home,
 # desktop, dev, agent) in a NixOS VM via the nixosTest framework, logs
 # in through the real greetd+tuigreet prompt, presses the real
-# $mod+Shift+space keybinding, and asserts on the journal records the
+# $mod+Shift+Return keybinding, and asserts on the journal records the
 # ambient-intake loop actually produces — see test/desktop-loop/test.nix
 # for what it does and does not change about the mechanism under test.
 #

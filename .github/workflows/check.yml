@@ -205,19 +205,32 @@ jobs:
           # so it can't be trusted alone to guard the regression. This
           # step grep-asserts that a representative sample of the
           # defaults home-manager ships (terminal, kill, exit, one
-          # workspace switch) and this repo's own $mod4+Shift+space
+          # workspace switch) and this repo's own Mod4+Shift+Return
           # binding are all present in the same generated file. It is
           # deliberately a sample, not an exhaustive re-listing of every
           # default binding — the point is to fail loudly if the whole
           # default set goes missing again, not to pin every keybind
           # home-manager happens to ship today.
+          #
+          # 'bindsym Mod1+Shift+space floating toggle' is in the sample
+          # for a second, different reason (docs/tasks/0019, defect 2):
+          # it's not the binding that broke — under the default Mod1
+          # modifier it never collided with anything — but its presence
+          # makes the *class* of bug (a private-layer binding silently
+          # displacing a stock one under some other modifier) visible in
+          # CI at all, which it previously was not. The Mod4 case that
+          # actually collided is asserted separately, at eval time, by
+          # flake.nix's nixosConfigurations.example-mod4 — this job only
+          # ever renders the Mod1 default (see that assertion's comment
+          # for why a second rendered job here would be redundant).
           missing=0
           for expected in \
             'bindsym Mod1+Return exec' \
             'bindsym Mod1+Shift+q kill' \
             'bindsym Mod1+Shift+e exec swaynag' \
             'bindsym Mod1+1 workspace number 1' \
-            'bindsym Mod4+Shift+space exec foot --app-id=castle-modal'
+            'bindsym Mod1+Shift+space floating toggle' \
+            'bindsym Mod4+Shift+Return exec foot --app-id=castle-modal'
           do
             if ! grep -qF "$expected" "$SWAY_CONFIG"; then
               echo "MISSING expected binding: $expected"
@@ -231,6 +244,43 @@ jobs:
             echo "wrong priority is silently discarding home-manager's default bindings again."
             exit 1
           fi
+
+      - name: Assert the workspace-1 binding is the first workspace binding in the config
+        run: |
+          # Presence alone can't catch defect 1 (docs/tasks/0019): Sway
+          # takes the *first* workspace binding mentioned in the config
+          # as its initial workspace, but home-manager emits
+          # `keybindings` sorted by key name, so `Mod1+0`'s
+          # `workspace number 10` sorts before `Mod1+1`'s
+          # `workspace number 1` and wins unless
+          # `wayland.windowManager.sway.config.defaultWorkspace`
+          # (modules/home/default.nix) hoists the workspace-1 binding to
+          # the front. That hoist works by exact string equality against
+          # the binding's *action*, not its key, so a wrong spelling
+          # there (e.g. "workspace 1") silently matches nothing — the
+          # `workspace number 1` binding the step above already asserts
+          # is present would still be present, just not first. Only an
+          # order-sensitive check catches that no-op, which is why this
+          # is a separate step from the presence check above rather than
+          # another line in its grep list.
+          #
+          # Written against the action ("workspace number N"), not the
+          # key, so it stays correct regardless of which modifier a
+          # config uses — same reasoning as the fix itself. The pattern
+          # anchors on a trailing digit run with nothing after it, so
+          # "workspace number 1" cannot accidentally match the
+          # "workspace number 10" line (that line ends in "0", not "1").
+          FIRST_WS=$(grep -nE '^bindsym [^ ]+ workspace number [0-9]+$' "$SWAY_CONFIG" | head -n1)
+          case "$FIRST_WS" in
+            *"workspace number 1") ;;
+            *) echo "First workspace binding in the generated config is: $FIRST_WS"
+               echo "Expected the 'workspace number 1' binding first. Sway takes the first"
+               echo "workspace mentioned in the config as the initial workspace, and"
+               echo "home-manager only hoists it when defaultWorkspace string-equals the"
+               echo "binding's action exactly (modules/home/default.nix, docs/tasks/0019)."
+               echo "A silent no-op there looks exactly like this."
+               exit 1 ;;
+          esac
 
       - name: Assert the generated Sway config's wallpaper names a file that exists
         run: |

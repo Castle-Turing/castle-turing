@@ -245,6 +245,87 @@
         ];
       };
 
+      # The Mod4 case defect 2 (docs/tasks/0019) was invisible in: a
+      # resident who switches the modifier to the Super key. `extendModules`
+      # is a standard `nixosSystem` output attribute on this nixpkgs pin
+      # (evaluated below, not merely assumed) — it re-evaluates
+      # `nixosConfigurations.example` with one extra module layered on top,
+      # rather than duplicating that whole configuration's module list a
+      # second time. Eval-only: nothing builds this system (no CI job
+      # forces `.config.system.build.toplevel`), but `nix flake check`
+      # already forces every nixosConfiguration's `assertions`, which is
+      # all that's needed to prove the modal chord displaces no stock
+      # binding under a modifier `sway-config-check` (check.yml) never
+      # renders — see docs/tasks/0019's scope item 4 for the residual this
+      # closes and scope item 5 for why a second rendered-and-validated
+      # job was rejected as redundant.
+      nixosConfigurations.example-mod4 = self.nixosConfigurations.example.extendModules {
+        modules = [
+          (
+            { config, lib, ... }:
+            let
+              # Same attribute path sway-config-check (check.yml) reads
+              # off `nixosConfigurations.example` — `resident` is this
+              # flake's own placeholder admin username
+              # (castle.admin.username, set on `.example` and inherited
+              # here), not a real person; see that job's own comment for
+              # why the literal is spelled out rather than derived.
+              keybindings =
+                config.home-manager.users.resident.wayland.windowManager.sway.config.keybindings;
+            in
+            {
+              home-manager.users.resident.wayland.windowManager.sway.config.modifier = "Mod4";
+
+              assertions = [
+                {
+                  # The chord survives the modifier change: modules/home's
+                  # `keybindings` definition is written against a literal
+                  # "Mod4+..." key, not "${modifier}+...", so it is
+                  # unaffected by the override above by construction — this
+                  # assertion is a regression guard on that construction,
+                  # not a live risk today.
+                  assertion =
+                    (keybindings."Mod4+Shift+Return" or null)
+                    == "exec foot --app-id=castle-modal -e castle-modal --mode compose";
+                  message = ''
+                    nixosConfigurations.example-mod4: keybindings."Mod4+Shift+Return"
+                    is not the ambient-intake exec command. modules/home/default.nix
+                    hardcodes the modal chord under a literal Mod4 prefix
+                    (docs/tasks/0019) specifically so it keeps working
+                    regardless of a resident's own `modifier` setting — this
+                    means that guarantee broke.
+                  '';
+                }
+                {
+                  # This is the defect-2 regression test (docs/tasks/0019)
+                  # and is red on the code this brief starts from: home-
+                  # manager's stock keybinding set includes
+                  # "${modifier}+Shift+space" = "floating toggle", which
+                  # only collides with the old "Mod4+Shift+space" modal
+                  # chord once `modifier` is set to Mod4 — a configuration
+                  # sway-config-check never renders (it only ever builds
+                  # `nixosConfigurations.example`, whose modifier is the
+                  # Mod1 default). The collision was silent: no eval error,
+                  # no CI failure, just a missing binding — see the brief's
+                  # "Why it is silent" section for the cross-level priority
+                  # mechanism.
+                  assertion = (keybindings."Mod4+Shift+space" or null) == "floating toggle";
+                  message = ''
+                    nixosConfigurations.example-mod4: keybindings."Mod4+Shift+space"
+                    is not "floating toggle". Under modifier = "Mod4", Sway/i3's
+                    stock floating-toggle binding lives at this exact key, and
+                    modules/home/default.nix's ambient-intake chord displaced it
+                    silently before docs/tasks/0019 moved the chord to
+                    Mod4+Shift+Return. If this assertion is red, the chord (or
+                    something else) is colliding with a stock Mod4 binding again.
+                  '';
+                }
+              ];
+            }
+          )
+        ];
+      };
+
       # docs/tasks/0011: the real desktop stack, booted in a NixOS VM and
       # driven end to end — modal keybinding, request, router, digest,
       # correction — via nixosTest. Deliberately a `packages.*` output,
