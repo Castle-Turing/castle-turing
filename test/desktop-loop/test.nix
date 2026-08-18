@@ -5,6 +5,14 @@
 # $mod+Shift+Return keybinding, and assert on the journal records the
 # loop actually produces.
 #
+# Since docs/tasks/0021-auto-dispatch.md this test also enables
+# castle.agent.dispatch.enable, which turns it into that feature's
+# acceptance condition: the resident presses one chord, types one
+# complaint, and a claimed, worked, routed errand appears with no
+# `castle work` or `castle route` typed anywhere. See the
+# dispatchWorker binding below for the safety floor that keeps CI from
+# attempting a real model call while doing it.
+#
 # Uses the `nixosTest`/`pkgs.testers.runNixOSTest` framework (a Python
 # driver: `wait_for_unit`, `send_key`, `swaymsg`-over-IPC, `screenshot`,
 # OCR) rather than extending test/vm-install/'s shell-driven QEMU
@@ -61,17 +69,33 @@ let
   testPassword = "castle-turing-harness-password";
   testPasswordHash = "$6$castleturingtest$zio0DohVCoFAZ/ByLr3cUIhPge5lXZ0O1ylANx36BtdkaeKzOqdKht4KBROWu5o3dVZNyIG7UDKROXEl6WVjx0";
 
-  # test/agent-loop/'s own scripted-worker convention (docs/tasks/0011's
-  # non-goal: not the real `claude -p` tenant, which needs network and
-  # credentials a VM test must not have) — reused as-is via
-  # copy_from_host rather than reimplemented, so this test exercises
-  # the exact same worker contract test/agent-loop/run.sh already
-  # proves, not a second, subtly different one. Same for
   # check_assertions.py: an independent, already-reviewed re-derivation
   # of the frontmatter format that does not share agent/castle's own
   # parser (see that file's header for why that independence matters).
-  scriptedWorker = ../agent-loop/scripted-worker.sh;
   checkAssertions = ../agent-loop/check_assertions.py;
+
+  # The worker tenant this VM runs, and it is a **safety floor rather
+  # than an incidental config choice** (docs/tasks/0021-auto-dispatch.md
+  # §7). `castle.agent.worker.command` defaults to
+  # `castle-worker-claude`, a real `claude -p` invocation, and this VM
+  # imports modules/dev, which installs the `claude` binary — so
+  # enabling dispatch without pinning the command would make CI attempt
+  # a real, networked model call with credentials the CI environment
+  # does not have, on every run.
+  #
+  # It reuses test/agent-loop/contract-worker.sh rather than
+  # reimplementing the contract, the same way this file already reuses
+  # check_assertions.py: what runs in a booted VM should be what the
+  # no-Nix harness already proves. The wrapper exists for two concrete
+  # reasons — the fixture's `#!/usr/bin/env bash` shebang and its
+  # `cat`/`sleep` calls both need tools on $PATH, and a systemd *user*
+  # service's $PATH is not something this test should have to assume.
+  # `pkgs.writeShellScript` gives an absolute-shebang, executable store
+  # path; the PATH line supplies the rest.
+  dispatchWorker = pkgs.writeShellScript "castle-dispatch-test-worker" ''
+    export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+    exec ${pkgs.bash}/bin/bash ${../agent-loop/contract-worker.sh}
+  '';
 
   # Deliberately non-default (docs/tasks/0013's bug 2b): the fallback
   # this same value would coincide with is $HOME/.local/state/castle
@@ -85,6 +109,16 @@ let
   # test exercises the configuration a real resident actually runs, not
   # a synthetic one.
   testStateDir = "/home/resident/private/state";
+
+  # Non-default for the same reason testStateDir is: `castle work`
+  # falls back to its working directory when CASTLE_REPO_ROOT is
+  # unset, and the dispatch unit's working directory is `%h` — so a
+  # test that left this alone could not tell a working
+  # castle.agent.worker.repoRoot handoff from a silent fallback to the
+  # resident's home directory. Nothing is checked out here; the path
+  # exists only to be carried through the unit's environment into the
+  # tenant's, where the scripted worker prints it back.
+  testRepoRoot = "/home/resident/private/checkout";
 
   # Plain, hardware-neutral fixture text — not personal data, never
   # meant to resemble a real complaint or a real correction.
@@ -179,6 +213,19 @@ in
       # fallback are the same directory and the test cannot fail on
       # this mechanism no matter which one actually fired.
       castle.agent.stateDir = testStateDir;
+
+      # docs/tasks/0021-auto-dispatch.md: with these three lines, this
+      # test becomes the feature's actual acceptance condition — file
+      # one request through the modal and a routed outcome appears with
+      # no subsequent resident CLI action at all. It also proves the
+      # systemd user unit really saw the configured CASTLE_STATE_DIR
+      # and CASTLE_REPO_ROOT (bug 2b's shape, now proven for the
+      # dispatch unit specifically rather than only for the modal): the
+      # scripted tenant prints its $CASTLE_REPO_ROOT, and the test
+      # asserts that string lands in the result record.
+      castle.agent.dispatch.enable = true;
+      castle.agent.worker.command = "${dispatchWorker}";
+      castle.agent.worker.repoRoot = testRepoRoot;
 
       # Not a departure from the mechanism under test: a bare NixOS
       # system has no `python3` on $PATH by default (modules/agent's
@@ -307,26 +354,52 @@ in
     assert "${complaintBody}" in request_record, request_record
     print("OK: request record carries the typed text verbatim, with the modal's real provenance/seat")
 
-    # --- castle route / a scripted worker / castle digest (docs/tasks/
-    # 0011 scope item 4; non-goal: not the real `claude -p` tenant) ---
-    machine.copy_from_host("${scriptedWorker}", "/tmp/scripted-worker.sh")
+    # --- The errand starts itself (docs/tasks/0021-auto-dispatch.md) -
+    # No `castle work` and no `castle route` are typed anywhere below.
+    # A systemd user path unit notices the request record the modal
+    # just wrote, `castle dispatch` takes the errand's lease, records a
+    # claim, runs the configured (scripted, model-free) tenant, and
+    # routes the result — all of it inside the real Sway session, from
+    # one keystroke's worth of resident action.
     machine.copy_from_host("${checkAssertions}", "/tmp/check_assertions.py")
 
-    worker_out = machine.succeed(
-        f"su - resident -c 'bash /tmp/scripted-worker.sh castle {request_id}'"
-    )
-    print(worker_out)
+    claim_path = machine.wait_until_succeeds(
+        "su - resident -c 'ls ${testStateDir}/journal/*-claim-*.md'",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    claim_record = machine.succeed(f"su - resident -c 'cat {claim_path}'")
+    assert f"refs: {request_id}" in claim_record, claim_record
+    assert "seat: worker" in claim_record, claim_record
+    print("OK: dispatch claimed the errand — 'in progress' is now something the journal can earn")
 
-    route_out = machine.succeed("su - resident -c 'castle route'")
-    print(route_out)
-    assert "-> notify" in route_out, (
-        f"castle route did not report routing the requested-provenance result to notify: {route_out}"
+    result_path = machine.wait_until_succeeds(
+        "su - resident -c 'ls ${testStateDir}/journal/*-result-*.md'",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    result_record = machine.succeed(f"su - resident -c 'cat {result_path}'")
+    assert "outcome: completed" in result_record, result_record
+    assert f"refs: {request_id}" in result_record, result_record
+    assert "provenance: requested" in result_record, result_record
+    # The tenant printed its own $CASTLE_REPO_ROOT: this string can
+    # only be here if the unit's Environment= reached the worker
+    # process, which is bug 2b's shape proven for the dispatch unit.
+    assert "${testRepoRoot}" in result_record, result_record
+    print("OK: a worker turn ran and wrote a completed result, with no resident CLI action")
+
+    # The routing decision, produced by the same sweep's tail step.
+    machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '^channel: notify' ${testStateDir}/journal/*-decision-*.md\"",
+        timeout=dt.timedelta(minutes=5),
     )
 
     journal_dump = machine.succeed("su - resident -c 'cat ${testStateDir}/journal/*.md'")
     assert "type: decision" in journal_dump, journal_dump
     assert "evidence:" in journal_dump and request_id in journal_dump, journal_dump
-    print("OK: castle route wrote a decision record citing evidence")
+    # The watermark decision (docs/tasks/0021 §2.2): written by the
+    # first sweep of the session, before the resident filed anything.
+    assert "seat: dispatch" in journal_dump, journal_dump
+    assert "watermark:" in journal_dump, journal_dump
+    print("OK: dispatch routed the auto-produced result and left a watermark record behind")
 
     digest_out = machine.succeed("su - resident -c 'castle digest'")
     assert f"Errand {request_id}" in digest_out, digest_out
@@ -377,6 +450,6 @@ in
     validate_out = machine.succeed("su - resident -c 'castle validate'")
     print(validate_out)
 
-    print("PASS: the ambient-intake loop ran end to end in a real Sway session driven by keystrokes alone.")
+    print("PASS: the ambient-intake loop ran end to end in a real Sway session driven by keystrokes alone — and the errand started itself.")
   '';
 }
