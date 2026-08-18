@@ -337,17 +337,35 @@ def journal_dir() -> pathlib.Path:
 
 
 def runtime_dir() -> pathlib.Path:
-    """`$XDG_RUNTIME_DIR/castle`, falling back to `/tmp/castle-$UID`.
+    """`$XDG_RUNTIME_DIR/castle`, then `/run/user/$UID/castle`, then
+    `/tmp/castle-$UID`.
 
     The machine-local, login-session-lifetime root: the spool lives
     under it, and so do the locks docs/tasks/0021-auto-dispatch.md
     adds. Nothing durable is ever kept here — a reboot wipes it, and
     every piece of this tool treats that as normal rather than as data
     loss (see `leases_dir`).
+
+    **The middle branch is a correctness fix, not tidiness.** Once
+    these locks exist, this function decides which *namespace* a lock
+    lives in, and two callers that disagree are not mutually excluded
+    at all. `XDG_RUNTIME_DIR` is unset in exactly the contexts most
+    likely to run `castle work` alongside a dispatch unit — an ssh
+    session, a cron job, `su`. Falling straight to `/tmp/castle-$UID`
+    there put a hand-run turn in a different namespace from the unit's,
+    which was reproduced writing a false `interrupted` result over a
+    turn that was very much alive. `/run/user/$UID` is the path
+    systemd's own user manager sets `XDG_RUNTIME_DIR` to, so preferring
+    it whenever it exists puts every caller on one host in one
+    namespace. If it does not exist there is no user manager, hence no
+    unit to diverge from, and `/tmp` is the honest last resort.
     """
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
         return pathlib.Path(runtime) / "castle"
+    session = pathlib.Path(f"/run/user/{os.getuid()}")
+    if session.is_dir():
+        return session / "castle"
     return pathlib.Path(f"/tmp/castle-{os.getuid()}")
 
 
@@ -403,9 +421,21 @@ def acquire_lock(path: pathlib.Path):
     handle = path.open("a+")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except BlockingIOError:
+        # EWOULDBLOCK, and ONLY that: somebody else holds this lock,
+        # which is the ordinary answer this function exists to give.
+        # A broader `except OSError` would quietly turn ENOLCK (the
+        # kernel is out of lock records) or EIO on an exotic filesystem
+        # into "somebody holds it" — a mechanism fault rendered as a
+        # perfectly normal skip, which for the reaper means declining
+        # to reap forever and for `castle work` means refusing to run
+        # with a message naming a holder that does not exist. Anything
+        # that is not "held" propagates and is loud.
         handle.close()
         return None
+    except BaseException:
+        handle.close()
+        raise
     return handle
 
 
@@ -1156,6 +1186,55 @@ WORKER_PROPOSES_NOTE = (
 )
 
 
+# How long to wait for a killed tenant's output before giving up on
+# it. Small on purpose: a sweep holding the global dispatch lock while
+# it waits on a process nobody is going to kill is worse than a result
+# record missing the last words of a tenant that had already timed out.
+TENANT_DRAIN_SECONDS = 5
+
+
+def _install_sigterm_raiser():
+    """Make SIGTERM raise, for the span of a running tenant.
+
+    Returns whatever handler was in place, or None if this process
+    cannot install one (`signal.signal` only works on the main thread;
+    a library caller on another thread simply gets today's behavior).
+    """
+
+    def _raise_on_sigterm(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    try:
+        return signal.signal(signal.SIGTERM, _raise_on_sigterm)
+    except (ValueError, OSError):
+        return None
+
+
+def _restore_sigterm(previous) -> None:
+    if previous is None:
+        return
+    try:
+        signal.signal(signal.SIGTERM, previous)
+    except (ValueError, OSError):
+        pass
+
+
+def _kill_tenant_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the tenant's whole process group, best effort.
+
+    The group, never just the child: `claude -p` and similar tenants
+    spawn their own subprocesses, and killing only the direct child
+    leaves those running — possibly still writing to the diff file
+    this turn is about to read. Best effort because every failure mode
+    here (the process already reaped, the group already gone) means
+    the thing this function wanted is already true.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except OSError:
+        pass
+
+
 class LeaseHeld(Exception):
     """Another live process already holds this request's worker lease.
 
@@ -1366,11 +1445,15 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
 
             try:
                 # start_new_session=True puts the tenant in its own
-                # process group so the timeout below can kill the WHOLE
-                # group: `claude -p` and similar tenants spawn their own
-                # subprocesses, and killing only the direct child leaves
-                # those running — possibly still writing to the diff
-                # file this function is about to read.
+                # process group, which is what lets the timeout below
+                # kill the whole tree rather than just the direct child
+                # (see `_kill_tenant_group`). It cuts both ways, and
+                # the cost is handled rather than ignored: a tenant
+                # outside this process's group also stops receiving the
+                # terminal's SIGINT, so a hand-run `castle work`
+                # abandoned with Ctrl-C would orphan it — which is why
+                # every exit from the region below, including
+                # BaseException, kills the group on the way out.
                 proc = subprocess.Popen(
                     argv,
                     stdin=subprocess.PIPE,
@@ -1402,15 +1485,56 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 )
 
             timed_out = False
+            drained = True
+            # SIGTERM has to be *made* into an exception before the
+            # handler below can catch it. Python turns SIGINT into
+            # KeyboardInterrupt for free, but SIGTERM's default action
+            # is to die on the spot — no unwinding, no `except`, no
+            # `finally` — which would leave the tenant running detached
+            # in exactly the case where something is deliberately
+            # shutting this process down. Installed only around the
+            # region where a tenant is alive, and restored after, so no
+            # other subcommand's behavior changes.
+            previous_sigterm = _install_sigterm_raiser()
             try:
                 stdout, stderr = proc.communicate(input=request.body, timeout=timeout)
             except subprocess.TimeoutExpired:
                 timed_out = True
+                _kill_tenant_group(proc)
                 try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except OSError:
+                    # Bounded, unlike the first attempt. The kill above
+                    # goes to the tenant's process group, and a
+                    # descendant that called setsid() on its own is no
+                    # longer in it — but it may still hold the write
+                    # end of these pipes, in which case an unbounded
+                    # drain here waits on a process nothing is going to
+                    # kill, wedging the sweep while it holds the global
+                    # dispatch lock. A few seconds is enough to collect
+                    # a killed tenant's output; past that, the output
+                    # is worth less than the sweep.
+                    stdout, stderr = proc.communicate(timeout=TENANT_DRAIN_SECONDS)
+                except subprocess.TimeoutExpired:
+                    drained = False
+                    stdout, stderr = "", ""
+            except BaseException:
+                # The invoker itself is going away — Ctrl-C at a
+                # terminal, SIGTERM, an unexpected error in this
+                # function. `start_new_session=True` deliberately put
+                # the tenant outside this process's group, which also
+                # means the terminal's own SIGINT never reached it: a
+                # hand-run `castle work` abandoned at the keyboard
+                # would leave a model tenant running detached, billing,
+                # with nothing left to write its result. The unit case
+                # is covered without this (systemd kills the whole
+                # cgroup); the terminal case is not, and this is it.
+                _kill_tenant_group(proc)
+                try:
+                    proc.communicate(timeout=TENANT_DRAIN_SECONDS)
+                except subprocess.TimeoutExpired:
                     pass
-                stdout, stderr = proc.communicate()
+                raise
+            finally:
+                _restore_sigterm(previous_sigterm)
 
             diff_text = ""
             try:
@@ -1472,6 +1596,15 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 "Anything above was read from $CASTLE_DIFF_FILE as it stood when the "
                 "tenant was killed, so it may be partial."
             )
+            if not drained:
+                body_lines.append("")
+                body_lines.append(
+                    "The tenant's own stdout and stderr could not be collected: "
+                    f"they were still open {TENANT_DRAIN_SECONDS}s after the kill, "
+                    "which means something it spawned escaped the process group "
+                    "(a descendant that called setsid) and is still holding the "
+                    "pipes. Nothing above came from the tenant's output stream."
+                )
         return _write_worker_result(request, outcome=outcome, body_lines=body_lines), outcome
     finally:
         # Releasing the lease is closing the handle — the kernel would

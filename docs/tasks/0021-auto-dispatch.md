@@ -568,6 +568,22 @@ guarantee — a human running `castle work <id>` by hand, concurrently
 with a dispatch sweep reaching the same request, must be refused the
 same way a second dispatch sweep would be.
 
+*Which directory that is matters more than it looks, and the first
+implementation got it wrong.* `spool_dir()`'s existing resolution falls
+straight from `$XDG_RUNTIME_DIR` to `/tmp/castle-$UID`, and copying it
+here meant the lock's **namespace** depended on the caller's
+environment: `XDG_RUNTIME_DIR` is unset in exactly the contexts most
+likely to run `castle work` beside a dispatch unit — ssh, cron, `su` —
+so a hand-run turn took a lock in `/tmp` while the unit took one under
+`/run/user`, and the two did not exclude each other at all. Reproduced:
+a sweep wrote a false `interrupted` result over a turn that was still
+running. The resolution is now `$XDG_RUNTIME_DIR`, then
+`/run/user/$UID` **if it exists** (the path systemd's own user manager
+sets `XDG_RUNTIME_DIR` to, so every caller on a host with a user
+manager lands in one namespace), then `/tmp/castle-$UID` — and if
+`/run/user/$UID` does not exist there is no user manager, hence no unit
+to diverge from.
+
 `flock` on a plain file, not a PID file with a manual staleness check:
 a stale `flock` is detectable race-free by the next acquirer (the
 kernel releases it the instant the holding process exits or dies, for
@@ -647,7 +663,32 @@ subprocesses, and killing only the immediate child leaves those running
 with the diff file potentially still being written. After the kill,
 write the result as usual with `outcome: timeout` (§3.5), reading
 whatever is in `$CASTLE_DIFF_FILE` as-is and noting in the body that it
-may be partial. This lives in the tool, not as `RuntimeMaxSec=` on the
+may be partial.
+
+Two details found while implementing this, both about the same fact —
+`start_new_session` puts the tenant outside this process's group, and
+that cuts both ways:
+
+- **The post-kill drain is bounded** (five seconds). The kill goes to
+  the tenant's process group; a descendant that called `setsid()` is no
+  longer in it and may still hold the pipes, so an unbounded
+  `communicate()` after the kill waits on a process nothing will ever
+  kill — wedging the sweep while it holds the global dispatch lock. On
+  expiry the result is written with empty output and a body line
+  saying exactly that, because a sweep is worth more than a killed
+  tenant's last words.
+- **The invoker's own death kills the tenant too.** The same detach
+  that makes group-killing possible also means the terminal's SIGINT
+  never reaches the tenant: a hand-run `castle work` abandoned with
+  Ctrl-C would leave a model tenant running, billing, with nothing left
+  alive to write its result. Every exit from the region where a tenant
+  is alive — including `BaseException` — now kills the group on the way
+  out. SIGTERM needs one extra step, since Python's default action for
+  it is to die on the spot with no unwinding at all: a handler that
+  raises `SystemExit` is installed for exactly the span of the tenant's
+  life and restored after. The systemd case never needed this (the unit
+  is a cgroup and systemd kills all of it); the terminal case is the
+  one this covers, and it is the case a human is actually in. This lives in the tool, not as `RuntimeMaxSec=` on the
 systemd unit, for two reasons stated together because they're really
 one reason: a unit-level timeout would kill an entire *sweep* (possibly
 mid-way through a second or third legitimate errand) rather than just

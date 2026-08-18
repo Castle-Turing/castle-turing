@@ -535,8 +535,7 @@ has to hold forever, not just today.
   format; `castle record --spool` writes there instead of the journal.
   Delete it any time; nothing durable is ever spool-only.
 - **Leases** — `$XDG_RUNTIME_DIR/castle/leases/<request-id>.lock`,
-  with the same `/tmp/castle-$UID/` fallback, plus one sibling
-  `dispatch.lock` for the global sweep
+  plus one sibling `dispatch.lock` for the global sweep
   (`docs/tasks/0021-auto-dispatch.md`). Not records and not spool
   entries: `RECORD_TYPES` is schema forever, and "a worker currently
   holds this errand" is an ephemeral liveness fact with the lifetime
@@ -544,7 +543,16 @@ has to hold forever, not just today.
   lock, not a record. `flock` on a plain file rather than a PID file
   with a staleness check, because the kernel releases a flock the
   instant its holder exits — for any reason, including a crash — so a
-  stale lock is detectable race-free by the next acquirer. The file's
+  stale lock is detectable race-free by the next acquirer. Unlike the
+  spool, these fall back to `/run/user/$UID/castle/` before
+  `/tmp/castle-$UID/` when `$XDG_RUNTIME_DIR` is unset — the variable
+  is missing in exactly the contexts most likely to run `castle work`
+  beside a dispatch unit (ssh, cron, `su`), and a lock in a different
+  directory is not a lock at all: the two callers would not exclude
+  each other, and a sweep would reap a live turn as interrupted.
+  `/run/user/$UID` is where systemd's user manager points
+  `XDG_RUNTIME_DIR`, so preferring it whenever it exists puts every
+  caller on one host in one namespace. The file's
   contents (start time, request id, tenant command) are informational
   only; nothing reads them back. A leftover, unheld lease file means
   nothing on its own — the journal says what happened, and a `claim`
