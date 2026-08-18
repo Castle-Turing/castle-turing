@@ -1525,16 +1525,34 @@ describing something that was not built. Nothing in the design above
 changed; these are the places the code is narrower, wider, or differently
 shaped than the text specifies, each with the reason.
 
-- **The validator accepts only the literal `true`, not "any truthy
-  spelling."** §9 says to check `blocking` against "the truthy/falsy
-  spellings `--blocking`'s own writer produces," and its own writer
-  produces exactly one: `true`. The fold in §4 reads the field as
-  *non-blank means blocking* — so a hand-written `blocking: false` would
-  resume an errand while reading as though it would not. Refusing every
-  spelling but `true` is what keeps the fold's cheap test honest, and it
-  costs nothing retroactively, since the field is new and nothing already
-  written can carry it. `dispatch-test.sh` plants a `blocking: false`
-  question and asserts `castle validate` rejects it.
+- **`blocking` is tested for the literal `true` everywhere, in the fold
+  as well as the validator.** §4 defines the fold's test as "`blocking`
+  non-blank (any truthy spelling `castle record --blocking` can
+  produce)" and §9 leaves the validator equally loose. Both are built
+  strict instead, through one shared predicate (`_is_blocking`), and the
+  reason is which way an unrecognised value fails. Under
+  non-blank-means-blocking, a hand-planted `blocking: false` — or
+  `blocking: maybe`, or a typo — **resumes an errand** while its own
+  text says otherwise: a surface acting on a value it did not
+  understand, which is the failure `outcome`'s "render an unknown value
+  verbatim, never as done" rule already exists to prevent
+  (`docs/tasks/0021` §3.5). Under an exact test the same record is
+  simply inert.
+
+  Putting the strictness only in `cmd_validate` would not have been
+  enough, and the first version of this work made that mistake:
+  `castle validate` is advisory and nothing invokes it automatically —
+  `cmd_dispatch` reaps, folds, works and routes, and never validates —
+  so on a real host the record would still have resumed the errand,
+  with the guard firing only if a human happened to run the validator.
+  The two checks are kept, doing different jobs: the fold decides
+  behaviour and declines, the validator reports the record so an inert
+  value is visible rather than merely harmless. `render_continuation_
+  packet` uses the identical predicate, so the packet can never describe
+  a question as blocking that the fold treated as not, or the reverse.
+  `resume.sh` plants a `blocking: false` question, answers it, and
+  asserts no turn runs; `dispatch-test.sh` asserts `castle validate`
+  rejects the same record.
 - **A resumed turn's `claim` body carries one extra paragraph.** §3 says
   "nothing else about the claim record changes." A first turn's claim is
   byte-identical to before, as specified; a resuming one gains a sentence
@@ -1592,3 +1610,15 @@ shaped than the text specifies, each with the reason.
   deleted confirmation string, not one.** §10 names line 858; the piped-
   stdout assertion later in the same file carried it too. Both were
   updated.
+- **One cost this task adds is deferred rather than paid, and is filed
+  rather than left in a review thread:
+  `docs/backlog/eligibility-fold-rescans-per-request.md`.** §4's
+  widened predicate calls `_resumable_answers` once per already-resulted
+  request, and each call rescans every record, so the fold is now
+  requests × records per sweep where it was linear. Measured at 117 ms
+  for a synthetic 2000-record, 500-errand journal. Not optimized here,
+  on this repo's own precedent (`docs/tasks/0021`'s refusal to add a
+  concurrency knob before evidence of a bottleneck) and because
+  `load_all` already re-parses every file each sweep, so this is not a
+  uniquely new cliff. The entry carries the measurement, the method, and
+  the shape of the fix.

@@ -1744,6 +1744,41 @@ def worker_timeout_seconds() -> int:
     return value
 
 
+def _is_blocking(rec: Record) -> bool:
+    """Does this record say its writer could not proceed without an
+    answer (docs/tasks/0023 §2)?
+
+    An exact match on the one spelling `castle record --blocking`
+    writes, deliberately, rather than "the field is non-blank." The
+    direction an unrecognised value fails in is the whole point.
+    Non-blank-means-blocking would make `blocking: false` — or
+    `blocking: maybe`, or a typo — *resume an errand* while the record's
+    own text says otherwise, which is the shape of failure this project
+    keeps paying to remove: a surface acting on a value it did not
+    understand. Under an exact test an unrecognised spelling simply
+    does not resume, `castle validate` names it the next time it runs,
+    and the safe direction is the default. Same reasoning
+    docs/tasks/0021 gave `outcome`, where an unrecognised value renders
+    verbatim rather than being folded into "done".
+
+    One function rather than the same expression written twice, because
+    the two callers are the eligibility fold and the packet that
+    explains it: if they ever disagreed, a resumed tenant would be
+    handed a question its own stdin describes as not blocking, which is
+    the two-surfaces-disagree failure docs/tasks/0015 scope 3 names as
+    worse than either surface being wrong alone.
+
+    `castle validate` keeps its own, separate check on the same field:
+    this decides behaviour, that reports a record whose value no writer
+    here produces. Neither replaces the other — the validator is
+    advisory and nothing runs it automatically (`cmd_dispatch` reaps,
+    folds, works and routes, and never validates), so a guard that
+    lived only there would leave the real host acting on the value it
+    was meant to catch.
+    """
+    return rec.fields.get(BLOCKING_FIELD) == "true"
+
+
 def render_continuation_packet(records: dict[str, Record], request: Record) -> str:
     """What goes on the tenant's stdin: this errand's own records,
     verbatim (docs/tasks/0023 §7).
@@ -1821,7 +1856,10 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
             ),
             key=lambda rec: rec.id,
         )
-        blocking = "blocking" if question.fields.get(BLOCKING_FIELD, "").strip() else "not blocking"
+        # The identical test the eligibility fold uses, via the same
+        # function, so the packet can never describe a question
+        # differently from the way resumption treated it.
+        blocking = "blocking" if _is_blocking(question) else "not blocking"
         answered = "answered below" if answers else "not answered yet"
         lines += [f"## A question this errand raised ({blocking}, {answered})", ""]
         lines += [question.body.strip(), ""]
@@ -2781,7 +2819,7 @@ def _resumable_answers(records: dict[str, Record], request_id: str) -> list[Reco
     blocking_questions = [
         rec
         for rec in records.values()
-        if rec.type == "question" and rec.fields.get(BLOCKING_FIELD, "").strip()
+        if rec.type == "question" and _is_blocking(rec)
     ]
     question_ids = set()
     for question in blocking_questions:
@@ -3344,14 +3382,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # there is no vocabulary to test membership against, only the
         # one spelling this repo's only writer produces.
         #
-        # Strict about that one spelling on purpose. The eligibility
-        # fold reads `blocking` as non-blank-means-blocking, so a
-        # hand-written `blocking: false` would resume the errand while
-        # reading as though it would not — a record whose own text
-        # contradicts what it does. Refusing every spelling but `true`
-        # is what keeps the fold's cheap test honest, and it costs
-        # nothing retroactively: the field is new, so nothing already
-        # written can carry it.
+        # Strict about that one spelling on purpose, and paired with
+        # `_is_blocking`, which is strict in the other direction: the
+        # fold declines to resume on any spelling but `true`, so a
+        # hand-written `blocking: false` or `blocking: maybe` is inert
+        # rather than dangerous. What it is not is *visible* — the
+        # record sits there looking like it means something, doing
+        # nothing. This check is what names it, the one time somebody
+        # runs the validator. Neither guard replaces the other:
+        # `castle validate` is advisory and nothing invokes it
+        # automatically (`cmd_dispatch` reaps, folds, works and routes,
+        # and never validates), so a guard that lived only here would
+        # leave a real host acting on the value it was meant to catch.
+        # It costs nothing retroactively either: the field is new, so
+        # nothing already written can carry it.
         blocking_raw = rec.fields.get(BLOCKING_FIELD)
         if blocking_raw is not None and blocking_raw != "true":
             errors.append(

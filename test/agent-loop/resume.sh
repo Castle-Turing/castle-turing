@@ -280,6 +280,54 @@ A7B="$("$CASTLE" answer "$Q7B" "Resume test: $ANSWER_MARKER — the resident's w
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
+log "a question whose blocking value is not the one spelling any writer produces resumes NOTHING"
+# ---------------------------------------------------------------------
+# The direction an unrecognised value has to fail in. `blocking: false`
+# is not something `castle record --blocking` can write — it can only be
+# hand-planted or written by some future tool — and the danger is not
+# that it exists but that a fold reading "is this field non-blank" would
+# resume an errand off a record whose own text says not to. The fold
+# tests for the literal `true`, so this is inert; `castle validate`
+# reports it separately, which is asserted in dispatch-test.sh rather
+# than here (this journal has to stay valid for the assertions below).
+REQ8="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — an eighth invented errand, questioned in a spelling nothing writes.")"
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" dispatch >/dev/null
+CLAIMS8_BEFORE="$(count_referencing claim "$REQ8")"
+Q8="20260101T000000Z-question-fa1se0"
+cat > "$JOURNAL/$Q8.md" <<EOF
+---
+id: $Q8
+type: question
+provenance: requested
+refs: $REQ8
+seat: worker
+created: 2026-01-01T00:00:00Z
+blocking: false
+---
+
+Resume test: a hand-planted question whose blocking value is not the one spelling any writer here produces.
+EOF
+A8="$("$CASTLE" answer "$Q8" "Resume test: the resident answers it anyway.")"
+log "  -> answered $Q8 (blocking: false) with $A8"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ8")" -eq "$CLAIMS8_BEFORE" ] || fail "a question with 'blocking: false' resumed $REQ8 — an unrecognised spelling must fail toward doing nothing"
+[ "$(count_referencing result "$REQ8")" -eq 1 ] || fail "a question with 'blocking: false' produced a second result on $REQ8"
+# The whole fixture comes back out, the same way dispatch-test.sh
+# withdraws its malformed-`outcome` record: this file holds itself to
+# "castle validate passes throughout," and a record the validator is
+# meant to reject cannot stay in the journal the later assertions fold
+# over. The rejection itself is asserted in dispatch-test.sh, where it
+# is the only thing that section is doing.
+#
+# Three files, not one: the answer would dangle without its question,
+# and the sweeps above routed the question like any other, so the
+# decision citing it would dangle too.
+rm -f "$JOURNAL/$Q8.md" "$JOURNAL/$A8.md"
+grep -l "^refs: $Q8\$" "$JOURNAL"/*-decision-*.md 2>/dev/null | xargs -r rm -f
+"$CASTLE" validate >/dev/null || fail "the journal did not validate clean once the blocking: false fixture was withdrawn"
+
+# ---------------------------------------------------------------------
 log "nothing in any packet leaked a correction, a decision, or another errand's records"
 # ---------------------------------------------------------------------
 # Belt and braces over the whole journal rather than one errand: every
