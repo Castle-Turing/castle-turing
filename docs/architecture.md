@@ -186,8 +186,11 @@ by re-running that fold over the same snapshot, which is why dispatch
 writes no decision record per errand: a record carrying identical
 evidence text on every invocation forever is ritual, not
 accountability. The one record it writes about itself is a watermark,
-marking the instant automatic dispatch began existing on this journal,
-because nothing else can ever recover that fact. `seat: dispatch` is a
+marking the instant automatic dispatch began existing on this journal
+and naming, in its own `refs`, the requests outstanding at that moment
+— which are the ones it will not start on its own. Both halves are
+there because nothing else can recover either fact: not when dispatch
+began, and not which errands predate it. `seat: dispatch` is a
 new value in an existing category, not a new category — `digest` is
 already a non-reasoning surface seat. Giving dispatch a policy for
 *which* eligible request to run, or a say in whether to run one at
