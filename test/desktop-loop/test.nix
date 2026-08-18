@@ -13,6 +13,12 @@
 # dispatchWorker binding below for the safety floor that keeps CI from
 # attempting a real model call while doing it.
 #
+# Since docs/tasks/0023-resume-cold.md it is that task's acceptance
+# condition too, and by the same standard: the resident answers a
+# blocking question through the real modal, and the errand continues —
+# a second turn, with a fresh tenant handed the errand's own records and
+# the resident's own words, still with no command typed anywhere.
+#
 # Uses the `nixosTest`/`pkgs.testers.runNixOSTest` framework (a Python
 # driver: `wait_for_unit`, `send_key`, `swaymsg`-over-IPC, `screenshot`,
 # OCR) rather than extending test/vm-install/'s shell-driven QEMU
@@ -103,13 +109,52 @@ let
   # agent/castle-worker-claude's prompt instructs a real tenant to do.
   # stdout is the reasoning channel that lands in the result body, so
   # the record id goes to /dev/null rather than into the account.
+  # Since docs/tasks/0023-resume-cold.md the question is raised
+  # `--blocking`, and only on a turn that is not itself a resumption.
+  # Neither half is decoration.
+  #
+  # `--blocking` is what makes answering it through the real modal, in
+  # the real Sway session, actually continue the errand — this task's
+  # acceptance condition, asserted at the end of the script with no
+  # `castle work` and no `castle route` typed anywhere, exactly the way
+  # 0021's own was.
+  #
+  # The CASTLE_RESUME_ANSWER_IDS guard is what stops that continuation
+  # raising a *third* question this run would then have to route and
+  # account for. A tenant that questions unconditionally, resumed turns
+  # included, would leave the journal holding a question nobody
+  # answered at the moment the test declares success.
   dispatchWorker = pkgs.writeShellScript "castle-dispatch-test-worker" ''
-    export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
-    castle record --type question --provenance requested --seat worker \
-      --refs "$CASTLE_REQUEST_ID" \
-      --body "Scripted posture question for $CASTLE_REQUEST_ID: fix it and tell you, or explain first?" \
-      >/dev/null
-    exec ${pkgs.bash}/bin/bash ${../agent-loop/contract-worker.sh}
+    export PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.gnugrep ]}:$PATH
+    # Read the errand's records here rather than letting the contract
+    # fixture consume them, then hand the same bytes on: this wrapper
+    # has to see the continuation packet to say anything true about it,
+    # and contract-worker.sh still gets exactly what `castle work`
+    # wrote.
+    packet="$(cat)"
+    if [ -z "''${CASTLE_RESUME_ANSWER_IDS:-}" ]; then
+      castle record --type question --provenance requested --seat worker \
+        --refs "$CASTLE_REQUEST_ID" \
+        --blocking \
+        --body "Scripted posture question for $CASTLE_REQUEST_ID: fix it and tell you, or explain first?" \
+        >/dev/null
+    else
+      echo "castle-dispatch-test-worker: resumed with $CASTLE_RESUME_ANSWER_IDS"
+      # The whole claim this VM exists to make about resumption, checked
+      # by the tenant that would be lied to: a fresh process, with no
+      # memory of the turn that asked the question, received the
+      # resident's own answer on its stdin. Asserted here rather than
+      # only in the test script because a packet that arrived empty
+      # would otherwise still produce a perfectly healthy-looking
+      # second result.
+      if printf '%s\n' "$packet" | grep -qF -- "${answerBody}"; then
+        echo "castle-dispatch-test-worker: the packet carried the resident's answer"
+      else
+        echo "castle-dispatch-test-worker: the packet did NOT carry the resident's answer" >&2
+        exit 7
+      fi
+    fi
+    printf '%s\n' "$packet" | ${pkgs.bash}/bin/bash ${../agent-loop/contract-worker.sh}
   '';
 
   # Deliberately non-default (docs/tasks/0013's bug 2b): the fallback
@@ -653,6 +698,99 @@ in
         "question still pending"
     )
 
+    # --- And that answer resumes the errand, cold
+    # (docs/tasks/0023-resume-cold.md) -------------------------------
+    #
+    # The acceptance condition for that task, end to end: the resident
+    # answered a blocking question through the real modal, in the real
+    # Sway session, and nothing else happened. No `castle work`, no
+    # `castle route`, no `castle dispatch` is typed below — the answer
+    # record landing in the journal is what wakes the path unit, and the
+    # sweep's own eligibility fold is what decides there is a turn to
+    # run.
+    #
+    # Deliberately the LAST journal segment in this script. Three
+    # assertions above (`ls`-ing a `*-claim-*.md` / `*-result-*.md` glob
+    # and `.strip()`-ing the single line into a path) hold only while
+    # this journal has exactly one claim and one result, and a resumed
+    # turn adds a second of each. Anything this segment introduces
+    # earlier would break them on a multi-line string sliced as a path
+    # — a Python exception, not a legible assertion failure.
+    answer_id = answer_path.rsplit("/", 1)[-1][: -len(".md")]
+
+    def count_matching(pattern, glob):
+        # `|| true` for the empty case, and `grep -c .` rather than
+        # `wc -l` so no match counts as 0 rather than 1 blank line.
+        return int(
+            machine.succeed(
+                "su - resident -c \"grep -l '" + pattern + "' "
+                + "${testStateDir}/journal/" + glob + " 2>/dev/null | grep -c . || true\""
+            ).strip()
+        )
+
+    # `retry`'s timeout is a timedelta, not a number of seconds — it
+    # compares against an elapsed timedelta internally, and an int here
+    # raises a TypeError deep in the driver rather than failing the
+    # assertion it was guarding.
+    retry(
+        lambda last: count_matching("^refs: " + second_request_id, "*-claim-*.md") == 2,
+        timeout=dt.timedelta(minutes=5),
+    )
+    retry(
+        lambda last: count_matching("^refs: " + second_request_id + ",", "*-result-*.md") == 2,
+        timeout=dt.timedelta(minutes=5),
+    )
+    print(f"OK: answering {second_question_id} started a second worker turn on {second_request_id}")
+
+    # The claim is the receipt: the answer named in its own refs, after
+    # the request id, is what spends it — and is why no later sweep
+    # resumes this errand a third time.
+    resumed_claim_path = machine.succeed(
+        "su - resident -c \"grep -l '^refs: " + second_request_id + "," + answer_id
+        + "$' ${testStateDir}/journal/*-claim-*.md\""
+    ).strip()
+    assert "\n" not in resumed_claim_path, resumed_claim_path
+    resumed_claim_id = resumed_claim_path.rsplit("/", 1)[-1][: -len(".md")]
+
+    resumed_result_path = machine.succeed(
+        "su - resident -c \"grep -l '^refs: " + second_request_id + "," + resumed_claim_id
+        + "$' ${testStateDir}/journal/*-result-*.md\""
+    ).strip()
+    resumed_result = machine.succeed(f"su - resident -c 'cat {resumed_result_path}'")
+    assert "outcome: completed" in resumed_result, resumed_result
+    # Both halves of what a resumed tenant is handed, reported by the
+    # tenant itself: the environment variable that says this is a
+    # resumption, and the resident's own words arriving on stdin in a
+    # process that has never seen the turn that asked the question.
+    assert f"resumed with {answer_id}" in resumed_result, resumed_result
+    assert "the packet carried the resident's answer" in resumed_result, resumed_result
+    print(
+        f"OK: the resumed turn ran cold — {resumed_claim_id} spent {answer_id}, and the "
+        "fresh tenant received the resident's answer on its stdin with no warm session "
+        "anywhere"
+    )
+
+    # Exactly two questions in this whole run: one per first turn, and
+    # none from the resumed one. A third would mean this segment left
+    # the journal holding a question nobody answered at the moment the
+    # test declares success.
+    question_count = int(
+        machine.succeed(
+            "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md | wc -l'"
+        ).strip()
+    )
+    assert question_count == 2, f"expected exactly 2 questions, found {question_count}"
+
+    # And the resumed result is routed like any other — waited for, not
+    # assumed, since check_assertions.py below requires it.
+    resumed_result_id = resumed_result_path.rsplit("/", 1)[-1][: -len(".md")]
+    machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '^refs: " + resumed_result_id
+        + "$' ${testStateDir}/journal/*-decision-*.md\"",
+        timeout=dt.timedelta(minutes=5),
+    )
+    print("OK: the resumed turn's result was routed like a first turn's, by the same sweep")
+
     # --- The notify channel, checked for silence rather than for a
     # popup. `castle route` deliberately never lets a failed
     # notification break routing — it warns on stderr and carries on —
@@ -703,6 +841,6 @@ in
     validate_out = machine.succeed("su - resident -c 'castle validate'")
     print(validate_out)
 
-    print("PASS: the ambient-intake loop ran end to end in a real Sway session driven by keystrokes alone — and the errand started itself.")
+    print("PASS: the ambient-intake loop ran end to end in a real Sway session driven by keystrokes alone — the errand started itself, and an answered blocking question continued it.")
   '';
 }
