@@ -288,13 +288,20 @@ castle-modal --mode answer  [--question ID]
   a fold recomputed on every invocation, not a stored flag, which is
   why nothing about a question is ever edited when it gets answered.
   Nothing pending prints one plain line and exits. Otherwise the
-  pending questions are listed oldest first, `[1]` through at most
-  `[9]` (past nine, a trailing "…and N more waiting." names the rest
-  honestly), each showing the question's first line and, when its refs
-  chain reaches an originating request, an indented `about:` line
-  naming that errand. One keypress picks one; **any key that selects
-  nothing closes the window immediately, writing nothing anywhere** —
-  the keypress is the dismissal, and there is no code path from it to a
+  pending questions are listed `[1]` through `[9]` a page at a time,
+  each showing the question's first line and, when its refs chain
+  reaches an originating request, an indented `about:` line naming that
+  errand. Past nine, a trailing "…and N more waiting — press m to see
+  them." names the rest and `m` turns the page, wrapping to the first
+  after the last: a cap with no way past it would make question ten
+  unreachable, on a surface whose fold exists so that nothing can be
+  hidden. Ordering is by full record id, which is **deterministic and
+  identical on every invocation** — that is what makes a screen-relative
+  number safe to press — and chronological only to one-second
+  granularity, since ids carry a random suffix and same-second questions
+  sort by it. One keypress picks one; **any key that selects nothing
+  closes the window immediately, writing nothing anywhere** — the
+  keypress is the dismissal, and there is no code path from it to a
   write. A picked question is then shown in full, verbatim and never
   truncated, and answered in compose mode's own `.`-terminated grammar.
   The answer goes through `file_answer()`, so the record and any
@@ -321,7 +328,10 @@ castle-modal --mode answer  [--question ID]
   compose's `--kind`: scripts and CI only, never shown to the resident.
   A piped session with questions pending and no `--question` **refuses**
   (exit 1) rather than guessing which one was meant, and prints the
-  answer's id on stdout when given one. **An interactive session always
+  answer's id on stdout when given one. A piped `--question` is answered
+  against the journal whatever the pending fold says, so its refusals
+  are the same ones `castle answer` gives — an empty fold is not a
+  reason to stop checking the id a script actually named. **An interactive session always
   ignores `--question` and shows the picker** — preselecting a question
   for a human who is looking at the screen is the answering-the-wrong-
   one hazard the picker exists to remove. Exit 0 on filed, nothing

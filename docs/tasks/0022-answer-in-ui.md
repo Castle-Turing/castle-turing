@@ -267,14 +267,29 @@ behaviour, in both cases. When it is empty: print
 
 **Interactive flow** (`sys.stdin.isatty()`):
 
-- Oldest-first — record ids are timestamp-prefixed and therefore
-  chronologically sortable by construction, the same property
-  `castle dispatch`'s oldest-first loop already relies on. Numbered
-  `[1]` through at most `[9]`; when more than nine are pending, show the
-  first nine and a plain trailing line, `"…and N more waiting."` The cap
-  is nine because it is a picker meant to fit one screen, not a paginated
-  list — the overflow line names the count honestly rather than silently
-  truncating.
+- Oldest-first, numbered `[1]` through at most `[9]` per page.
+
+  *(Two corrections from review round 1. **Finding 7, the ordering
+  claim:** this said ids are "chronologically sortable by construction",
+  which is false within a single second — `make_id` appends a *random*
+  suffix, so two questions filed in the same second sort by that suffix,
+  not by which came first. What the full-id sort actually guarantees,
+  and all the picker needs, is that the order is deterministic and
+  identical on every invocation, so a number means the same thing for as
+  long as the list is on screen; across seconds it is genuinely
+  oldest-first. No schema change — the claim was wrong, not the
+  mechanism. **Finding 1, the cap:** a hard nine-entry cap with no way
+  past it made question ten unreachable — possibly the exact question a
+  notification had just pointed the resident at — on a surface whose
+  fold exists precisely so that nothing can be hidden by construction.
+  It pages instead, inside the same one-keypress grammar: digits select
+  on the current page, `m` shows the next nine and wraps to the first
+  page after the last, any other key still closes. The prompt reads
+  `"Press a number to answer, m for more, or any other key to close."`
+  and the overflow line `"…and N more waiting — press m to see them."`,
+  both only when more than nine are pending; with nine or fewer, the
+  surface is exactly as it was. cbreak stays engaged across page
+  redraws, so a page turn never reopens the swallowed-keypress gap.)*
 - Each entry shows the first line of the question's body, and — when
   `_find_root_request` (already in `agent/castle`, walking `refs` back
   to an originating `request`) reaches one — an indented
@@ -385,7 +400,22 @@ itself.
   `--question` given: refused, exit 1, nothing written. Guessing the
   oldest pending question in a script context would be a silent
   wrong-record path with no resident present to notice — worse than
-  refusing outright.
+  refusing outright. With nothing pending and no `--question`, it prints
+  the friendly line and exits 0, same as an interactive session.
+
+  *(Corrected during implementation — review round 1, finding 2. The
+  "compute the fold first, in both cases" rule above was implemented
+  literally, as a short-circuit ahead of everything else, which quietly
+  turned every documented `--question` refusal into exit 0 with prose on
+  stdout: a bogus id, a request id, and an already-answered question all
+  hit the empty-fold path, because answering a question is exactly what
+  empties the fold. **A piped session with `--question` now goes
+  straight to the write path regardless of the fold** — `file_answer`
+  owns every check, so the refusals it raises are the contract — and the
+  empty-fold exit-0 remains for interactive sessions and for piped
+  sessions with no flag. The fold-first rule still holds for everything
+  it was written to govern: no surface guesses which question was
+  meant.)*
 - A piped session **with** `--question ID`: reads the answer body from
   stdin using the same `.`/EOF grammar, calls `file_answer`, and on
   success prints the answer id on stdout — this is script output, meant

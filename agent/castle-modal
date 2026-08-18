@@ -93,8 +93,17 @@ def _pause_for_dismissal(out=sys.stdout) -> None:
     Gated on isatty() for the same reason compose mode's cosmetic
     prompts are: a piped-stdin run (CI, or `castle-modal` in a script)
     has no human to wait for and no tty to read a keypress from.
+
+    **Both** ends, not just stdin (review round 1, finding 4). In foot —
+    the only place this pause is for — stdin and stdout are the same
+    tty. In a command substitution run from a terminal, `$(castle-modal
+    ...)` pipes stdout while stdin stays the caller's tty, so a
+    stdin-only test read as "a human is here" and blocked forever on a
+    keypress nobody knew to press; a reviewer hung a harness on exactly
+    that. Captured output means nobody is watching a window that could
+    close, which is the whole thing this pause exists to prevent.
     """
-    if not sys.stdin.isatty():
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return
     print(file=out)
     print("Press Enter to close.", file=out)
@@ -250,9 +259,16 @@ def _pending_questions(records: dict) -> list:
     It is the same test castle's own pendingness check and the status
     surface's "waiting on you" overlay apply.
 
-    Oldest first by id: ids are timestamp-prefixed and therefore
-    chronologically sortable by construction, the same property
-    `castle dispatch`'s oldest-first loop already relies on.
+    Sorted by full id, which is chronological only to one-second
+    granularity (review round 1, finding 7): `make_id` prefixes a
+    UTC timestamp and appends a *random* suffix, so two questions filed
+    in the same second sort by that suffix rather than by which came
+    first. What the sort actually guarantees — and all the picker needs
+    — is that the order is deterministic and identical on every
+    invocation, so the number a resident presses means the same thing
+    for as long as the list is on screen. Across seconds it is genuinely
+    oldest-first, the same property `castle dispatch`'s own loop relies
+    on.
     """
     answered = {ref for rec in records.values() if rec.type == "answer" for ref in rec.refs}
     return sorted(
@@ -290,39 +306,80 @@ def _show_picker(castle, records: dict, pending: list, out=sys.stdout):
     is safe to treat as stable *because* the ordering is deterministic
     and recomputed once per invocation, not because the numbers mean
     anything durable.
+
+    Past nine, `m` shows the next nine and wraps around after the last
+    page (review round 1, finding 1). The cap alone made question ten
+    unreachable — possibly the exact question a notification had just
+    pointed the resident at — on a surface whose whole claim is that it
+    cannot hide a question by construction. Paging keeps the
+    one-keypress grammar: digits pick, `m` turns the page, anything
+    else closes.
     """
     import termios
     import tty
 
-    shown = pending[:ANSWER_PICKER_LIMIT]
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
+    pages = max(1, (len(pending) + ANSWER_PICKER_LIMIT - 1) // ANSWER_PICKER_LIMIT)
+    page = 0
     try:
+        # cbreak stays engaged across every redraw, not just the first:
+        # it is entered before anything is printed and left on until a
+        # key ends the loop, so no page turn ever reopens the gap where
+        # a keypress would be swallowed by the canonical line
+        # discipline waiting for a newline that never comes.
         tty.setcbreak(fd)
-        print("Waiting on you:", file=out)
-        print(file=out)
-        for index, question in enumerate(shown, start=1):
-            print(f"  [{index}] {_first_line(question.body) or '(no text)'}", file=out)
-            about = _about_line(castle, records, question)
-            if about:
-                print(f"      about: {about}", file=out)
-        if len(pending) > len(shown):
+        while True:
+            start = page * ANSWER_PICKER_LIMIT
+            shown = pending[start : start + ANSWER_PICKER_LIMIT]
+            rest = len(pending) - len(shown)
+            print("Waiting on you:", file=out)
             print(file=out)
-            print(f"…and {len(pending) - len(shown)} more waiting.", file=out)
-        print(file=out)
-        print("Press a number to answer that one, or any other key to close.", file=out)
-        key = sys.stdin.read(1)
+            for index, question in enumerate(shown, start=1):
+                print(f"  [{index}] {_first_line(question.body) or '(no text)'}", file=out)
+                about = _about_line(castle, records, question)
+                if about:
+                    print(f"      about: {about}", file=out)
+            if rest:
+                print(file=out)
+                print(f"…and {rest} more waiting — press m to see them.", file=out)
+            print(file=out)
+            if pages > 1:
+                print(
+                    "Press a number to answer, m for more, or any other key to close.",
+                    file=out,
+                )
+            else:
+                print("Press a number to answer, or any other key to close.", file=out)
+            key = sys.stdin.read(1)
+
+            # Explicit membership, not `str.isdigit()` (review round 1,
+            # finding 5): isdigit() is true of '²' and of Eastern-Arabic
+            # digits, and `int()` accepts the latter — so a stray
+            # superscript crashed the picker and '٣' silently selected
+            # the third entry. The live range is this page's own, so a
+            # digit past the end of a short last page closes rather than
+            # indexing off it.
+            if len(key) == 1 and key in "123456789"[: len(shown)]:
+                # Always an explicit selection, even when one question is
+                # pending: a uniform grammar keeps "answering something
+                # you did not choose" impossible by construction rather
+                # than by luck.
+                selected = shown[int(key) - 1]
+                break
+            if pages > 1 and key == "m":
+                # Wraps, so the last page's `m` returns to the first
+                # rather than dead-ending on a key the prompt still
+                # offers.
+                page = (page + 1) % pages
+                print(file=out)
+                continue
+            selected = None
+            break
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     print(file=out)
-
-    # Always the picker, even when exactly one question is pending: a
-    # uniform grammar, with an explicit selection every single time,
-    # keeps "answering something you did not choose" impossible by
-    # construction rather than by luck.
-    if key.isdigit() and 1 <= int(key) <= len(shown):
-        return shown[int(key) - 1]
-    return None
+    return selected
 
 
 def _answer_refusal(exc) -> str:
@@ -374,16 +431,27 @@ def _run_answer_scripted(castle, question_id: str | None, out=sys.stdout) -> int
 
 def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
     records = castle.load_all(castle.journal_dir())
-    # Computed first, before interactive and piped part ways: "nothing
-    # is waiting" is the same true answer either way.
     pending = _pending_questions(records)
+    interactive = sys.stdin.isatty()
+
+    # A scripted caller naming a question goes straight to the write,
+    # whatever the fold says (review round 1, finding 2). The friendly
+    # "nothing is waiting" exit used to come first for everyone, which
+    # quietly turned every documented --question refusal — a bogus id, a
+    # request id, an already-answered question — into exit 0 with prose
+    # on stdout, because those are exactly the cases where the fold is
+    # likely to be empty. file_answer does all the checking; this path
+    # only has to let it.
+    if question_id and not interactive:
+        return _run_answer_scripted(castle, question_id, out)
+
     if not pending:
         print("Nothing is waiting on you.", file=out)
         _pause_for_dismissal(out)
         return 0
 
-    if not sys.stdin.isatty():
-        return _run_answer_scripted(castle, question_id, out)
+    if not interactive:
+        return _run_answer_scripted(castle, None, out)
 
     # An interactive session always shows the picker and always ignores
     # --question. A flag that preselects a question in a session a human

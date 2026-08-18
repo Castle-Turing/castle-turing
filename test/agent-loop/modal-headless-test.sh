@@ -937,37 +937,51 @@ printf 'Answered, so the tests below start from a fold they control.\n.\n' \
 
 log "answer mode: --question is the script path, and every refusal on it exits 1 without writing (test 7)"
 REQ_ANS_4="$("$CASTLE" ask "Answer-mode errand four: the lock screen takes a moment.")"
-# Two questions: one for the script path to answer, and one left
-# pending throughout, because the fold is checked before anything else
-# — with nothing waiting, every invocation below would correctly say so
-# and exit 0 rather than exercising the refusal it is here to test.
 Q_ANS_4="$(plant_question "$REQ_ANS_4" 20260201T000400Z "Shorten the lock delay, or leave it?")"
-Q_HELD="$(plant_question "$REQ_ANS_4" 20260201T000401Z "Held pending on purpose, so the fold is never empty here?")"
-"$CASTLE" validate || fail "the script-path question fixtures do not validate"
-SCRIPTED_ANSWER_ID="$(printf 'Shorten it.\n.\n' | "$MODAL" --mode answer --question "$Q_ANS_4")"
-[ -n "$SCRIPTED_ANSWER_ID" ] || fail "--question printed no answer id on stdout"
-[ -f "$CASTLE_STATE_DIR/journal/$SCRIPTED_ANSWER_ID.md" ] \
-  || fail "--question printed $SCRIPTED_ANSWER_ID but no such record exists"
+"$CASTLE" validate || fail "the script-path question fixture does not validate"
+# With something pending and no --question, a script gets a refusal
+# rather than a guess: choosing for a caller with no human present is
+# the silent wrong-record path this flag exists to avoid.
 FILES_BEFORE="$(journal_file_count)"
-if printf 'Too late.\n.\n' | "$MODAL" --mode answer --question "$Q_ANS_4" 2>"$WORKDIR/answer-again-err"; then
-  fail "--question on an already-answered question was accepted"
-fi
-grep -q "nothing filed" "$WORKDIR/answer-again-err" \
-  || fail "the already-answered refusal did not read like the others: $(cat "$WORKDIR/answer-again-err")"
-if printf 'Nowhere.\n.\n' | "$MODAL" --mode answer --question "20260201T000000Z-question-nope" 2>/dev/null; then
-  fail "--question naming a record that does not exist was accepted"
-fi
-if printf 'Not a question.\n.\n' | "$MODAL" --mode answer --question "$REQ_ANS_4" 2>/dev/null; then
-  fail "--question naming a request record was accepted"
-fi
 if printf 'Which one?\n.\n' | "$MODAL" --mode answer 2>"$WORKDIR/answer-noflag-err"; then
   fail "a piped session with pending questions and no --question guessed one instead of refusing"
 fi
 grep -q "no terminal" "$WORKDIR/answer-noflag-err" \
   || fail "the piped-without---question refusal did not explain itself: $(cat "$WORKDIR/answer-noflag-err")"
-[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "a refused --question invocation wrote a record anyway"
-printf 'Answered, so the next test starts from an empty fold.\n.\n' \
-  | "$MODAL" --mode answer --question "$Q_HELD" >/dev/null
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "the piped-without---question refusal wrote a record anyway"
+
+SCRIPTED_ANSWER_ID="$(printf 'Shorten it.\n.\n' | "$MODAL" --mode answer --question "$Q_ANS_4")"
+[ -n "$SCRIPTED_ANSWER_ID" ] || fail "--question printed no answer id on stdout"
+[ -f "$CASTLE_STATE_DIR/journal/$SCRIPTED_ANSWER_ID.md" ] \
+  || fail "--question printed $SCRIPTED_ANSWER_ID but no such record exists"
+
+# The fold is empty now, and that must change none of the above
+# (review round 1, finding 2). The empty-fold short-circuit used to run
+# first for every caller, which turned each documented --question
+# refusal into exit 0 with prose on stdout — precisely where a script
+# is most likely to hit one, since answering a question is exactly what
+# empties the fold.
+printf 'Which one?\n.\n' | "$MODAL" --mode answer > "$WORKDIR/answer-emptyfold-out" 2>&1 \
+  || fail "with nothing pending and no --question, answer mode should exit 0"
+grep -q "Nothing is waiting on you." "$WORKDIR/answer-emptyfold-out" \
+  || fail "the empty fold stopped printing its friendly line: $(cat "$WORKDIR/answer-emptyfold-out")"
+FILES_BEFORE="$(journal_file_count)"
+if printf 'Nowhere.\n.\n' | "$MODAL" --mode answer --question "20260201T000000Z-question-nope" 2>"$WORKDIR/emptyfold-bogus-err"; then
+  fail "with an empty fold, --question naming a nonexistent record exited 0 instead of refusing"
+fi
+grep -q "no such question, nothing filed." "$WORKDIR/emptyfold-bogus-err" \
+  || fail "the empty-fold bogus-id refusal said something else: $(cat "$WORKDIR/emptyfold-bogus-err")"
+if printf 'Not a question.\n.\n' | "$MODAL" --mode answer --question "$REQ_ANS_4" 2>"$WORKDIR/emptyfold-type-err"; then
+  fail "with an empty fold, --question naming a request exited 0 instead of refusing"
+fi
+grep -q "that is not a question, nothing filed." "$WORKDIR/emptyfold-type-err" \
+  || fail "the empty-fold wrong-type refusal said something else: $(cat "$WORKDIR/emptyfold-type-err")"
+if printf 'Again.\n.\n' | "$MODAL" --mode answer --question "$Q_ANS_4" 2>"$WORKDIR/emptyfold-again-err"; then
+  fail "with an empty fold, --question on an already-answered question exited 0 instead of refusing"
+fi
+grep -q "already answered elsewhere, nothing filed." "$WORKDIR/emptyfold-again-err" \
+  || fail "the empty-fold already-answered refusal said something else: $(cat "$WORKDIR/emptyfold-again-err")"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "an empty-fold --question refusal wrote a record anyway"
 
 log "answer mode: an interactive session ignores --question and shows the picker anyway (test 8)"
 REQ_ANS_5="$("$CASTLE" ask "Answer-mode errand five: the terminal font looks thin.")"
@@ -1035,8 +1049,54 @@ ANSWER_OVERFLOW_OUT="$(cat "$WORKDIR/answer-overflow.txt")"
 echo "$ANSWER_OVERFLOW_OUT" | grep -q "\[9\] Overflow question number 09?" \
   || fail "the picker did not show a ninth entry: $ANSWER_OVERFLOW_OUT"
 refute "$ANSWER_OVERFLOW_OUT" "\[10\]" "the picker showed a tenth entry — the cap is nine"
-echo "$ANSWER_OVERFLOW_OUT" | grep -q "…and 1 more waiting." \
-  || fail "the picker did not name the overflow count honestly: $ANSWER_OVERFLOW_OUT"
+echo "$ANSWER_OVERFLOW_OUT" | grep -q "…and 1 more waiting — press m to see them." \
+  || fail "the picker did not name the overflow count and the way to reach it: $ANSWER_OVERFLOW_OUT"
+echo "$ANSWER_OVERFLOW_OUT" | grep -q "Press a number to answer, m for more, or any other key to close." \
+  || fail "the picker did not offer paging in its prompt when more than nine are pending"
+
+log "answer mode: a page turn past the last page wraps back to the first"
+drive_modal "$WORKDIR/answer-wrap.txt" --mode answer -- \
+  "wait:any other key to close" "key:m" "wait:Overflow question number 10?" \
+  "key:m" "sleep:1" "key:z"
+[ "$(transcript_rc "$WORKDIR/answer-wrap.txt")" = "0" ] || fail "wrapping around the pages did not exit 0"
+# The first page rendered twice: once on open, once after the second m
+# wrapped past the last page. A cumulative transcript makes every
+# `wait` for already-seen text return instantly, so this counts renders
+# rather than waiting for one.
+WRAP_RENDERS="$(grep -c "\[1\] Overflow question number 01?" "$WORKDIR/answer-wrap.txt" || true)"
+[ "$WRAP_RENDERS" -ge 2 ] \
+  || fail "m on the last page did not wrap back to the first (first page rendered $WRAP_RENDERS time(s))"
+
+log "answer mode: m turns the page, and the tenth question is reachable and answerable (review round 1, finding 1)"
+# The cap alone made question ten unreachable — possibly the very
+# question a notification had just pointed the resident at, on a
+# surface whose fold exists so nothing can be hidden by construction.
+drive_modal "$WORKDIR/answer-page.txt" --mode answer -- \
+  "wait:any other key to close" "key:m" "wait:Overflow question number 10?" \
+  "key:1" "wait:End with a line containing just" \
+  "send:Answered from the second page.\n.\n" "wait:Press Enter to close" "send:\n"
+ANSWER_PAGE_OUT="$(cat "$WORKDIR/answer-page.txt")"
+[ "$(transcript_rc "$WORKDIR/answer-page.txt")" = "0" ] || fail "answering from the second page did not exit 0"
+echo "$ANSWER_PAGE_OUT" | grep -q "\[1\] Overflow question number 10?" \
+  || fail "pressing m did not put the tenth question at [1] on a new page: $ANSWER_PAGE_OUT"
+Q_TENTH="20260201T000910Z-question-q000910Z"
+[ -n "$(answers_naming "$Q_TENTH")" ] \
+  || fail "the answer filed from the second page does not name the tenth question"
+grep -q "Answered from the second page." "$(answers_naming "$Q_TENTH" | head -1)" \
+  || fail "the second-page answer body did not land verbatim"
+
+log "answer mode: a keypress that only *looks* like a digit closes cleanly (review round 1, finding 5)"
+# str.isdigit() is true of '²' and of Eastern-Arabic digits, and int()
+# accepts the latter — so the old predicate crashed on one and silently
+# selected an entry on the other.
+FILES_BEFORE="$(journal_file_count)"
+drive_modal "$WORKDIR/answer-superscript.txt" --mode answer -- \
+  "wait:any other key to close" "key:²"
+[ "$(transcript_rc "$WORKDIR/answer-superscript.txt")" = "0" ] \
+  || fail "a superscript digit at the picker did not close cleanly"
+grep -q "Traceback" "$WORKDIR/answer-superscript.txt" \
+  && fail "a superscript digit at the picker raised — the transcript carries a traceback"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "a superscript digit wrote something"
 
 log "status mode: it now holds its window open until dismissed, on both exit paths (test 12)"
 drive_modal "$WORKDIR/status-pause.txt" --mode status -- \
@@ -1054,6 +1114,63 @@ CASTLE_STATE_DIR="$EMPTY_STATUS_STATE" python3 "$WORKDIR/pty-drive.py" "$MODAL" 
 grep -q "No errands yet" "$WORKDIR/status-empty.txt" \
   || fail "the empty-journal status path did not print its message before pausing"
 [ "$(transcript_rc "$WORKDIR/status-empty.txt")" = "0" ] || fail "empty-journal status mode did not exit 0"
+
+log "the dismissal pause needs a tty on BOTH ends, or a command substitution hangs forever (review round 1, finding 4)"
+# `$(castle-modal --mode status)` from a terminal pipes stdout while
+# stdin stays the caller's tty. A stdin-only gate read that as "a human
+# is here" and blocked on a keypress nobody knew to press — a reviewer
+# hung a harness on exactly this. Captured output means nobody is
+# watching a window that could close, which is the only thing the pause
+# exists to prevent. Driven with a pty for stdin and a pipe for stdout,
+# under `timeout` so a regression fails this test rather than wedging
+# the whole suite.
+cat > "$WORKDIR/pty-stdin-pipe-stdout.py" <<'PYSTDOUT'
+"""Run castle-modal with a real tty on stdin and a pipe on stdout —
+the shape a command substitution produces from a terminal, and the one
+a stdin-only isatty() gate misreads as "a human is watching".
+
+Any arguments after the mode are written to the pty in order, each
+after a pause: with stdout captured there is nothing to wait *for*, so
+this drives blind rather than pretending to synchronise on prompts it
+cannot see. The pauses are generous for the same cbreak-gap reason the
+other driver documents."""
+import os
+import pty
+import subprocess
+import sys
+import time
+
+modal, mode, writes = sys.argv[1], sys.argv[2], sys.argv[3:]
+main_fd, sub_fd = pty.openpty()
+proc = subprocess.Popen(
+    [modal, "--mode", mode],
+    stdin=sub_fd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True,
+)
+os.close(sub_fd)
+for chunk in writes:
+    time.sleep(1.5)
+    os.write(main_fd, chunk.replace("\\n", "\n").encode())
+out, _ = proc.communicate(timeout=20)
+sys.stdout.write(out.decode(errors="replace"))
+sys.stdout.write(f"\nRC={proc.returncode}\n")
+PYSTDOUT
+timeout 30 python3 "$WORKDIR/pty-stdin-pipe-stdout.py" "$MODAL" status > "$WORKDIR/status-piped-stdout.txt" 2>&1 \
+  || fail "status mode with a tty stdin and a piped stdout did not exit promptly — the pause is gating on stdin alone again"
+[ "$(transcript_rc "$WORKDIR/status-piped-stdout.txt")" = "0" ] || fail "the piped-stdout status run did not exit 0"
+grep -q "Press Enter to close" "$WORKDIR/status-piped-stdout.txt" \
+  && fail "status mode asked a captured run to press Enter — nobody is watching a window that could close"
+# Answer mode's picker legitimately blocks on a keypress with a tty
+# stdin (that is a keyboard, and the picker needs one) — so this drives
+# a whole answer through and asserts only that the *pause* stayed away.
+timeout 40 python3 "$WORKDIR/pty-stdin-pipe-stdout.py" "$MODAL" answer "1" "Answered with stdout captured.\\n.\\n" \
+  > "$WORKDIR/answer-piped-stdout.txt" 2>&1 \
+  || fail "answer mode with a tty stdin and a piped stdout did not exit promptly"
+[ "$(transcript_rc "$WORKDIR/answer-piped-stdout.txt")" = "0" ] || fail "the piped-stdout answer run did not exit 0"
+grep -q "Filed. Nothing picks this errand back up automatically yet." "$WORKDIR/answer-piped-stdout.txt" \
+  || fail "the piped-stdout answer run did not file anything: $(cat "$WORKDIR/answer-piped-stdout.txt")"
+grep -q "Press Enter to close" "$WORKDIR/answer-piped-stdout.txt" \
+  && fail "answer mode asked a captured run to press Enter"
+true
 
 log "file_answer: a resident-model entry that cannot be written must not cost the resident their answer (review round 1, finding 3)"
 # The answer record is durable before the entry is attempted, and the
