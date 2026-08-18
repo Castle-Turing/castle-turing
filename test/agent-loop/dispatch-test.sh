@@ -232,6 +232,29 @@ grep -q '^outcome: failed$' "$RESULT_DIE_FILE" || fail "$RESULT_DIE_FILE should 
 grep -q 'killed by signal 9' "$RESULT_DIE_FILE" || fail "$RESULT_DIE_FILE does not say the tenant was killed by a signal"
 
 # ---------------------------------------------------------------------
+log "a tenant that emits a non-UTF-8 byte still completes — the turn is recorded, not crashed out of"
+# ---------------------------------------------------------------------
+# Verified as a real crash before the fix: `text=True` decoding raised
+# UnicodeDecodeError out of communicate(), and the diff read raised it
+# again from read_text(), which the OSError handler there did not
+# catch. Either one escaped run_worker_turn with the claim already
+# written and no result — so `castle work` died with a traceback,
+# `castle dispatch` exited 1 (the code reserved for mechanism faults),
+# and the NEXT sweep reaped a turn that had actually finished into a
+# permanent, false `outcome: interrupted`, discarding the diff the
+# tenant produced.
+REQ_BINARY="$("$CASTLE" ask "Dispatch test: the tenant emits a byte that is not valid UTF-8.")"
+CASTLE_TEST_WORKER_BINARY=1 "$CASTLE" dispatch >"$WORKDIR/binary-sweep.out" 2>&1 \
+  || fail "a sweep whose tenant emitted a non-UTF-8 byte exited nonzero: $(cat "$WORKDIR/binary-sweep.out")"
+RESULT_BINARY_FILE="$(referencing result "$REQ_BINARY")"
+[ -n "$RESULT_BINARY_FILE" ] || fail "the non-UTF-8 tenant produced no result record at all"
+grep -q '^outcome: completed$' "$RESULT_BINARY_FILE" || fail "$RESULT_BINARY_FILE should carry outcome: completed — the tenant exited 0, it just wrote a byte python could not decode"
+grep -q 'placeholder after' "$RESULT_BINARY_FILE" || fail "$RESULT_BINARY_FILE lost the diff the tenant wrote"
+"$CASTLE" validate || fail "the journal does not validate after a tenant emitted an undecodable byte"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_BINARY")" -eq 1 ] || fail "the next sweep wrote a second result for $REQ_BINARY — a completed turn was reaped as interrupted"
+
+# ---------------------------------------------------------------------
 log "a hanging tenant under CASTLE_WORKER_TIMEOUT=2 yields outcome: timeout within seconds, not its full sleep"
 # ---------------------------------------------------------------------
 REQ_HANG="$("$CASTLE" ask "Dispatch test: the tenant hangs.")"

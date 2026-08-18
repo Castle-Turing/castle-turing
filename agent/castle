@@ -1475,6 +1475,22 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    # A tenant's output encoding is not part of the
+                    # contract — it writes prose for a human, and a
+                    # stray byte from a binary file it happened to cat
+                    # is not a reason for anything to fail. Without
+                    # this, `text=True` decoding raises UnicodeDecodeError
+                    # out of communicate(), which escapes this whole
+                    # function: `castle work` dies with a traceback,
+                    # `castle dispatch` exits 1 (the code §2.7 reserves
+                    # for *mechanism* faults), no result is written at
+                    # all — and the next sweep finds the dangling claim
+                    # and reaps a completed turn into a permanent,
+                    # false `outcome: interrupted`, with the diff the
+                    # tenant actually produced thrown away. A
+                    # replacement character in a result body is honest;
+                    # that is a lie.
+                    errors="replace",
                     env=env,
                     start_new_session=True,
                 )
@@ -1554,7 +1570,13 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
 
             diff_text = ""
             try:
-                diff_text = diff_path.read_text().strip()
+                # Bytes, then a lenient decode, for the same reason the
+                # Popen above passes errors="replace": `read_text()`
+                # raises UnicodeDecodeError on a diff carrying one
+                # stray byte, and that exception is not caught by the
+                # OSError below — it escapes with the whole turn's
+                # account, including the parts that decoded fine.
+                diff_text = diff_path.read_bytes().decode("utf-8", errors="replace").strip()
             except OSError:
                 diff_text = ""
         finally:

@@ -673,6 +673,20 @@ write the result as usual with `outcome: timeout` (§3.5), reading
 whatever is in `$CASTLE_DIFF_FILE` as-is and noting in the body that it
 may be partial.
 
+**A tenant's output encoding is not part of the contract.** Both
+decoding paths — `Popen(text=True)` and the read of
+`$CASTLE_DIFF_FILE` — are lenient (`errors="replace"`). Found by
+review, verified by execution: one byte that is not valid UTF-8 (a
+tenant that `cat`s a binary file once) raised `UnicodeDecodeError` out
+of `communicate()`, or out of `read_text()` past an `except OSError`
+that could not catch it, and escaped the turn entirely — `castle work`
+died with a traceback, `castle dispatch` exited 1 (the code §2.7
+reserves for *mechanism* faults), no result was written, and the next
+sweep reaped the dangling claim into a permanent, false
+`outcome: interrupted` while the diff the tenant had actually produced
+was discarded. A replacement character in a result body is honest; that
+was a lie.
+
 Two details found while implementing this, both about the same fact —
 `start_new_session` puts the tenant outside this process's group, and
 that cuts both ways:

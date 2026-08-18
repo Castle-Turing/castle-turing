@@ -36,6 +36,17 @@ request_body="$(cat)"
 # path keeps the fixture family at the four shapes the brief names.
 sleep "${CASTLE_TEST_WORKER_SLEEP:-0}"
 
+# Optional, default off: emit a byte that is not valid UTF-8 on stdout
+# and into the diff. A tenant's output encoding is not part of the
+# contract — a real one only has to cat a binary file once to produce
+# this — and before `castle work` decoded leniently, a single such byte
+# crashed the turn out of its own result-writing path and left the
+# claim to be reaped as a false `interrupted`. A knob rather than a
+# sixth fixture, same reasoning as CASTLE_TEST_WORKER_SLEEP above.
+if [ -n "${CASTLE_TEST_WORKER_BINARY:-}" ]; then
+  printf 'contract-worker: here comes a stray byte: \377\n'
+fi
+
 cat <<EOF > "$CASTLE_DIFF_FILE"
 --- a/docs/backlog/example-item (synthetic, harness fixture only)
 +++ b/docs/backlog/example-item (synthetic, harness fixture only)
@@ -43,6 +54,10 @@ cat <<EOF > "$CASTLE_DIFF_FILE"
 -placeholder before
 +placeholder after
 EOF
+
+if [ -n "${CASTLE_TEST_WORKER_BINARY:-}" ]; then
+  printf 'a stray byte in the diff too: \377\n' >> "$CASTLE_DIFF_FILE"
+fi
 
 printf 'contract-worker: handled %s in %s\n' "$CASTLE_REQUEST_ID" "$CASTLE_REPO_ROOT"
 printf 'contract-worker: the request said: %s\n' "${request_body%%$'\n'*}"
