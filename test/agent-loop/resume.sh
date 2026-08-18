@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+# test/agent-loop/resume.sh — errand resumption after an answer
+# (docs/tasks/0023-resume-cold.md §11).
+#
+# Same shape as dispatch-test.sh, whose helpers and conventions this
+# file reuses rather than reinventing: plain bash and stdlib python3,
+# no Nix, zero models, zero network, a throwaway CASTLE_STATE_DIR and
+# XDG_RUNTIME_DIR, the same notify stub.
+#
+# Everything here goes through `castle dispatch` or `castle work`,
+# never `castle record` assembling a scenario by hand. That is not
+# stylistic: the continuation packet, CASTLE_RESUME_ANSWER_IDS and the
+# claim's widened `refs` all live inside `run_worker_turn`, and those
+# two entry points are the only things that reach it. A test that built
+# the journal by hand could assert the fold and still miss every part
+# of the mechanism the fold exists to drive.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CASTLE="$REPO_ROOT/agent/castle"
+CHECK="$REPO_ROOT/test/agent-loop/check_assertions.py"
+WORKER_BLOCKING="$REPO_ROOT/test/agent-loop/scripted-worker-blocking.sh"
+WORKER_BLOCKING_ALT="$REPO_ROOT/test/agent-loop/scripted-worker-blocking-alt.py"
+WORKER_OK="$REPO_ROOT/test/agent-loop/contract-worker.sh"
+
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-resume-test.XXXXXX")"
+trap 'rm -rf "$WORKDIR"' EXIT
+
+export CASTLE_STATE_DIR="$WORKDIR/state"
+export XDG_RUNTIME_DIR="$WORKDIR/runtime"
+mkdir -p "$CASTLE_STATE_DIR" "$XDG_RUNTIME_DIR"
+JOURNAL="$CASTLE_STATE_DIR/journal"
+
+export CASTLE_NOTIFY_LOG="$WORKDIR/notify.log"
+export CASTLE_NOTIFY_COMMAND="$REPO_ROOT/test/agent-loop/notify-stub.sh"
+: > "$CASTLE_NOTIFY_LOG"
+
+export CASTLE_REPO_ROOT="$WORKDIR/repo"
+mkdir -p "$CASTLE_REPO_ROOT"
+# The tenants file their question with this rather than a `castle` on
+# $PATH, which no-Nix CI does not have.
+export CASTLE_TEST_CASTLE_BIN="$CASTLE"
+export CASTLE_WORKER_COMMAND="$WORKER_BLOCKING"
+
+log() { printf '>>> %s\n' "$*"; }
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+# The same three helpers dispatch-test.sh uses, tolerating "nothing of
+# that type yet" rather than letting a non-matching glob kill the script
+# under `set -e` before the assertion that would have explained it.
+records_of_type() { find "$JOURNAL" -name "*-$1-*.md" 2>/dev/null || true; }
+count_of_type() { records_of_type "$1" | grep -c . || true; }
+referencing() {
+  local rtype="$1" id="$2"
+  grep -l "^refs: .*$id" "$JOURNAL"/*-"$rtype"-*.md 2>/dev/null || true
+}
+count_referencing() { referencing "$1" "$2" | grep -c . || true; }
+
+# The blocking question this errand's own turn raised: a question record
+# carrying `blocking: true` whose refs name the request. Returned as an
+# id, not a path, since every assertion below wants the id.
+blocking_question_for() {
+  local request_id="$1" path
+  path="$(grep -l "^refs: .*$request_id" "$JOURNAL"/*-question-*.md 2>/dev/null \
+    | xargs -r grep -l '^blocking: true$' | head -1 || true)"
+  [ -n "$path" ] || return 0
+  basename "$path" .md
+}
+
+# The marker string the fixtures grep for out of the continuation
+# packet. Invented, hardware-neutral, and nothing like anything a real
+# resident would say — this repo never puts real resident words in a
+# fixture (CLAUDE.md's hard rule), and the resumption path is the one
+# that carries them by design.
+REQUEST_MARKER="RESUME-FIXTURE-REQUEST-MARKER"
+ANSWER_MARKER="RESUME-FIXTURE-ANSWER-MARKER"
+
+# The watermark first, on an empty journal, so nothing below is
+# accidentally excluded by it (docs/tasks/0021 §2.2).
+"$CASTLE" dispatch --watermark-only >/dev/null
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a blocking question stops the errand, and an ANSWER to it resumes exactly one further turn"
+# ---------------------------------------------------------------------
+REQ1="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — an invented errand the tenant cannot finish alone.")"
+log "  -> $REQ1"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ1")" -eq 1 ] || fail "the first sweep did not run a turn on $REQ1"
+[ "$(count_referencing result "$REQ1")" -eq 1 ] || fail "the first turn wrote no result for $REQ1"
+Q1="$(blocking_question_for "$REQ1")"
+[ -n "$Q1" ] || fail "the tenant filed no blocking question on its first turn"
+log "  -> blocking question $Q1"
+grep -q '^blocking: true$' "$JOURNAL/$Q1.md" || fail "$Q1 does not carry blocking: true"
+"$CASTLE" validate >/dev/null
+
+log "  -- and an unanswered blocking question resumes NOTHING, however many sweeps run"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ1")" -eq 1 ] || fail "an UNANSWERED blocking question started a second turn on $REQ1 — nothing but the resident may close a question"
+[ "$(count_referencing result "$REQ1")" -eq 1 ] || fail "an unanswered blocking question produced a second result on $REQ1"
+
+log "  -- a correction against this very request is planted BEFORE the answer"
+# `_collect_downstream` would have pulled this into the errand's fold
+# and handed it to the tenant: the resident's verdict about the system
+# becoming an input to the work being judged. Planted here, before the
+# resumption, so the resumed tenant's own refusal (it exits 6 on this
+# marker) is what proves the selective fold excludes it — an assertion
+# made after the turn could only ever prove the leak did not happen to
+# be echoed.
+CORRECTION="$("$CASTLE" correct --refs "$REQ1" "Resume test: RESUME-FIXTURE-MUST-NOT-REACH-A-TENANT — the resident says how the system is doing.")"
+log "  -> planted correction $CORRECTION against $REQ1"
+
+log "  -- the resident answers, and the next sweep resumes the errand"
+A1="$("$CASTLE" answer "$Q1" "Resume test: $ANSWER_MARKER — the resident's invented word on the matter.")"
+log "  -> answer $A1"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ1")" -eq 2 ] || fail "the answered blocking question did not start a second turn: $(count_referencing claim "$REQ1") claim(s) on $REQ1"
+[ "$(count_referencing result "$REQ1")" -eq 2 ] || fail "the resumed turn wrote no result of its own"
+
+log "  -- the resuming claim names the answer it spent, after the request id"
+RESUME_CLAIM_FILE="$(grep -l "^refs: $REQ1,$A1\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
+[ -n "$RESUME_CLAIM_FILE" ] || fail "no claim record carries 'refs: $REQ1,$A1' — the answer was never spent, which is the unbounded-retry loop"
+RESUME_CLAIM="$(basename "$RESUME_CLAIM_FILE" .md)"
+# The FIRST turn's claim must be untouched: byte-for-byte the shape it
+# always had, request id and nothing else.
+FIRST_CLAIM_FILE="$(grep -l "^refs: $REQ1\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
+[ -n "$FIRST_CLAIM_FILE" ] || fail "the first turn's claim no longer carries exactly 'refs: $REQ1' — a non-resuming turn's claim must be unchanged"
+
+log "  -- and the resumed RESULT's refs are still exactly request,claim (0021's shape, untouched)"
+RESUME_RESULT_FILE="$(grep -l "^refs: $REQ1,$RESUME_CLAIM\$" "$JOURNAL"/*-result-*.md 2>/dev/null || true)"
+[ -n "$RESUME_RESULT_FILE" ] || fail "the resumed turn's result does not reference exactly its request and its claim: $(grep -h '^refs:' $(referencing result "$REQ1"))"
+grep -q '^outcome: completed$' "$RESUME_RESULT_FILE" || fail "the resumed turn did not complete: $(grep '^outcome:' "$RESUME_RESULT_FILE")"
+
+log "  -- the tenant proves it actually READ the packet: request, question and answer all reached its stdin"
+grep -q "packet carried the request: .*$REQUEST_MARKER" "$RESUME_RESULT_FILE" \
+  || fail "the resumed tenant did not see the original request in its continuation packet"
+grep -q "packet carried the question: .*the errand cannot continue until this is answered" "$RESUME_RESULT_FILE" \
+  || fail "the resumed tenant did not see the blocking question in its continuation packet"
+grep -q "packet carried the answer: .*$ANSWER_MARKER" "$RESUME_RESULT_FILE" \
+  || fail "the resumed tenant did not see the resident's answer in its continuation packet"
+grep -q "RESUMED with $A1" "$RESUME_RESULT_FILE" \
+  || fail "the resumed tenant did not receive CASTLE_RESUME_ANSWER_IDS naming $A1"
+"$CASTLE" validate >/dev/null
+
+log "  -- and the correction planted before the turn never reached the tenant (it would have exited 6)"
+grep -q "leaked a record this seat must never read" "$RESUME_RESULT_FILE" \
+  && fail "the continuation packet carried the correction filed against $REQ1"
+[ "$(count_of_type correction)" -eq 1 ] || fail "the correction fixture did not land"
+
+# ---------------------------------------------------------------------
+log "the same answer never resumes twice: two more sweeps, back to back, add nothing"
+# ---------------------------------------------------------------------
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ1")" -eq 2 ] || fail "a spent answer resumed the errand again: $(count_referencing claim "$REQ1") claims on $REQ1"
+[ "$(count_referencing result "$REQ1")" -eq 2 ] || fail "a spent answer produced a third result on $REQ1"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a NON-blocking question, answered, resumes nothing — the field is what gates this, not the answer"
+# ---------------------------------------------------------------------
+# Deliberately the same shape as dispatch-test.sh's existing
+# non-behavior fixture, on an errand this file worked itself: a plain
+# `castle record --type question` with no --blocking.
+REQ2="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a second invented errand, completed in one turn.")"
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ2")" -eq 1 ] || fail "the ordinary tenant did not complete $REQ2"
+Q2="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ2" \
+  --body "Resume test: an ordinary question filed alongside a completed result.")"
+A2="$("$CASTLE" answer "$Q2" "Resume test: the resident answers a non-blocking question.")"
+log "  -> answered non-blocking $Q2 with $A2"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ2")" -eq 1 ] || fail "an answered NON-blocking question started a second turn on $REQ2"
+[ "$(count_referencing result "$REQ2")" -eq 1 ] || fail "an answered NON-blocking question produced a second result on $REQ2"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "two sweeps racing the same unspent answer produce ONE resumption between them, not one each"
+# ---------------------------------------------------------------------
+REQ3="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a third invented errand, for the race.")"
+"$CASTLE" dispatch >/dev/null
+Q3="$(blocking_question_for "$REQ3")"
+[ -n "$Q3" ] || fail "no blocking question was raised on $REQ3"
+A3="$("$CASTLE" answer "$Q3" "Resume test: $ANSWER_MARKER — the resident's word, for the race.")"
+# Widened the same way dispatch-test.sh widens its concurrency window,
+# so the two sweeps genuinely overlap rather than passing in sequence.
+CASTLE_TEST_WORKER_SLEEP=2 "$CASTLE" dispatch >"$WORKDIR/race-a.out" 2>&1 &
+RACE_A=$!
+CASTLE_TEST_WORKER_SLEEP=2 "$CASTLE" dispatch >"$WORKDIR/race-b.out" 2>&1 &
+RACE_B=$!
+wait "$RACE_A" || fail "racing sweep A exited nonzero: $(cat "$WORKDIR/race-a.out")"
+wait "$RACE_B" || fail "racing sweep B exited nonzero: $(cat "$WORKDIR/race-b.out")"
+[ "$(count_referencing claim "$REQ3")" -eq 2 ] || fail "two racing sweeps resumed $REQ3 twice: $(count_referencing claim "$REQ3") claims"
+[ "$(count_referencing result "$REQ3")" -eq 2 ] || fail "two racing sweeps wrote $(count_referencing result "$REQ3") results for $REQ3"
+grep -q "^refs: $REQ3,$A3\$" "$JOURNAL"/*-claim-*.md || fail "the racing resumption did not spend $A3"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a resumed turn that FAILS is not tried again — the claim spent the answer whatever the outcome"
+# ---------------------------------------------------------------------
+REQ4="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a fourth invented errand whose resumption fails.")"
+"$CASTLE" dispatch >/dev/null
+Q4="$(blocking_question_for "$REQ4")"
+[ -n "$Q4" ] || fail "no blocking question was raised on $REQ4"
+A4="$("$CASTLE" answer "$Q4" "Resume test: $ANSWER_MARKER — the resident's word on the errand that will fail.")"
+CASTLE_TEST_WORKER_FAIL_ON_RESUME=1 "$CASTLE" dispatch >/dev/null
+FAILED_RESULT_FILE="$(grep -l '^outcome: failed$' $(referencing result "$REQ4") 2>/dev/null || true)"
+[ -n "$FAILED_RESULT_FILE" ] || fail "the failing resumed turn did not produce an outcome: failed result for $REQ4"
+grep -q "^refs: $REQ4,$A4\$" "$JOURNAL"/*-claim-*.md || fail "the failing resumed turn's claim does not name $A4 — a failed resumption must still spend its answer"
+CLAIMS_AFTER_FAIL="$(count_referencing claim "$REQ4")"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ4")" -eq "$CLAIMS_AFTER_FAIL" ] || fail "a failed resumption was retried automatically — resumption must not become retry"
+"$CASTLE" validate >/dev/null
+
+log "  -- and the resident can still retry it by hand, exactly like any other failed errand"
+CASTLE_TEST_WORKER_FAIL_ON_RESUME= "$CASTLE" work "$REQ4" >/dev/null 2>&1 || true
+[ "$(count_referencing claim "$REQ4")" -eq $(( CLAIMS_AFTER_FAIL + 1 )) ] || fail "a hand-run castle work on a failed resumed errand did not start a turn"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "the tenant can be SWAPPED between an errand's first turn and its resumed one"
+# ---------------------------------------------------------------------
+# Proposal 03's re-tenanting claim inside a single errand, which is a
+# stronger form of what tenant-swap.sh proves across whole runs: the
+# errand boundary is what makes continuation possible, so nothing about
+# it may depend on the same harness being on both sides of the answer.
+REQ5="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a fifth invented errand, re-tenanted mid-flight.")"
+"$CASTLE" dispatch >/dev/null   # bash tenant raises the blocking question
+Q5="$(blocking_question_for "$REQ5")"
+[ -n "$Q5" ] || fail "no blocking question was raised on $REQ5"
+A5="$("$CASTLE" answer "$Q5" "Resume test: $ANSWER_MARKER — the resident's word, answered to a different tenant.")"
+CASTLE_WORKER_COMMAND="$WORKER_BLOCKING_ALT" "$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ5")" -eq 2 ] || fail "the swapped-in tenant did not resume $REQ5"
+ALT_RESULT_FILE="$(grep -l 'scripted-worker-blocking-alt' $(referencing result "$REQ5") 2>/dev/null || true)"
+[ -n "$ALT_RESULT_FILE" ] || fail "no result came from the python tenant — the resumed turn ran the wrong one"
+grep -q "packet carried the answer: .*$ANSWER_MARKER" "$ALT_RESULT_FILE" \
+  || fail "a tenant that never saw the first turn did not receive the answer in its packet — resumption depends on the harness, which is exactly what it must not do"
+grep -q '^outcome: completed$' "$ALT_RESULT_FILE" || fail "the re-tenanted resumption did not complete"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a blocking question filed against its own RESULT, not the request, still resumes the errand"
+# ---------------------------------------------------------------------
+# The shape the production tenant can actually produce: castle-worker-
+# claude hands the --refs choice to a model, and a question refs'd
+# against the turn's own result is a reasonable thing for one to write.
+# Strict direct keying would leave it permanently unattributable —
+# answered, and resuming nothing, silently, forever.
+REQ6="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a sixth invented errand, questioned through its result.")"
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" dispatch >/dev/null
+RESULT6="$(basename "$(referencing result "$REQ6")" .md)"
+Q6="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$RESULT6" \
+  --blocking --body "Resume test: a blocking question filed against its own result, not the request.")"
+A6="$("$CASTLE" answer "$Q6" "Resume test: $ANSWER_MARKER — the resident's word on the indirect question.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ6")" -eq 2 ] || fail "a blocking question refs'd through its own result did not resume $REQ6"
+grep -q "^refs: $REQ6,$A6\$" "$JOURNAL"/*-claim-*.md || fail "the resumption of $REQ6 did not spend $A6"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a FOLLOW-UP request's blocking question resumes the follow-up, never its parent"
+# ---------------------------------------------------------------------
+# The contamination case `_collect_downstream` would have produced.
+# The follow-up carries filed-during-turn only if a tenant filed it, and
+# this one is the resident's own, so it is ordinarily eligible.
+REQ7="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a seventh invented errand, the parent.")"
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" dispatch >/dev/null
+CLAIMS_PARENT_BEFORE="$(count_referencing claim "$REQ7")"
+REQ7B="$("$CASTLE" ask --refs "$REQ7" "Resume test: $REQUEST_MARKER — the follow-up, filed against its parent.")"
+"$CASTLE" dispatch >/dev/null   # blocking tenant works the follow-up
+Q7B="$(blocking_question_for "$REQ7B")"
+[ -n "$Q7B" ] || fail "no blocking question was raised on the follow-up $REQ7B"
+A7B="$("$CASTLE" answer "$Q7B" "Resume test: $ANSWER_MARKER — the resident's word on the follow-up.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ7")" -eq "$CLAIMS_PARENT_BEFORE" ] || fail "answering the follow-up's blocking question resumed its PARENT $REQ7 as well"
+[ "$(count_referencing claim "$REQ7B")" -eq 2 ] || fail "the follow-up $REQ7B was not resumed by its own answer"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "nothing in any packet leaked a correction, a decision, or another errand's records"
+# ---------------------------------------------------------------------
+# Belt and braces over the whole journal rather than one errand: every
+# resumed tenant refuses the marker outright (exit 6), so a leak
+# anywhere shows up as a failed turn whose result says so.
+LEAKED="$(grep -l "leaked a record this seat must never read" "$JOURNAL"/*-result-*.md 2>/dev/null || true)"
+[ -z "$LEAKED" ] || fail "a continuation packet leaked a record a worker tenant must never read: $LEAKED"
+
+# ---------------------------------------------------------------------
+log "final sweep, then independent structural assertions over the whole journal"
+# ---------------------------------------------------------------------
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" validate
+# Free and strong: every result and question, resumed ones included,
+# has to carry a decision citing it. A resumed result routed as
+# second-class would fail here without this file asserting it directly.
+"$CHECK" "$JOURNAL"
+
+log "all assertions passed"

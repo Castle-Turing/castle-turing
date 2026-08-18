@@ -614,6 +614,61 @@ log "  -> answered $QUESTION with $ANSWER"
 [ "$(count_referencing claim "$REQ1")" -eq 1 ] || fail "an answer caused a second worker turn on $REQ1"
 
 # ---------------------------------------------------------------------
+log "  -- and its BLOCKING twin, the same shape with one flag added, DOES resume the errand exactly once (docs/tasks/0023)"
+# ---------------------------------------------------------------------
+# Deliberately beside the non-behavior test above rather than in
+# resume.sh: the pair is the proof that resumption is opt-in. The two
+# fixtures differ in exactly one argument, and go opposite ways.
+REQ_BLOCKING="$("$CASTLE" ask "Dispatch test: an errand whose question will stop it.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 1 ] || fail "the blocking-twin errand was never worked"
+Q_BLOCKING="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_BLOCKING" \
+  --blocking --body "Dispatch test: a question its writer says the errand cannot proceed without.")"
+grep -q '^blocking: true$' "$JOURNAL/$Q_BLOCKING.md" || fail "$Q_BLOCKING does not carry blocking: true"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 1 ] || fail "an UNANSWERED blocking question resumed $REQ_BLOCKING — only the resident may close a question"
+A_BLOCKING="$("$CASTLE" answer "$Q_BLOCKING" "Dispatch test: the resident closes the blocking question.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 2 ] || fail "answering a BLOCKING question did not resume $REQ_BLOCKING"
+[ "$(count_referencing result "$REQ_BLOCKING")" -eq 2 ] || fail "the resumed turn on $REQ_BLOCKING wrote no result"
+grep -q "^refs: $REQ_BLOCKING,$A_BLOCKING\$" "$JOURNAL"/*-claim-*.md \
+  || fail "the resuming claim does not name the answer it spent — nothing bounds the resumption"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 2 ] || fail "a spent answer resumed $REQ_BLOCKING a second time"
+"$CASTLE" validate
+
+log "  -- castle record refuses a --blocking question with no --refs: it could never be attributed to an errand"
+if "$CASTLE" record --type question --provenance requested --seat worker --blocking \
+  --body "Dispatch test: a blocking question with nothing to attribute it to." >"$WORKDIR/blocking-norefs.out" 2>&1; then
+  fail "castle record wrote a --blocking question with no --refs"
+fi
+grep -q "refusing to write a --blocking question with no --refs" "$WORKDIR/blocking-norefs.out" \
+  || fail "the --blocking/--refs refusal did not explain itself: $(cat "$WORKDIR/blocking-norefs.out")"
+
+log "  -- and validate rejects a hand-planted blocking value that is not the one spelling any writer produces"
+BAD_BLOCKING_FILE="$JOURNAL/20260101T000000Z-question-bad0b1.md"
+cat > "$BAD_BLOCKING_FILE" <<EOF
+---
+id: 20260101T000000Z-question-bad0b1
+type: question
+provenance: requested
+refs: $REQ1
+seat: worker
+created: 2026-01-01T00:00:00Z
+blocking: false
+---
+
+Malformed blocking fixture: 'false' would read as truthy to the fold that resumes errands.
+EOF
+if "$CASTLE" validate >"$WORKDIR/bad-blocking.out" 2>"$WORKDIR/bad-blocking.err"; then
+  fail "castle validate accepted a question record with blocking: false"
+fi
+grep -q "blocking" "$WORKDIR/bad-blocking.err" || fail "castle validate's blocking rejection message changed unexpectedly"
+rm -f "$BAD_BLOCKING_FILE"
+"$CASTLE" validate || fail "the journal did not validate clean once the malformed blocking fixture was removed"
+
+# ---------------------------------------------------------------------
 log "an empty CASTLE_WORKER_COMMAND yields outcome: failed on the very first sweep, not a silent unbounded retry loop"
 # ---------------------------------------------------------------------
 REQ_NOWORKER="$("$CASTLE" ask "Dispatch test: no worker tenant is configured at all.")"

@@ -99,6 +99,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: test/agent-loop/dispatch-test.sh
+      # Errand resumption (docs/tasks/0023-resume-cold.md): the same
+      # sweep driven past the point where it used to stop — a worker
+      # marks a question blocking and files no work, the resident
+      # answers, and exactly one further turn runs with a fresh tenant
+      # handed the errand's own records and nothing else. In this job
+      # rather than a fifth one because it drives the identical
+      # mechanism with the identical toolchain; a separate job would
+      # pay for another checkout to prove nothing extra.
+      - run: test/agent-loop/resume.sh
 
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and
