@@ -203,6 +203,45 @@
                     is where it stays honest.
                   '';
                 }
+                {
+                  # docs/tasks/0021-auto-dispatch.md: this
+                  # configuration imports nixosModules.agent and leaves
+                  # castle.agent.dispatch.enable at its default, so no
+                  # castle-dispatch user unit may exist. The middle
+                  # case between "no agent module at all" (proven by
+                  # test/vm-install's harness, which imports none) and
+                  # "dispatch explicitly on"
+                  # (nixosConfigurations.example-dispatch, below):
+                  # default-off has to be provably off, not merely
+                  # documented as off, because turning it on is a
+                  # standing authority decision this framework must
+                  # never make on a resident's behalf.
+                  #
+                  # Written as an implication ("dispatch off ⇒ no
+                  # units") rather than a flat "no units", because
+                  # `nixosConfigurations.example-dispatch` below
+                  # extends *this* configuration and inherits its
+                  # assertions — a flat form would go red there for
+                  # the one configuration that is supposed to have the
+                  # units. The antecedent holds here (this
+                  # configuration never sets the option), so the check
+                  # still bites exactly where it is aimed.
+                  assertion =
+                    config.castle.agent.dispatch.enable
+                    || (
+                      !(config.systemd.user.services ? castle-dispatch)
+                      && !(config.systemd.user.services ? castle-dispatch-watermark)
+                      && !(config.systemd.user.paths ? castle-dispatch)
+                      && !(config.systemd.user.timers ? castle-dispatch)
+                    );
+                  message = ''
+                    nixosConfigurations.example generates a castle-dispatch
+                    systemd user unit even though castle.agent.dispatch.enable
+                    is left at its default. Automatic dispatch is opt-in
+                    (docs/tasks/0021-auto-dispatch.md): importing
+                    nixosModules.agent must never start errands on its own.
+                  '';
+                }
               ];
             }
           )
@@ -318,6 +357,144 @@
                     silently before docs/tasks/0019 moved the chord to
                     Mod4+Shift+Return. If this assertion is red, the chord (or
                     something else) is colliding with a stock Mod4 binding again.
+                  '';
+                }
+              ];
+            }
+          )
+        ];
+      };
+
+      # The other half of the default-off proof (docs/tasks/0021-auto-
+      # dispatch.md): `nixosConfigurations.example` asserts that no
+      # castle-dispatch unit exists when dispatch is left alone; this
+      # variant turns it on and asserts the four units exist and carry
+      # the environment the sweep needs. Same `extendModules` precedent
+      # as example-mod4 above, and eval-only for the same reason —
+      # nothing builds or boots this configuration, but `nix flake
+      # check` forces every nixosConfiguration's `assertions`, which is
+      # all it takes to prove the wiring. A dummy stateDir, because the
+      # module (rightly) refuses to enable dispatch without one and
+      # this repo may never name a real resident's path.
+      nixosConfigurations.example-dispatch = self.nixosConfigurations.example.extendModules {
+        modules = [
+          (
+            { config, lib, ... }:
+            let
+              dummyStateDir = "/home/resident/private/state";
+              dummyRepoRoot = "/home/resident/private";
+              unit = config.systemd.user.services.castle-dispatch or null;
+              watermarkUnit = config.systemd.user.services.castle-dispatch-watermark or null;
+              # The unit-level `environment` attrset, not a raw
+              # serviceConfig.Environment list — see modules/agent's
+              # comment on why the distinction is load-bearing (systemd
+              # splits an unquoted Environment= value on whitespace;
+              # the option's toJSON rendering is what quotes it).
+              environment = if unit == null then { } else unit.environment;
+            in
+            {
+              castle.agent = {
+                dispatch.enable = true;
+                stateDir = dummyStateDir;
+                worker.repoRoot = dummyRepoRoot;
+              };
+
+              assertions = [
+                {
+                  assertion =
+                    (config.systemd.user.services ? castle-dispatch)
+                    && (config.systemd.user.services ? castle-dispatch-watermark)
+                    && (config.systemd.user.paths ? castle-dispatch)
+                    && (config.systemd.user.timers ? castle-dispatch);
+                  message = ''
+                    nixosConfigurations.example-dispatch: castle.agent.dispatch.enable
+                    is true but modules/agent did not declare all four
+                    systemd.user units (path, service, timer, watermark). The path
+                    unit is the prompt trigger, the timer is the backstop for a
+                    missed inotify event, and castle-dispatch-watermark is what
+                    puts the dispatch boundary down at session start instead of
+                    leaving it to whichever sweep runs first — losing any of them
+                    silently degrades automatic dispatch to something slower, to
+                    nothing at all, or to a boundary a login can beat
+                    (docs/tasks/0021-auto-dispatch.md §1).
+                  '';
+                }
+                {
+                  # Asserted on the option values, not on a built unit
+                  # file: this is an eval-only check, and the attrs are
+                  # what modules/agent actually promises.
+                  assertion =
+                    unit != null
+                    && unit.serviceConfig.Type == "oneshot"
+                    && unit.serviceConfig.WorkingDirectory == "%h"
+                    # Pinned because losing it is silent and ugly:
+                    # systemd.user units are declared for every user
+                    # with a systemd instance, greetd's `greeter`
+                    # included, and without this the sweep runs — and
+                    # fails — at the login screen on every boot. Found
+                    # by running test/desktop-loop's VM, not by
+                    # reasoning (docs/tasks/0021 §1).
+                    && unit.unitConfig.ConditionUser == "!@system"
+                    # The service is activated BY the path unit and the
+                    # timer, never wanted by default.target itself: a
+                    # oneshot in the activation path would hold a login
+                    # open for the length of a sweep
+                    # (docs/tasks/0021 §1).
+                    && unit.wantedBy == [ ]
+                    && config.systemd.user.paths.castle-dispatch.wantedBy == [ "default.target" ]
+                    && config.systemd.user.timers.castle-dispatch.wantedBy == [ "default.target" ]
+                    && config.systemd.user.paths.castle-dispatch.unitConfig.ConditionUser
+                      == "!@system"
+                    && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser
+                      == "!@system"
+                    && environment.CASTLE_STATE_DIR or null == dummyStateDir
+                    # Without a PATH the default tenant (`claude -p`)
+                    # and the notify channel (`notify-send`) are both
+                    # unreachable from the unit — see modules/agent's
+                    # comment; the VM test caught this one too.
+                    && lib.hasPrefix "/run/current-system/sw/bin" (environment.PATH or "")
+                    && environment.CASTLE_WORKER_TIMEOUT or null == "900"
+                    && environment.CASTLE_REPO_ROOT or null == dummyRepoRoot
+                    && (environment.CASTLE_WORKER_COMMAND or "") != ""
+                    && config.systemd.user.paths.castle-dispatch.pathConfig.PathChanged
+                      == "${dummyStateDir}/journal"
+                    # Asserted absent, not merely unset by accident: a
+                    # MakeDirectory here would create the resident's
+                    # state directory before their private repo is
+                    # restored into it (docs/tasks/0021 §1/§2.2).
+                    && !(config.systemd.user.paths.castle-dispatch.pathConfig ? MakeDirectory)
+                    && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec
+                      == "1min"
+                    # The watermark unit, pinned to the three facts
+                    # that make it work at all: it is IN default.target
+                    # (unlike the sweep — it is cheap enough to sit in
+                    # a login's activation path, and it has to run
+                    # before anything interactive exists), it runs the
+                    # --watermark-only path rather than a full sweep,
+                    # and it skips greetd's system accounts like its
+                    # siblings. Losing the wantedBy would put the
+                    # boundary back where the VM test found it: written
+                    # by the first sweep, five seconds after login, and
+                    # losable to one keystroke
+                    # (docs/tasks/0021-auto-dispatch.md §2.2).
+                    && watermarkUnit != null
+                    && watermarkUnit.wantedBy == [ "default.target" ]
+                    && watermarkUnit.unitConfig.ConditionUser == "!@system"
+                    && watermarkUnit.serviceConfig.Type == "oneshot"
+                    && lib.hasSuffix "castle dispatch --watermark-only"
+                      watermarkUnit.serviceConfig.ExecStart
+                    && watermarkUnit.environment.CASTLE_STATE_DIR or null == dummyStateDir;
+                  message = ''
+                    nixosConfigurations.example-dispatch: the castle-dispatch units
+                    do not carry what the sweep needs. Expected a oneshot service
+                    running from %h with CASTLE_STATE_DIR, CASTLE_WORKER_COMMAND,
+                    CASTLE_WORKER_TIMEOUT and CASTLE_REPO_ROOT baked in
+                    (determinism, not an inheritance gap — see modules/agent's own
+                    comment), a path unit watching the configured journal
+                    directory rather than a filename pattern, a one-minute
+                    backstop timer, and a session-start watermark oneshot that
+                    runs `castle dispatch --watermark-only`
+                    (docs/tasks/0021-auto-dispatch.md §1).
                   '';
                 }
               ];

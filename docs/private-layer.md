@@ -79,17 +79,25 @@ The exported modules:
   gh, ripgrep, fd, claude-code). No private data, no assertions.
 - `nixosModules.agent` — the agent layer's CLI (`castle`, plus
   `castle-modal` and the default `castle-worker-claude` worker tenant)
-  and three options: `castle.agent.stateDir` (wired into
+  and six options: `castle.agent.stateDir` (wired into
   `CASTLE_STATE_DIR`), `castle.agent.worker.command` (wired into
-  `CASTLE_WORKER_COMMAND` — which tenant holds the worker seat), and
-  `castle.agent.notify.command` (wired into `CASTLE_NOTIFY_COMMAND` —
-  what the router's `notify` channel actually runs). See "The agent's
-  state" below and `agent/README.md`. No assertions: an unset
-  `stateDir`/`notify.command` just falls back to a per-user or built-in
-  default rather than failing evaluation, since the agent layer is
-  optional the way `desktop`/`dev` are; `worker.command` always has a
-  runnable default (a headless `claude -p`) since the worker seat needs
-  *something* to default to.
+  `CASTLE_WORKER_COMMAND` — which tenant holds the worker seat),
+  `castle.agent.worker.timeoutSeconds` (`CASTLE_WORKER_TIMEOUT`),
+  `castle.agent.worker.repoRoot` (`CASTLE_REPO_ROOT` — which
+  repository the tenant operates on), `castle.agent.notify.command`
+  (wired into `CASTLE_NOTIFY_COMMAND` — what the router's `notify`
+  channel actually runs), and `castle.agent.dispatch.enable` (whether
+  filed errands start themselves). See "The agent's state" below and
+  `agent/README.md`. An unset `stateDir`/`notify.command`/`repoRoot`
+  just falls back to a per-user or built-in default rather than
+  failing evaluation, since the agent layer is optional the way
+  `desktop`/`dev` are; `worker.command` and `worker.timeoutSeconds`
+  always have a usable default (a headless `claude -p`, and fifteen
+  minutes) since the worker seat needs *something* to default to. One
+  assertion beyond the "no literal `"` in the value" check every
+  string option here carries: `dispatch.enable` requires `stateDir`,
+  because unattended writing is exactly when the journal has to be the
+  durable one you chose rather than a per-user fallback.
 - `nixosModules.installer` — the agentic installer image: bootable NixOS
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
@@ -133,6 +141,15 @@ The values this repo may never contain:
   # nixosModules.desktop need neither.
   # castle.agent.worker.command = "/path/to/your/own/worker/tenant";
   # castle.agent.notify.command = "";  # e.g. to no-op on a headless host
+  # castle.agent.worker.timeoutSeconds = 900;  # how long a hung tenant may run
+
+  # Optional, and the one authority decision in this file: let filed
+  # errands start themselves, with no `castle work` typed by hand.
+  # Off unless you turn it on — see "Automatic dispatch" below before
+  # you do, and set worker.repoRoot with it (a worker told nothing
+  # thinks your home directory is the repo).
+  # castle.agent.dispatch.enable = true;
+  # castle.agent.worker.repoRoot = "/home/<your-login>/private";
 
   # Optional — taste, only meaningful if you use nixosModules.desktop.
   # hosts/xps9370 already supplies hardware-derived scale/cursor/console
@@ -186,6 +203,19 @@ The values this repo may never contain:
   `claude -p` (`agent/castle-worker-claude`); override only if you're
   running a different tenant. Whatever holds this seat, it never
   deploys — see `agent/README.md`.
+- `castle.agent.worker.timeoutSeconds` — how long the worker tenant
+  may run before `castle work` kills its whole process group and
+  records `outcome: timeout`. Default 900 (fifteen minutes), a chosen
+  value rather than a measured one; raise it if your tenant
+  legitimately takes longer.
+- `castle.agent.worker.repoRoot` — the repository the worker tenant is
+  told to operate on (`$CASTLE_REPO_ROOT`). No default this repo could
+  supply: your checkout path is your data, not the framework's.
+  **Unset, a worker is told its repo is your home directory**, since
+  `castle work` falls back to its working directory — set this
+  whenever you enable automatic dispatch.
+- `castle.agent.dispatch.enable` — whether filed errands start
+  themselves. Default `false`. See "Automatic dispatch" below.
 - `castle.agent.notify.command` — what the router's `notify` channel
   actually runs (docs/architecture.md). Defaults to plain `notify-send`
   on `$PATH`, which is real once `nixosModules.desktop` is imported
@@ -398,6 +428,91 @@ thing to approve in advance — and **pushing stays manual** until
 secrets tooling gives this repo a credential story for doing it
 unattended. Don't wire a cron job or a service to `git push` this
 repo's state until that lands.
+
+## Automatic dispatch (optional, off by default)
+
+Out of the box, a filed request sits in the journal until you run
+`castle work <id>` yourself. `castle.agent.dispatch.enable = true`
+changes that: four `systemd.user` units — a path unit watching your
+journal directory, a `oneshot` service running `castle dispatch`, a
+one-minute backstop timer, and a second `oneshot` that marks the
+dispatch boundary when your session starts — notice new work, run the
+configured worker tenant against one eligible errand at a time, and
+route the results (`docs/tasks/0021-auto-dispatch.md`).
+
+**This is an authority decision, which is why it is yours and not the
+framework's.** Turning it on means a model tenant can start work, and
+spend money, with nobody watching at the moment it happens. What the
+mechanism promises in exchange:
+
+- **One automatic attempt per request, ever.** A request with any
+  result at all — succeeded, failed, timed out, interrupted — is
+  permanently ineligible. That bound is structural, not a counter that
+  could be misconfigured or reset. Retrying is `castle work <id>`,
+  typed by you.
+- **Nothing before you opted in.** A watermark record is written the
+  moment your first dispatch-enabled session starts, before you have a
+  desktop to file anything from; requests filed before that instant are
+  never auto-started, are named in the record by id, and the record
+  says so in plain English. Anything the watermark excluded still shows
+  up in `castle-modal --mode status` with the `castle work <id>` that
+  runs it by hand.
+
+  **This promise assumes your journal is already on the machine when
+  that session starts, so put it there first.** Either have the private
+  checkout in place before your first login with dispatch enabled, or
+  leave `dispatch.enable = false` until the first restore has finished
+  and rebuild afterwards. If the journal instead arrives *during* a
+  dispatch-enabled session, the first sweep to notice it writes the
+  watermark — a backstop, and a real one, but not the same guarantee:
+  a restore that copies files one at a time can be caught partway
+  through, and the boundary then freezes around whatever had landed.
+  History arriving after it is not excluded, and a request whose result
+  file has not been copied yet looks unfinished and can be picked up.
+  Nothing is lost either way — every attempt is one attempt, recorded —
+  but an errand you considered closed months ago could get a model call
+  spent on it. Getting the checkout in place first costs nothing and
+  removes the whole question.
+- **Nothing is hidden.** Every turn leaves a `claim` record when it
+  starts and a `result` carrying an `outcome` when it ends, including
+  when it ends badly — and `castle-modal --mode status` shows you
+  which errands are running, which are waiting on you, and which
+  failed and need retrying.
+- **The worker still proposes and never deploys.** Automatic
+  invocation changes nothing about that: no `nixos-rebuild`, no `git
+  commit`, no applying a diff. You review and apply, exactly as
+  before.
+
+**Clone this repo onto the machine before you turn dispatch on.** The
+sweep will not create `castle.agent.stateDir` for you: it checks
+whether that directory exists and, if it does not, says so and does
+nothing until the next timer tick. That refusal is deliberate. A sweep
+that created the directory would both break the clone you were about
+to do into it and — worse — write its watermark declaring that nothing
+predates automatic dispatch, minutes before your real journal arrived.
+Every request in that restored history would then look new.
+
+Two settings to get right when you enable it. `castle.agent.stateDir`
+is required (evaluation fails without it). And
+`castle.agent.worker.repoRoot` should name the repository you actually
+want worked on — without it, a dispatched worker is told its repo is
+your home directory.
+
+**One host per journal.** If you sync this private repo between
+machines, turn dispatch on for only one of them. The lease that keeps
+a single worker per errand is machine-local — it lives in the runtime
+directory, not in the journal — so two dispatch-enabled hosts sharing
+one journal would each start the same request, and each write
+`interrupted` results about the other's live turns. Nothing reconciles
+two dispatchers over a synced journal yet, and this task does not
+pretend to; it is work for whatever design gives the journal a sync
+story.
+
+The units run only while you are logged in: this repo deliberately
+does **not** enable `loginctl` lingering, since a mechanism whose only
+visible output today is a desktop notification has nothing useful to
+do while nobody is at the keyboard. Running dispatch between logins is
+a further authority decision, and it is yours to make separately.
 
 ## The installer image (optional, per host)
 

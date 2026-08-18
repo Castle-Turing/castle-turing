@@ -113,12 +113,20 @@ in
 
         The contract, whatever holds this option: the request body is
         piped to the command's stdin; `$CASTLE_REQUEST_ID`,
-        `$CASTLE_REQUEST_BODY`, `$CASTLE_DIFF_FILE`, and
+        `$CASTLE_DIFF_FILE`, and
         `$CASTLE_REPO_ROOT` are set in its environment; reasoning goes
         to stdout, a diff (or nothing) goes to `$CASTLE_DIFF_FILE`. See
         agent/castle-worker-claude for the reference implementation of
-        that contract and test/agent-loop/scripted-worker.sh for a
-        model-free stand-in. THE WORKER MUST NOT DEPLOY — no
+        that contract and test/agent-loop/contract-worker.sh for a
+        model-free stand-in that satisfies it. *Not*
+        test/agent-loop/scripted-worker.sh, which this description used
+        to name: that fixture predates the worker contract, takes two
+        positional arguments, reads nothing from stdin, and is invoked
+        by harnesses that bypass `castle work` entirely — pointed at
+        this option it exits 2 on every errand, and since one failed
+        result is all it takes to make a request permanently
+        ineligible, following that pointer would burn each request's
+        single automatic attempt. THE WORKER MUST NOT DEPLOY — no
         `nixos-rebuild`, no `git commit`, no applying anything to a
         running system, from this seat, ever, in this slice. CI
         overrides this option's effect by setting
@@ -129,6 +137,106 @@ in
         Must not contain a literal `"` character — see `stateDir`'s
         description for why (this option is wired through
         `environment.sessionVariables` the same way).
+      '';
+    };
+
+    worker.timeoutSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 900;
+      description = ''
+        How long `castle work` (agent/castle) lets the worker tenant
+        run before killing its whole process group and writing a
+        result with `outcome: timeout`
+        (docs/tasks/0021-auto-dispatch.md). Wired into
+        `CASTLE_WORKER_TIMEOUT`.
+
+        Fifteen minutes is a chosen value, not derived from any
+        measurement: long enough for a real `claude -p` errand, short
+        enough that a hung tenant does not silently occupy the worker
+        seat for the rest of the day. Raise it if your tenant
+        legitimately takes longer.
+
+        The guard lives in the tool, not as `RuntimeMaxSec=` on the
+        dispatch unit, for one reason wearing two hats: a unit-level
+        timeout would kill an entire *sweep* — possibly part-way
+        through a second or third perfectly healthy errand — rather
+        than the one hung turn, and a human running `castle work` by
+        hand outside any unit deserves the identical guard. The
+        timeout is a property of the worker contract, not of how the
+        worker happened to be invoked.
+      '';
+    };
+
+    worker.repoRoot = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        The repository the worker tenant operates on — wired into
+        `CASTLE_REPO_ROOT`, which `castle work` puts in the tenant's
+        environment (see `agent/castle-worker-claude`, which tells the
+        model to diagnose the problem in the repository checked out
+        there).
+
+        Default `null`, and it cannot be otherwise: the private
+        flake's actual checkout path on disk is resident data, which
+        this repo may never guess (Principle 02, the same reasoning
+        `stateDir` above documents).
+
+        **Left unset, a dispatched worker is told its repo is your
+        home directory.** `castle work` falls back to the current
+        working directory, and the dispatch unit's working directory
+        is `%h` — which is very unlikely to be the repo a real tenant
+        needs to operate on. Set this whenever you enable
+        `castle.agent.dispatch.enable`.
+
+        Must not contain a literal `"` character — see `stateDir`'s
+        description for why (this option rides
+        `environment.sessionVariables` the same way, so a hand-run
+        `castle work` in a terminal gets the same repo root a
+        dispatched one does).
+      '';
+    };
+
+    dispatch.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Start eligible resident-filed errands automatically, with no
+        `castle work` or `castle route` typed by hand
+        (docs/tasks/0021-auto-dispatch.md).
+
+        Declares four `systemd.user` units — a path unit watching the
+        journal directory, a `oneshot` service running
+        `castle dispatch`, a one-minute timer as a backstop for a
+        missed inotify event, and a second `oneshot` that establishes
+        the dispatch watermark at session start. The sweep reaps
+        interrupted turns, runs the configured worker tenant against
+        every eligible request one at a time, and routes once at the
+        end.
+
+        **Default off, deliberately.** Turning this on is a standing
+        authority decision about your own machine — it lets a model
+        tenant start work, and spend money, without a human in the
+        loop at the moment it happens. This framework will not make
+        that decision for a resident; a private layer opts in
+        (docs/private-layer.md).
+
+        Requires `castle.agent.stateDir` (asserted below), and you
+        almost certainly want `castle.agent.worker.repoRoot` too —
+        see that option's description for what happens without it.
+
+        **Enable this on at most one host per journal.** The lease that
+        guarantees one turn at a time is machine-local, and nothing yet
+        reconciles two dispatchers over a synced journal: two enabled
+        hosts sharing one private repo would work the same request
+        twice and write false `interrupted` results at each other.
+
+        Deliberately **no `loginctl enable-linger`**: without
+        lingering, these units run only while you are logged in, which
+        is the honest lifetime for a mechanism whose only externally
+        visible output today is a desktop notification. Running
+        dispatch between logins is a separate authority decision and
+        is out of scope here.
       '';
     };
 
@@ -220,10 +328,286 @@ in
     # COMMAND, plain notify-send) would otherwise silently substitute a
     # different command than the one configured — the same shape of
     # silent-wrong-behavior bug 2 was, just for a different value.
+    #
+    # CASTLE_WORKER_TIMEOUT and CASTLE_REPO_ROOT joined the block with
+    # docs/tasks/0021-auto-dispatch.md, for the same reason the other
+    # three are here rather than only on the dispatch unit below: a
+    # `castle work` a resident runs by hand from a terminal inside the
+    # Sway session must get the identical timeout guard and repo root
+    # an automatically-dispatched worker gets, not a weaker version of
+    # either. The timeout rides unconditionally (it always has a
+    # value); the repo root only when one is actually configured.
     environment.sessionVariables =
       (lib.optionalAttrs (cfg.stateDir != null) { CASTLE_STATE_DIR = cfg.stateDir; })
       // { CASTLE_WORKER_COMMAND = cfg.worker.command; }
+      // { CASTLE_WORKER_TIMEOUT = toString cfg.worker.timeoutSeconds; }
+      // (lib.optionalAttrs (cfg.worker.repoRoot != null) { CASTLE_REPO_ROOT = cfg.worker.repoRoot; })
       // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
+
+    # ---------------------------------------------------------------
+    # Automatic dispatch (docs/tasks/0021-auto-dispatch.md), off by
+    # default — see castle.agent.dispatch.enable's description.
+    #
+    # The first systemd.user.* units in this repo. Everything else
+    # using this path-unit-plus-oneshot pattern (modules/base's
+    # castle-password-reminder-check) is a *system* unit because its
+    # job needs root; dispatch needs the opposite, for three reasons.
+    # agent/castle's spool and lease directories resolve relative to
+    # $XDG_RUNTIME_DIR, a per-login-session concept — a system unit
+    # would use /tmp/castle-0 instead of the resident's real runtime
+    # directory. `castle route`'s notify channel shells out to
+    # notify-send, which needs the session's bus to reach mako; a
+    # system unit has no session to reach. And a user unit needs no
+    # username baked into this public repo (Principle 02):
+    # systemd.user.* units are per-login-session by construction, with
+    # no `User=` to set.
+    #
+    # Deliberately minimal hardening, with the reasoning here rather
+    # than left implicit: the worker tenant needs network (to reach a
+    # model API), $HOME (its own config and credentials), and the
+    # configured state directory. ProtectHome, PrivateNetwork, or a
+    # restrictive ReadOnlyPaths would break the seat outright.
+    # `Type = "oneshot"` with no `Restart=` is the only meaningful
+    # constraint applied, and it is a correctness property (a oneshot
+    # that fails is a mechanism fault, not a retry candidate — see
+    # `castle dispatch`'s exit-code contract) rather than a security
+    # one. Hardening a unit whose entire job is running an
+    # unconstrained model tenant would be theatre: the containment
+    # this design actually relies on is a code fact — `cmd_work` has
+    # no path that runs nixos-rebuild, git commit, or anything else
+    # that touches a running system (Proposal 03's "the worker
+    # proposes, it never deploys").
+    #
+    # `ConditionUser=!@system` on all four, found by running
+    # test/desktop-loop's VM rather than reasoned out in advance:
+    # `systemd.user.*` units are declared for EVERY user with a
+    # systemd instance, and on a host that imports modules/desktop
+    # that includes greetd's own `greeter` system account. Its
+    # manager dutifully started castle-dispatch at the login screen,
+    # where the sweep exited 1 on a journal it has no business reading
+    # ("Permission denied: /home/resident/private/state/journal") and
+    # left a failed unit sitting in a session nobody inspects. The
+    # sweep's exit code is supposed to mean "dispatch itself broke,"
+    # so a guaranteed-failing instance of it on every boot is exactly
+    # the health signal a resident would learn to ignore. `!@system`
+    # is nixpkgs' own idiom for this — the same condition
+    # `nixos-activation.service` (the user-specific activation unit)
+    # carries — and it needs no username baked into this repo
+    # (Principle 02).
+    # ---------------------------------------------------------------
+    systemd.user.paths.castle-dispatch = lib.mkIf cfg.dispatch.enable {
+      description = "Watch the castle journal for records that need dispatching";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      pathConfig = {
+        # The whole journal directory, not `*-request-*.md`
+        # specifically. A request-shaped watcher would satisfy this
+        # task completely while foreclosing the next one:
+        # docs/backlog/errand-resume-after-answer.md needs dispatch to
+        # notice an `answer` record too, and a watcher keyed to a
+        # filename shape is structurally unable to fire on anything
+        # else — broadening it later means touching this unit on every
+        # host that has it deployed. Watching the directory and
+        # deciding eligibility in code means the *predicate* (a pure
+        # function over the journal) can grow without this file
+        # changing at all. The wakeup is a hint; the fold is the
+        # authority.
+        PathChanged = "${toString cfg.stateDir}/journal";
+        # Deliberately NO MakeDirectory. systemd watches the nearest
+        # existing parent of a path that does not exist yet and fires
+        # when the path appears, so nothing is lost by not creating it
+        # — and creating the resident's state directory from a unit is
+        # exactly the restore-order hazard `castle dispatch`'s own
+        # guard closes: on a machine where dispatch is enabled before
+        # the private repo holding the journal is cloned, a unit that
+        # helpfully mkdir'd the path would both break that clone and
+        # let castle-dispatch-watermark (or, failing that, the first
+        # sweep) write a watermark declaring that nothing predates it,
+        # minutes before the real history arrived. Left uncreated, the
+        # restore is what makes this path appear, this unit fires on
+        # it, and the sweep it triggers writes the watermark itself —
+        # the backstop for a journal that lands mid-session, after the
+        # session-start unit below has already found nothing to mark.
+      };
+    };
+
+    systemd.user.services.castle-dispatch = lib.mkIf cfg.dispatch.enable {
+      description = "Run one castle dispatch sweep over the journal";
+      # Deliberately NO wantedBy: the path unit and the timer above and
+      # below activate this service, and they are the ones default.target
+      # wants. A Type=oneshot pulled directly into default.target holds
+      # the user manager's activation open for the whole sweep — up to
+      # `worker.timeoutSeconds` per eligible errand, so a queue of them
+      # could keep a login "starting" for a very long time — and buys
+      # nothing, because the 5s OnStartupSec timer already delivers the
+      # first sweep of the session without blocking anything. The one
+      # thing that genuinely had to happen before a login could race it
+      # — putting the watermark down — is castle-dispatch-watermark's
+      # job below, and that unit IS in default.target: a journal read
+      # plus at most one record write is not a sweep.
+      unitConfig.ConditionUser = "!@system";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${castleCli}/bin/castle dispatch";
+        # %h — the resident's home directory. `castle work` falls back
+        # to the working directory when CASTLE_REPO_ROOT is unset,
+        # which is why worker.repoRoot's description says plainly that
+        # an operator who leaves it null is telling the tenant its repo
+        # is their home directory.
+        WorkingDirectory = "%h";
+        # Baked in at `nixos-rebuild switch` rather than inherited.
+        # Not because environment.sessionVariables cannot reach a
+        # systemd user unit — it can: nixos/modules/security/pam.nix
+        # wires pam_env.so into the systemd-user PAM service's session
+        # stack by default, against the same /etc/pam/environment the
+        # greetd login path reads (docs/tasks/0013's bug 2), and
+        # `systemctl --user show-environment` does show CASTLE_STATE_DIR
+        # on a real login. The argument is determinism: a value baked
+        # into the unit reaches it immediately, with no re-login
+        # required (pam_env-set variables only take effect on the
+        # *next* login), and the unit stops depending on nixpkgs' PAM
+        # wiring staying exactly as it is today.
+      };
+      # The unit-level `environment` option, NOT a raw
+      # serviceConfig.Environment list, and the difference is
+      # load-bearing: systemd's Environment= splits an unquoted value
+      # on whitespace, so a raw list entry like
+      # "CASTLE_WORKER_COMMAND=claude -p" silently becomes
+      # CASTLE_WORKER_COMMAND=claude with the "-p" dropped — a
+      # silent-wrong-value bug of exactly the shape docs/tasks/0013's
+      # bug 2 was, waiting for the first resident whose tenant command
+      # carries an argument. The `environment` option renders every
+      # entry through toJSON (nixos/lib/systemd-lib.nix, the
+      # `Environment=${toJSON ...}` line), producing
+      # Environment="NAME=value with spaces" — one quoted assignment,
+      # exactly what systemd's own syntax wants. The existing
+      # `"`-character assertions on these options are what keep that
+      # quoting always representable. A null value is simply omitted
+      # (same systemd-lib line), so notify/repoRoot need no
+      # optionalAttrs dance here.
+      environment = {
+        # A systemd user manager hands its units a bare PATH that
+        # contains neither of the two binaries this sweep actually
+        # needs, which the VM test caught doing exactly that: the
+        # default worker tenant (agent/castle-worker-claude) execs
+        # `claude` from $PATH, and `castle route`'s notify channel
+        # shells out to `notify-send`. Both live in the system
+        # profile on a host that imported modules/dev and
+        # modules/desktop respectively — so without this line,
+        # enabling dispatch with the *default* tenant produces a
+        # result record saying the tenant could not be run, and
+        # every notification the router fires is silently lost to a
+        # non-fatal warning nobody reads. `%u` and `%h` are systemd
+        # specifiers (Environment= expands specifiers), so the
+        # resident's own profile paths are reachable with no username
+        # baked into this repo (Principle 02). mkForce because
+        # nixpkgs' user.nix already gives every user service a stock
+        # PATH (coreutils, grep, sed, systemd) at normal priority;
+        # this value replaces it rather than merging, and loses
+        # nothing by doing so — /run/current-system/sw/bin carries all
+        # of those on any NixOS host.
+        PATH = lib.mkForce "/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin";
+        CASTLE_STATE_DIR = toString cfg.stateDir;
+        CASTLE_WORKER_COMMAND = cfg.worker.command;
+        CASTLE_WORKER_TIMEOUT = toString cfg.worker.timeoutSeconds;
+        CASTLE_NOTIFY_COMMAND = cfg.notify.command;
+        CASTLE_REPO_ROOT = cfg.worker.repoRoot;
+      };
+    };
+
+    systemd.user.timers.castle-dispatch = lib.mkIf cfg.dispatch.enable {
+      description = "Backstop for the castle dispatch path unit";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      # A backstop, not the primary trigger: the path unit above fires
+      # within moments of a record landing, but a missed inotify event
+      # — or a request filed while this user session was down — would
+      # otherwise wait forever. This is scheduling *for this
+      # lifecycle*, which is exactly what docs/tasks/0021's non-goals
+      # carve out from "no scheduling."
+      timerConfig = {
+        # 5s, not a minute: an OnStartupSec timer whose interval has
+        # already elapsed fires immediately on activation, so this
+        # value is really "how long after the user manager starts
+        # before the first sweep runs." It no longer has anything to
+        # do with the watermark — castle-dispatch-watermark below owns
+        # that boundary, and owns it at an instant no login can beat.
+        # Five seconds is still worth having for what a first sweep
+        # actually does: reap the turns a crash or a logout interrupted
+        # and surface whatever backlog is waiting, promptly after
+        # login, without holding the login open while it happens.
+        OnStartupSec = "5s";
+        # A minute, not five. This tick is the only thing that ever
+        # runs when an inotify event is missed, or when a request was
+        # filed while this session was down — and the price of either
+        # is total silence until the next tick. Five minutes of that
+        # sits badly against a mechanism whose whole promise to a
+        # resident is "filing is enough"; the VM test raced that
+        # backstop and lost. The tick is cheap when there is nothing to
+        # do: one journal read, one lock, one log line, no model call.
+        OnUnitActiveSec = "1min";
+      };
+    };
+
+    # The watermark is put down here, at the instant the user manager
+    # starts, and not by whichever sweep happens to run first.
+    #
+    # test/desktop-loop caught the difference by failing: the timer's
+    # OnStartupSec is measured from user-manager start, and a
+    # graphical login plus one modal keystroke beats five seconds
+    # comfortably. In the VM the resident's very first request was
+    # filed a second after the user manager came up and roughly five
+    # seconds before the first sweep — so on a fresh journal that
+    # request was outstanding when the sweep wrote the watermark, was
+    # named in the watermark's own refs, and was therefore excluded
+    # from automatic dispatch by name, permanently. The sweep printed
+    # "nothing eligible" and nothing ever triggered again. That is a
+    # product defect on any fresh host, not a test artifact: a request
+    # filed in the first seconds after login was silently and
+    # permanently excluded.
+    #
+    # Moving the write here changes the boundary from "filed before
+    # the first sweep happened to run" to "filed before this
+    # dispatch-enabled session existed," which is the boundary
+    # §2.2 always meant. This unit runs before any compositor exists —
+    # there is no window in which a human could file anything, because
+    # there is nothing yet to file it with.
+    #
+    # It is `wantedBy = default.target` where the sweep service
+    # deliberately is not, and the distinction is the cost of the
+    # oneshot: the objection to putting the *sweep* in a login's
+    # activation path is that it can hold the user manager open for
+    # `worker.timeoutSeconds` per eligible errand. This does one
+    # journal read and at most one record write, and then it is done.
+    #
+    # Be honest about the guarantee: it is a margin, not a systemd
+    # ordering edge. greetd launches the compositor as the session
+    # process, not as a user unit, so there is no `Before=` that can
+    # be written against the thing that must lose the race — the
+    # claim is milliseconds against seconds, not an enforced order.
+    # The failure mode if it ever did lose is soft and visible, which
+    # is what makes the margin acceptable: the request lands in the
+    # watermark's refs, appears on the status surface with its
+    # `castle work <id>` label, and runs by hand.
+    systemd.user.services.castle-dispatch-watermark = lib.mkIf cfg.dispatch.enable {
+      description = "Establish the dispatch watermark at session start";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${castleCli}/bin/castle dispatch --watermark-only";
+        WorkingDirectory = "%h";
+      };
+      # Only the state directory. This path runs no tenant and fires
+      # no notification, so it needs neither the worker environment
+      # (command, timeout, repo root) nor the PATH line the sweep
+      # service carries for `claude` and `notify-send` — castleCli
+      # wraps its own python3 at a store path, so `castle` itself
+      # needs nothing on PATH to run.
+      environment = {
+        CASTLE_STATE_DIR = toString cfg.stateDir;
+      };
+    };
 
     # /code-review caught this on the branch that introduced the switch
     # to sessionVariables above: nixos/modules/config/system-
@@ -264,6 +648,35 @@ in
           can fail login for the whole host, not just castle-modal.
           Quote arguments inside the command differently (e.g. single
           quotes, or a wrapper script) instead.
+        '';
+      }
+      {
+        assertion = cfg.worker.repoRoot == null || !(lib.hasInfix "\"" cfg.worker.repoRoot);
+        message = ''
+          castle.agent.worker.repoRoot contains a literal `"` character —
+          see castle.agent.stateDir's identical assertion message for
+          why that breaks environment.sessionVariables' PAM-format
+          write. Use a path without a quote in it.
+        '';
+      }
+      {
+        # docs/tasks/0021-auto-dispatch.md: automatic dispatch is
+        # exactly the situation where the journal has to be the
+        # durable, private-repo-tracked one. Left to the fallback
+        # (~/.local/state/castle), the configured path and the
+        # fallback coincide — the same blindness
+        # test/desktop-loop/test.nix's testStateDir comment documents
+        # for docs/tasks/0013's bug 2b, except live on a real host
+        # instead of caught in a harness.
+        assertion = !cfg.dispatch.enable || cfg.stateDir != null;
+        message = ''
+          castle.agent.dispatch.enable is true but castle.agent.stateDir
+          is unset. Automatic dispatch writes claim, result, and
+          decision records unattended; they must land in the durable,
+          private-repo-tracked journal you chose, not in whatever
+          per-user fallback the CLI resolves on its own
+          (~/.local/state/castle). Set castle.agent.stateDir to your
+          private repo's state/ directory — see docs/private-layer.md.
         '';
       }
       {

@@ -306,4 +306,352 @@ then
   fail "interactive classification regression test failed (see output above)"
 fi
 
+# ---------------------------------------------------------------------
+# docs/tasks/0021-auto-dispatch.md §4: _errand_state now reads a
+# result's `outcome` field and probes the live lease behind a `claim`.
+# Every pre-existing assertion above stays exactly as it was — in
+# particular "a result with no outcome field reads as done", which is
+# every result written before that field existed and must keep reading
+# that way forever in an append-only journal.
+# ---------------------------------------------------------------------
+
+# The four fixtures below are hand-written rather than produced by
+# running a real worker: this file's subject is `_errand_state`'s
+# reading of the field, not any particular writer of it. `castle
+# record` does take --outcome (this same file exercises it further
+# down, for the human-worker-seat case) — the field is optional and
+# validated when present — but planting the record directly pins the
+# exact bytes each state is read from, which is the same technique
+# run.sh already uses for its malformed-propensity fixtures.
+# $4 (optional) is the claim this result closes, and $5 (optional) an
+# id timestamp for ordering. Both matter since docs/tasks/0021 made the
+# ledger per turn: a result closes the claim it names, and "newest"
+# is decided by id, so a fixture that wants to be the newest turn's
+# account has to say so.
+plant_result_with_outcome() {
+  local request_id="$1" outcome="$2" suffix="$3" claim_id="${4:-}" stamp="${5:-20260101T000000Z}"
+  local id="$stamp-result-$suffix"
+  local refs="$request_id"
+  [ -n "$claim_id" ] && refs="$request_id,$claim_id"
+  cat > "$CASTLE_STATE_DIR/journal/$id.md" <<EOF
+---
+id: $id
+type: result
+provenance: requested
+refs: $refs
+seat: worker
+created: 2026-01-01T00:00:00Z
+outcome: $outcome
+---
+
+Planted fixture: a result carrying outcome: $outcome (docs/tasks/0021).
+EOF
+  echo "$id"
+}
+
+plant_claim() {
+  local request_id="$1" suffix="$2" stamp="${3:-20260101T000000Z}"
+  local id="$stamp-claim-$suffix"
+  cat > "$CASTLE_STATE_DIR/journal/$id.md" <<EOF
+---
+id: $id
+type: claim
+provenance: requested
+refs: $request_id
+seat: worker
+created: 2026-01-01T00:00:00Z
+---
+
+Planted fixture: a worker turn began here (docs/tasks/0021).
+EOF
+  echo "$id"
+}
+
+log "status mode: each outcome value produces its own label, and every failure label names the retry command (docs/tasks/0021 §4)"
+REQ_COMPLETED="$("$CASTLE" ask "Outcome fixture: a completed errand.")"
+REQ_FAILED="$("$CASTLE" ask "Outcome fixture: a failed errand.")"
+REQ_TIMEOUT="$("$CASTLE" ask "Outcome fixture: a timed-out errand.")"
+REQ_INTERRUPTED="$("$CASTLE" ask "Outcome fixture: an interrupted errand.")"
+plant_result_with_outcome "$REQ_COMPLETED" completed 0c0001 >/dev/null
+plant_result_with_outcome "$REQ_FAILED" failed 0c0002 >/dev/null
+plant_result_with_outcome "$REQ_TIMEOUT" timeout 0c0003 >/dev/null
+plant_result_with_outcome "$REQ_INTERRUPTED" interrupted 0c0004 >/dev/null
+"$CASTLE" validate || fail "the planted outcome fixtures do not validate"
+
+# --limit well above the default 10: this file has filed more errands
+# than the status fold shows by default.
+STATUS_OUTCOMES="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_COMPLETED\] requested — done$" \
+  || fail "outcome: completed did not render as 'done'"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry$" \
+  || fail "outcome: failed did not render a label naming the retry command"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_TIMEOUT\] requested — timed out — castle work $REQ_TIMEOUT to retry$" \
+  || fail "outcome: timeout did not render a label naming the retry command"
+echo "$STATUS_OUTCOMES" | grep -q "^\[$REQ_INTERRUPTED\] requested — interrupted — castle work $REQ_INTERRUPTED to retry$" \
+  || fail "outcome: interrupted did not render a label naming the retry command"
+
+log "status mode: a claim with a DEAD lease reads as interrupted, not 'in progress' — nothing is actually running"
+REQ_CLAIMED="$("$CASTLE" ask "Claim fixture: a worker turn that began.")"
+CLAIM_ID="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ_CLAIMED" \
+  --body "Planted claim: a turn began here.")"
+[ -n "$CLAIM_ID" ] || fail "could not plant a claim record"
+STATUS_DEAD_LEASE="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_DEAD_LEASE" | grep -q "^\[$REQ_CLAIMED\] requested — interrupted — castle work $REQ_CLAIMED to retry$" \
+  || fail "a claim with no live lease did not read as interrupted"
+
+log "status mode: the same claim with a LIVE lease reads as 'in progress (started HH:MM)' — backed by a held flock, not by absence of evidence"
+cat > "$WORKDIR/hold-lease.py" <<'PYEOF'
+"""Hold a real flock on an errand's lease file, the way a running
+`castle work` would, so the modal's live-lease probe has something
+genuine to find. Deliberately does not import agent/castle: this is
+the harness checking the tool from the outside, same reasoning
+check_assertions.py's header gives."""
+import fcntl
+import pathlib
+import sys
+import time
+
+runtime_dir, request_id, ready_path = sys.argv[1], sys.argv[2], sys.argv[3]
+leases = pathlib.Path(runtime_dir) / "castle" / "leases"
+leases.mkdir(parents=True, exist_ok=True)
+handle = (leases / f"{request_id}.lock").open("a+")
+fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+pathlib.Path(ready_path).write_text("held\n")
+time.sleep(60)
+PYEOF
+python3 "$WORKDIR/hold-lease.py" "$XDG_RUNTIME_DIR" "$REQ_CLAIMED" "$WORKDIR/lease-held" &
+LEASE_HOLDER=$!
+for _ in $(seq 1 50); do
+  [ -f "$WORKDIR/lease-held" ] && break
+  sleep 0.2
+done
+[ -f "$WORKDIR/lease-held" ] || fail "the lease-holder helper never took the lock"
+STATUS_LIVE_LEASE="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_LIVE_LEASE" | grep -qE "^\[$REQ_CLAIMED\] requested — in progress \(started [0-9]{2}:[0-9]{2}\)$" \
+  || fail "a claim with a live lease did not read as 'in progress (started HH:MM)': $(echo "$STATUS_LIVE_LEASE" | grep "$REQ_CLAIMED" || true)"
+kill "$LEASE_HOLDER" 2>/dev/null || true
+wait "$LEASE_HOLDER" 2>/dev/null || true
+
+log "status mode: once the lease dies with its holder, the same errand reads as interrupted again"
+STATUS_AFTER_LEASE="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_AFTER_LEASE" | grep -q "^\[$REQ_CLAIMED\] requested — interrupted — castle work $REQ_CLAIMED to retry$" \
+  || fail "the errand still claimed to be in progress after its lease holder died"
+
+log "status mode: a live turn outranks an existing result — a failed errand being retried right now reads as 'in progress', not as advice to retry it"
+# The label this ordering exists for. Under results-win-outright, an
+# errand whose failed turn the resident was retrying at that very
+# moment rendered "failed — castle work <id> to retry": advice to run a
+# command that was already running, and that would be refused the lease
+# if the resident took it.
+# Closing $CLAIM_ID specifically: since the ledger is per turn, a
+# result that named only the request would leave this errand's newest
+# claim unclosed, and the honest label for that is "interrupted", not
+# "failed" — which is a different assertion than the one this section
+# is making.
+plant_result_with_outcome "$REQ_CLAIMED" failed 0c0005 "$CLAIM_ID" >/dev/null
+STATUS_FAILED_CLAIM="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_FAILED_CLAIM" | grep -q "^\[$REQ_CLAIMED\] requested — failed — castle work $REQ_CLAIMED to retry$" \
+  || fail "with a failed result and no live lease, the errand should read as failed"
+python3 "$WORKDIR/hold-lease.py" "$XDG_RUNTIME_DIR" "$REQ_CLAIMED" "$WORKDIR/lease-held-2" &
+LEASE_HOLDER_2=$!
+for _ in $(seq 1 50); do
+  [ -f "$WORKDIR/lease-held-2" ] && break
+  sleep 0.2
+done
+[ -f "$WORKDIR/lease-held-2" ] || fail "the lease-holder helper never took the lock for the retry case"
+STATUS_LIVE_RETRY="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_LIVE_RETRY" | grep -qE "^\[$REQ_CLAIMED\] requested — in progress \(started [0-9]{2}:[0-9]{2}\)$" \
+  || fail "a live turn on an errand that already has a failed result did not read as 'in progress': $(echo "$STATUS_LIVE_RETRY" | grep "$REQ_CLAIMED" || true)"
+kill "$LEASE_HOLDER_2" 2>/dev/null || true
+wait "$LEASE_HOLDER_2" 2>/dev/null || true
+
+log "status mode: the errand's state is its NEWEST turn's state, not its newest result's (docs/tasks/0021 §4)"
+# Scenario (a), verified as a real misreport before the fix: an errand
+# whose retry completed, and whose older abandoned turn was reaped
+# afterwards, carries an `interrupted` result NEWER than its
+# `completed` one — because the reaper wrote it later. Keyed on the
+# newest result it read as interrupted forever, though it was finished.
+REQ_TWO_TURNS="$("$CASTLE" ask "Two turns: an old one reaped after a newer one completed.")"
+CLAIM_A="$(plant_claim "$REQ_TWO_TURNS" 0a0001 20260101T000100Z)"
+CLAIM_B="$(plant_claim "$REQ_TWO_TURNS" 0a0002 20260101T000200Z)"
+plant_result_with_outcome "$REQ_TWO_TURNS" completed 0a0003 "$CLAIM_B" 20260101T000300Z >/dev/null
+# The reaper's account of the OLDER turn, written last of all.
+plant_result_with_outcome "$REQ_TWO_TURNS" interrupted 0a0004 "$CLAIM_A" 20260101T000400Z >/dev/null
+"$CASTLE" validate || fail "the two-turn fixtures do not validate"
+STATUS_TWO_TURNS="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_TWO_TURNS" | grep -q "^\[$REQ_TWO_TURNS\] requested — done$" \
+  || fail "an errand whose newest turn completed reads as something else because an older turn was reaped later: $(echo "$STATUS_TWO_TURNS" | grep "$REQ_TWO_TURNS" || true)"
+
+log "status mode: and an open newest turn is not masked by an older turn's result"
+# Scenario (b), the same bug from the other side: a second turn that
+# died leaves a claim no result closes, and an older result hid it
+# entirely.
+REQ_OPEN_TURN="$("$CASTLE" ask "Two turns: the newer one died and nothing closed it.")"
+CLAIM_C="$(plant_claim "$REQ_OPEN_TURN" 0b0001 20260101T000100Z)"
+plant_result_with_outcome "$REQ_OPEN_TURN" completed 0b0002 "$CLAIM_C" 20260101T000200Z >/dev/null
+plant_claim "$REQ_OPEN_TURN" 0b0003 20260101T000300Z >/dev/null
+"$CASTLE" validate || fail "the open-turn fixtures do not validate"
+STATUS_OPEN_TURN="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_OPEN_TURN" | grep -q "^\[$REQ_OPEN_TURN\] requested — interrupted — castle work $REQ_OPEN_TURN to retry$" \
+  || fail "an unclosed newest turn was masked by an older turn's result: $(echo "$STATUS_OPEN_TURN" | grep "$REQ_OPEN_TURN" || true)"
+
+log "status mode: an outcome value this version does not know renders verbatim, never as 'done'"
+# `outcome` is a named cross-task contract (0026/0027 reuse it), so a
+# value from a later task, a hand-written record, or a typo will reach
+# this surface eventually. Reporting it as success because it was not
+# recognised is precisely the prose-vs-field failure the field exists
+# to end. Planted directly and removed again, the same pattern
+# run.sh's malformed-propensity fixtures use: `castle validate`
+# rejects unknown outcomes on purpose, so the record cannot be left
+# lying in the journal.
+REQ_UNKNOWN_OUTCOME="$("$CASTLE" ask "An outcome from a vocabulary this version has never heard of.")"
+UNKNOWN_RESULT="$CASTLE_STATE_DIR/journal/20260101T000500Z-result-0e0001.md"
+cat > "$UNKNOWN_RESULT" <<EOF
+---
+id: 20260101T000500Z-result-0e0001
+type: result
+provenance: requested
+refs: $REQ_UNKNOWN_OUTCOME
+seat: worker
+created: 2026-01-01T00:05:00Z
+outcome: cancelled
+---
+
+Planted fixture: an outcome value outside this version's vocabulary.
+EOF
+STATUS_UNKNOWN="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_UNKNOWN" | grep -q "^\[$REQ_UNKNOWN_OUTCOME\] requested — cancelled — castle work $REQ_UNKNOWN_OUTCOME to retry$" \
+  || fail "an unrecognised outcome did not render verbatim with a retry hint: $(echo "$STATUS_UNKNOWN" | grep "$REQ_UNKNOWN_OUTCOME" || true)"
+echo "$STATUS_UNKNOWN" | grep -q "^\[$REQ_UNKNOWN_OUTCOME\] requested — done$" \
+  && fail "an unrecognised outcome was reported as done — success by default on a field that exists to prevent exactly that"
+rm -f "$UNKNOWN_RESULT"
+"$CASTLE" validate || fail "the journal did not validate clean once the unknown-outcome fixture was removed"
+
+log "castle record --outcome: a human holding the worker seat can state the fact, and the surface reads it"
+REQ_HANDFAIL="$("$CASTLE" ask "A failed errand a human recorded by hand.")"
+"$CASTLE" record --type result --provenance requested --seat worker --refs "$REQ_HANDFAIL" \
+  --outcome failed --body "Tried it by hand; it did not work." >/dev/null
+STATUS_HANDFAIL="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_HANDFAIL" | grep -q "^\[$REQ_HANDFAIL\] requested — failed — castle work $REQ_HANDFAIL to retry$" \
+  || fail "a hand-written result with --outcome failed did not read as failed: $(echo "$STATUS_HANDFAIL" | grep "$REQ_HANDFAIL" || true)"
+"$CASTLE" validate || fail "a hand-written result carrying --outcome does not validate"
+
+log "status mode: a claim closed by a HAND-WRITTEN result (no claim id in its refs) reads by that result, not as interrupted"
+# The human-seat-holder shape: `castle work` crashed, the resident
+# finished the errand with `castle record --type result --refs R` — the
+# spelling the CLI implies — and the status surface used to mask that
+# closure behind "interrupted" forever, while the next sweep prepared
+# to contradict it in the journal. Same two-clause rule as the reaper,
+# from the same function.
+REQ_HAND_CLOSED="$("$CASTLE" ask "A crashed turn the resident closed by hand.")"
+plant_claim "$REQ_HAND_CLOSED" 0d0001 20260101T000100Z >/dev/null
+# Request-only refs, newer id: exactly what `castle record` writes.
+plant_result_with_outcome "$REQ_HAND_CLOSED" completed 0d0002 "" 20260101T000200Z >/dev/null
+"$CASTLE" validate || fail "the hand-closure fixtures do not validate"
+STATUS_HAND_CLOSED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_HAND_CLOSED" | grep -q "^\[$REQ_HAND_CLOSED\] requested — done$" \
+  || fail "an errand a resident closed by hand still reads as unfinished: $(echo "$STATUS_HAND_CLOSED" | grep "$REQ_HAND_CLOSED" || true)"
+
+log "status mode: a request the watermark excluded says so, instead of waiting for a worker that will never come"
+# The watermark names its excluded requests in its own refs, so the
+# explanation is already in this errand's downstream fold — and
+# "awaiting a worker" on an errand automatic dispatch has permanently
+# declined to touch is 0015's failure exactly.
+REQ_PREDATES="$("$CASTLE" ask "Filed before dispatch existed on this journal.")"
+WATERMARK_FIXTURE="$CASTLE_STATE_DIR/journal/20260101T000600Z-decision-0f0001.md"
+cat > "$WATERMARK_FIXTURE" <<EOF
+---
+id: 20260101T000600Z-decision-0f0001
+type: decision
+provenance: initiated
+refs: $REQ_PREDATES
+seat: dispatch
+created: 2026-01-01T00:06:00Z
+evidence: planted watermark fixture: dispatch began after this request was filed
+watermark: 2026-01-01T00:06:00Z
+---
+
+Planted fixture: the dispatch watermark, naming $REQ_PREDATES as excluded.
+EOF
+"$CASTLE" validate || fail "the planted watermark fixture does not validate"
+STATUS_PREDATES="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES\] requested — not started automatically (predates dispatch) — castle work $REQ_PREDATES to run it$" \
+  || fail "a watermark-excluded request did not say so: $(echo "$STATUS_PREDATES" | grep "$REQ_PREDATES" || true)"
+echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES\] requested — awaiting a worker$" \
+  && fail "a watermark-excluded request still claims to be awaiting a worker — nothing will ever start it automatically"
+# The watermark is a decision with no channel, and the fold renders it
+# as a note rather than inventing a routing that never happened.
+echo "$STATUS_PREDATES" | grep -A2 "^\[$REQ_PREDATES\]" | grep -q "noted: planted watermark fixture" \
+  || fail "the channel-less watermark decision did not render as a note under the errand it excluded"
+
+log "status mode: a request a tenant filed during its own turn says so, instead of promising a worker that is never coming"
+# docs/tasks/0021 §2.4(e): dispatch deliberately never starts these, so
+# "awaiting a worker" would be 0015's exact failure — a label promising
+# a start that will not happen. Filed through the real mechanism (the
+# tenant's inherited CASTLE_WORKER_CLAIM), not by hand-editing a record.
+REQ_STAMPED="$(CASTLE_WORKER_CLAIM="$CLAIM_A" "$CASTLE" ask "Filed by a tenant mid-turn: should not claim to be awaiting a worker.")"
+grep -q "^filed-during-turn: $CLAIM_A\$" "$CASTLE_STATE_DIR/journal/$REQ_STAMPED.md" \
+  || fail "$REQ_STAMPED carries no filed-during-turn stamp — the fixture is not exercising what it claims to"
+STATUS_STAMPED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_STAMPED" | grep -q "^\[$REQ_STAMPED\] requested — filed during a worker turn — castle work $REQ_STAMPED to run it$" \
+  || fail "a tenant-filed request did not say so: $(echo "$STATUS_STAMPED" | grep "$REQ_STAMPED" || true)"
+echo "$STATUS_STAMPED" | grep -q "^\[$REQ_STAMPED\] requested — awaiting a worker$" \
+  && fail "a tenant-filed request still claims to be awaiting a worker — nothing will ever start it automatically"
+"$CASTLE" validate || fail "the journal does not validate after the tenant-filed request fixture"
+
+log "status mode: an unanswered question still overlays every one of these states unchanged"
+"$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
+  --body "Should I try a different approach?" >/dev/null
+STATUS_OVERLAY="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you$" \
+  || fail "the ', waiting on you' overlay did not compose with an outcome label"
+"$CASTLE" validate || fail "the journal did not validate after the outcome/claim fixtures"
+
+# ---------------------------------------------------------------------
+log "status mode: a follow-up errand's turns never label the errand it was filed against"
+# ---------------------------------------------------------------------
+# `castle ask --refs R1` is the documented way to file a follow-up, and
+# `_collect_downstream` is transitive over refs with no keying by
+# errand — so R2, and everything hanging off R2, lands in R1's fold.
+# Deriving R1's turn state from that fold read R2's abandoned turn as
+# R1's own: a finished errand labelled "interrupted — castle work R1 to
+# retry", about a turn R1 never had. The fold stays transitive (a
+# question raised anywhere on the chain is still the resident's to
+# answer); what is keyed to the request is the turn state.
+REQ_PARENT="$("$CASTLE" ask "Parent errand: finishes cleanly, must not inherit a follow-up's state.")"
+CLAIM_PARENT="$(plant_claim "$REQ_PARENT" 0e0001 20260101T000700Z)"
+plant_result_with_outcome "$REQ_PARENT" completed 0e0002 "$CLAIM_PARENT" 20260101T000701Z >/dev/null
+REQ_FOLLOW="$("$CASTLE" ask --refs "$REQ_PARENT" "Follow-up errand: its own turn dies, and stays its own.")"
+plant_claim "$REQ_FOLLOW" 0e0003 20260101T000800Z >/dev/null
+"$CASTLE" validate || fail "the follow-up fixture does not validate"
+STATUS_FOLLOW="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_FOLLOW" | grep -q "^\[$REQ_PARENT\] requested — done$" \
+  || fail "the parent errand took its state from a follow-up's turn: $(echo "$STATUS_FOLLOW" | grep "$REQ_PARENT" || true)"
+echo "$STATUS_FOLLOW" | grep -q "^\[$REQ_FOLLOW\] requested — interrupted — castle work $REQ_FOLLOW to retry$" \
+  || fail "the follow-up errand did not report its own dead turn: $(echo "$STATUS_FOLLOW" | grep "$REQ_FOLLOW" || true)"
+
+# ---------------------------------------------------------------------
+log "status mode: answering one question does not silence the next one"
+# ---------------------------------------------------------------------
+# The overlay used to be "there is a question and there is no answer",
+# which never paired the two: the first answer on an errand made every
+# later question invisible, on the one surface whose whole job is to
+# say when a worker is blocked on the resident.
+REQ_TWOQ="$("$CASTLE" ask "An errand whose worker asks twice.")"
+Q_FIRST="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ_TWOQ" --body "First question?")"
+STATUS_Q1="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+  || fail "an unanswered question did not raise the overlay: $(echo "$STATUS_Q1" | grep "$REQ_TWOQ" || true)"
+"$CASTLE" answer "$Q_FIRST" "Yes, go ahead." >/dev/null
+STATUS_Q1A="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+  && fail "an answered question still reads as waiting on the resident"
+"$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ_TWOQ" --body "Second question, after the first was answered?" >/dev/null
+STATUS_Q2="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+  || fail "a SECOND question went unnoticed because an earlier one had been answered — the overlay is not pairing answers with questions"
+"$CASTLE" validate || fail "the journal does not validate after the two-question fixture"
+
 log "all assertions passed"

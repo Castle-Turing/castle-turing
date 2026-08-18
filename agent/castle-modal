@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """castle-modal — the ambient-intake surface (docs/tasks/0009-ambient-intake.md).
 
-The keybinding ($mod+Shift+space, see modules/home) opens a floating
+The keybinding (Mod4+Shift+Return, see modules/home) opens a floating
 `foot` terminal running this script. Stdlib Python only, same
 constraint as agent/castle (agent/README.md) — and for the same reason:
 this has to keep working with nothing installed beyond a python3
@@ -44,6 +44,7 @@ no foot, and no Sway involved (docs/tasks/0009's verification plan).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import importlib.machinery
 import importlib.util
 import pathlib
@@ -185,7 +186,58 @@ def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
     return 0
 
 
-def _errand_state(downstream: list) -> str:
+def _started_at(castle, claim) -> str:
+    """A claim's start time as local wall-clock `HH:MM`.
+
+    `created` is UTC, always (agent/castle's CREATED_FMT), and "started
+    14:03" means nothing to a resident if 14:03 is in a timezone they
+    don't live in. Falls back to the raw field if it doesn't parse —
+    this is a status line, not a validator."""
+    raw = claim.fields.get("created", "")
+    try:
+        when = dt.datetime.strptime(raw, castle.CREATED_FMT).replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return raw or "?"
+    return when.astimezone().strftime("%H:%M")
+
+
+def _outcome_label(outcome: str, request_id: str) -> str:
+    """One result's `outcome` as a resident-facing label.
+
+    Every non-completed value names the retry command explicitly. That
+    is docs/tasks/0015's lesson restated — "the label must not cause
+    the inaction it describes": a label honest about failure but silent
+    about what to do next repeats the same mistake in the other
+    direction. An absent `outcome` means "done", deliberately and
+    forever: every result written before that field existed is already
+    permanent in an append-only journal and cannot be backfilled, so a
+    pre-existing result whose body says "FAILED" in prose keeps reading
+    as "done" — the same backward-compatibility posture
+    `considered`/`propensity` already established. Nothing here greps a
+    body for a word like "FAILED"; the field is the fact.
+    """
+    if outcome == "failed":
+        return f"failed — castle work {request_id} to retry"
+    if outcome == "timeout":
+        return f"timed out — castle work {request_id} to retry"
+    if outcome == "interrupted":
+        return f"interrupted — castle work {request_id} to retry"
+    if outcome and outcome != "completed":
+        # An outcome from outside today's vocabulary — a later task
+        # extending the contract, a hand-written record, a typo. Shown
+        # verbatim with the retry hint rather than folded into "done":
+        # `outcome` is a named cross-task contract (agent/README.md),
+        # and defaulting an unrecognised member of it to success is the
+        # exact failure this whole field exists to end — a surface
+        # quietly reporting an errand as fine because it did not
+        # understand what it was told. Absent and `completed` keep
+        # meaning done, which is the append-only compatibility promise
+        # and unchanged.
+        return f"{outcome} — castle work {request_id} to retry"
+    return "done"
+
+
+def _errand_state(castle, request, downstream: list) -> str:
     """`result` was checked before question/answer, so 'done' won any
     errand that also had an unanswered question — but the worker prompt
     (agent/castle-worker-claude) explicitly tells tenants to "file the
@@ -195,36 +247,141 @@ def _errand_state(downstream: list) -> str:
     you" — the one state this whole modal exists to surface — silently
     unreachable in exactly the flow the worker is instructed to use
     (0009 review pass finding 4). Reporting both when both apply is
-    strictly more honest than picking one.
+    strictly more honest than picking one. The ", waiting on you"
+    overlay below composes exactly as it always has — and it is now
+    computed by pairing each question with an answer that names it,
+    rather than by asking whether the fold contains an answer of any
+    kind. The old form went quiet after the first answer, so a worker
+    that raised a second question on the same errand waited on a
+    resident who was never told.
 
-    The fallthrough below used to read "in progress". Read that as
-    plain English and it claims a worker is running; read it as what
-    the code actually does and it is just "no result, no unanswered
-    question" — the state of a request record in the instant after it's
-    written, before anything has looked at it, because no record type
-    here means *a tenant claimed this errand*. That type doesn't exist
-    yet, so this branch can never observe a claim — only its absence.
-    On the reference host, where `castle work` is invoked by hand
-    rather than scheduled, that absence is the steady state: every
-    filed request reads "in progress" forever, including ones nothing
-    will ever pick up, and a resident who trusts the label has no
-    reason to run the worker that would make it true (docs/tasks/0015).
-    "awaiting a worker" says only what the journal actually shows. A
-    real in-progress state needs a record written when a tenant claims
-    the errand — deliberately not added here, because it belongs with
-    the first *asynchronous* worker: `castle work` today runs
-    synchronously from a shell, so a claimed record would be written
-    and read microseconds apart."""
-    types = {rec.type for rec in downstream}
-    has_result = "result" in types
-    waiting = "question" in types and "answer" not in types
-    if has_result and waiting:
-        return "done, waiting on you"
+    **The errand's state is the state of its newest turn.** Since
+    docs/tasks/0021-auto-dispatch.md a result names the `claim` it
+    closes, so "which turn are we talking about" is answerable — and it
+    has to be asked, because keying on the newest *result* gets two
+    real cases backwards. An errand whose retry completed, and whose
+    older abandoned turn was reaped afterwards, has a newer
+    `interrupted` result than its `completed` one: keyed on results it
+    reads as interrupted forever, though it is finished. And an errand
+    with a second turn that died leaves a claim no result closes, which
+    an older result masks entirely. Older turns' accounts — reaped ones
+    included — are history; the newest turn is the current truth. A
+    journal with no `claim` records at all (everything written before
+    this task) keeps the old newest-result behavior unchanged.
+
+    "in progress" is now *earnable* (docs/tasks/0021 §4), which
+    docs/tasks/0015 deliberately left it not being: a `claim` record
+    says a worker turn began, and a live `flock` on that errand's lease
+    says one is running right this second. Both, not either — a claim
+    with a dead lease is an interrupted turn, and saying "in progress"
+    about it would be exactly the absence-of-evidence guess 0015
+    removed. It is also checked **first**, ahead of any result: an
+    errand whose failed turn the resident is retrying right now must
+    not be labelled with advice to run the very command that is already
+    running (and would be refused the lease).
+
+    The narrow race this live probe shares with the dispatch reaper's
+    own probe is documented on agent/castle's `lock_is_held`, and
+    accepted there.
+    """
+    request_id = request.id
+
+    # Every question in this fold that no answer names. The old form
+    # was `"question" in types and "answer" not in types`, which never
+    # paired an answer with its question: one answered question made
+    # the errand stop saying "waiting on you" forever, hiding every
+    # later question the worker raised. Questions and answers are the
+    # one thing that legitimately arrives here through the transitive
+    # walk (a follow-up request's question is still this errand chain
+    # waiting on the resident), so unlike the turn state below they are
+    # deliberately NOT keyed to this request id.
+    answered = {ref for rec in downstream if rec.type == "answer" for ref in rec.refs}
+    waiting = any(
+        rec.type == "question" and rec.id not in answered for rec in downstream
+    )
+
+    # `_collect_downstream` is transitive over `refs` with no keying by
+    # type or by errand, which is right for the fold as a whole and
+    # wrong for deriving *this* errand's turn state from it. A
+    # follow-up filed with `castle ask --refs R1` pulls R2 into R1's
+    # downstream, and R2's claims and results come with it — so an R1
+    # that finished cleanly could be labelled from R2's abandoned turn
+    # ("interrupted — castle work R1 to retry", about a turn that was
+    # never R1's). Both selections are keyed to this request, the same
+    # way agent/castle keys them: a claim belongs to the errand named
+    # first in its `refs` (what the reaper uses to find the request),
+    # and a result belongs to any errand it names (what `closing_result`
+    # uses, and what lets `--refs R,C` close a turn by hand).
+    results = sorted(
+        (rec for rec in downstream if rec.type == "result" and request_id in rec.refs),
+        key=lambda rec: rec.id,
+    )
+    claims = sorted(
+        (
+            rec
+            for rec in downstream
+            if rec.type == "claim" and rec.refs and rec.refs[0] == request_id
+        ),
+        key=lambda rec: rec.id,
+    )
+
+    base = None
+    if claims:
+        newest_claim = claims[-1]
+        if castle.lease_is_held(request_id):
+            base = f"in progress (started {_started_at(castle, newest_claim)})"
+        else:
+            # The result that closes *this* turn, not merely the newest
+            # result on the errand — and the same two-clause rule the
+            # dispatch reaper uses, from the same function, so the two
+            # surfaces can never disagree about whether a turn was ever
+            # accounted for. Clause (b) is what stops this label
+            # masking a resident's own hand-written closure behind an
+            # "interrupted" the reaper was about to contradict.
+            closing = castle.closing_result(newest_claim, results, claims)
+            if closing is not None:
+                base = _outcome_label(closing.fields.get("outcome", ""), request_id)
+            else:
+                # The window between "the lease died" and "the next
+                # dispatch sweep reaps it into a result". Nothing is
+                # running, so "interrupted" is the honest label.
+                base = f"interrupted — castle work {request_id} to retry"
+    elif results:
+        # No claim records anywhere on this errand: a journal from
+        # before docs/tasks/0021, where nothing recorded turns at all.
+        base = _outcome_label(results[-1].fields.get("outcome", ""), request_id)
+    elif any(
+        rec.type == "decision"
+        and rec.fields.get("seat") == castle.DISPATCH_SEAT
+        and rec.fields.get("watermark", "").strip()
+        # Named in the watermark's own refs, not merely reachable from
+        # this errand through one. The watermark excludes BY NAME
+        # (docs/tasks/0021 §2.2), so a watermark that named a follow-up
+        # request but not this one must not make this one claim it
+        # predates dispatch — the same transitive contamination the
+        # claim and result selections above are keyed against.
+        and request_id in rec.refs
+        for rec in downstream
+    ):
+        # The watermark names the requests it excluded in its own refs
+        # (docs/tasks/0021 §2.2), which is exactly why it turns up in
+        # this errand's downstream fold — so the reason nothing is
+        # happening is already here, and "awaiting a worker" would be
+        # 0015's failure again: a label promising a start that is never
+        # coming, on an errand automatic dispatch has permanently
+        # declined to touch.
+        base = f"not started automatically (predates dispatch) — castle work {request_id} to run it"
+    elif request.fields.get(castle.FILED_DURING_TURN_FIELD, "").strip():
+        # A request a worker tenant filed during its own turn
+        # (docs/tasks/0021 §2.4(e)). "Awaiting a worker" would be the
+        # 0015 failure exactly: a label promising a start that is never
+        # coming, because dispatch deliberately never starts these. Say
+        # what is true and what to do about it.
+        base = f"filed during a worker turn — castle work {request_id} to run it"
+
     if waiting:
-        return "waiting on you"
-    if has_result:
-        return "done"
-    return "awaiting a worker"
+        return f"{base}, waiting on you" if base else "waiting on you"
+    return base or "awaiting a worker"
 
 
 def run_status(castle, limit: int, out=sys.stdout) -> int:
@@ -236,12 +393,12 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
     )[:limit]
 
     if not requests:
-        print("No errands yet. Press $mod+Shift+space and describe one.", file=out)
+        print("No errands yet. Press Mod4+Shift+Return and describe one.", file=out)
         return 0
 
     for req in requests:
         downstream = castle._collect_downstream(records, req.id)
-        state = _errand_state(downstream)
+        state = _errand_state(castle, req, downstream)
         first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
         print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
         print(f"    asked: {first_line}", file=out)
@@ -250,9 +407,20 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
             key=lambda rec: rec.id,
         )
         for decision in decisions:
-            channel = decision.fields.get("channel", "?")
+            channel = decision.fields.get("channel", "")
             evidence = decision.fields.get("evidence", "")
-            print(f"    decided -> {channel}: {evidence}", file=out)
+            if channel:
+                print(f"    decided -> {channel}: {evidence}", file=out)
+            else:
+                # A decision that routed nothing — today, the dispatch
+                # watermark, which names the requests it excluded from
+                # automatic starting in its own `refs` and therefore
+                # lands in this errand's fold (docs/tasks/0021 §2.2).
+                # "decided -> ?" would read as a routing that failed;
+                # this reads as what it is, which for an excluded
+                # request is exactly the explanation the resident wants
+                # for why nothing is happening on its own.
+                print(f"    noted: {evidence}", file=out)
         print(file=out)
     return 0
 

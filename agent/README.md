@@ -13,7 +13,10 @@ CLI's ask/answer/record/route/digest/validate/show core, and the
 journal/spool split. `docs/tasks/0009-ambient-intake.md` added the
 modal intake, the worker seat's real tenant (`castle work`), the
 router's `notify` channel, and the resident-model write path
-(`castle answer --fact`).
+(`castle answer --fact`). `docs/tasks/0021-auto-dispatch.md` added
+`castle dispatch` — the sweep that lets a filed errand start itself —
+along with the per-request lease, the `claim` record, and the
+`outcome` field on results.
 
 Nothing here is a model, and nothing here decides anything a human
 couldn't decide by hand-writing the same record with a text editor.
@@ -38,9 +41,10 @@ file, `agent/castle`, meant to be read top to bottom.
 castle ask [--provenance requested|initiated] [--refs id,id] TEXT...
 castle answer QUESTION_ID [--fact NAME] TEXT...
 castle correct [--refs id,id] TEXT...
-castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--body TEXT | --body-file PATH] [--spool]
+castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--outcome VALUE] [--body TEXT | --body-file PATH] [--spool]
 castle route
 castle work REQUEST_ID
+castle dispatch
 castle digest [--since TIMESTAMP]
 castle validate [--journal DIR]
 castle show ID
@@ -78,7 +82,11 @@ castle show ID
 - **`record`** — the generic writer underneath the above, and what a
   worker or router seat calls directly. Any seat, any type. `--fact` is
   honored here too so a worker raising a `question` record can name the
-  fact it's eliciting up front.
+  fact it's eliciting up front, and `--outcome` likewise for a
+  `result` — **a human holding the worker seat by hand should pass
+  `--outcome failed` when an errand failed**, because no surface may
+  read failure out of prose: a result with no `outcome` field reads as
+  done, forever (see "The claim record, and the `outcome` field").
 - **`route`** — the router. Reads every `result` and `question` record
   not yet referenced by a `decision` record **written by the router
   seat itself** — filtering on `seat: router`, not just record type, is
@@ -119,7 +127,55 @@ castle show ID
   to the rest of the system. **The worker proposes; it never deploys**
   — this function has no code path that runs `nixos-rebuild`, `git
   commit`, or anything else that touches a running system or this
-  repo's history.
+  repo's history. Before anything else it takes an exclusive `flock`
+  on that errand's lease (see "Where state lives") and writes a
+  `claim` record; a second `castle work` on an errand somebody is
+  already working is refused outright, with nothing written. Re-running
+  it on an errand that already has a result is *not* refused — that is
+  the retry path, and it stays exactly that
+  (`docs/tasks/0021-auto-dispatch.md`).
+- **`dispatch`** — one sweep of the journal, and the only subcommand
+  a machine runs unprompted (`docs/tasks/0021-auto-dispatch.md`). In
+  order: take a global sweep lock (one sweep at a time, machine-wide);
+  write the watermark if this journal has never had one — a backstop,
+  since on a host running `modules/agent` the normal writer is the
+  `castle-dispatch-watermark` unit at session start, and what is left
+  for a sweep is a journal restored mid-session; give every
+  interrupted turn a result; work every eligible request, oldest
+  first, one at a time; run `route` exactly once at the end. A request
+  is eligible iff nothing has produced a `result` for it, nothing is
+  running on it, it is not named in the watermark record's own `refs`,
+  and it carries no `filed-during-turn` stamp — a fold over the
+  journal, nothing else. Provenance is deliberately *not* an
+  eligibility condition (it decides the channel, never whether the
+  errand runs), and neither is an unanswered question (errand
+  resumption is `docs/backlog/errand-resume-after-answer.md`'s
+  problem). Exit code 0 whenever the sweep ran, *including* when an
+  errand it attempted failed: failure is visible in `outcome`, and a
+  nonzero exit here means dispatch itself broke. On a host that opts
+  into `castle.agent.dispatch.enable` (`modules/agent`), a systemd
+  user path unit and a one-minute backstop timer run this; a human
+  holding the dispatch seat can run it by hand, exactly like every
+  other subcommand here. `--watermark-only` runs the guards, puts the
+  watermark down if this journal has never had one, and returns
+  without sweeping: that is what the session-start unit runs, so the
+  boundary is "filed before this dispatch-enabled session existed"
+  rather than "filed before the first sweep happened to run" — a
+  distinction the VM test made concrete by losing that race to a
+  resident's first keystroke.
+
+  `seat: dispatch` appears on exactly two kinds of record — the
+  watermark decision and any `result` the reaper had to supply — and
+  it is **plumbing, not a reasoning seat**, a new value in the
+  existing category `digest` already occupies rather than a new
+  category. Dispatch holds no judgment and chooses no tenant: which
+  request runs next is a total function of the journal, which is also
+  why it writes no decision record per errand (a record whose evidence
+  text would be identical on every invocation forever is ritual, not
+  accountability). Giving it a policy for *which* eligible request to
+  run, or a say in whether to run one at all, would make it a
+  reasoning seat — see `docs/architecture.md`'s Seats section, which
+  exists partly to stop a later agent "completing" it into one.
 - **`digest`** — folds the journal into a report: one section per
   errand (a `request` and everything transitively `refs`-linked to
   it), in creation order, plus a trailing **Corrections** section
@@ -181,15 +237,39 @@ castle-modal --mode status  [--limit N]
   prints; `--kind`'s two values are for scripts and CI, not shown to a
   human.
 - **status** — folds the `--limit` most recent errands (default 10)
-  from the journal into a compact listing: what was asked, whether it's
-  awaiting a worker, waiting on the resident, or done, and what the
-  router most recently decided and why. "Awaiting a worker" is the
-  fallthrough — no record type here means *a tenant claimed this
-  errand*, so it says only that nothing has touched the errand yet, not
-  that anything is under way (`docs/tasks/0015-filed-not-in-progress.md`;
-  see `_errand_state`). The "come back later and check" half of the
-  design. Corrections never appear here: they aren't errands, and
-  there's nothing about one to "come back and check" on.
+  from the journal into a compact listing: what was asked, what state
+  it's in, and what the router most recently decided and why.
+  "Awaiting a worker" is still the fallthrough, and still says only
+  that nothing has touched the errand yet
+  (`docs/tasks/0015-filed-not-in-progress.md`; see `_errand_state`) —
+  but the other states are now *earned* rather than guessed
+  (`docs/tasks/0021-auto-dispatch.md`): "in progress (started HH:MM)"
+  requires both a `claim` record and a live `flock` on that errand's
+  lease, checked at read time and checked *first*, ahead of any result
+  — an errand whose failed turn is being retried at this moment must
+  not be labelled with advice to run the command that is already
+  running. A claim whose lease is dead reads as interrupted, because
+  nothing is actually running. The state is that of the errand's
+  **newest turn**: the result naming the newest `claim` is the one that
+  labels it, so an old turn reaped after a newer one completed does not
+  make a finished errand read as interrupted, and a second turn that
+  died is not masked by an older turn's result. A request a tenant
+  filed during its own turn reads "filed during a worker turn — `castle
+  work <id>` to run it", and one the watermark excluded reads "not
+  started automatically (predates dispatch) — `castle work <id>` to run
+  it": nothing will ever start either of them on its own, so neither
+  may claim to be awaiting a worker. A result's
+  `outcome` supplies the rest — `done`, or "failed / timed out /
+  interrupted — castle work `<id>` to retry". Every non-done label
+  names the retry command on purpose: 0015's lesson was that a label
+  must not cause the inaction it describes, and "failed" with no next
+  step is that mistake in the other direction. `castle digest`
+  deliberately grows no lease reader to match: a digest is a
+  historical account of a period that already happened, not a live
+  view, so "in progress" has no business appearing in one. The "come
+  back later and check" half of the design. Corrections never appear
+  here: they aren't errands, and there's nothing about one to "come
+  back and check" on.
 
 Headless by construction: both modes only ever read `sys.stdin` and
 write `sys.stdout`/`sys.stderr`, with no `curses` and no compositor
@@ -256,10 +336,10 @@ field. That trade is intentional — prose belongs in the body.
 | Field        | Meaning                                                              |
 |--------------|-----------------------------------------------------------------------|
 | `id`         | `YYYYMMDDTHHMMSSZ-<type>-<6 hex chars>` — sortable, greppable, collision-safe enough. Must match the filename. |
-| `type`       | One of `request`, `decision`, `result`, `question`, `answer`, `correction`. |
+| `type`       | One of `request`, `decision`, `result`, `question`, `answer`, `correction`, `claim`. |
 | `provenance` | `requested` (the resident asked for this) or `initiated` (the system undertook it on its own). |
 | `refs`       | Comma-separated ids of the records this one responds to. Empty for a root request. |
-| `seat`       | Which seat wrote this record (`intake`, `router`, `worker`, `digest`, or a specific worker's own name). |
+| `seat`       | Which seat wrote this record (`intake`, `router`, `worker`, `digest`, `dispatch`, or a specific worker's own name). |
 | `created`    | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ`.                                 |
 
 `decision` records require one more, non-empty field:
@@ -331,6 +411,105 @@ permanent schema gate and not only in the test harness. A decision
 record from before this change, with none of these fields, still
 validates clean.
 
+### The claim record, and the `outcome` field
+
+Two additions from `docs/tasks/0021-auto-dispatch.md`, both driven by
+the same fact: once errands start themselves, nobody is watching the
+terminal when one goes wrong.
+
+A **`claim`** record is written the moment `castle work` takes an
+errand — after the lease, before the tenant command is even resolved.
+It needs no new frontmatter field: `refs` points at the request, the
+body names the tenant command and the start time, same as any other
+record's account of itself. Its job is *observability across a
+restart*, not exclusion — the lease already provides exclusion, for
+free, from `flock`'s own semantics. What the lease cannot do is
+survive a reboot, and that is exactly the case that matters: without a
+durable record, an interrupted turn would be indistinguishable from an
+untouched one, silently eligible again, and the resident's status
+surface would have no "interrupted" state to show because nothing
+would know one had happened. `castle record --type claim` is
+permitted, unlike `--type correction`: a claim is a mechanical
+observation, not resident speech, so none of the reasoning that makes
+corrections special applies.
+
+A **`filed-during-turn`** field on `request` records, whose value is a
+`claim` id. `write_record` stamps it on any request written while a
+worker tenant's turn is running — the tenant carries
+`CASTLE_WORKER_CLAIM` in its environment, and anything it invokes
+(`castle ask`, `castle record --type request`) inherits it. Dispatch
+never auto-starts a request carrying the stamp.
+
+The reason is spend, not correctness. "One automatic attempt per
+request" bounds unattended work only while the *supply* of requests is
+outside the tenant's control, and it isn't: a tenant that spots a
+second problem while fixing the first files it the sanctioned way, and
+each new request is a fresh errand with a fresh attempt. One sweep ran
+five turns off a single resident request before this existed. The
+stamp is a mechanical observation — "filed while that turn was
+running," a fact about who was executing, never a claim about the
+request's worth — so the request stays an ordinary request: it appears
+in the status fold like any other and `castle work <id>` runs it. Only
+the automatic attempt is withheld, which puts "should this follow-up
+happen?" back where a cost-and-authority question belongs.
+
+An **`outcome`** field on `result` records, from a closed vocabulary:
+
+| Value         | Written when |
+|---------------|--------------|
+| `completed`   | the tenant exited 0. |
+| `failed`      | the invoker watched the tenant die — a nonzero exit, a signal, an unparseable or unrunnable command, or no command configured at all. |
+| `timeout`     | the tenant outlived `CASTLE_WORKER_TIMEOUT` and its whole process group was killed. |
+| `interrupted` | the *invoker itself* died before writing anything, and a later `castle dispatch` sweep supplied the account from the surviving claim record. |
+
+Every result a worker turn writes references **both** the request and
+the `claim` it closes (`refs: <request-id>,<claim-id>`). That is what
+makes the reaper's ledger per *turn* rather than per errand: it asks
+"does any result name this claim?", so a failed errand a resident
+retried by hand — whose retry then died — still gets an account of that
+second turn. With request-only refs the first turn's result closed the
+second turn's claim and the interruption was never recorded at all.
+Eligibility is still per request: any result at all bars an automatic
+attempt.
+
+The `failed`/`interrupted` boundary is exactly "did anything survive to
+write the account": a tenant killed by a signal while `castle work` is
+still running is `failed`; only a turn nobody ever finished is
+`interrupted`.
+
+**This is a named cross-task contract.** Tasks 0026 and 0027 are
+expected to reuse this field name and these four values rather than
+each inventing a sibling field, and 0028 (rendering the errand
+lifecycle) reads it directly. **No surface may ever infer failure by
+grepping a body for a word like "FAILED."** The exit code is the fact
+and it lives in this field; the body carries the reasoning. That is
+not hypothetical hygiene — before this field existed, a failed errand's
+result body said "FAILED" in prose and `castle-modal`'s status fold,
+having no way to read it, reported the errand as plain "done."
+
+A surface meeting a value it does not recognise — a later task
+extending this vocabulary, a hand-written record, a typo — renders it
+**verbatim, with the retry hint**, never as "done". Defaulting an
+unknown member of a named contract to success would be the same
+prose-versus-field failure the field was added to end, one level up.
+Absent and `completed` keep meaning done, which is the append-only
+compatibility promise.
+
+Like `considered`/`propensity`, and for the identical reason,
+`outcome` is validated **when present** and never required: the
+journal is append-only, every result written before the field existed
+is permanent, and a validator that suddenly demanded it would fail the
+entire pre-existing journal retroactively. A result with no `outcome`
+therefore keeps reading as "done" on every surface, forever, on
+purpose.
+
+Fields considered for this record and deliberately dropped, each
+failing the "needed now" test: `attempts` (the retry bound is
+structural — any result at all makes a request ineligible — so nothing
+would read a counter), `duration` (nothing renders a timing view yet),
+and `exit-code` (the four-value enum already carries every distinction
+a caller makes today).
+
 ### Corrections and filing-time context
 
 A `correction` record (`docs/tasks/0010-correction-record.md`) needs no
@@ -393,11 +572,48 @@ has to hold forever, not just today.
   record: folds are cheap at this scale, and a flat directory keeps
   `grep`/`ls` working as the primary way to look at it, per
   `docs/tasks/0008`'s pre-made decision.
+- **The runtime directory** — everything machine-local and
+  session-lifetime resolves through one place: `$XDG_RUNTIME_DIR/castle`
+  if that variable is set, else `/run/user/$UID/castle` if that
+  directory exists, else `/tmp/castle-$UID`. The middle branch matters
+  because `$XDG_RUNTIME_DIR` is unset in exactly the contexts most
+  likely to run `castle work` beside a dispatch unit — ssh, cron, `su`
+  — and `/run/user/$UID` is where systemd's user manager points that
+  variable, so preferring it puts every caller on one host in one
+  place. For the spool that is tidiness; for the locks below it is
+  correctness (a lock in a different directory is not a lock at all).
 - **The spool** — ephemeral, machine-local, never committed — lives
-  under `$XDG_RUNTIME_DIR/castle/spool/`, falling back to
-  `/tmp/castle-$UID/spool/` if no runtime dir is set. Same record
-  format; `castle record --spool` writes there instead of the journal.
-  Delete it any time; nothing durable is ever spool-only.
+  under `<runtime>/spool/`. Same record format; `castle record --spool`
+  writes there instead of the journal. Delete it any time; nothing
+  durable is ever spool-only.
+- **Leases** — `<runtime>/leases/<request-id>.lock`, plus two siblings:
+  `dispatch.lock` for the global sweep and `route.lock` serializing the
+  router's fold (`docs/tasks/0021-auto-dispatch.md`). Not records and not spool
+  entries: `RECORD_TYPES` is schema forever, and "a worker currently
+  holds this errand" is an ephemeral liveness fact with the lifetime
+  of a login session, not a message one seat is sending another. A
+  lock, not a record. `flock` on a plain file rather than a PID file
+  with a staleness check, because the kernel releases a flock the
+  instant its holder exits — for any reason, including a crash — so a
+  stale lock is detectable race-free by the next acquirer. Two callers
+  that resolve the runtime directory differently are not excluding each
+  other at all — one would reap the other's live turn as interrupted —
+  which is why that resolution is shared and why `castle dispatch`
+  refuses to run unattended when it lands on the world-writable `/tmp`
+  branch (any local user could squat a lock there and wedge the sweep
+  silently green). A hand-run `castle work` still accepts it: a human
+  is present to notice. The file's
+  contents (start time, request id, tenant command) are informational
+  only; nothing reads them back. A leftover, unheld lease file means
+  nothing on its own — the journal says what happened, and a `claim`
+  with no live lease and no result is what `castle dispatch` reaps.
+  The lease is **machine-local by design**, which carries one honest
+  limit: enable dispatch on at most one host per journal. Two
+  dispatch-enabled machines sharing a synced private repo would work
+  the same request twice and write false `interrupted` results at each
+  other, because nothing reconciles two dispatchers over one journal —
+  that belongs to whatever task designs journal sync, and nothing here
+  pretends to solve it.
 - **`modules/agent`** (this flake's `nixosModules.agent`) installs the
   `castle` CLI and declares `castle.agent.stateDir`, which — when set
   by a private layer — is wired into `CASTLE_STATE_DIR` via
@@ -517,9 +733,10 @@ unlike `test/vm-install/`'s harness — runnable locally with nothing
 beyond `bash` and `python3` on `$PATH`:
 
 ```
-test/agent-loop/run.sh                  # the full loop, both channels, the router-bug regression, Proposal 05's write path
+test/agent-loop/run.sh                   # the full loop, both channels, the router-bug regression, Proposal 05's write path
 test/agent-loop/tenant-swap.sh           # runs run.sh twice with two differently-shaped workers, diffs the outcome
 test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin, zero compositor
+test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: watermark, lease, claim, reaper, outcomes
 ```
 
 - **`run.sh`** (the `agent-loop-test` CI job) runs the whole loop —
@@ -576,3 +793,50 @@ test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin
   run proving the plain-language classification prompt appears with
   both labels and that the feedback key files a correction while the
   fix key and bare Enter both file a request.
+  `docs/tasks/0021-auto-dispatch.md` added: each of the four `outcome`
+  values producing its own `_errand_state` label; a planted `claim`
+  reading as "in progress" while a helper process holds a real `flock`
+  on the errand's lease, and as interrupted the moment that holder
+  dies; and the `", waiting on you"` overlay still composing with an
+  outcome label. Two more came from a later review pass: an errand
+  never takes its state from a follow-up filed against it with
+  `castle ask --refs` (the fold is transitive, the turn state is keyed
+  to the request), and answering one question does not silence the
+  next one raised on the same errand. Every pre-existing state
+  assertion in the file is unchanged — in particular that a result
+  with no `outcome` field still reads as "done".
+- **`dispatch-test.sh`** (the `dispatch-test` CI job,
+  `docs/tasks/0021-auto-dispatch.md`) drives `castle dispatch` — the
+  sweep a systemd path unit and timer trigger on a real host — by hand.
+  It proves: the watermark is written exactly once and a request filed
+  before it is never auto-started; `castle dispatch --watermark-only`
+  — what the session-start unit runs — establishes that boundary
+  without claiming, working, or routing anything, writes it exactly
+  once however often it runs, and a later full sweep honours it; an
+  eligible request gets exactly one turn whose result the same sweep
+  routes; a second sweep over an
+  already-worked journal writes nothing (asserted on record counts, not
+  on the process exiting, since the sweep writes into the directory the
+  path unit watches and must not retrigger itself forever); two
+  concurrent sweeps produce exactly one claim and one result; a
+  hand-run `castle work` is refused, silently writing nothing, while
+  another turn holds the lease; a failing tenant, a signal-killed
+  tenant, an empty `CASTLE_WORKER_COMMAND`, and a command that isn't a
+  real binary all produce `outcome: failed` and are never retried
+  automatically; a hanging tenant under `CASTLE_WORKER_TIMEOUT=2`
+  produces `outcome: timeout` in seconds rather than its full sleep; a
+  planted claim with an absent or stale lease is reaped into an
+  `outcome: interrupted` result that then gets routed; a request a
+  tenant filed mid-turn is stamped, never auto-started, and still
+  runnable by hand; an `answer`
+  filed against a question on an already-worked errand does **not**
+  make it eligible again (an explicit non-behavior — task 0023's
+  territory, and a regression here would silently widen 0021's scope
+  into it); corrections stay unrouted even when dispatch is what
+  triggers the router; and `castle validate` passes throughout, not
+  just at the end. Its `contract-worker*.sh` fixtures are also the
+  only place the *real* `castle.agent.worker.command` contract — body
+  on stdin, reasoning on stdout, a diff to `$CASTLE_DIFF_FILE` — is
+  exercised: `run.sh`'s scripted workers are invoked positionally and
+  bypass `cmd_work` entirely, and they stay that way so
+  `tenant-swap.sh`'s comparison keeps meaning what it means.

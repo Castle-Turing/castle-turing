@@ -83,6 +83,23 @@ jobs:
       # same reason as the job above.
       - run: test/agent-loop/tenant-swap.sh
 
+  # Automatic dispatch (docs/tasks/0021-auto-dispatch.md): the sweep a
+  # systemd path unit and timer trigger on a real host, driven directly
+  # here — the watermark, the per-request lease, the durable claim
+  # record, the reaper, the closed `outcome` vocabulary, and the
+  # deliberate non-behavior that an answer does not re-open an
+  # already-worked errand. Its own job next to the two around it, same
+  # stock-runner style and same reason: no Nix is involved. It is also
+  # the first thing anywhere to exercise the real
+  # castle.agent.worker.command contract end to end
+  # (test/agent-loop/contract-worker*.sh) — run.sh's scripted workers
+  # deliberately bypass `cmd_work`.
+  dispatch-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test/agent-loop/dispatch-test.sh
+
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and
   # the status fold it renders — no compositor, no foot, no Sway

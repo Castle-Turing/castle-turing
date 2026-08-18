@@ -27,7 +27,7 @@ on:
       - "modules/**"
       - "agent/**"
       - "test/desktop-loop/**"
-      - "test/agent-loop/scripted-worker.sh"
+      - "test/agent-loop/contract-worker.sh"
       - "test/agent-loop/check_assertions.py"
       - ".github/workflows/desktop-loop-test.yml"
   push:
@@ -39,7 +39,7 @@ on:
       - "modules/**"
       - "agent/**"
       - "test/desktop-loop/**"
-      - "test/agent-loop/scripted-worker.sh"
+      - "test/agent-loop/contract-worker.sh"
       - "test/agent-loop/check_assertions.py"
       - ".github/workflows/desktop-loop-test.yml"
   # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
