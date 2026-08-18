@@ -454,11 +454,25 @@ mechanism promises in exchange:
   moment your first dispatch-enabled session starts, before you have a
   desktop to file anything from; requests filed before that instant are
   never auto-started, are named in the record by id, and the record
-  says so in plain English. (If your private repo is restored after
-  login, the first sweep to see the new journal writes it instead.)
-  Anything the watermark excluded still shows up in
-  `castle-modal --mode status` with the `castle work <id>` that runs
-  it by hand.
+  says so in plain English. Anything the watermark excluded still shows
+  up in `castle-modal --mode status` with the `castle work <id>` that
+  runs it by hand.
+
+  **This promise assumes your journal is already on the machine when
+  that session starts, so put it there first.** Either have the private
+  checkout in place before your first login with dispatch enabled, or
+  leave `dispatch.enable = false` until the first restore has finished
+  and rebuild afterwards. If the journal instead arrives *during* a
+  dispatch-enabled session, the first sweep to notice it writes the
+  watermark — a backstop, and a real one, but not the same guarantee:
+  a restore that copies files one at a time can be caught partway
+  through, and the boundary then freezes around whatever had landed.
+  History arriving after it is not excluded, and a request whose result
+  file has not been copied yet looks unfinished and can be picked up.
+  Nothing is lost either way — every attempt is one attempt, recorded —
+  but an errand you considered closed months ago could get a model call
+  spent on it. Getting the checkout in place first costs nothing and
+  removes the whole question.
 - **Nothing is hidden.** Every turn leaves a `claim` record when it
   starts and a `result` carrying an `outcome` when it ends, including
   when it ends badly — and `castle-modal --mode status` shows you

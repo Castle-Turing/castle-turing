@@ -459,21 +459,50 @@ own find-or-write stays as the backstop for the one case that unit
 cannot cover: a private repo restored mid-session, into a state
 directory the unit found absent and rightly declined to touch. The
 path unit fires the moment that journal lands, so the sweep's write
-follows the restore by moments — well inside the time it takes a human
-to notice the clone finished and file something.
+follows the restore by moments.
 
-The residual that remains is narrower and worth stating exactly. Only
-one shape can still put a *resident's* request into the watermark's
-refs: `stateDir` is absent at session start (so the watermark unit
-exits 0 with nothing to mark), and the first-ever record in that
-journal is a request the resident files by hand in a way that itself
-creates the directory tree — out of contract, since `stateDir` is
-documented as pointing into an already-cloned private checkout. Even
-then the failure is soft and visible, which is the property that makes
-the margin acceptable at all: the request is named in the watermark's
-`refs`, appears on the status surface labelled "not started
-automatically (predates dispatch) — `castle work <id>` to run it", and
-runs on demand. Nothing is lost, deleted, or silent.
+*The mid-session backstop is a convenience, not a guarantee, and
+saying otherwise would be the same overclaim this section already had
+to retract once.* The path unit fires on the **first file** to land,
+and a restore is not atomic: git checking out objects, or rsync
+walking a tree, populates `journal/` incrementally. A watermark
+written partway through freezes its `refs` around whatever had arrived
+by then, with two consequences. History that lands afterwards is not
+excluded by it. And a `request` file copied before its own `result`
+file reads as outstanding at that instant, so a long-closed errand can
+look eligible and be picked up. A `stateDir` pre-created outside the
+documented contract has the same shape one step earlier: the
+session-start unit finds an empty journal, writes an empty-refs
+watermark, and every record restored afterwards arrives on the wrong
+side of it.
+
+**Quiescence gating was considered and rejected.** Waiting for the
+journal directory to be quiet for N seconds before writing the
+boundary trades one bug for a worse one: the wait runs exactly while a
+resident may be actively filing, so a request filed during it lands
+before the watermark and is excluded by name — the filed-then-excluded
+failure this entire section exists to close, reintroduced in the
+restore path. Checking a manifest for completeness instead needs a
+journal-sync design (what a complete journal *is*, who publishes that
+fact) that this task deliberately does not do, and inventing half of
+one here would be worse than naming the limit. So the limit is named,
+and the fix is an order of operations documented where a resident
+meets it (`docs/private-layer.md`): have the private checkout in place
+before the first dispatch-enabled login, or leave dispatch off until
+the first restore has finished.
+
+The residual is therefore two shapes, both narrow, both soft. The
+partial-restore one above; and the out-of-contract one where
+`stateDir` is absent at session start (so the watermark unit exits 0
+with nothing to mark) and the first-ever record in that journal is a
+request the resident files by hand in a way that itself creates the
+directory tree. Neither is silent: an excluded request is named in the
+watermark's `refs` and appears on the status surface labelled "not
+started automatically (predates dispatch) — `castle work <id>` to run
+it", and an errand picked up wrongly still gets exactly one attempt,
+recorded, routed, and visible. Nothing is lost or deleted; what is at
+stake is a model call spent on an errand the resident had considered
+finished.
 
 *What was considered and rejected in moving that boundary:*
 
@@ -552,7 +581,22 @@ forever. It also covers every result written before this task. The
 exclusion inside (b) is what keeps per-turn accounting intact, and the
 counterexample is concrete: a reaper's own `interrupted` for old claim
 A lands with the newest id in the journal, and must not thereby close
-a still-open claim B. Then: probe the per-request lease
+a still-open claim B.
+
+*Which claims that exclusion is drawn from is derived inside
+`closing_result`, not supplied by the caller, and a review pass is why.*
+Both were caller-supplied, and the two callers supplied different
+sets — the reaper every claim in the journal, `castle-modal` only the
+claims in one errand's transitive fold. A resident closing a crashed
+errand with `castle record --type result --refs R1,C2`, where `C2` is
+some other errand's claim (an easy copy-paste), then landed on
+opposite sides of the exclusion: the modal showed the errand closed,
+the reaper wrote a permanent `interrupted` over it. That is exactly
+the disagreement this helper's existence is supposed to make
+impossible, so the narrowing moved inside it — only claims of *this
+claim's own request* count, keyed by `refs[0]` the way the reaper
+keys claims to errands. Callers may now pass any superset and get the
+same answer. Then: probe the per-request lease
 (`$XDG_RUNTIME_DIR/castle/leases/<request-id>.lock`,
 `flock(LOCK_NB)`). Lock held → a worker is running right now; skip it.
 Lock acquirable, or the file is simply absent (the normal case after a
@@ -747,8 +791,23 @@ eligible request would meet. A sweep that shrugged and carried on
 would spend the one automatic attempt of the entire queue on a single
 transient fault — a store path swapped mid-rebuild, a broken `PATH` —
 and exit 0 while doing it. Aborting caps the damage at one errand per
-sweep and makes the unit's health signal say what is actually
-wrong. Note that
+sweep and makes the unit's health signal say what is actually wrong.
+
+*The abort runs the router before it returns, and that is load-bearing
+rather than tidy.* Review caught this path leaving by a door that
+skipped the sweep's tail `route_journal()`, so the one record that
+says "your tenant is broken" sat in the journal unrouted and
+unnotified — while the timer came back a minute later and burned the
+next request's single automatic attempt in the same silence. The burn
+itself is by design and is bounded (one attempt per request, ever);
+being *quiet* about it is not, and the two together turn a broken
+tenant into a queue that de-automates itself with nothing to show for
+it. Routing here makes every burn produce its notification
+immediately, so a misconfigured tenant nags within minutes instead.
+The routing is best-effort and cannot change the exit code: a router
+failure must not overwrite the mechanism fault this path exists to
+report, and `route_journal` is an idempotent whole-journal fold, so
+anything it misses the next sweep picks up. Note that
 an unparseable `watermark:` *timestamp* is no longer one of them —
 once exclusion moved to `refs`, nothing reads that field except
 `_find_watermark`, so a cosmetically mangled value is not a reason to
@@ -939,8 +998,21 @@ that cuts both ways:
   errand as `outcome: timeout` with a body claiming its process group
   had been killed. The handler now checks `proc.poll()` first: only a
   still-running process is a timeout (kill the group, drain bounded);
-  an already-exited one is drained bounded with no kill and its
-  outcome decided by its exit code as usual.
+  an already-exited one is drained bounded and its outcome decided by
+  its exit code as usual.
+
+  *Checking is not enough on its own, which a later review pass
+  caught.* A single `communicate(timeout=CASTLE_WORKER_TIMEOUT)` still
+  **waits** the whole timeout before there is anything to check — the
+  default is fifteen minutes — with the global dispatch lock held and
+  the tenant long since finished. The wait is now sliced: the same
+  deadline (`timeout` from the moment the tenant started, unchanged for
+  a tenant that really is running), asked in five-second increments,
+  with `poll()` between them, so an exited tenant is noticed within a
+  slice instead of at the deadline. `input` rides only the first
+  slice; the subprocess module keeps unwritten input and collected
+  output on the `Popen` across a `TimeoutExpired`, which is exactly
+  what retried communication is documented to support.
 - **The post-kill drain is bounded** (five seconds). The kill goes to
   the tenant's process group; a descendant that called `setsid()` is no
   longer in it and may still hold the pipes, so an unbounded
@@ -949,6 +1021,30 @@ that cuts both ways:
   expiry the result is written with empty output and a body line
   saying exactly that, because a sweep is worth more than a killed
   tenant's last words.
+
+  *And the group is killed on the exited path too, which it was not.*
+  `_kill_tenant_group` ran only where `poll()` was `None`, so a tenant
+  that exited leaving a child of **its own group** holding the pipes
+  had that child survive the turn unconditionally — recorded
+  `completed`, with a process still alive and still able to write into
+  `$CASTLE_REPO_ROOT` after the journal's account of the turn was
+  final. A turn's account being final and its processes still running
+  is the one combination this design cannot allow. The exited path now
+  drains once, and if the pipes are still held, kills the group and
+  drains once more: an in-group straggler dies and its output is
+  recovered, and only a genuine `setsid()` escapee reaches the
+  give-up branch. That also makes the "could not be collected" body
+  line exact rather than presumptive — by the time it is written, the
+  group has always been killed, so the holder really is outside it.
+
+  *A second bug inside the first, found by the test written for it.*
+  `_kill_tenant_group` resolved the group with
+  `os.getpgid(proc.pid)` — which works only while the tenant is
+  alive. `poll()` reaps it, and a reaped pid has no process group, so
+  on the exited path the lookup raised and the kill silently became a
+  no-op: precisely where the kill had just been added, and where it
+  matters most. The group id is now captured at spawn, where
+  `start_new_session=True` guarantees it equals the tenant's pid.
 - **The invoker's own death kills the tenant too.** The same detach
   that makes group-killing possible also means the terminal's SIGINT
   never reaches the tenant: a hand-run `castle work` abandoned with
@@ -989,7 +1085,12 @@ two things at once: it makes the request **ineligible** going forward
 (§2.4(b)), bounding the retry to exactly one automatic attempt, and it
 tells the resident through the ordinary router path — "seat empty, and
 the resident is told," per `docs/architecture.md`'s occupancy language
-— instead of leaving them to notice a growing pile of nothing.
+— instead of leaving them to notice a growing pile of nothing. *That
+second half was aspirational until review made it true on the
+dispatched path:* the sweep's abort returned before its routing tail,
+so on the very path where nobody is watching a terminal, the result
+was written and never delivered. The abort now routes before it
+returns (§2.7).
 
 These three paths also **raise** after writing their result
 (`TenantNotRunnable`, carrying the result's id). `cmd_work` catches it
@@ -1136,7 +1237,9 @@ two real cases backwards, in opposite directions. Since §3 makes every
 worker result name the `claim` it closes, "which turn are we talking
 about" is answerable (via the same two-clause `closing_result` helper
 §2.3 describes, so the reaper and this surface can never disagree
-about whether a turn was accounted for), and it has to be asked: an errand whose retry
+about whether a turn was accounted for — see §2.3 for the review
+finding that made that promise true rather than merely stated), and it
+has to be asked: an errand whose retry
 completed and whose older abandoned turn was reaped *afterwards*
 carries an `interrupted` result newer than its `completed` one, so
 keyed on results it reads as interrupted forever though it is
@@ -1145,6 +1248,31 @@ result closes, which an older result masks entirely. Older turns'
 accounts — reaped ones included — are history; the newest turn is the
 current truth. An errand with no `claim` records at all (every journal
 written before this task) keeps the newest-result behavior unchanged.
+
+*Which records count as this errand's turns is keyed to the request,
+and a review pass is why.* `_collect_downstream` is transitive over
+`refs` with no keying by type or errand — correct for the fold as a
+whole, and wrong as the input to a turn-state decision.
+`castle ask --refs R1` is the documented way to file a follow-up, so
+R2 lands in R1's downstream and brings its own claims and results with
+it: a cleanly finished R1 could be labelled from R2's abandoned turn,
+"interrupted — `castle work R1` to retry", about a turn R1 never had.
+Claims are now selected by `refs[0] == this request` (the reaper's own
+keying) and results by naming this request (what `closing_result`
+uses, and what lets `--refs R,C` close a turn by hand). The watermark
+branch is keyed the same way — the watermark excludes **by name**, so
+a watermark reachable through a follow-up must not make this errand
+claim it predates dispatch. Questions and answers deliberately stay
+transitive: a question raised anywhere on the chain is still the
+resident's to answer.
+
+*The "waiting on you" overlay pairs answers with questions.* It used
+to ask whether the fold contained a question and no answer, which
+never paired the two, so the first answer on an errand silenced every
+question raised after it — on the one surface whose entire job is to
+say when a worker is blocked on the resident. It now collects the
+question ids that some answer names, and overlays if any question in
+the fold is not among them.
 
 The newest turn's account is read with its `outcome` field:
 
@@ -1303,6 +1431,17 @@ coverage. New fixtures:
   presence. It also proves the inheritance path the stamp depends on:
   the fixture never sets `filed-during-turn` and does not know it
   exists, it just runs `castle ask`.
+- `contract-worker-detach.sh` — *added with the pass-3 review finding
+  above*: writes its diff, exits 0, and leaves a `setsid` helper
+  holding the inherited stdout and stderr. The shape a `claude`-style
+  CLI produces routinely, and the one that made pipe-EOF and process
+  exit diverge.
+- `contract-worker-straggler.sh` — *added with the pass-4 review
+  finding above*: the same shape without the `setsid`, so the child
+  stays in the tenant's own process group. It is the case a turn can
+  and must end, and until that pass nothing did: the pid it leaves in
+  `$CASTLE_REPO_ROOT` is how the harness asserts the child did not
+  outlive the turn whose result already accounts for it.
 
 The existing `scripted-worker.sh` and `scripted-worker-alt.py` stay
 **byte-for-byte untouched** — they hold the worker seat for `run.sh`
@@ -1357,6 +1496,18 @@ python3 like every other harness in this directory, its own CI job in
 - a hanging tenant (`contract-worker-hang.sh`) under
   `CASTLE_WORKER_TIMEOUT=2` yields `outcome: timeout` within a few
   seconds, not the fixture's full sleep duration;
+- a tenant that exits 0 leaving its pipes held (`-detach.sh`, escapee;
+  `-straggler.sh`, in-group) is `completed`, and the sweep returns in
+  seconds **under a deliberately large `CASTLE_WORKER_TIMEOUT` (600)**
+  — the timeout is what the old single-`communicate` wait would have
+  spent, so a small one made this assertion prove nothing. For the
+  in-group fixture the harness additionally asserts its child is dead
+  once the sweep returns, and that the tenant's stdout survived (the
+  kill is what closes the pipes, so the drain after it succeeds);
+- a hand-written closure whose `--refs` also names an unrelated
+  errand's claim still closes its own turn, and the sweep does not
+  reap it — the reaper and the status surface reading one shared
+  `closing_result`, asserted rather than assumed (§2.3);
 - a planted `claim` record with a stale or absent lease file yields a
   reaped `outcome: interrupted` result on the next sweep, and that
   result gets routed;

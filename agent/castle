@@ -57,6 +57,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 # ---------------------------------------------------------------------------
 # Record schema (docs/architecture.md's "Records" section)
@@ -1268,6 +1269,60 @@ WORKER_PROPOSES_NOTE = (
 # record missing the last words of a tenant that had already timed out.
 TENANT_DRAIN_SECONDS = 5
 
+# How often, while waiting on a tenant, to stop waiting on its *pipes*
+# and ask the *process* whether it is still alive.
+#
+# `communicate(timeout=...)` fires on pipe EOF, never on process exit,
+# so a tenant that exits leaving a detached helper holding stdout is
+# indistinguishable from a hung one until something checks `poll()`.
+# Classifying that case correctly is not enough on its own: a single
+# `communicate(timeout=CASTLE_WORKER_TIMEOUT)` still *waits* the full
+# timeout — fifteen minutes by default — before the classification can
+# happen, with the global dispatch lock held the whole time and the
+# tenant long since finished. Slicing the wait bounds that delay to
+# this value without changing what a genuinely running tenant is
+# allowed: the deadline is still `timeout` from the start, it is just
+# checked in increments.
+TENANT_POLL_SECONDS = 5
+
+
+def _drain_after_exit(
+    proc: subprocess.Popen, pgid: int, *, kill_stragglers: bool
+) -> tuple[bool, str, str]:
+    """Collect what is left in a finished-or-killed tenant's pipes.
+
+    Returns `(drained, stdout, stderr)`. Bounded, always: whoever is
+    still holding the write end may be a process nothing in this turn
+    can reach, and an unbounded wait on it wedges a sweep that is
+    holding the global dispatch lock.
+
+    `kill_stragglers` is the exited-tenant path. The tenant is gone but
+    something it spawned still holds the pipes, and if that something
+    is still in the tenant's process group then this turn can — and
+    must — end it: the journal's account of the turn is about to be
+    final, and a child that outlives it can still be writing to
+    $CASTLE_REPO_ROOT afterwards, mutating a working tree whose result
+    record already claims to describe what happened. `_kill_tenant_group`
+    was previously unreachable on this path (it ran only when
+    `poll()` was None), so an in-group straggler survived the turn
+    unconditionally. Killing is skipped when the caller already killed
+    the group on the timeout path — a second SIGKILL buys nothing and
+    would double this function's worst case.
+    """
+    try:
+        stdout, stderr = proc.communicate(timeout=TENANT_DRAIN_SECONDS)
+        return True, stdout, stderr
+    except subprocess.TimeoutExpired:
+        pass
+    if kill_stragglers:
+        _kill_tenant_group(pgid)
+        try:
+            stdout, stderr = proc.communicate(timeout=TENANT_DRAIN_SECONDS)
+            return True, stdout, stderr
+        except subprocess.TimeoutExpired:
+            pass
+    return False, "", ""
+
 
 def _install_sigterm_raiser():
     """Make SIGTERM raise, for the span of a running tenant.
@@ -1295,18 +1350,30 @@ def _restore_sigterm(previous) -> None:
         pass
 
 
-def _kill_tenant_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the tenant's whole process group, best effort.
+def _kill_tenant_group(pgid: int) -> None:
+    """SIGKILL a tenant's whole process group, best effort.
 
     The group, never just the child: `claude -p` and similar tenants
     spawn their own subprocesses, and killing only the direct child
     leaves those running — possibly still writing to the diff file
     this turn is about to read. Best effort because every failure mode
-    here (the process already reaped, the group already gone) means
-    the thing this function wanted is already true.
+    here (the group already gone) means the thing this function wanted
+    is already true.
+
+    **Takes a pgid captured at spawn time, not a `Popen`.** It used to
+    resolve the group itself with `os.getpgid(proc.pid)`, which works
+    only while the tenant is still alive: `poll()` reaps it, and a
+    reaped pid has no process group, so `getpgid` raised and the kill
+    silently became a no-op. On the path that matters most — the
+    tenant exited, something it spawned still holds the pipes — that
+    is exactly when the lookup fails and exactly when the kill is
+    needed. `start_new_session=True` makes the tenant its own group
+    leader, so the group's id is the tenant's pid, known from the
+    moment `Popen` returns and stable regardless of what the tenant
+    does afterwards.
     """
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.killpg(pgid, signal.SIGKILL)
     except OSError:
         pass
 
@@ -1623,6 +1690,17 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                     ),
                 )
 
+            # Captured now, while the tenant is certainly alive, and
+            # used for every kill below — see `_kill_tenant_group` for
+            # why looking it up later does not work. `start_new_session`
+            # made the tenant a session and group leader, so this is
+            # its own pid; the fallback is the same value by a
+            # different route, for a kernel that somehow disagrees.
+            try:
+                tenant_pgid = os.getpgid(proc.pid)
+            except OSError:
+                tenant_pgid = proc.pid
+
             timed_out = False
             drained = True
             # SIGTERM has to be *made* into an exception before the
@@ -1636,8 +1714,6 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
             # other subcommand's behavior changes.
             previous_sigterm = _install_sigterm_raiser()
             try:
-                stdout, stderr = proc.communicate(input=request.body, timeout=timeout)
-            except subprocess.TimeoutExpired:
                 # `communicate(timeout=...)` fires on **pipe EOF**, not
                 # on process exit, and the two diverge in a case real
                 # tenants produce constantly: a `claude`-style CLI
@@ -1645,31 +1721,59 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 # tenant's stdout and stderr, the tenant itself exits 0
                 # having written its diff, and the pipes stay open in
                 # the helper's hands for as long as it lives. Reading
-                # this timeout as "the tenant hung" recorded a
-                # successful errand as `outcome: timeout` — "the
-                # tenant's whole process group was killed" — over a
-                # result that had actually completed. So ask the
-                # process, not the pipes.
-                if proc.poll() is None:
-                    timed_out = True
-                    _kill_tenant_group(proc)
-                try:
-                    # Bounded, unlike the first attempt. On the genuine
-                    # timeout above, the kill went to the tenant's
-                    # process group, and a descendant that called
-                    # setsid() is no longer in it — it may still hold
-                    # the write end of these pipes, in which case an
-                    # unbounded drain waits on a process nothing is
-                    # going to kill, wedging the sweep while it holds
-                    # the global dispatch lock. On the already-exited
-                    # path it is the same wait for the same reason,
-                    # minus the kill. Either way: a few seconds is
-                    # enough to collect what is there, and past that
-                    # the output is worth less than the sweep.
-                    stdout, stderr = proc.communicate(timeout=TENANT_DRAIN_SECONDS)
-                except subprocess.TimeoutExpired:
-                    drained = False
-                    stdout, stderr = "", ""
+                # that as "the tenant hung" recorded a successful
+                # errand as `outcome: timeout` — "the tenant's whole
+                # process group was killed" — over a result that had
+                # actually completed. So ask the process, not the
+                # pipes; and ask it *often*, which is the second half
+                # of the same bug. Waiting the full timeout in one
+                # call and only then asking got the classification
+                # right while still spending fifteen minutes of a
+                # resident's default timeout, and the whole sweep's
+                # dispatch lock, on a tenant that had already exited.
+                #
+                # The deadline is unchanged for a tenant that really is
+                # running: `timeout` seconds from the moment it
+                # started, checked in TENANT_POLL_SECONDS increments
+                # rather than in one blocking call. `input` goes only
+                # on the first slice — after a TimeoutExpired, the
+                # remaining unwritten input and the output collected so
+                # far are held on the Popen and continue where they
+                # left off, which is exactly what the subprocess docs
+                # promise for retried communication.
+                stdout, stderr = None, None
+                deadline = time.monotonic() + timeout
+                pending_input: str | None = request.body
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        # The tenant is still alive and its time is up:
+                        # a genuine hang. Kill the group and collect
+                        # whatever it managed to say.
+                        timed_out = True
+                        _kill_tenant_group(tenant_pgid)
+                        break
+                    try:
+                        stdout, stderr = proc.communicate(
+                            input=pending_input,
+                            timeout=min(TENANT_POLL_SECONDS, remaining),
+                        )
+                        break
+                    except subprocess.TimeoutExpired:
+                        pending_input = None
+                        if proc.poll() is not None:
+                            # Exited, pipes still held by something it
+                            # spawned. Stop waiting on the pipes now
+                            # rather than at the deadline.
+                            break
+                if stdout is None:
+                    # Either path above leaves the pipes to be drained
+                    # under a bound. `kill_stragglers` only on the
+                    # exited path: the timeout path already killed the
+                    # group one line ago.
+                    drained, stdout, stderr = _drain_after_exit(
+                        proc, tenant_pgid, kill_stragglers=not timed_out
+                    )
             except BaseException:
                 # The invoker itself is going away — Ctrl-C at a
                 # terminal, SIGTERM, an unexpected error in this
@@ -1681,7 +1785,7 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
                 # with nothing left to write its result. The unit case
                 # is covered without this (systemd kills the whole
                 # cgroup); the terminal case is not, and this is it.
-                _kill_tenant_group(proc)
+                _kill_tenant_group(tenant_pgid)
                 try:
                     proc.communicate(timeout=TENANT_DRAIN_SECONDS)
                 except subprocess.TimeoutExpired:
@@ -1759,12 +1863,13 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         if not drained:
             body_lines.append("")
             body_lines.append(
-                "The tenant's own stdout and stderr could not be collected: they "
-                f"were still open {TENANT_DRAIN_SECONDS}s after this turn stopped "
-                "waiting, which means something the tenant spawned escaped its "
-                "process group (a descendant that called setsid) and is still "
-                "holding the pipes. Nothing above came from the tenant's output "
-                "stream."
+                "The tenant's own stdout and stderr could not be collected. This "
+                "turn killed the tenant's whole process group and the pipes were "
+                f"still held {TENANT_DRAIN_SECONDS}s later, which narrows what is "
+                "holding them to one thing: a descendant that called setsid() and "
+                "so is outside the group this turn can reach. It is still running, "
+                "and this turn cannot end it. Nothing above came from the tenant's "
+                "output stream."
             )
         return (
             _write_worker_result(
@@ -1854,12 +1959,28 @@ def cmd_work(args: argparse.Namespace) -> int:
 
 
 def closing_result(
-    claim: Record, results: list[Record], claim_ids: set[str]
+    claim: Record, results: list[Record], claims: list[Record]
 ) -> Record | None:
     """The result that accounts for this turn, or None if the turn is
     still open (docs/tasks/0021 §2.3). Shared by `castle dispatch`'s
     reaper and `castle-modal`'s status fold so the two can never
     disagree about whether a turn was ever closed.
+
+    **Both inputs are narrowed here, not by the caller, and that is the
+    whole point of the third parameter's shape.** It used to be a set
+    of claim ids assembled by each caller, and the callers assembled
+    different ones: the reaper passed every claim in the journal, the
+    modal passed only the claims in one errand's transitive fold. A
+    resident closing a crashed errand with
+    `castle record --type result --refs R1,C2` — where C2 is some other
+    errand's claim, easy to do by copy-paste — landed on opposite sides
+    of clause (b)'s exclusion in the two surfaces: the modal showed the
+    errand closed, the reaper wrote a permanent `interrupted` over it.
+    That is precisely the disagreement the paragraph above promises
+    cannot happen, so the narrowing moved in here. Callers may now pass
+    any superset — the whole journal's claims and results, or one
+    errand's — and get the same answer, because this function keeps
+    only the ones belonging to *this claim's own request*.
 
     Two clauses, and the second one exists because of a shape the CLI
     itself suggests:
@@ -1895,12 +2016,19 @@ def closing_result(
         return max(named, key=lambda rec: rec.id)
     if not request_id:
         return None
+    # Keyed the way the reaper keys a claim to an errand — `refs[0]` —
+    # so "this request's claims" means the same thing in both places.
+    request_claim_ids = {
+        rec.id
+        for rec in claims
+        if rec.type == "claim" and rec.refs and rec.refs[0] == request_id
+    }
     by_recency = [
         rec
         for rec in results
         if request_id in rec.refs
         and rec.id > claim.id
-        and not any(ref in claim_ids for ref in rec.refs)
+        and not any(ref in request_claim_ids for ref in rec.refs)
     ]
     if by_recency:
         return max(by_recency, key=lambda rec: rec.id)
@@ -2072,7 +2200,6 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     claims = sorted(
         (rec for rec in records.values() if rec.type == "claim"), key=lambda rec: rec.id
     )
-    claim_ids = {rec.id for rec in claims}
     for claim in claims:
         refs = claim.refs
         if not refs:
@@ -2081,7 +2208,7 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
         request = records.get(request_id)
         if request is None or request.type != "request":
             continue
-        if closing_result(claim, results, claim_ids) is not None:
+        if closing_result(claim, results, claims) is not None:
             continue
 
         # Acquiring is the probe: held means a worker is running this
@@ -2097,8 +2224,8 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
             # lie in an append-only log.
             fresh = load_all(journal_dir())
             fresh_results = [rec for rec in fresh.values() if rec.type == "result"]
-            fresh_claim_ids = {rec.id for rec in fresh.values() if rec.type == "claim"}
-            if closing_result(claim, fresh_results, fresh_claim_ids) is not None:
+            fresh_claims = [rec for rec in fresh.values() if rec.type == "claim"]
+            if closing_result(claim, fresh_results, fresh_claims) is not None:
                 continue
             started = claim.fields.get("created", "unknown")
             record_id = write_record(
@@ -2298,10 +2425,26 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         # usually already down. What stays here is the backstop for a
         # journal that appears *mid-session* — a private repo restored
         # an hour after login, into a state directory the session-start
-        # unit found absent and declined to touch. The path unit fires
-        # the moment that journal lands, which puts this write moments
-        # after the restore, before a human can plausibly file into a
-        # journal they have only just finished cloning.
+        # unit found absent and declined to touch.
+        #
+        # **That backstop is a convenience, not a guarantee, and the
+        # difference is worth being exact about.** The path unit fires
+        # on the first file to land, and a restore that populates the
+        # journal incrementally — git checking out objects, rsync
+        # walking a tree — is not atomic: a watermark written partway
+        # through freezes `refs` around whatever had arrived, so
+        # history landing afterwards is not excluded, and a request
+        # file that arrives before its own result file reads as
+        # outstanding and therefore eligible. Waiting for quiescence
+        # was considered and rejected (docs/tasks/0021 §2.2): a "quiet
+        # for N seconds" gate delays the boundary while a resident may
+        # be actively filing, which re-opens the filed-then-excluded
+        # bug this whole mechanism exists to close, and a
+        # manifest-completeness check needs a journal-sync design this
+        # task deliberately does not do. The documented order is the
+        # fix: have the private checkout in place before the first
+        # dispatch-enabled login, or leave dispatch off until the first
+        # restore has finished (docs/private-layer.md).
         watermark_record = _find_watermark(records)
         if watermark_record is None:
             watermark_id = _write_watermark(records)
@@ -2378,6 +2521,31 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                     "request's one automatic attempt on the same fault",
                     file=sys.stderr,
                 )
+                # Route before returning. This path writes a `failed`
+                # result and then leaves by a door that skips the
+                # sweep's tail — so without this, the one record that
+                # would tell the resident their tenant is broken sat
+                # unrouted and unnotified, while the timer came back a
+                # minute later and burned another request's single
+                # automatic attempt in silence. The burn is deliberate
+                # and bounded (one result per request, ever); being
+                # silent about it is not. Every burn now notifies, so a
+                # broken tenant nags within minutes instead of quietly
+                # de-automating the queue.
+                #
+                # Best effort, and the exit code is not negotiable: a
+                # routing failure must not overwrite the mechanism
+                # fault this return is reporting. `route_journal` is an
+                # idempotent whole-journal fold, so anything it misses
+                # here the next sweep picks up anyway.
+                try:
+                    route_journal()
+                except Exception as route_exc:  # noqa: BLE001 - see above
+                    print(
+                        f"castle dispatch: could not route the tenant-fault result "
+                        f"({route_exc}); the next sweep will route it",
+                        file=sys.stderr,
+                    )
                 return 1
             except LeaseHeld:
                 # A human running `castle work` by hand reached this

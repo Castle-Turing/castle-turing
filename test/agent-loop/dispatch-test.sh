@@ -29,6 +29,7 @@ WORKER_HANG="$REPO_ROOT/test/agent-loop/contract-worker-hang.sh"
 WORKER_DIE="$REPO_ROOT/test/agent-loop/contract-worker-die.sh"
 WORKER_FILER="$REPO_ROOT/test/agent-loop/contract-worker-filer.sh"
 WORKER_DETACH="$REPO_ROOT/test/agent-loop/contract-worker-detach.sh"
+WORKER_STRAGGLER="$REPO_ROOT/test/agent-loop/contract-worker-straggler.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-dispatch-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -413,19 +414,72 @@ log "a tenant that exits 0 while a detached helper still holds the pipes is comp
 # timeout` with a body saying its process group had been killed — over
 # an errand that finished and wrote its diff. The fix asks the process
 # (proc.poll()), not the pipes.
+#
+# CASTLE_WORKER_TIMEOUT is deliberately LARGE here, and that is the
+# assertion. Classifying the turn correctly was only half the bug: a
+# single communicate(timeout=CASTLE_WORKER_TIMEOUT) still *waited* the
+# whole timeout before the classification could happen, dispatch lock
+# held, on a tenant that had already exited. This scenario used to run
+# with a 3s timeout, where a 25s bound passed either way and proved
+# nothing about the wait. At 600s the old code takes over ten minutes
+# to write this result; the sliced wait takes seconds.
 REQ_DETACH="$("$CASTLE" ask "Dispatch test: the tenant exits 0 but leaves a helper holding the pipes.")"
 DETACH_START="$(date +%s)"
-CASTLE_WORKER_COMMAND="$WORKER_DETACH" CASTLE_WORKER_TIMEOUT=3 "$CASTLE" dispatch >"$WORKDIR/detach-sweep.out" 2>&1 \
+CASTLE_WORKER_COMMAND="$WORKER_DETACH" CASTLE_WORKER_TIMEOUT=600 "$CASTLE" dispatch >"$WORKDIR/detach-sweep.out" 2>&1 \
   || fail "the detached-helper sweep exited nonzero: $(cat "$WORKDIR/detach-sweep.out")"
 DETACH_ELAPSED=$(( $(date +%s) - DETACH_START ))
 RESULT_DETACH_FILE="$(referencing result "$REQ_DETACH")"
 [ -n "$RESULT_DETACH_FILE" ] || fail "the detached-helper tenant produced no result record"
 grep -q '^outcome: completed$' "$RESULT_DETACH_FILE" || fail "$RESULT_DETACH_FILE should carry outcome: completed — the tenant exited 0, only its leftover helper held the pipes open; got: $(grep '^outcome:' "$RESULT_DETACH_FILE" || echo none)"
 grep -q 'synthetic (harness fixture only)' "$RESULT_DETACH_FILE" || fail "$RESULT_DETACH_FILE lost the diff the tenant wrote before exiting"
-# The fixture's helper sleeps 30s. The sweep must not have waited for
-# it — the bounded drain caps that at a few seconds.
-[ "$DETACH_ELAPSED" -lt 25 ] || fail "the sweep waited ${DETACH_ELAPSED}s on a helper the tenant left behind"
-log "  -> swept in ${DETACH_ELAPSED}s (the leftover helper sleeps 30s and is not waited on)"
+# Bounded by the poll slice plus the two drain windows — seconds — and
+# nowhere near either the fixture's 30s helper or the 600s timeout.
+[ "$DETACH_ELAPSED" -lt 60 ] || fail "the sweep waited ${DETACH_ELAPSED}s on a tenant that had already exited (CASTLE_WORKER_TIMEOUT was 600: the wait is not being sliced)"
+log "  -> swept in ${DETACH_ELAPSED}s with CASTLE_WORKER_TIMEOUT=600 (the helper sleeps 30s and is not waited on)"
+"$CASTLE" validate
+
+# ---------------------------------------------------------------------
+log "an IN-GROUP child left holding the pipes is killed with the turn, not left running past its own account"
+# ---------------------------------------------------------------------
+# The other half of the exited-tenant path. contract-worker-detach.sh
+# calls setsid, so its helper is beyond any kill this turn can make.
+# This fixture's child stays in the tenant's process group — and until
+# now nothing killed it, because _kill_tenant_group ran only while the
+# tenant itself was still alive. So the turn was recorded `completed`
+# and the child ran on, able to keep writing into $CASTLE_REPO_ROOT
+# after the journal's account of that turn was final.
+#
+# Three things at once: the wait is sliced (large timeout, seconds
+# elapsed), the child is dead once the sweep returns, and killing it
+# is what lets the drain finally succeed — so the tenant's own stdout
+# lands in the result instead of the "could not be collected" note.
+rm -f "$CASTLE_REPO_ROOT/straggler.pid"
+REQ_STRAG="$("$CASTLE" ask "Dispatch test: the tenant exits 0 leaving an in-group child on the pipes.")"
+STRAG_START="$(date +%s)"
+CASTLE_WORKER_COMMAND="$WORKER_STRAGGLER" CASTLE_WORKER_TIMEOUT=600 "$CASTLE" dispatch >"$WORKDIR/straggler-sweep.out" 2>&1 \
+  || fail "the in-group-straggler sweep exited nonzero: $(cat "$WORKDIR/straggler-sweep.out")"
+STRAG_ELAPSED=$(( $(date +%s) - STRAG_START ))
+[ "$STRAG_ELAPSED" -lt 60 ] || fail "the sweep waited ${STRAG_ELAPSED}s on a tenant that had already exited (CASTLE_WORKER_TIMEOUT was 600)"
+RESULT_STRAG_FILE="$(referencing result "$REQ_STRAG")"
+[ -n "$RESULT_STRAG_FILE" ] || fail "the in-group-straggler tenant produced no result record"
+grep -q '^outcome: completed$' "$RESULT_STRAG_FILE" || fail "$RESULT_STRAG_FILE should carry outcome: completed — the tenant exited 0; got: $(grep '^outcome:' "$RESULT_STRAG_FILE" || echo none)"
+STRAG_PID="$(cat "$CASTLE_REPO_ROOT/straggler.pid" 2>/dev/null || true)"
+[ -n "$STRAG_PID" ] || fail "the straggler fixture wrote no pid file — it never ran as intended"
+# The kill is a signal, so allow the exit to land; a couple of seconds
+# is generous for a SIGKILL the sweep already issued before returning.
+for _ in 1 2 3 4 5; do
+  kill -0 "$STRAG_PID" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 "$STRAG_PID" 2>/dev/null; then
+  kill -9 "$STRAG_PID" 2>/dev/null || true
+  fail "the in-group child ($STRAG_PID) outlived the turn whose result already claims to account for it"
+fi
+# Killing the holder is what closes the pipes, so the drain that
+# follows it succeeds and the tenant's reasoning survives.
+grep -q 'could not be collected' "$RESULT_STRAG_FILE" && fail "$RESULT_STRAG_FILE gave up on the tenant's output even though the only thing holding the pipes was in-group and killable"
+grep -q 'leaving an in-group child holding the pipes' "$RESULT_STRAG_FILE" || fail "$RESULT_STRAG_FILE lost the tenant's stdout, which the post-kill drain should have collected"
+log "  -> swept in ${STRAG_ELAPSED}s; in-group child $STRAG_PID did not outlive the turn"
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
@@ -490,6 +544,32 @@ log "  -> claim $CLAIM_HANDCLOSE closed by hand-written result $HANDCLOSE_RESULT
 [ "$(count_referencing result "$REQ_HANDCLOSE")" -eq 1 ] || fail "the sweep wrote a second result for $REQ_HANDCLOSE — it reaped a turn the resident had already accounted for by hand"
 grep -l '^outcome: interrupted$' "$JOURNAL"/*-result-*.md 2>/dev/null | xargs -r grep -l "$CLAIM_HANDCLOSE" >/dev/null 2>&1 \
   && fail "an interrupted result was written for $CLAIM_HANDCLOSE despite a hand-written closure"
+"$CASTLE" validate
+
+log "  -- and the same closure holds when the resident's --refs also names some other errand's claim"
+# `--refs R,C` is the spelling a resident lands on by copy-paste, and
+# it used to make the two surfaces disagree. The exclusion in
+# closing_result's clause (b) — a result naming any claim of this
+# request does not close a different one by recency — was assembled by
+# each caller: the reaper passed every claim in the journal, so a
+# result naming an UNRELATED errand's claim tripped the exclusion and
+# the turn looked open; castle-modal passed only this errand's fold,
+# where that unrelated claim does not appear, so the same result read
+# as a valid closure. The modal showed the errand closed while the next
+# sweep wrote a permanent `interrupted` over it — precisely the
+# disagreement closing_result's docstring promises cannot happen. The
+# narrowing now lives inside closing_result, so no caller can diverge.
+REQ_CROSSREF="$("$CASTLE" ask "Dispatch test: a crashed turn closed by hand, with a stray claim ref.")"
+CLAIM_CROSSREF="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ_CROSSREF" \
+  --body "Planted claim: a turn that crashed before writing anything.")"
+CROSSREF_RESULT="$("$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$REQ_CROSSREF,$CLAIM_HANDCLOSE" \
+  --body "Resident finished this errand by hand, naming another errand's claim by mistake.")"
+log "  -> $CROSSREF_RESULT names $REQ_CROSSREF and the UNRELATED claim $CLAIM_HANDCLOSE"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_CROSSREF")" -eq 1 ] || fail "the sweep reaped $CLAIM_CROSSREF despite a hand-written closure, because the closure also named an unrelated errand's claim"
+grep -l '^outcome: interrupted$' "$JOURNAL"/*-result-*.md 2>/dev/null | xargs -r grep -l "$CLAIM_CROSSREF" >/dev/null 2>&1 \
+  && fail "an interrupted result was written for $CLAIM_CROSSREF — the reaper and the status surface are reading the same closure differently again"
 "$CASTLE" validate
 
 log "per-turn accounting: an interrupted RETRY of an already-failed errand is still reaped"

@@ -317,10 +317,12 @@ fi
 
 # The four fixtures below are hand-written rather than produced by
 # running a real worker: this file's subject is `_errand_state`'s
-# reading of the field, and `castle record` has no --outcome flag (the
-# field is written by the code paths that observe an outcome, never
-# passed in by a caller). Planting a record directly is the same
-# technique run.sh already uses for its malformed-propensity fixtures.
+# reading of the field, not any particular writer of it. `castle
+# record` does take --outcome (this same file exercises it further
+# down, for the human-worker-seat case) — the field is optional and
+# validated when present — but planting the record directly pins the
+# exact bytes each state is read from, which is the same technique
+# run.sh already uses for its malformed-propensity fixtures.
 # $4 (optional) is the claim this result closes, and $5 (optional) an
 # id timestamp for ordering. Both matter since docs/tasks/0021 made the
 # ledger per turn: a result closes the claim it names, and "newest"
@@ -604,5 +606,52 @@ STATUS_OVERLAY="$("$MODAL" --mode status --limit 40)"
 echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you$" \
   || fail "the ', waiting on you' overlay did not compose with an outcome label"
 "$CASTLE" validate || fail "the journal did not validate after the outcome/claim fixtures"
+
+# ---------------------------------------------------------------------
+log "status mode: a follow-up errand's turns never label the errand it was filed against"
+# ---------------------------------------------------------------------
+# `castle ask --refs R1` is the documented way to file a follow-up, and
+# `_collect_downstream` is transitive over refs with no keying by
+# errand — so R2, and everything hanging off R2, lands in R1's fold.
+# Deriving R1's turn state from that fold read R2's abandoned turn as
+# R1's own: a finished errand labelled "interrupted — castle work R1 to
+# retry", about a turn R1 never had. The fold stays transitive (a
+# question raised anywhere on the chain is still the resident's to
+# answer); what is keyed to the request is the turn state.
+REQ_PARENT="$("$CASTLE" ask "Parent errand: finishes cleanly, must not inherit a follow-up's state.")"
+CLAIM_PARENT="$(plant_claim "$REQ_PARENT" 0e0001 20260101T000700Z)"
+plant_result_with_outcome "$REQ_PARENT" completed 0e0002 "$CLAIM_PARENT" 20260101T000701Z >/dev/null
+REQ_FOLLOW="$("$CASTLE" ask --refs "$REQ_PARENT" "Follow-up errand: its own turn dies, and stays its own.")"
+plant_claim "$REQ_FOLLOW" 0e0003 20260101T000800Z >/dev/null
+"$CASTLE" validate || fail "the follow-up fixture does not validate"
+STATUS_FOLLOW="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_FOLLOW" | grep -q "^\[$REQ_PARENT\] requested — done$" \
+  || fail "the parent errand took its state from a follow-up's turn: $(echo "$STATUS_FOLLOW" | grep "$REQ_PARENT" || true)"
+echo "$STATUS_FOLLOW" | grep -q "^\[$REQ_FOLLOW\] requested — interrupted — castle work $REQ_FOLLOW to retry$" \
+  || fail "the follow-up errand did not report its own dead turn: $(echo "$STATUS_FOLLOW" | grep "$REQ_FOLLOW" || true)"
+
+# ---------------------------------------------------------------------
+log "status mode: answering one question does not silence the next one"
+# ---------------------------------------------------------------------
+# The overlay used to be "there is a question and there is no answer",
+# which never paired the two: the first answer on an errand made every
+# later question invisible, on the one surface whose whole job is to
+# say when a worker is blocked on the resident.
+REQ_TWOQ="$("$CASTLE" ask "An errand whose worker asks twice.")"
+Q_FIRST="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ_TWOQ" --body "First question?")"
+STATUS_Q1="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+  || fail "an unanswered question did not raise the overlay: $(echo "$STATUS_Q1" | grep "$REQ_TWOQ" || true)"
+"$CASTLE" answer "$Q_FIRST" "Yes, go ahead." >/dev/null
+STATUS_Q1A="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+  && fail "an answered question still reads as waiting on the resident"
+"$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ_TWOQ" --body "Second question, after the first was answered?" >/dev/null
+STATUS_Q2="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you$" \
+  || fail "a SECOND question went unnoticed because an earlier one had been answered — the overlay is not pairing answers with questions"
+"$CASTLE" validate || fail "the journal does not validate after the two-question fixture"
 
 log "all assertions passed"

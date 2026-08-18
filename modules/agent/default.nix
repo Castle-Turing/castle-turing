@@ -117,8 +117,16 @@ in
         `$CASTLE_REPO_ROOT` are set in its environment; reasoning goes
         to stdout, a diff (or nothing) goes to `$CASTLE_DIFF_FILE`. See
         agent/castle-worker-claude for the reference implementation of
-        that contract and test/agent-loop/scripted-worker.sh for a
-        model-free stand-in. THE WORKER MUST NOT DEPLOY — no
+        that contract and test/agent-loop/contract-worker.sh for a
+        model-free stand-in that satisfies it. *Not*
+        test/agent-loop/scripted-worker.sh, which this description used
+        to name: that fixture predates the worker contract, takes two
+        positional arguments, reads nothing from stdin, and is invoked
+        by harnesses that bypass `castle work` entirely — pointed at
+        this option it exits 2 on every errand, and since one failed
+        result is all it takes to make a request permanently
+        ineligible, following that pointer would burn each request's
+        single automatic attempt. THE WORKER MUST NOT DEPLOY — no
         `nixos-rebuild`, no `git commit`, no applying anything to a
         running system, from this seat, ever, in this slice. CI
         overrides this option's effect by setting

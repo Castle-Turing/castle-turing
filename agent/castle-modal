@@ -248,7 +248,12 @@ def _errand_state(castle, request, downstream: list) -> str:
     unreachable in exactly the flow the worker is instructed to use
     (0009 review pass finding 4). Reporting both when both apply is
     strictly more honest than picking one. The ", waiting on you"
-    overlay below composes exactly as it always has.
+    overlay below composes exactly as it always has — and it is now
+    computed by pairing each question with an answer that names it,
+    rather than by asking whether the fold contains an answer of any
+    kind. The old form went quiet after the first answer, so a worker
+    that raised a second question on the same errand waited on a
+    resident who was never told.
 
     **The errand's state is the state of its newest turn.** Since
     docs/tasks/0021-auto-dispatch.md a result names the `claim` it
@@ -280,13 +285,44 @@ def _errand_state(castle, request, downstream: list) -> str:
     accepted there.
     """
     request_id = request.id
-    types = {rec.type for rec in downstream}
-    waiting = "question" in types and "answer" not in types
+
+    # Every question in this fold that no answer names. The old form
+    # was `"question" in types and "answer" not in types`, which never
+    # paired an answer with its question: one answered question made
+    # the errand stop saying "waiting on you" forever, hiding every
+    # later question the worker raised. Questions and answers are the
+    # one thing that legitimately arrives here through the transitive
+    # walk (a follow-up request's question is still this errand chain
+    # waiting on the resident), so unlike the turn state below they are
+    # deliberately NOT keyed to this request id.
+    answered = {ref for rec in downstream if rec.type == "answer" for ref in rec.refs}
+    waiting = any(
+        rec.type == "question" and rec.id not in answered for rec in downstream
+    )
+
+    # `_collect_downstream` is transitive over `refs` with no keying by
+    # type or by errand, which is right for the fold as a whole and
+    # wrong for deriving *this* errand's turn state from it. A
+    # follow-up filed with `castle ask --refs R1` pulls R2 into R1's
+    # downstream, and R2's claims and results come with it — so an R1
+    # that finished cleanly could be labelled from R2's abandoned turn
+    # ("interrupted — castle work R1 to retry", about a turn that was
+    # never R1's). Both selections are keyed to this request, the same
+    # way agent/castle keys them: a claim belongs to the errand named
+    # first in its `refs` (what the reaper uses to find the request),
+    # and a result belongs to any errand it names (what `closing_result`
+    # uses, and what lets `--refs R,C` close a turn by hand).
     results = sorted(
-        (rec for rec in downstream if rec.type == "result"), key=lambda rec: rec.id
+        (rec for rec in downstream if rec.type == "result" and request_id in rec.refs),
+        key=lambda rec: rec.id,
     )
     claims = sorted(
-        (rec for rec in downstream if rec.type == "claim"), key=lambda rec: rec.id
+        (
+            rec
+            for rec in downstream
+            if rec.type == "claim" and rec.refs and rec.refs[0] == request_id
+        ),
+        key=lambda rec: rec.id,
     )
 
     base = None
@@ -302,8 +338,7 @@ def _errand_state(castle, request, downstream: list) -> str:
             # accounted for. Clause (b) is what stops this label
             # masking a resident's own hand-written closure behind an
             # "interrupted" the reaper was about to contradict.
-            claim_ids = {rec.id for rec in claims}
-            closing = castle.closing_result(newest_claim, results, claim_ids)
+            closing = castle.closing_result(newest_claim, results, claims)
             if closing is not None:
                 base = _outcome_label(closing.fields.get("outcome", ""), request_id)
             else:
@@ -319,6 +354,13 @@ def _errand_state(castle, request, downstream: list) -> str:
         rec.type == "decision"
         and rec.fields.get("seat") == castle.DISPATCH_SEAT
         and rec.fields.get("watermark", "").strip()
+        # Named in the watermark's own refs, not merely reachable from
+        # this errand through one. The watermark excludes BY NAME
+        # (docs/tasks/0021 §2.2), so a watermark that named a follow-up
+        # request but not this one must not make this one claim it
+        # predates dispatch — the same transitive contamination the
+        # claim and result selections above are keyed against.
+        and request_id in rec.refs
         for rec in downstream
     ):
         # The watermark names the requests it excluded in its own refs

@@ -798,9 +798,13 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   reading as "in progress" while a helper process holds a real `flock`
   on the errand's lease, and as interrupted the moment that holder
   dies; and the `", waiting on you"` overlay still composing with an
-  outcome label. Every pre-existing state assertion in the file is
-  unchanged — in particular that a result with no `outcome` field
-  still reads as "done".
+  outcome label. Two more came from a later review pass: an errand
+  never takes its state from a follow-up filed against it with
+  `castle ask --refs` (the fold is transitive, the turn state is keyed
+  to the request), and answering one question does not silence the
+  next one raised on the same errand. Every pre-existing state
+  assertion in the file is unchanged — in particular that a result
+  with no `outcome` field still reads as "done".
 - **`dispatch-test.sh`** (the `dispatch-test` CI job,
   `docs/tasks/0021-auto-dispatch.md`) drives `castle dispatch` — the
   sweep a systemd path unit and timer trigger on a real host — by hand.
@@ -830,7 +834,7 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   territory, and a regression here would silently widen 0021's scope
   into it); corrections stay unrouted even when dispatch is what
   triggers the router; and `castle validate` passes throughout, not
-  just at the end. Its four `contract-worker*.sh` fixtures are also the
+  just at the end. Its `contract-worker*.sh` fixtures are also the
   only place the *real* `castle.agent.worker.command` contract — body
   on stdin, reasoning on stdout, a diff to `$CASTLE_DIFF_FILE` — is
   exercised: `run.sh`'s scripted workers are invoked positionally and
