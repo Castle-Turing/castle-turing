@@ -336,6 +336,32 @@
                   '';
                 }
                 {
+                  # The same guarantee for the answer chord
+                  # (docs/tasks/0022-answer-in-ui.md §5). It is a
+                  # separate assertion rather than a loop over both
+                  # chords so a failure names which one broke, and it
+                  # matters slightly more here than for the compose
+                  # chord: `Shift+a` is a letter chord, and the stock
+                  # set does bind `${modifier}+Shift+<direction>` with
+                  # the directions defaulting to home-row letters — so
+                  # this is also the proof that this repo's chord and a
+                  # Mod4 resident's stock move-window bindings still
+                  # both survive the per-key merge.
+                  assertion =
+                    (keybindings."Mod4+Shift+a" or null)
+                    == "exec foot --app-id=castle-modal -e castle-modal --mode answer";
+                  message = ''
+                    nixosConfigurations.example-mod4: keybindings."Mod4+Shift+a"
+                    is not the answer-mode exec command. modules/home/default.nix
+                    hardcodes it under a literal Mod4 prefix, in the same
+                    lib.mkOptionDefault attrset as the compose chord
+                    (docs/tasks/0022), so it keeps working regardless of a
+                    resident's own `modifier` setting — this means that broke,
+                    or the binding landed in a second keybindings definition
+                    and took home-manager's defaults down with it.
+                  '';
+                }
+                {
                   # This is the defect-2 regression test (docs/tasks/0019)
                   # and is red on the code this brief starts from: home-
                   # manager's stock keybinding set includes
