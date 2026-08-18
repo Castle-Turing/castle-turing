@@ -64,6 +64,20 @@ trusting any review output. The same rule holds for anything else derived
 from a ref you did not just refresh — flake locks and path overrides
 included.
 
+**Start every session on a freshly pulled `main`.** Not `git fetch`
+alone — the working tree too. A session opens on whatever branch the
+last one left checked out, and that branch's `CLAUDE.md`, task
+numbering, and conventions are exactly as stale as the branch is. This
+has already bitten: a session began work against a `CLAUDE.md` with no
+`## Delegation` section, days after that section landed on `main`, and
+allocated a task number four short of the real next one. Before reading
+anything else in the repo:
+
+    git fetch --all --prune && git checkout main && git pull --ff-only
+
+Branch or check out the working branch *after* that, so the conventions
+you read are the current ones.
+
 ## Delegation
 
 Work is handed off, not done by the session that receives it. The
