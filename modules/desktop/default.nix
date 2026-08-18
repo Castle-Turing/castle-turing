@@ -322,13 +322,22 @@ in
     console = {
       packages = [ pkgs.spleen ];
     } // lib.optionalAttrs (config.castle.display.consoleFont != null) {
-      font = config.castle.display.consoleFont;
+      # lib.mkDefault on both, not bare assignments. These are opinions
+      # this module holds, exactly like the wallpaper default above, and
+      # a resident must be able to override an opinion at normal
+      # priority rather than reaching for lib.mkForce. Without it,
+      # `console.earlySetup = false;` in a private layer is not an
+      # override but a conflict: "The option 'console.earlySetup' has
+      # conflicting definition values". The larger initrd this costs is
+      # named below as a cost, which makes declining it a legitimate
+      # thing for a resident to want.
+      font = lib.mkDefault config.castle.display.consoleFont;
       # Apply the font from the initrd rather than after stage 2.
       # Without this the early-boot console — the part you read when
       # something has gone wrong — keeps the kernel's 8x16 default even
       # though the option is set, which is half the problem this option
       # exists to solve. Costs a slightly larger initrd.
-      earlySetup = true;
+      earlySetup = lib.mkDefault true;
     };
 
     programs.sway = {

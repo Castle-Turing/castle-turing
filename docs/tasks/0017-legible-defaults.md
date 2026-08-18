@@ -420,9 +420,12 @@ default keybindings, the wallpaper path), and runs `foot --check-config`:
   file appearing, not a changed one. Note the family in that file comes
   from the private layer (item 9), so CI must assert the *framework
   default* (`monospace`), not the resident's Iosevka.
-- Build `nixosConfigurations.xps9370` and assert `console.font`
-  resolves to `spleen-16x32` and that the built system's console font
-  file exists in the store.
+- Assert `console.font` resolves to `spleen-16x32` and that the named
+  font really exists inside `pkgs.spleen`. Note this is checked against
+  `nixosConfigurations.example` - there is no `nixosConfigurations.xps9370`
+  in flake.nix, and an earlier draft of this plan said there was.
+  `.example` imports `nixosModules.host-xps9370`, which is why the host
+  value resolves there at all.
 
 **Needs human hands.** Every value in this brief was calibrated by eye
 before it was written down (see "How the sizes and the typeface were

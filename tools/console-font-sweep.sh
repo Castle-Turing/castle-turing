@@ -27,9 +27,12 @@
 # sample too.
 #
 # **This needs sudo and it changes VT state.** `setfont` is privileged.
-# The script restores the kernel default on every VT it touched when you
-# press Enter, including on Ctrl-C — but if it is killed outright, reset
-# by hand with `sudo setfont -C /dev/ttyN` (no font argument) or reboot.
+# The script restores the host's CONFIGURED font (console.font, read
+# from /etc/vconsole.conf) on every VT it touched when you press Enter,
+# including on Ctrl-C — not the kernel default, which on a HiDPI host
+# would leave the console worse than it started. If it is killed
+# outright, reset by hand with `sudo setfont -C /dev/ttyN <font>` or
+# reboot.
 # It deliberately never touches the VT your graphical session is on.
 #
 # USAGE
@@ -66,7 +69,7 @@ hold() {
     # See tools/font-sweep.sh's `hold` for why this is `sleep &` + `wait`
     # rather than a bare `sleep`. Here the consequence is worse than a
     # stray window: a swallowed SIGTERM means the VTs keep the swept font
-    # instead of being restored to the kernel default.
+    # instead of being restored to the host's configured one.
     while :; do sleep 3600 & wait $! || break; done
   fi
 }
@@ -186,6 +189,14 @@ for spec in "$@"; do
   # Reprint on a loop so a getty appearing cannot leave a blank screen.
   (
     while :; do
+      # Refresh sudo's credential cache before each write. Without this,
+      # a sweep left up past sudo's timestamp_timeout (15 min by
+      # default - and the non-TTY branch of `hold` explicitly supports
+      # leaving it up) has this background subshell try to prompt for a
+      # password on /dev/tty, take SIGTTIN, and stop. A stopped process
+      # does not act on cleanup's SIGTERM without a SIGCONT, so the
+      # sample would freeze and the subshell would never be reaped.
+      sudo -n -v 2>/dev/null || true
       {
         printf '\n=== %s ===\n\n' "$spec"
         printf 'The quick brown fox jumps over the lazy dog. 0123456789\n'

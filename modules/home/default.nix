@@ -329,9 +329,18 @@ in
       # (`sans-serif`, resolved by fontconfig from fonts.packages), and
       # a resident naming a real face supplies its package in the same
       # private layer that names it.
-      gtk = lib.mkIf (swayEnabled && uiFontSet) {
+      # `enable` is gated only on the session existing, NOT on the font
+      # options being set. Enabling home-manager's gtk module is what
+      # writes gtk-3.0/settings.ini at all — and `home.pointerCursor`
+      # below feeds gtk-cursor-theme-name/-size into that same file.
+      # Gating `enable` on uiFontSet therefore coupled two unrelated
+      # things: a resident taking castle.display.uiFont's documented
+      # `null` opt-out silently lost their GTK *cursor* configuration
+      # too, leaving GTK apps on the XCURSOR_* env-var fallback. Only
+      # the font itself is conditional.
+      gtk = lib.mkIf swayEnabled {
         enable = true;
-        font = {
+        font = lib.mkIf uiFontSet {
           name = displayCfg.uiFont;
           size = displayCfg.uiFontSize;
         };

@@ -18,8 +18,10 @@ press Enter to tear it all down. `terminal` tiles foot panes on a
 scratch workspace; `ui` stacks swaynag bars (the surface that renders
 Sway titlebars, the nagbar, and — via the same Pango description — GTK
 chrome); `console-font-sweep.sh` loads PSF fonts onto spare VTs so you
-can compare by switching to them, and restores the kernel default when
-you are done.
+can compare by switching to them, and restores whatever font the host
+is configured for (`console.font`, via /etc/vconsole.conf) when you are
+done — not the kernel default, which on a HiDPI host would leave the
+console worse than it started.
 
 Every display value in `docs/tasks/0017-legible-defaults.md` was picked
 this way. That was a deliberate reaction to
@@ -42,10 +44,10 @@ installed only there won't appear in the comparison unless you pass its
 directory as another `--font-dir`.
 
 **`console-font-sweep.sh` needs sudo and changes VT state.** `setfont`
-is privileged. It restores the kernel default on every VT it touched,
-including on Ctrl-C, and never touches the VT your graphical session is
-on — but if it is killed with `-9`, reset by hand with `sudo setfont -C
-/dev/ttyN`.
+is privileged. It restores the host's configured font on every VT it
+touched, including on Ctrl-C, and never touches the VT your graphical
+session is on — but if it is killed with `-9`, reset by hand with
+`sudo setfont -C /dev/ttyN <font>`.
 
 ### An unresolved boundary
 
