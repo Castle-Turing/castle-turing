@@ -76,14 +76,17 @@ silently accumulate a dispatch policy nobody wrote down."
 
 New Nix option `castle.agent.dispatch.enable` (`modules/agent`,
 `lib.types.bool`, **default `false`**). When enabled, `modules/agent`
-declares three `systemd.user` units. The **path unit and the timer**
-are `wantedBy = [ "default.target" ]`; the **service deliberately is
-not** — they activate it. (The first version of this design wanted all
-three, and that was wrong: a `Type=oneshot` in default.target's own
-activation path holds the user manager's startup open for the entire
-sweep, up to `worker.timeoutSeconds` per eligible errand, and buys
-nothing the 5s `OnStartupSec` timer does not already deliver without
-blocking a login.)
+declares four `systemd.user` units. The **path unit, the timer, and
+the watermark oneshot** are `wantedBy = [ "default.target" ]`; the
+**sweep service deliberately is not** — the path unit and timer
+activate it. (The first version of this design wanted the sweep in
+default.target too, and that was wrong: a `Type=oneshot` in
+default.target's own activation path holds the user manager's startup
+open for the entire sweep, up to `worker.timeoutSeconds` per eligible
+errand, and buys nothing the 5s `OnStartupSec` timer does not already
+deliver without blocking a login. The watermark oneshot added later is
+in default.target precisely because that objection does not reach it:
+one journal read and at most one record write is not a sweep.)
 
 - **`systemd.user.paths.castle-dispatch`** — `pathConfig.PathChanged =
   "${cfg.stateDir}/journal"`, and **no `MakeDirectory`** (the first
@@ -102,17 +105,45 @@ blocking a login.)
   see "Where the environment comes from," below. No `Restart=`: a
   oneshot that fails is a mechanism fault, not a retry candidate (§2.7).
 - **`systemd.user.timers.castle-dispatch`** — `OnStartupSec = "5s"`,
-  `OnUnitActiveSec = "5min"`. A backstop, not the primary trigger: the
+  `OnUnitActiveSec = "1min"`. A backstop, not the primary trigger: the
   path unit should fire within moments of a request landing, but a
   missed inotify event (or a request filed while the user session was
   down) would otherwise wait forever. `OnStartupSec` is five seconds
-  rather than a minute for a reason that belongs to §2.2: a timer whose
-  interval has already elapsed fires immediately on activation, so this
-  value is really "how long after the user manager starts before the
-  first sweep runs," and the first sweep on a fresh journal is the one
-  that writes the watermark. Five seconds puts that write before a
-  human could plausibly have filed anything, which shrinks §2.2's
-  excluded-by-name residual to nothing in practice.
+  rather than a minute because a timer whose interval has already
+  elapsed fires immediately on activation, so this value is really
+  "how long after the user manager starts before the first sweep
+  runs" — and a first sweep that soon is worth having for what it
+  actually does: reap the turns a crash or a logout interrupted, and
+  surface a waiting backlog promptly after login, without holding the
+  login open while it happens. It has **nothing to do with the
+  watermark any more**; see the watermark unit below and the
+  correction recorded at the end of §2.2.
+  `OnUnitActiveSec` is one minute, not five. This tick is the only
+  thing that ever runs when an inotify event is missed, or when a
+  request was filed while the session was down, and the price of
+  either is total silence until the next tick. Five minutes of that
+  reads badly against a mechanism whose whole promise is "filing is
+  enough" — and it is what the VM test raced and lost, timing out at
+  300s while waiting for a 5-minute backstop. A tick with nothing to
+  do costs one journal read, one lock, and one log line; no model call
+  is reachable without an eligible request.
+- **`systemd.user.services.castle-dispatch-watermark`** — `Type =
+  "oneshot"`, `wantedBy = [ "default.target" ]`,
+  `ExecStart` runs `castle dispatch --watermark-only`,
+  `WorkingDirectory = "%h"`, and an `Environment=` block carrying
+  `CASTLE_STATE_DIR` and nothing else: this path runs no tenant and
+  fires no notification, so it needs neither the worker environment
+  nor the sweep service's `PATH` line (`castleCli` wraps its own
+  python3). **It establishes §2.2's watermark at the instant the user
+  manager starts**, which is what makes the boundary "filed before
+  this dispatch-enabled session existed" rather than "filed before the
+  first sweep happened to run." It runs before any compositor exists,
+  so there is no window in which a human could file anything — there
+  is nothing yet to file it with. The guarantee is a margin, not a
+  systemd ordering edge: greetd launches the compositor as the session
+  process, not as a user unit, so no `Before=` can be written against
+  the thing that must lose. Milliseconds against seconds, plus a soft
+  and visible failure mode if it ever lost anyway (§2.2).
 
 **The service also sets `PATH`** — the second correction the VM test
 forced. A systemd user manager hands its units a bare PATH containing
@@ -164,7 +195,7 @@ into the public repo (Principle 02) — `systemd.user.*` units are
 per-login-session by construction, with no `User=` to set.
 
 **Deliberately no `loginctl enable-linger`.** Without lingering, the
-user's systemd instance — and therefore these three units — runs only
+user's systemd instance — and therefore these four units — runs only
 while the resident is logged in, which is the honest lifetime for a
 mechanism whose only externally visible output (today) is a desktop
 notification: there is nothing for it to do while nobody is at the
@@ -274,9 +305,10 @@ deploys").
 - **Timer-only, no path unit.** Costs latency for no benefit: the path
   unit is the house style for "notice a change, react promptly, with a
   timer as backstop" (`modules/base`'s password-reminder check already
-  pairs the two), and a five-minute-average delay between filing a
-  request and it starting is a worse resident experience than the
-  seconds a path unit gives for free.
+  pairs the two), and a thirty-second-average delay between filing a
+  request and it starting (with the one-minute backstop interval this
+  design settled on) is a worse resident experience than the seconds a
+  path unit gives for free.
 - **Watching `*-request-*.md` specifically, instead of the whole
   journal directory.** This is the rejection most worth recording,
   because a request-shaped watcher would satisfy *this* task completely
@@ -302,6 +334,17 @@ hands are (`agent/README.md`'s framing of `castle`'s subcommands), and
 runnable by hand by a human holding the dispatch seat, which is the
 same "any seat can be held by a human" property every other subcommand
 already has.
+
+**One flag: `--watermark-only`.** It runs every guard below,
+establishes §2.2's watermark if this journal has never had one, prints
+that it is not sweeping, and returns 0 — no reaping, no worker turn,
+no routing. It exists so §1's `castle-dispatch-watermark` unit can put
+the dispatch boundary down at user-manager start without any of the
+cost that keeps the sweep service out of `default.target`. It is
+deliberately a flag on `dispatch` rather than a subcommand of its own:
+it is the same fold over the same journal behind the same guards,
+stopping early, and a separate subcommand would invite the two to
+drift apart on exactly the question they must agree on.
 
 The sweep, in order:
 
@@ -348,7 +391,11 @@ sweep lock removes that race by construction: sweeps are serialized,
 full stop.
 
 **2.2 — Watermark.** If no `decision` record with `seat: dispatch` and
-a `watermark:` field exists anywhere in the journal, write one:
+a `watermark:` field exists anywhere in the journal, write one. The
+*normal* writer is §1's `castle-dispatch-watermark`, running
+`castle dispatch --watermark-only` at user-manager start; a full sweep
+does the same find-or-write as a backstop, for a journal that appears
+mid-session. Either way the record is identical:
 `type: decision`, `seat: dispatch`, `provenance: initiated`, and —
 this is the load-bearing part — **`refs` listing, by id, every
 `request` record with no `result` at that instant**. *Not* "and
@@ -401,11 +448,73 @@ host that is the single most likely thing to happen, since the first
 sweep is usually triggered by the first request. Naming the excluded
 set removes the class of bug instead of narrowing the window: anything
 not on the list is eligible, however close to the boundary it was
-filed. The residual is small, named, and visible: a request filed in
-the seconds between enabling dispatch and the first sweep is excluded
-*by name*, shows up in the status surface like any other errand, and
-runs by hand. §1's five-second `OnStartupSec` is what keeps that
-window from mattering.
+filed.
+
+*Where the boundary actually sits, and the correction that put it
+there.* The boundary is **"filed before this dispatch-enabled session
+existed,"** established at user-manager start by
+`castle-dispatch-watermark` (§1) — before any compositor exists, so
+before the resident has anything to file a request *with*. The sweep's
+own find-or-write stays as the backstop for the one case that unit
+cannot cover: a private repo restored mid-session, into a state
+directory the unit found absent and rightly declined to touch. The
+path unit fires the moment that journal lands, so the sweep's write
+follows the restore by moments — well inside the time it takes a human
+to notice the clone finished and file something.
+
+The residual that remains is narrower and worth stating exactly. Only
+one shape can still put a *resident's* request into the watermark's
+refs: `stateDir` is absent at session start (so the watermark unit
+exits 0 with nothing to mark), and the first-ever record in that
+journal is a request the resident files by hand in a way that itself
+creates the directory tree — out of contract, since `stateDir` is
+documented as pointing into an already-cloned private checkout. Even
+then the failure is soft and visible, which is the property that makes
+the margin acceptable at all: the request is named in the watermark's
+`refs`, appears on the status surface labelled "not started
+automatically (predates dispatch) — `castle work <id>` to run it", and
+runs on demand. Nothing is lost, deleted, or silent.
+
+*What was considered and rejected in moving that boundary:*
+
+- **Comparing each request's `created` against the user manager's
+  start time.** Reintroduces the whole-second-granularity timestamp
+  comparison this same section already invalidated once — the exact
+  bug that made exclusion by name necessary — and derives the boundary
+  from a systemd internal, which is an illegible mechanism for a
+  journal whose premise is that a cold reader can reconstruct every
+  decision from the records themselves.
+- **Writing the watermark from the filing path** (`castle-modal`,
+  `castle request`). The filing path cannot know whether dispatch is
+  enabled on this host — the option lives in the module, the filer
+  runs from a session that never reads it — and a dispatch-seat
+  decision does not belong in the filing seat's code regardless.
+- **Making the VM test wait for the watermark before filing.** This
+  was the tempting one, and it is the failure this task exists to
+  stop: it pins the bug as intended behaviour and turns a check that
+  caught a real product defect into a check that verifies nothing. The
+  test's fast filing is the mechanism under test.
+- **Claiming a structural `Before=` ordering against the compositor.**
+  There is nothing to order against: greetd launches the compositor as
+  the session process, not as a user unit, so no ordering edge exists
+  between it and a `systemd.user` service. The honest statement is a
+  margin — a oneshot at user-manager start against a human login plus
+  a keystroke, milliseconds against seconds — plus the soft, visible
+  failure mode above.
+
+*This section's earlier "the residual shrinks to nothing in practice"
+claim was falsified by the VM test, and the same PR that ran it moved
+the boundary.* The numbers, from the run that failed: user manager up
+at ~50.4s, the resident's request filed at ~51.7s, the first sweep at
+~56.4s. A graphical login plus one modal keystroke beats a 5s
+`OnStartupSec` comfortably, so on every fresh-journal run the request
+that woke dispatch was named in the watermark's own refs and excluded
+by name forever; the sweep printed `dispatch: nothing eligible`, the
+path unit had no future event to fire on, and the test timed out
+racing the (then five-minute) timer backstop. That is a product defect
+on any fresh host, not a test artifact. Briefs ride their branch and
+nothing else corrects one the work has overtaken, so the correction is
+recorded here rather than left in a PR description.
 
 This is journal-resident, not a
 machine-local marker file, because a machine-local watermark is
@@ -1218,8 +1327,18 @@ python3 like every other harness in this directory, its own CI job in
 `.github/workflows/check.yml` next to `agent-loop-test` and
 `modal-headless-test`. Proves:
 
-- the watermark is written exactly once, on the first sweep, and a
-  request created before it stays un-dispatched;
+- the watermark is written exactly once — by whichever of the two
+  writers gets there first — and a request created before it stays
+  un-dispatched;
+- `castle dispatch --watermark-only`, what §1's session-start unit
+  runs, establishes that boundary on a fresh journal and does nothing
+  else: it names the outstanding request in the watermark's `refs`,
+  says in its output that it is not sweeping, and writes no `claim`
+  and no `result` (asserted on record counts). Running it a second
+  time leaves the journal byte-identical in record count, and a
+  subsequent *full* sweep honours the boundary it laid down — the
+  pre-watermark request stays un-dispatched while one filed after it
+  is claimed and resolved;
 - an eligible request gets exactly one turn, and its result is routed
   by the same sweep's tail step;
 - a second sweep over an already-worked journal changes nothing — the
@@ -1312,7 +1431,29 @@ asserts the question exists, references the request, and was routed to
 has two warning variants and only one of them says "notify command",
 while both carry that prefix — and the router's ordinary reports print
 `route: …` and the sweep's print `dispatch: …` without it, so the
-substring covers both failures without matching healthy output. Remember to check the path
+substring covers both failures without matching healthy output.
+
+*A third addition, forced by this VM failing.* Two assertions run
+after the end-to-end flow: that the watermark record's `refs` are
+**empty** (this journal starts empty, so the resident's request must
+not be named in it — the direct regression assertion for the race
+§2.2 records), and that `castle-dispatch-watermark` really ran. *That
+second one is asserted on three properties, not on `Result` alone, and
+the reason is worth recording: `systemctl show -p Result` reports
+`success` for a unit that does not exist and for one that exists but
+never started, so a check on `Result` alone would stay green through a
+typo in the unit name, a lost `wantedBy`, or a `ConditionUser` that
+excluded the resident — every failure it was meant to catch.
+`LoadState=loaded` proves the unit exists, a non-empty
+`ExecMainStartTimestamp` proves its `ExecStart` actually ran, and
+`Result=success` then proves it did not fail. `is-active` is no help
+either: this oneshot sets no `RemainAfterExit`, so a finished run and
+a never-started one both read `inactive`.* Deliberately **no
+wait or sleep before the modal files its request**: the test's fast
+filing is exactly what exercised the defect, and slowing it down would
+turn the regression assertion into a check that verifies nothing.
+
+Remember to check the path
 filters in `.github/workflows/desktop-loop-test.yml` if this adds any
 new fixture file paths that need triggering the workflow.
 
@@ -1330,8 +1471,10 @@ new fixture file paths that need triggering the workflow.
   `.example`, so the check still bites exactly where it is aimed.*
 - A new `extendModules` variant, following the `example-mod4` precedent
   already in `flake.nix`, with `castle.agent.dispatch.enable = true`
-  and a dummy `stateDir` set, asserting the three units exist and carry
-  the expected `Environment=` values. Eval-only, exactly like
+  and a dummy `stateDir` set, asserting the four units exist and carry
+  the expected `Environment=` values — including that
+  `castle-dispatch-watermark` is in `default.target`, runs the
+  `--watermark-only` path, and carries `CASTLE_STATE_DIR`. Eval-only, exactly like
   `example-mod4` — nothing builds or boots this configuration; `nix
   flake check` forcing every `nixosConfiguration`'s `assertions` is
   what proves it.

@@ -137,7 +137,10 @@ castle show ID
 - **`dispatch`** — one sweep of the journal, and the only subcommand
   a machine runs unprompted (`docs/tasks/0021-auto-dispatch.md`). In
   order: take a global sweep lock (one sweep at a time, machine-wide);
-  write the watermark if this journal has never had one; give every
+  write the watermark if this journal has never had one — a backstop,
+  since on a host running `modules/agent` the normal writer is the
+  `castle-dispatch-watermark` unit at session start, and what is left
+  for a sweep is a journal restored mid-session; give every
   interrupted turn a result; work every eligible request, oldest
   first, one at a time; run `route` exactly once at the end. A request
   is eligible iff nothing has produced a `result` for it, nothing is
@@ -151,9 +154,15 @@ castle show ID
   errand it attempted failed: failure is visible in `outcome`, and a
   nonzero exit here means dispatch itself broke. On a host that opts
   into `castle.agent.dispatch.enable` (`modules/agent`), a systemd
-  user path unit and a five-minute backstop timer run this; a human
+  user path unit and a one-minute backstop timer run this; a human
   holding the dispatch seat can run it by hand, exactly like every
-  other subcommand here.
+  other subcommand here. `--watermark-only` runs the guards, puts the
+  watermark down if this journal has never had one, and returns
+  without sweeping: that is what the session-start unit runs, so the
+  boundary is "filed before this dispatch-enabled session existed"
+  rather than "filed before the first sweep happened to run" — a
+  distinction the VM test made concrete by losing that race to a
+  resident's first keystroke.
 
   `seat: dispatch` appears on exactly two kinds of record — the
   watermark decision and any `result` the reaper had to supply — and
@@ -796,8 +805,12 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   `docs/tasks/0021-auto-dispatch.md`) drives `castle dispatch` — the
   sweep a systemd path unit and timer trigger on a real host — by hand.
   It proves: the watermark is written exactly once and a request filed
-  before it is never auto-started; an eligible request gets exactly one
-  turn whose result the same sweep routes; a second sweep over an
+  before it is never auto-started; `castle dispatch --watermark-only`
+  — what the session-start unit runs — establishes that boundary
+  without claiming, working, or routing anything, writes it exactly
+  once however often it runs, and a later full sweep honours it; an
+  eligible request gets exactly one turn whose result the same sweep
+  routes; a second sweep over an
   already-worked journal writes nothing (asserted on record counts, not
   on the process exiting, since the sweep writes into the directory the
   path unit watches and must not retrigger itself forever); two

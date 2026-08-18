@@ -433,11 +433,12 @@ repo's state until that lands.
 
 Out of the box, a filed request sits in the journal until you run
 `castle work <id>` yourself. `castle.agent.dispatch.enable = true`
-changes that: three `systemd.user` units — a path unit watching your
-journal directory, a `oneshot` service running `castle dispatch`, and
-a five-minute backstop timer — notice new work, run the configured
-worker tenant against one eligible errand at a time, and route the
-results (`docs/tasks/0021-auto-dispatch.md`).
+changes that: four `systemd.user` units — a path unit watching your
+journal directory, a `oneshot` service running `castle dispatch`, a
+one-minute backstop timer, and a second `oneshot` that marks the
+dispatch boundary when your session starts — notice new work, run the
+configured worker tenant against one eligible errand at a time, and
+route the results (`docs/tasks/0021-auto-dispatch.md`).
 
 **This is an authority decision, which is why it is yours and not the
 framework's.** Turning it on means a model tenant can start work, and
@@ -449,9 +450,15 @@ mechanism promises in exchange:
   permanently ineligible. That bound is structural, not a counter that
   could be misconfigured or reset. Retrying is `castle work <id>`,
   typed by you.
-- **Nothing before you opted in.** The first sweep writes a watermark
-  record; requests filed before that instant are never auto-started,
-  and the record says so in plain English.
+- **Nothing before you opted in.** A watermark record is written the
+  moment your first dispatch-enabled session starts, before you have a
+  desktop to file anything from; requests filed before that instant are
+  never auto-started, are named in the record by id, and the record
+  says so in plain English. (If your private repo is restored after
+  login, the first sweep to see the new journal writes it instead.)
+  Anything the watermark excluded still shows up in
+  `castle-modal --mode status` with the `castle work <id>` that runs
+  it by hand.
 - **Nothing is hidden.** Every turn leaves a `claim` record when it
   starts and a `result` carrying an `outcome` when it ends, including
   when it ends badly — and `castle-modal --mode status` shows you

@@ -245,10 +245,12 @@ in
       # — a sweep that mkdir'd the resident's state directory before
       # their journal was restored into it would break the restore and
       # write a watermark claiming nothing predates it — so this VM has
-      # to supply what a real host's private repo supplies. It is also
-      # what lets the first sweep run within seconds of login and put
-      # its empty-refs watermark down before the resident files
-      # anything, which is the ordering every assertion below assumes.
+      # to supply what a real host's private repo supplies. The
+      # ordering the assertions below depend on — an empty-refs
+      # watermark already down before the resident files anything —
+      # comes from the castle-dispatch-watermark unit, which runs at
+      # user-manager start, not from anything about this rule; the
+      # directory has to exist for that unit to find a journal to mark.
       systemd.tmpfiles.rules = [
         "d /home/resident/private 0755 resident users -"
         "d ${testStateDir} 0755 resident users -"
@@ -445,11 +447,70 @@ in
     journal_dump = machine.succeed("su - resident -c 'cat ${testStateDir}/journal/*.md'")
     assert "type: decision" in journal_dump, journal_dump
     assert "evidence:" in journal_dump and request_id in journal_dump, journal_dump
-    # The watermark decision (docs/tasks/0021 §2.2): written by the
-    # first sweep of the session, before the resident filed anything.
+    # The watermark decision (docs/tasks/0021 §2.2): written by
+    # castle-dispatch-watermark at the instant this session's user
+    # manager started, before the resident had a compositor to file
+    # anything with.
     assert "seat: dispatch" in journal_dump, journal_dump
     assert "watermark:" in journal_dump, journal_dump
     print("OK: dispatch routed the auto-produced result and left a watermark record behind")
+
+    # --- The watermark did not swallow the request that woke dispatch
+    # (docs/tasks/0021 §2.2) -------------------------------------------
+    #
+    # The direct regression assertion for the defect that made this
+    # unit exist. This VM's journal starts empty, so a watermark
+    # established at session start has nothing outstanding to name and
+    # its `refs` must be empty. When the *first sweep* owned that write
+    # instead, a graphical login plus one modal keystroke beat its 5s
+    # OnStartupSec: the resident's request was outstanding when the
+    # watermark landed, was named in these refs, and was excluded from
+    # automatic dispatch by name — permanently, with the sweep printing
+    # "nothing eligible" and nothing ever triggering again. If that
+    # race is ever reintroduced, the request id reappears on this line.
+    watermark_path = machine.succeed(
+        "su - resident -c \"grep -l '^watermark: ' ${testStateDir}/journal/*-decision-*.md\""
+    ).strip()
+    watermark_record = machine.succeed(f"su - resident -c 'cat {watermark_path}'")
+    assert request_id not in watermark_record, watermark_record
+    # `render_record` writes an empty refs list as the bare field with
+    # nothing after the colon (agent/castle's write_record joins the
+    # list with commas; the empty join is ""), so this is the exact
+    # serialization of "excluded nothing."
+    assert "\nrefs: \n" in watermark_record, watermark_record
+    print("OK: the watermark's refs are empty — the resident's first request was not excluded by it")
+
+    # And the unit that wrote it really is the one that ran. Three
+    # properties, not one, because `Result` alone asserts nothing:
+    # systemd reports `Result=success` for a unit that does not exist
+    # AND for one that exists but never started, so a check on it
+    # alone would stay green through a typo in the unit name, a lost
+    # `wantedBy`, or a `ConditionUser` that excluded the resident —
+    # every failure it is supposed to catch. `LoadState` proves the
+    # unit exists, a non-empty `ExecMainStartTimestamp` proves its
+    # ExecStart actually ran (a skipped condition leaves it empty),
+    # and `Result` then proves it did not fail. `is-active` is no use
+    # either way: this oneshot sets no RemainAfterExit, so it is
+    # inactive once finished, exactly like one that never ran.
+    #
+    # XDG_RUNTIME_DIR is set explicitly rather than relying on
+    # pam_systemd to furnish it to `su -`; `systemctl --user` needs it
+    # to find the resident's manager, and depending on the PAM stack
+    # here would make this assertion fail for a reason that has
+    # nothing to do with dispatch.
+    watermark_props = machine.succeed(
+        "su - resident -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user show "
+        "castle-dispatch-watermark -p LoadState -p ExecMainStartTimestamp -p Result'"
+    )
+    assert "LoadState=loaded" in watermark_props, watermark_props
+    assert "Result=success" in watermark_props, watermark_props
+    started_at = [
+        line.split("=", 1)[1]
+        for line in watermark_props.splitlines()
+        if line.startswith("ExecMainStartTimestamp=")
+    ]
+    assert started_at and started_at[0].strip(), watermark_props
+    print("OK: castle-dispatch-watermark ran at session start and exited success")
 
     digest_out = machine.succeed("su - resident -c 'castle digest'")
     assert f"Errand {request_id}" in digest_out, digest_out

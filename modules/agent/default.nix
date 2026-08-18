@@ -197,12 +197,14 @@ in
         `castle work` or `castle route` typed by hand
         (docs/tasks/0021-auto-dispatch.md).
 
-        Declares three `systemd.user` units — a path unit watching the
+        Declares four `systemd.user` units — a path unit watching the
         journal directory, a `oneshot` service running
-        `castle dispatch`, and a five-minute timer as a backstop for a
-        missed inotify event. The sweep reaps interrupted turns, runs
-        the configured worker tenant against every eligible request
-        one at a time, and routes once at the end.
+        `castle dispatch`, a one-minute timer as a backstop for a
+        missed inotify event, and a second `oneshot` that establishes
+        the dispatch watermark at session start. The sweep reaps
+        interrupted turns, runs the configured worker tenant against
+        every eligible request one at a time, and routes once at the
+        end.
 
         **Default off, deliberately.** Turning this on is a standing
         authority decision about your own machine — it lets a model
@@ -368,7 +370,7 @@ in
     # that touches a running system (Proposal 03's "the worker
     # proposes, it never deploys").
     #
-    # `ConditionUser=!@system` on all three, found by running
+    # `ConditionUser=!@system` on all four, found by running
     # test/desktop-loop's VM rather than reasoned out in advance:
     # `systemd.user.*` units are declared for EVERY user with a
     # systemd instance, and on a host that imports modules/desktop
@@ -411,8 +413,13 @@ in
         # guard closes: on a machine where dispatch is enabled before
         # the private repo holding the journal is cloned, a unit that
         # helpfully mkdir'd the path would both break that clone and
-        # let the first sweep write a watermark declaring that nothing
-        # predates it, minutes before the real history arrived.
+        # let castle-dispatch-watermark (or, failing that, the first
+        # sweep) write a watermark declaring that nothing predates it,
+        # minutes before the real history arrived. Left uncreated, the
+        # restore is what makes this path appear, this unit fires on
+        # it, and the sweep it triggers writes the watermark itself —
+        # the backstop for a journal that lands mid-session, after the
+        # session-start unit below has already found nothing to mark.
       };
     };
 
@@ -425,7 +432,11 @@ in
       # `worker.timeoutSeconds` per eligible errand, so a queue of them
       # could keep a login "starting" for a very long time — and buys
       # nothing, because the 5s OnStartupSec timer already delivers the
-      # first sweep of the session without blocking anything.
+      # first sweep of the session without blocking anything. The one
+      # thing that genuinely had to happen before a login could race it
+      # — putting the watermark down — is castle-dispatch-watermark's
+      # job below, and that unit IS in default.target: a journal read
+      # plus at most one record write is not a sweep.
       unitConfig.ConditionUser = "!@system";
       serviceConfig = {
         Type = "oneshot";
@@ -510,13 +521,83 @@ in
         # 5s, not a minute: an OnStartupSec timer whose interval has
         # already elapsed fires immediately on activation, so this
         # value is really "how long after the user manager starts
-        # before the first sweep runs" — and the first sweep on a
-        # fresh journal is the one that writes the watermark. Five
-        # seconds puts that write before a human could plausibly have
-        # filed anything, which is what shrinks the excluded-by-name
-        # residual (docs/tasks/0021 §2.2) to nothing in practice.
+        # before the first sweep runs." It no longer has anything to
+        # do with the watermark — castle-dispatch-watermark below owns
+        # that boundary, and owns it at an instant no login can beat.
+        # Five seconds is still worth having for what a first sweep
+        # actually does: reap the turns a crash or a logout interrupted
+        # and surface whatever backlog is waiting, promptly after
+        # login, without holding the login open while it happens.
         OnStartupSec = "5s";
-        OnUnitActiveSec = "5min";
+        # A minute, not five. This tick is the only thing that ever
+        # runs when an inotify event is missed, or when a request was
+        # filed while this session was down — and the price of either
+        # is total silence until the next tick. Five minutes of that
+        # sits badly against a mechanism whose whole promise to a
+        # resident is "filing is enough"; the VM test raced that
+        # backstop and lost. The tick is cheap when there is nothing to
+        # do: one journal read, one lock, one log line, no model call.
+        OnUnitActiveSec = "1min";
+      };
+    };
+
+    # The watermark is put down here, at the instant the user manager
+    # starts, and not by whichever sweep happens to run first.
+    #
+    # test/desktop-loop caught the difference by failing: the timer's
+    # OnStartupSec is measured from user-manager start, and a
+    # graphical login plus one modal keystroke beats five seconds
+    # comfortably. In the VM the resident's very first request was
+    # filed a second after the user manager came up and roughly five
+    # seconds before the first sweep — so on a fresh journal that
+    # request was outstanding when the sweep wrote the watermark, was
+    # named in the watermark's own refs, and was therefore excluded
+    # from automatic dispatch by name, permanently. The sweep printed
+    # "nothing eligible" and nothing ever triggered again. That is a
+    # product defect on any fresh host, not a test artifact: a request
+    # filed in the first seconds after login was silently and
+    # permanently excluded.
+    #
+    # Moving the write here changes the boundary from "filed before
+    # the first sweep happened to run" to "filed before this
+    # dispatch-enabled session existed," which is the boundary
+    # §2.2 always meant. This unit runs before any compositor exists —
+    # there is no window in which a human could file anything, because
+    # there is nothing yet to file it with.
+    #
+    # It is `wantedBy = default.target` where the sweep service
+    # deliberately is not, and the distinction is the cost of the
+    # oneshot: the objection to putting the *sweep* in a login's
+    # activation path is that it can hold the user manager open for
+    # `worker.timeoutSeconds` per eligible errand. This does one
+    # journal read and at most one record write, and then it is done.
+    #
+    # Be honest about the guarantee: it is a margin, not a systemd
+    # ordering edge. greetd launches the compositor as the session
+    # process, not as a user unit, so there is no `Before=` that can
+    # be written against the thing that must lose the race — the
+    # claim is milliseconds against seconds, not an enforced order.
+    # The failure mode if it ever did lose is soft and visible, which
+    # is what makes the margin acceptable: the request lands in the
+    # watermark's refs, appears on the status surface with its
+    # `castle work <id>` label, and runs by hand.
+    systemd.user.services.castle-dispatch-watermark = lib.mkIf cfg.dispatch.enable {
+      description = "Establish the dispatch watermark at session start";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${castleCli}/bin/castle dispatch --watermark-only";
+        WorkingDirectory = "%h";
+      };
+      # Only the state directory. This path runs no tenant and fires
+      # no notification, so it needs neither the worker environment
+      # (command, timeout, repo root) nor the PATH line the sweep
+      # service carries for `claude` and `notify-send` — castleCli
+      # wraps its own python3 at a store path, so `castle` itself
+      # needs nothing on PATH to run.
+      environment = {
+        CASTLE_STATE_DIR = toString cfg.stateDir;
       };
     };
 

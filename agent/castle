@@ -2204,6 +2204,16 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     that cannot be written or read back), which is what keeps the
     systemd unit's own failed state meaning "dispatch itself broke"
     rather than "an errand the tenant attempted didn't go well."
+
+    `--watermark-only` runs every guard below, establishes the
+    watermark if this journal has never had one, and returns without
+    reaping or dispatching anything. That is how the boundary gets put
+    down on a real host: `castle-dispatch-watermark` runs it the
+    instant the user manager starts, before any compositor exists, so
+    the boundary is "filed before this dispatch-enabled session
+    existed" rather than "filed before the first sweep happened to
+    run" — a distinction the VM test made concrete by losing that race
+    to a resident's first keystroke (docs/tasks/0021 §2.2).
     """
     # Before anything else, and before `journal_dir()` gets a chance to
     # create it: does the configured state directory exist at all?
@@ -2221,7 +2231,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     #
     # Exit 0, not 1: a state directory that does not exist yet is not a
     # mechanism fault, it is a machine that is not ready. The timer
-    # comes back in five minutes, and by then it usually is.
+    # comes back in a minute, and by then it usually is.
     configured_state_dir = state_dir()
     if not configured_state_dir.exists():
         print(
@@ -2281,6 +2291,17 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             print(f"castle dispatch: cannot read the journal: {exc}", file=sys.stderr)
             return 1
 
+        # Find-or-write. On a host running modules/agent the normal
+        # writer is no longer this line: `castle-dispatch-watermark`
+        # runs `castle dispatch --watermark-only` at user-manager
+        # start, so by the time any sweep reaches here the boundary is
+        # usually already down. What stays here is the backstop for a
+        # journal that appears *mid-session* — a private repo restored
+        # an hour after login, into a state directory the session-start
+        # unit found absent and declined to touch. The path unit fires
+        # the moment that journal lands, which puts this write moments
+        # after the restore, before a human can plausibly file into a
+        # journal they have only just finished cloning.
         watermark_record = _find_watermark(records)
         if watermark_record is None:
             watermark_id = _write_watermark(records)
@@ -2294,6 +2315,20 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                 )
                 return 1
             print(f"dispatch: wrote the dispatch watermark {watermark_id}")
+
+        # Everything above is a guard or the watermark itself; nothing
+        # below this line is. `--watermark-only` stops here, having
+        # done exactly the one job the session-start unit exists for.
+        # It deliberately sits behind all three early exits: no state
+        # directory means there is no journal to draw a boundary on
+        # yet, a fallback runtime dir means locks an unattended run
+        # will not trust, and a busy sweep lock means a sweep is
+        # already running that writes the watermark itself if it is
+        # missing.
+        if args.watermark_only:
+            print("dispatch: watermark established; not sweeping (--watermark-only)")
+            return 0
+
         # The exclusion set, read off the watermark record's own refs.
         # Nothing parses the `watermark:` timestamp here any more: it is
         # how `_find_watermark` recognises the record and an honest fact
@@ -2718,6 +2753,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_dispatch = sub.add_parser(
         "dispatch",
         help="dispatch: one sweep — reap interrupted turns, work every eligible request, route once",
+    )
+    p_dispatch.add_argument(
+        "--watermark-only",
+        action="store_true",
+        help=(
+            "establish the dispatch watermark if this journal has never had one, "
+            "then exit without sweeping; used by the session-start systemd unit "
+            "(modules/agent's castle-dispatch-watermark)"
+        ),
     )
     p_dispatch.set_defaults(func=cmd_dispatch)
 

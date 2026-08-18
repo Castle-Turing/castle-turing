@@ -230,6 +230,7 @@
                     config.castle.agent.dispatch.enable
                     || (
                       !(config.systemd.user.services ? castle-dispatch)
+                      && !(config.systemd.user.services ? castle-dispatch-watermark)
                       && !(config.systemd.user.paths ? castle-dispatch)
                       && !(config.systemd.user.timers ? castle-dispatch)
                     );
@@ -367,7 +368,7 @@
       # The other half of the default-off proof (docs/tasks/0021-auto-
       # dispatch.md): `nixosConfigurations.example` asserts that no
       # castle-dispatch unit exists when dispatch is left alone; this
-      # variant turns it on and asserts the three units exist and carry
+      # variant turns it on and asserts the four units exist and carry
       # the environment the sweep needs. Same `extendModules` precedent
       # as example-mod4 above, and eval-only for the same reason —
       # nothing builds or boots this configuration, but `nix flake
@@ -383,6 +384,7 @@
               dummyStateDir = "/home/resident/private/state";
               dummyRepoRoot = "/home/resident/private";
               unit = config.systemd.user.services.castle-dispatch or null;
+              watermarkUnit = config.systemd.user.services.castle-dispatch-watermark or null;
               # The unit-level `environment` attrset, not a raw
               # serviceConfig.Environment list — see modules/agent's
               # comment on why the distinction is load-bearing (systemd
@@ -401,15 +403,19 @@
                 {
                   assertion =
                     (config.systemd.user.services ? castle-dispatch)
+                    && (config.systemd.user.services ? castle-dispatch-watermark)
                     && (config.systemd.user.paths ? castle-dispatch)
                     && (config.systemd.user.timers ? castle-dispatch);
                   message = ''
                     nixosConfigurations.example-dispatch: castle.agent.dispatch.enable
-                    is true but modules/agent did not declare all three
-                    systemd.user units (path, service, timer). The path unit is
-                    the prompt trigger and the timer is the backstop for a missed
-                    inotify event — losing either silently degrades automatic
-                    dispatch to something slower or to nothing at all
+                    is true but modules/agent did not declare all four
+                    systemd.user units (path, service, timer, watermark). The path
+                    unit is the prompt trigger, the timer is the backstop for a
+                    missed inotify event, and castle-dispatch-watermark is what
+                    puts the dispatch boundary down at session start instead of
+                    leaving it to whichever sweep runs first — losing any of them
+                    silently degrades automatic dispatch to something slower, to
+                    nothing at all, or to a boundary a login can beat
                     (docs/tasks/0021-auto-dispatch.md §1).
                   '';
                 }
@@ -458,7 +464,26 @@
                     # restored into it (docs/tasks/0021 §1/§2.2).
                     && !(config.systemd.user.paths.castle-dispatch.pathConfig ? MakeDirectory)
                     && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec
-                      == "5min";
+                      == "1min"
+                    # The watermark unit, pinned to the three facts
+                    # that make it work at all: it is IN default.target
+                    # (unlike the sweep — it is cheap enough to sit in
+                    # a login's activation path, and it has to run
+                    # before anything interactive exists), it runs the
+                    # --watermark-only path rather than a full sweep,
+                    # and it skips greetd's system accounts like its
+                    # siblings. Losing the wantedBy would put the
+                    # boundary back where the VM test found it: written
+                    # by the first sweep, five seconds after login, and
+                    # losable to one keystroke
+                    # (docs/tasks/0021-auto-dispatch.md §2.2).
+                    && watermarkUnit != null
+                    && watermarkUnit.wantedBy == [ "default.target" ]
+                    && watermarkUnit.unitConfig.ConditionUser == "!@system"
+                    && watermarkUnit.serviceConfig.Type == "oneshot"
+                    && lib.hasSuffix "castle dispatch --watermark-only"
+                      watermarkUnit.serviceConfig.ExecStart
+                    && watermarkUnit.environment.CASTLE_STATE_DIR or null == dummyStateDir;
                   message = ''
                     nixosConfigurations.example-dispatch: the castle-dispatch units
                     do not carry what the sweep needs. Expected a oneshot service
@@ -466,8 +491,10 @@
                     CASTLE_WORKER_TIMEOUT and CASTLE_REPO_ROOT baked in
                     (determinism, not an inheritance gap — see modules/agent's own
                     comment), a path unit watching the configured journal
-                    directory rather than a filename pattern, and a five-minute
-                    backstop timer (docs/tasks/0021-auto-dispatch.md §1).
+                    directory rather than a filename pattern, a one-minute
+                    backstop timer, and a session-start watermark oneshot that
+                    runs `castle dispatch --watermark-only`
+                    (docs/tasks/0021-auto-dispatch.md §1).
                   '';
                 }
               ];

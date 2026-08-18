@@ -122,6 +122,66 @@ REQ_SAME_SECOND="$("$CASTLE" ask "Dispatch test: filed in the same second as a s
 [ "$(count_referencing result "$REQ_SAME_SECOND")" -eq 1 ] || fail "a request filed in the same wall-clock second as a sweep was not dispatched — the watermark is excluding by timestamp again, not by name"
 
 # ---------------------------------------------------------------------
+log "--watermark-only establishes the boundary and sweeps nothing — the session-start unit's whole job"
+# ---------------------------------------------------------------------
+# On a real host this is what modules/agent's castle-dispatch-watermark
+# runs, at the instant the user manager starts. It exists because the
+# first *sweep* is too late: its 5s OnStartupSec is measured from that
+# same instant, and test/desktop-loop showed a graphical login plus one
+# modal keystroke beating it comfortably — the resident's first request
+# was outstanding when the sweep wrote the watermark, landed in the
+# watermark's own refs, and was excluded from automatic dispatch by
+# name, forever. Establishing the boundary before any compositor exists
+# moves it from "filed before the first sweep happened to run" to
+# "filed before this dispatch-enabled session existed."
+#
+# Its own state directory, because every assertion here is about a
+# journal that has never been swept and the one above has been swept
+# three times. `$JOURNAL` and `$CASTLE_STATE_DIR` are restored at the
+# end of the section — everything after it works the main journal.
+MAIN_STATE_DIR="$CASTLE_STATE_DIR"
+MAIN_JOURNAL="$JOURNAL"
+export CASTLE_STATE_DIR="$WORKDIR/state-watermark-only"
+JOURNAL="$CASTLE_STATE_DIR/journal"
+mkdir -p "$CASTLE_STATE_DIR"
+
+REQ_PRE="$("$CASTLE" ask "Dispatch test: outstanding before the session-start watermark ran.")"
+log "  -> $REQ_PRE"
+WM_ONLY_OUT="$("$CASTLE" dispatch --watermark-only)"
+echo "$WM_ONLY_OUT"
+case "$WM_ONLY_OUT" in
+  *"not sweeping"*) : ;;
+  *) fail "--watermark-only did not say it was not sweeping: $WM_ONLY_OUT" ;;
+esac
+WM_ONLY_FILES="$(grep -l '^watermark: ' "$JOURNAL"/*-decision-*.md 2>/dev/null || true)"
+[ "$(echo "$WM_ONLY_FILES" | grep -c . || true)" -eq 1 ] || fail "--watermark-only did not establish exactly one watermark record"
+grep -q "^refs: .*$REQ_PRE" "$WM_ONLY_FILES" || fail "the watermark --watermark-only wrote does not name the outstanding request $REQ_PRE in its refs"
+# Nothing else happened: no claim, no result, no routing decision. The
+# whole point of the flag is that a unit in default.target's activation
+# path cannot afford a sweep — a oneshot holding the user manager open
+# for worker.timeoutSeconds per eligible errand is exactly what the
+# sweep service is kept out of default.target to avoid.
+[ "$(count_of_type claim)" -eq 0 ] || fail "--watermark-only claimed a request"
+[ "$(count_of_type result)" -eq 0 ] || fail "--watermark-only produced a result"
+[ "$(all_records)" -eq 2 ] || fail "expected exactly 2 records (the request and the watermark) after --watermark-only, got $(all_records)"
+"$CASTLE" validate
+
+log "--watermark-only is idempotent: a second session-start run writes nothing"
+"$CASTLE" dispatch --watermark-only >/dev/null
+[ "$(all_records)" -eq 2 ] || fail "a second --watermark-only run changed the journal (now $(all_records) records) — the boundary must be written exactly once, ever"
+
+log "a later full sweep respects the boundary the session-start unit put down"
+REQ_POST="$("$CASTLE" ask "Dispatch test: filed after the session-start watermark, must run.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing result "$REQ_PRE")" -eq 0 ] || fail "the request the session-start watermark excluded was auto-dispatched by a later sweep anyway"
+[ "$(count_referencing claim "$REQ_PRE")" -eq 0 ] || fail "the request the session-start watermark excluded was claimed by a later sweep anyway"
+[ "$(count_referencing result "$REQ_POST")" -eq 1 ] || fail "a request filed after the session-start watermark was not dispatched"
+"$CASTLE" validate
+
+export CASTLE_STATE_DIR="$MAIN_STATE_DIR"
+JOURNAL="$MAIN_JOURNAL"
+
+# ---------------------------------------------------------------------
 log "a state dir that does not exist yet is not a mechanism fault: the sweep says so, creates nothing, and exits 0"
 # ---------------------------------------------------------------------
 # The restore-order hazard: dispatch enabled and rebuilt before the
