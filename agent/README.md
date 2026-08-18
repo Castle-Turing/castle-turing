@@ -563,34 +563,48 @@ has to hold forever, not just today.
   record: folds are cheap at this scale, and a flat directory keeps
   `grep`/`ls` working as the primary way to look at it, per
   `docs/tasks/0008`'s pre-made decision.
+- **The runtime directory** — everything machine-local and
+  session-lifetime resolves through one place: `$XDG_RUNTIME_DIR/castle`
+  if that variable is set, else `/run/user/$UID/castle` if that
+  directory exists, else `/tmp/castle-$UID`. The middle branch matters
+  because `$XDG_RUNTIME_DIR` is unset in exactly the contexts most
+  likely to run `castle work` beside a dispatch unit — ssh, cron, `su`
+  — and `/run/user/$UID` is where systemd's user manager points that
+  variable, so preferring it puts every caller on one host in one
+  place. For the spool that is tidiness; for the locks below it is
+  correctness (a lock in a different directory is not a lock at all).
 - **The spool** — ephemeral, machine-local, never committed — lives
-  under `$XDG_RUNTIME_DIR/castle/spool/`, falling back to
-  `/tmp/castle-$UID/spool/` if no runtime dir is set. Same record
-  format; `castle record --spool` writes there instead of the journal.
-  Delete it any time; nothing durable is ever spool-only.
-- **Leases** — `$XDG_RUNTIME_DIR/castle/leases/<request-id>.lock`,
-  plus one sibling `dispatch.lock` for the global sweep
-  (`docs/tasks/0021-auto-dispatch.md`). Not records and not spool
+  under `<runtime>/spool/`. Same record format; `castle record --spool`
+  writes there instead of the journal. Delete it any time; nothing
+  durable is ever spool-only.
+- **Leases** — `<runtime>/leases/<request-id>.lock`, plus two siblings:
+  `dispatch.lock` for the global sweep and `route.lock` serializing the
+  router's fold (`docs/tasks/0021-auto-dispatch.md`). Not records and not spool
   entries: `RECORD_TYPES` is schema forever, and "a worker currently
   holds this errand" is an ephemeral liveness fact with the lifetime
   of a login session, not a message one seat is sending another. A
   lock, not a record. `flock` on a plain file rather than a PID file
   with a staleness check, because the kernel releases a flock the
   instant its holder exits — for any reason, including a crash — so a
-  stale lock is detectable race-free by the next acquirer. Unlike the
-  spool, these fall back to `/run/user/$UID/castle/` before
-  `/tmp/castle-$UID/` when `$XDG_RUNTIME_DIR` is unset — the variable
-  is missing in exactly the contexts most likely to run `castle work`
-  beside a dispatch unit (ssh, cron, `su`), and a lock in a different
-  directory is not a lock at all: the two callers would not exclude
-  each other, and a sweep would reap a live turn as interrupted.
-  `/run/user/$UID` is where systemd's user manager points
-  `XDG_RUNTIME_DIR`, so preferring it whenever it exists puts every
-  caller on one host in one namespace. The file's
+  stale lock is detectable race-free by the next acquirer. Two callers
+  that resolve the runtime directory differently are not excluding each
+  other at all — one would reap the other's live turn as interrupted —
+  which is why that resolution is shared and why `castle dispatch`
+  refuses to run unattended when it lands on the world-writable `/tmp`
+  branch (any local user could squat a lock there and wedge the sweep
+  silently green). A hand-run `castle work` still accepts it: a human
+  is present to notice. The file's
   contents (start time, request id, tenant command) are informational
   only; nothing reads them back. A leftover, unheld lease file means
   nothing on its own — the journal says what happened, and a `claim`
   with no live lease and no result is what `castle dispatch` reaps.
+  The lease is **machine-local by design**, which carries one honest
+  limit: enable dispatch on at most one host per journal. Two
+  dispatch-enabled machines sharing a synced private repo would work
+  the same request twice and write false `interrupted` results at each
+  other, because nothing reconciles two dispatchers over one journal —
+  that belongs to whatever task designs journal sync, and nothing here
+  pretends to solve it.
 - **`modules/agent`** (this flake's `nixosModules.agent`) installs the
   `castle` CLI and declares `castle.agent.stateDir`, which — when set
   by a private layer — is wired into `CASTLE_STATE_DIR` via

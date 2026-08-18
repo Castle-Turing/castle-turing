@@ -429,6 +429,14 @@
                     # by running test/desktop-loop's VM, not by
                     # reasoning (docs/tasks/0021 §1).
                     && unit.unitConfig.ConditionUser == "!@system"
+                    # The service is activated BY the path unit and the
+                    # timer, never wanted by default.target itself: a
+                    # oneshot in the activation path would hold a login
+                    # open for the length of a sweep
+                    # (docs/tasks/0021 §1).
+                    && unit.wantedBy == [ ]
+                    && config.systemd.user.paths.castle-dispatch.wantedBy == [ "default.target" ]
+                    && config.systemd.user.timers.castle-dispatch.wantedBy == [ "default.target" ]
                     && config.systemd.user.paths.castle-dispatch.unitConfig.ConditionUser
                       == "!@system"
                     && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser

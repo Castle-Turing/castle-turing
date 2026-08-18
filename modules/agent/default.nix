@@ -215,6 +215,12 @@ in
         almost certainly want `castle.agent.worker.repoRoot` too —
         see that option's description for what happens without it.
 
+        **Enable this on at most one host per journal.** The lease that
+        guarantees one turn at a time is machine-local, and nothing yet
+        reconciles two dispatchers over a synced journal: two enabled
+        hosts sharing one private repo would work the same request
+        twice and write false `interrupted` results at each other.
+
         Deliberately **no `loginctl enable-linger`**: without
         lingering, these units run only while you are logged in, which
         is the honest lifetime for a mechanism whose only externally
@@ -412,7 +418,14 @@ in
 
     systemd.user.services.castle-dispatch = lib.mkIf cfg.dispatch.enable {
       description = "Run one castle dispatch sweep over the journal";
-      wantedBy = [ "default.target" ];
+      # Deliberately NO wantedBy: the path unit and the timer above and
+      # below activate this service, and they are the ones default.target
+      # wants. A Type=oneshot pulled directly into default.target holds
+      # the user manager's activation open for the whole sweep — up to
+      # `worker.timeoutSeconds` per eligible errand, so a queue of them
+      # could keep a login "starting" for a very long time — and buys
+      # nothing, because the 5s OnStartupSec timer already delivers the
+      # first sweep of the session without blocking anything.
       unitConfig.ConditionUser = "!@system";
       serviceConfig = {
         Type = "oneshot";

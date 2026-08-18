@@ -76,7 +76,14 @@ silently accumulate a dispatch policy nobody wrote down."
 
 New Nix option `castle.agent.dispatch.enable` (`modules/agent`,
 `lib.types.bool`, **default `false`**). When enabled, `modules/agent`
-declares three `systemd.user` units, all `wantedBy = [ "default.target" ]`:
+declares three `systemd.user` units. The **path unit and the timer**
+are `wantedBy = [ "default.target" ]`; the **service deliberately is
+not** — they activate it. (The first version of this design wanted all
+three, and that was wrong: a `Type=oneshot` in default.target's own
+activation path holds the user manager's startup open for the entire
+sweep, up to `worker.timeoutSeconds` per eligible errand, and buys
+nothing the 5s `OnStartupSec` timer does not already deliver without
+blocking a login.)
 
 - **`systemd.user.paths.castle-dispatch`** — `pathConfig.PathChanged =
   "${cfg.stateDir}/journal"`, and **no `MakeDirectory`** (the first
@@ -86,7 +93,8 @@ declares three `systemd.user` units, all `wantedBy = [ "default.target" ]`:
   when the path appears, so nothing is lost by not creating it. Fires
   on *any* new record landing in the journal, not just requests — see
   "Why a request-shaped watcher was rejected," below.
-- **`systemd.user.services.castle-dispatch`** — `Type = "oneshot"`,
+- **`systemd.user.services.castle-dispatch`** — no `wantedBy` (see
+  above), `Type = "oneshot"`,
   `ExecStart` runs `castle dispatch` (the new subcommand, §2),
   `WorkingDirectory = "%h"`, and an `Environment=` block carrying
   `CASTLE_STATE_DIR`, `CASTLE_WORKER_COMMAND`, `CASTLE_NOTIFY_COMMAND`
@@ -456,6 +464,16 @@ fresh file and locks that). An unheld lease file means nothing on its
 own, and the runtime directory is wiped at reboot regardless. The journal is the authority
 here; the lease is only ever a liveness probe, never the record of
 what happened.
+
+*A second accepted limit, inherited rather than introduced:* the lease
+is **machine-local**, so dispatch assumes **one host per journal**. Two
+dispatch-enabled machines sharing a synced private repo would work the
+same request twice and write false `interrupted` results at each
+other, because nothing reconciles two dispatchers over one journal.
+Not solved here and deliberately not papered over with a mechanism:
+journal sync does not exist yet, and whatever task designs it inherits
+this. Said in the option description and in `docs/private-layer.md`
+where a resident will actually meet it — enable on at most one host.
 
 *One accepted limit, stated rather than engineered around:* a worker
 deliberately outliving its login session (`nohup castle work …`, or

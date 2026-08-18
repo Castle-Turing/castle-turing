@@ -477,6 +477,16 @@ is required (evaluation fails without it). And
 want worked on — without it, a dispatched worker is told its repo is
 your home directory.
 
+**One host per journal.** If you sync this private repo between
+machines, turn dispatch on for only one of them. The lease that keeps
+a single worker per errand is machine-local — it lives in the runtime
+directory, not in the journal — so two dispatch-enabled hosts sharing
+one journal would each start the same request, and each write
+`interrupted` results about the other's live turns. Nothing reconciles
+two dispatchers over a synced journal yet, and this task does not
+pretend to; it is work for whatever design gives the journal a sync
+story.
+
 The units run only while you are logged in: this repo deliberately
 does **not** enable `loginctl` lingering, since a mechanism whose only
 visible output today is a desktop notification has nothing useful to
