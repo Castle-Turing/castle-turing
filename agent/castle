@@ -2824,23 +2824,38 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
     record's refs, it was not filed by a tenant during its own turn,
     and nothing is running on it.
 
+    Condition (b) — "no result references it" — is the one condition
+    with an exception, and exactly one (docs/tasks/0023 §4): a request
+    whose own worker turn raised a **blocking** question that the
+    resident has since **answered**, where no claim has spent that
+    answer yet, is eligible for one more turn. That is resumption, and
+    it is bounded the same structural way everything else here is —
+    the resuming turn's claim spends the answer the instant the turn
+    starts, so the same answer can never produce a second turn.
+
     Deliberately NOT conditions here, each recorded so a future reader
     does not "fix" the omission: **provenance** (an `initiated` request
     is still work that needs doing — provenance decides the delivery
     channel, never whether the errand runs); **an unanswered question
-    on the errand** (that is the errand-resume problem
-    docs/backlog/errand-resume-after-answer.md names and task 0023
-    owns — an `answer` must not make a worked errand eligible again);
-    and **staleness** (a request filed a week ago that nothing picked
-    up is exactly as eligible as one filed a minute ago; the loop runs
-    oldest-first, so it gets there).
+    on the errand** (a turn correctly waiting on the only party allowed
+    to close a question is not an interrupted turn — nothing here adds
+    a staleness clock or a timeout that would resume one, ever, and an
+    answered *non*-blocking question, which is the common shape, still
+    changes nothing); and **staleness** (a request filed a week ago
+    that nothing picked up is exactly as eligible as one filed a minute
+    ago; the loop runs oldest-first, so it gets there).
     """
     answered = _requests_with_results(records)
     eligible = [
         rec
         for rec in records.values()
         if rec.type == "request"
-        and rec.id not in answered
+        # Absent `blocking` means not blocking, so `_resumable_answers`
+        # is empty for every question written before that field
+        # existed: no pre-0023 errand, however old and however many
+        # answered questions it carries, is ever spontaneously resumed
+        # the first time this code runs against a resident's journal.
+        and (rec.id not in answered or _resumable_answers(records, rec.id))
         # Excluded by name, from the watermark record's own refs — not
         # by comparing timestamps. See `_write_watermark` for the hole
         # that closes: with whole-second `created` granularity, the
@@ -3099,11 +3114,27 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                 continue
             worked.append((request.id, outcome))
             print(f"dispatch: worked {request.id} -> {record_id} (outcome: {outcome})")
-            # Belt and braces against an unterminating sweep: every
-            # path through run_worker_turn writes a result, so the
-            # request cannot still be eligible — but if that ever
-            # stopped being true, this loop would spend a model call
-            # per iteration forever.
+            # This was belt and braces against an unterminating sweep,
+            # on the reasoning that every path through run_worker_turn
+            # writes a result and so the request cannot still be
+            # eligible. Since docs/tasks/0023 that reasoning no longer
+            # holds, and this line is load-bearing for a real case
+            # rather than a hypothetical one.
+            #
+            # A resumed turn spends every answer unspent at the moment
+            # its claim was written, so an errand whose answered
+            # blocking questions were all pending at fold time is fully
+            # drained in one turn. But a turn can legitimately run for
+            # CASTLE_WORKER_TIMEOUT (900s by default), and nothing
+            # stops the resident answering a *second* blocking question
+            # on the same errand while the first resumption is still in
+            # flight. That answer did not exist when this turn's claim
+            # was written, so this turn did not spend it: the moment
+            # the result lands, the next iteration's fresh fold finds
+            # the request eligible again, correctly. Skipping it defers
+            # that to the next sweep — a path-unit firing or the
+            # one-minute timer — instead of looping on the same errand
+            # inside this one.
             skip.add(request.id)
 
         if not reaped and not worked:
