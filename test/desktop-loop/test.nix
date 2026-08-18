@@ -139,6 +139,12 @@ let
   # meant to resemble a real complaint or a real correction.
   complaintBody = "The cursor is hard to see on this VM after the loop test logs in.";
   correctionBody = "You interrupted me over something that could have waited.";
+  # The second errand, and the answer typed at its question
+  # (docs/tasks/0022-answer-in-ui.md). Distinct from complaintBody so
+  # every assertion below can tell the two errands apart by their text
+  # alone, and hardware-neutral for the same reason the two above are.
+  answerComplaintBody = "The panel clock is hard to read at a glance on this VM.";
+  answerBody = "Make it larger and leave the format alone.";
 in
 {
   name = "desktop-loop";
@@ -546,6 +552,94 @@ in
     assert f"stated: {correction_id}" in model_content, model_content
     assert "${correctionBody}" in model_content, model_content
     print("OK: the correction produced a volunteered resident-model entry citing it")
+
+    # --- Answer a question through the modal, with no `castle answer`
+    # typed anywhere (docs/tasks/0022-answer-in-ui.md) -----------------
+    #
+    # A second request, filed exactly the way the first one was, so
+    # dispatch starts it on its own and the scripted tenant raises a
+    # second question. Two pending questions is the point rather than an
+    # accident of sequencing: the picker has to show a list and the
+    # resident has to choose out of it, which a run with one pending
+    # question could pass without ever proving.
+    machine.send_key("meta_l-shift-ret")
+    retry(lambda last: has_modal())
+    machine.send_chars("${answerComplaintBody}\n.\n")
+    machine.sleep(2)
+    machine.send_key("ret")  # bare Enter: "something to fix" -> request
+    machine.sleep(1)
+    machine.send_key("ret")  # dismiss
+    retry(lambda last: not has_modal())
+
+    second_request_path = machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '${answerComplaintBody}' ${testStateDir}/journal/*-request-*.md\"",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    second_request_id = second_request_path.rsplit("/", 1)[-1][: -len(".md")]
+
+    # Waited for, not assumed: dispatch has to notice the request, take
+    # its lease, run the turn and route it before this record exists.
+    # The tenant raises exactly one question per turn, so the second
+    # question is the one naming the second request.
+    second_question_path = machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '^refs: " + second_request_id + "$' ${testStateDir}/journal/*-question-*.md\"",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    second_question_id = second_question_path.rsplit("/", 1)[-1][: -len(".md")]
+    print(f"OK: a second errand ran itself and raised {second_question_id}")
+
+    # The real chord, on the real Sway session — same naming convention
+    # as "meta_l-shift-ret" above (modules/home/default.nix binds
+    # Mod4+Shift+a to castle-modal --mode answer).
+    machine.send_key("meta_l-shift-a")
+    retry(lambda last: has_modal())
+    # The picker is read with the tty in cbreak mode, which castle-modal
+    # engages after the window exists — the same reason the correction
+    # flow above sleeps before sending its single keypress. A digit that
+    # lands before then is held by the kernel's canonical line
+    # discipline waiting for a newline that a bare keypress never sends.
+    machine.sleep(2)
+    # The one thing no headless test can show a human: what the picker
+    # actually looks like on screen.
+    machine.screenshot("08-modal-answer-picker")
+
+    # Oldest first, so the first errand's question is [1] and this one
+    # is [2]. Pressing 2 is the whole assertion — a resident choosing
+    # one question out of several by a number they can see, never by a
+    # record id they had to find first.
+    machine.send_key("2")
+    machine.sleep(2)
+    machine.send_chars("${answerBody}\n.\n")
+    machine.sleep(2)
+    machine.screenshot("09-modal-answer-filed")
+    machine.send_key("ret")  # dismiss ("Press Enter to close.")
+    retry(lambda last: not has_modal())
+
+    answer_path = machine.succeed(
+        "su - resident -c 'ls ${testStateDir}/journal/*-answer-*.md'"
+    ).strip()
+    assert "\n" not in answer_path, f"expected exactly one answer record, got: {answer_path}"
+    answer_record = machine.succeed(f"su - resident -c 'cat {answer_path}'")
+    # Exactly the question that was picked, and only it: `refs` is the
+    # whole claim an answer makes about what it closes.
+    assert f"\nrefs: {second_question_id}\n" in answer_record, answer_record
+    assert "seat: intake" in answer_record, answer_record
+    assert "provenance: requested" in answer_record, answer_record
+    assert "${answerBody}" in answer_record, answer_record
+
+    # And the other question is still waiting: nothing names it, which
+    # is the whole definition of pending on every surface that reads it.
+    answers_naming_first = machine.succeed(
+        "su - resident -c \"grep -l '^refs: " + question_id + "$' ${testStateDir}/journal/*-answer-*.md || true\""
+    ).strip()
+    assert answers_naming_first == "", (
+        f"the first errand's question was answered too: {answers_naming_first}"
+    )
+    print(
+        f"OK: the modal filed an answer to {second_question_id} — the question the "
+        "resident picked, verbatim, with no record id typed anywhere and the other "
+        "question still pending"
+    )
 
     # --- The notify channel, checked for silence rather than for a
     # popup. `castle route` deliberately never lets a failed

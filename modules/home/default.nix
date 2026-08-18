@@ -298,6 +298,50 @@ in
           keybindings = lib.mkOptionDefault {
             "Mod4+Shift+Return" = "exec foot --app-id=castle-modal -e castle-modal --mode compose";
 
+            # Mod4+Shift+a opens the same modal in answer mode: the
+            # questions the system is waiting on, answered in plain
+            # language with no record id typed anywhere
+            # (docs/tasks/0022-answer-in-ui.md). Same app_id, so the
+            # window.commands floating/center rule below covers it with
+            # no change. The chord string also appears as prose in
+            # agent/castle's question notification and in
+            # castle-modal's own "waiting on you" overlay — change it
+            # here and grep for it there, which is exactly the miss
+            # docs/tasks/0019 left behind when it moved the compose
+            # chord and two hardcoded mentions of the old one survived.
+            #
+            # In THIS attrset, wrapped once, for the reason the long
+            # comment above gives at length: a second, unwrapped
+            # `keybindings = { ... }` definition anywhere in this module
+            # sits at the module system's default priority and makes
+            # filterOverrides' discard home-manager's entire default set
+            # before the per-key merge ever runs (the 0009 finding-1
+            # lockout). One attrset, one wrapping.
+            #
+            # Shift+a specifically. Read out of the pinned
+            # home-manager sway.nix (modules/services/window-managers/
+            # i3-sway/sway.nix at this flake's lock), not assumed: no
+            # stock binding uses the `Shift+a` suffix under ANY modifier
+            # value, so this chord displaces nothing whatever a resident
+            # sets `modifier` to. `${modifier}+a` is not taken either.
+            #
+            # What IS in the stock set, and is the residual this comment
+            # exists to state: sway.nix binds
+            # `${modifier}+Shift+${config.left|down|up|right}` to the
+            # move-window commands, and those four options are *home-row
+            # direction keys* — they default to h/j/k/l, letters, not
+            # arrows (there are separate arrow-key bindings). So a
+            # resident who sets BOTH `modifier = "Mod4"` AND one of
+            # those directions to "a" produces a real `Mod4+Shift+a`
+            # move-window binding that this chord then eats silently,
+            # with no module-system diagnostic of any kind: that is the
+            # cross-level shape (b) collision the long comment above
+            # describes, and the same shape docs/tasks/0019 defect 2
+            # found once already. Shift+Return was immune because Return
+            # is not a key anyone remaps a direction onto. A letter is
+            # not immune, and that is the price of a mnemonic chord.
+            "Mod4+Shift+a" = "exec foot --app-id=castle-modal -e castle-modal --mode answer";
+
             # Media and brightness keys (task 0020 item 1). Sway has no
             # built-in handling for these: an XF86 keysym does nothing
             # until something binds it.

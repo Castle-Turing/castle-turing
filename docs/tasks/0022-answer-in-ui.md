@@ -523,25 +523,32 @@ exists to prevent from happening again. One attrset, one wrapping.
 **Chord choice, and the residual risk it carries.** Verified against the
 pinned home-manager `sway.nix` module's own default bindings at this
 flake's lock: no stock binding under **any** modifier value uses the
-`Shift+a` suffix (`${modifier}+a` is stock's own "focus parent";
-`${modifier}+Shift+{left,down,up,right}` are the stock **move-window**
-defaults — `move left`/`move down`/`move up`/`move right`, a distinct
-keybinding namespace from Sway's separate `mode "resize"` block, whose
-own bindings live inside that mode and so cannot collide with a
-top-level chord at all. None of the move-window defaults is a letter key
-with a `Shift` prefix). Record the residual this same comment must
-state, because it is the same shape `docs/tasks/0019` defect 2 already
-found once for a different chord: a resident who *both* sets a
-private-layer `config.left = "a"` (or otherwise rebinds the move-left
-direction onto the letter `a`) **and** sets `modifier = "Mod4"` collides
-with this chord silently, with no module-system diagnostic of any kind —
-that move-window binding is exactly what a `config.left = "a"` resident
-would produce, which is what makes the collision concrete rather than
-hypothetical, and it is the identical cross-level shape-(b) collision
+`Shift+a` suffix, and `${modifier}+a` is not taken either, so the chord
+displaces nothing whatever a resident sets `modifier` to.
+
+*(Corrected during implementation — this paragraph originally claimed
+"none of the move-window defaults is a letter key with a `Shift`
+prefix", which is false at this pin and was worth getting right, because
+it is the exact fact the residual below turns on. `sway.nix` binds
+`${modifier}+Shift+${config.left|down|up|right}` to `move
+left`/`down`/`up`/`right`, and those four options are **home-row
+direction keys** defaulting to `h`/`j`/`k`/`l` — letters, with separate
+arrow-key bindings alongside them. So the stock set does contain
+`Shift`-prefixed letter chords; none of them is `a`, which is what makes
+`Shift+a` safe by default and what makes the residual concrete rather
+than hypothetical.)*
+
+Record the residual in the chord's own comment, because it is the same
+shape `docs/tasks/0019` defect 2 already found once for a different
+chord: a resident who *both* sets a private-layer `config.left = "a"`
+(or rebinds any of those four directions onto the letter `a`) **and**
+sets `modifier = "Mod4"` produces a real `Mod4+Shift+a` move-window
+binding, which this chord then eats silently, with no module-system
+diagnostic of any kind — the identical cross-level shape-(b) collision
 `modules/home/default.nix`'s existing long comment already documents for
 the general mechanism. `Shift+Return` was immune to this specific
-failure mode because `Return` is not a letter a resident would ever
-remap to; `Shift+a` is a letter, and is not immune. State the risk
+failure mode because `Return` is not a key a resident would ever remap a
+direction onto; `Shift+a` is a letter, and is not immune. State the risk
 plainly in the new chord's own comment rather than only inheriting the
 general warning above it.
 
