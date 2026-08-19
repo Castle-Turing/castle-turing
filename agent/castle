@@ -3353,6 +3353,37 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "with no diff there is nothing for it to name: it has been discarded "
                 "rather than recorded, and this result carries no `target` field."
             )
+        # And the mirror, which matters more than the case above it.
+        # A stamp with no diff is incoherent but inert — there is
+        # nothing to misroute. A diff with no target is a real,
+        # applyable artifact with its destination missing, and
+        # docs/tasks/0025's approval binding and docs/tasks/0026's
+        # applier are both documented as reading this field to decide
+        # which checkout a proposal goes to. Silence there would hand
+        # them exactly the gap this whole task exists to close, one
+        # layer further in.
+        #
+        # It is also the likelier of the two mistakes: a tenant that
+        # produces a real diff and forgets the second file is an
+        # ordinary slip, while one that stamps a target and produces
+        # nothing is odd. Having decided a discarded stamp must be
+        # visible, leaving this silent would be an asymmetry with no
+        # argument behind it.
+        #
+        # A note, not a failure, and deliberately so: the turn did the
+        # work and the diff is still the durable artifact this seat
+        # exists to produce. What is missing is routing information a
+        # later task needs, which is worth saying plainly and is not
+        # worth discarding a proposal over.
+        elif diff_text and not target_text:
+            body_lines.append("")
+            body_lines.append(
+                "The worker tenant produced a diff but declared no target: nothing "
+                "was written to $CASTLE_TARGET_FILE, so this result carries no "
+                "`target` field. The diff above stands on its own, but a proposal "
+                "with no target cannot be routed to a checkout — whatever applies it "
+                "has no way to know which repository its paths are relative to."
+            )
         if stamped_target:
             resolved = {
                 "private": env.get(PRIVATE_ROOT_ENV),

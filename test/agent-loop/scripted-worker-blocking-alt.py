@@ -11,7 +11,7 @@ errand boundary is what makes continuation possible, so nothing about
 it may depend on the same harness being on both sides of the question.
 
 Same contract as its bash twin (the packet on stdin,
-CASTLE_REQUEST_ID/CASTLE_DIFF_FILE/CASTLE_PRIVATE_ROOT and
+CASTLE_REQUEST_ID/CASTLE_DIFF_FILE/CASTLE_TARGET_FILE/CASTLE_PRIVATE_ROOT and
 CASTLE_TEST_CASTLE_BIN in the environment, reasoning on stdout, a diff
 or nothing to $CASTLE_DIFF_FILE) and the same two shapes: a
 `--blocking` question and nothing else on a first invocation; on a
@@ -42,6 +42,7 @@ def need(name: str) -> str:
 def main() -> int:
     request_id = need("CASTLE_REQUEST_ID")
     diff_file = need("CASTLE_DIFF_FILE")
+    target_file = need("CASTLE_TARGET_FILE")
     repo_root = need("CASTLE_PRIVATE_ROOT")
     castle = need("CASTLE_TEST_CASTLE_BIN")
 
@@ -129,6 +130,13 @@ def main() -> int:
         "-placeholder before the resumed turn\n"
         "+placeholder after the resumed turn\n"
     )
+    # Every fixture that produces a diff also declares which checkout
+    # it is against, since docs/tasks/0024-config-target.md. This one
+    # predates that mechanism — it omitted a target because there was
+    # none to omit, not because a diff without one is a shape worth
+    # exercising — and a diff with no target now draws a note in the
+    # result body saying it cannot be routed.
+    pathlib.Path(target_file).write_text("private\n")
     print(
         f"scripted-worker-blocking-alt: finished {request_id} on a resumed turn in {repo_root}"
     )

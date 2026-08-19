@@ -206,9 +206,13 @@ assert_checkouts_untouched "after the first errand"
 log "  -- assertion 4: castle validate passes over the journal"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after the first errand"
 
-log "  -- and the mechanism-unusable note is ABSENT when nothing is misconfigured"
+log "  -- and neither the mechanism-unusable note nor either target-mismatch note appears"
 grep -q 'castle.agent.repo.mechanism` is configured' "$R1" \
   && fail "a result carried the mechanism-unusable note on a host with no mechanism root configured"
+grep -q 'declared no target' "$R1" \
+  && fail "a turn that stamped a target was told it had not"
+grep -q 'it has been discarded rather than recorded' "$R1" \
+  && fail "a turn that produced a diff was told its target was discarded"
 
 # ---------------------------------------------------------------------
 log "assertion 7: the sibling-option coupling rule — cursorSize alone would be a silent no-op"
@@ -304,6 +308,42 @@ grep -q '^target:' "$R_STAMP" \
   && fail "a result with no diff carries a target field — that reads as a proposal with nothing to apply"
 grep -q 'it has been discarded rather than recorded' "$R_STAMP" \
   || fail "the discarded target was swallowed silently instead of being named in the body"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a diff with no target says so — the mirror, and the one that matters more"
+# ---------------------------------------------------------------------
+# A stamp with no diff is incoherent but inert. A diff with no target
+# is a real, applyable artifact whose destination is missing, and
+# docs/tasks/0025 and 0026 both read that field to decide which
+# checkout a proposal goes to. A note rather than a failure: the turn
+# did the work, the diff is still the durable artifact, and what is
+# absent is routing information a later task needs.
+DIFF_ONLY="$WORKDIR/diff-only-tenant.sh"
+cat > "$DIFF_ONLY" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'diff-only tenant: a diff with nowhere declared to apply it
+'
+printf -- '--- a/resident.nix
++++ b/resident.nix
+@@ -1 +1 @@
+-placeholder before
++placeholder after
+' > "$CASTLE_DIFF_FILE"
+TENANT
+chmod +x "$DIFF_ONLY"
+REQ_DIFFONLY="$("$CASTLE" ask "An invented errand whose tenant writes a diff and declares no target.")"
+CASTLE_WORKER_COMMAND="$DIFF_ONLY" "$CASTLE" work "$REQ_DIFFONLY" >/dev/null
+R_DIFFONLY="$(newest_result_for "$REQ_DIFFONLY")"
+grep -q '^outcome: completed$' "$R_DIFFONLY" || fail "the diff-only turn did not complete"
+grep -q '^+placeholder after$' "$R_DIFFONLY" || fail "the diff-only turn's diff is not in the result body"
+grep -q '^target:' "$R_DIFFONLY" && fail "a turn that declared no target carries a target field"
+grep -q 'produced a diff but declared no target' "$R_DIFFONLY" \
+  || fail "a diff with no target was recorded silently — 0025 and 0026 cannot route it and nothing says so"
+grep -q 'cannot be routed to a checkout' "$R_DIFFONLY" \
+  || fail "the note does not say what is actually lost by the missing target"
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------

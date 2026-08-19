@@ -729,12 +729,23 @@ today and is a lie the first time the checkout moves or the machine is
 reinstalled. The resolved path is stated in the body prose beside the
 diff, where nothing keys on it and its staleness is obvious.
 
-**Written only alongside a diff.** A target means "the checkout this
-diff applies to," so a result with no diff carries no `target` — a
-tenant that stamps one anyway has the field discarded, with a sentence
-in the body saying so rather than a silent swallow. Recording it would
-make the result read, to anything keying on this field to decide where
-to apply a proposal, as an applicable proposal with nothing to apply.
+**Written only alongside a diff, and its absence beside one is said
+out loud.** A target means "the checkout this diff applies to," so a
+result with no diff carries no `target` — a tenant that stamps one
+anyway has the field discarded, with a sentence in the body saying so
+rather than a silent swallow. Recording it would make the result read,
+to anything keying on this field to decide where to apply a proposal,
+as an applicable proposal with nothing to apply.
+
+The mirror gets a sentence too, and it is the one that matters more.
+A stamp with no diff is incoherent but inert; a **diff with no
+target** is a real, applyable artifact whose destination is missing,
+which is exactly what a consumer routing on this field cannot handle.
+It is also the likelier slip — forgetting the second output file is
+ordinary, stamping a target while producing nothing is odd. Such a
+result keeps its diff and gains a note saying the tenant declared no
+target and that a proposal without one cannot be routed to a checkout.
+Neither case is a failure; neither is allowed to be silent.
 
 Validated **when present**, like `outcome`, for the identical
 append-only reason, and scoped to `result` records the way `blocking`

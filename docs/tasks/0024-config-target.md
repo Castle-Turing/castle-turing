@@ -381,6 +381,43 @@ gets (`agent/castle:2921-2927`: "no diff produced ... or the worker
 tenant did not write one"). This is not validated against a fixed
 vocabulary at read time; §6 explains why.
 
+**Corrected during implementation: honest is not the same as
+harmless, and this paragraph originally conflated them.** Treating an
+absent target file as simply "the tenant did not declare one" is
+accurate and was written before §6 committed `docs/tasks/0025` and
+`0026` to reading this field to decide which checkout a proposal goes
+to. Once something downstream routes on it, silence about its absence
+stops being neutral: a turn that produced a real diff and no target
+leaves an applyable artifact whose destination is missing, which is
+the gap this whole task exists to close, reappearing one layer in. It
+is also the likelier of the two mistakes a tenant can make here — the
+second output file is easy to forget, while stamping a target and
+producing nothing is odd.
+
+So the result body says so, in both directions and symmetrically. A
+target with no diff is discarded with a sentence saying it was (§6);
+a diff with no target is recorded, kept, and accompanied by a sentence
+saying a proposal with no target cannot be routed to a checkout.
+Neither is a failure — the first is inert, and the second did real
+work whose diff is still the durable artifact. What neither may be is
+silent.
+
+**Consequence for the fixtures, decided rather than dodged.** Six
+fixtures under `test/agent-loop/` produce a diff, and five of them
+stamped no target: `contract-worker-detach.sh`, `-filer.sh`,
+`-straggler.sh`, `scripted-worker-blocking.sh`, and
+`scripted-worker-blocking-alt.py`. Every one of them was read before
+deciding, and none omits a target for any reason of its own — they
+predate the mechanism entirely, having been written for
+`docs/tasks/0021` and `0023`, and each produces an ordinary synthetic
+private-layer diff. So they stamp `private`, rather than the note
+going unwritten to keep unrelated harnesses quiet. The fixtures that
+still declare no target are exactly the ones that write no diff
+(`-die`, `-fail`, `-hang`, `scripted-worker-self-answer.sh`), which is
+correct and needs no change. The note itself is exercised by a
+purpose-built tenant in `config-target.sh`, not by leaving a
+production-shaped fixture deliberately incomplete.
+
 ### 6. The `target` field on `result` records
 
 **One new optional field, `target`, on `result` records only, written

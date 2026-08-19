@@ -36,6 +36,7 @@ set -euo pipefail
 
 : "${CASTLE_REQUEST_ID:?scripted-worker-blocking.sh: CASTLE_REQUEST_ID must be set}"
 : "${CASTLE_DIFF_FILE:?scripted-worker-blocking.sh: CASTLE_DIFF_FILE must be set}"
+: "${CASTLE_TARGET_FILE:?scripted-worker-blocking.sh: CASTLE_TARGET_FILE must be set}"
 : "${CASTLE_PRIVATE_ROOT:?scripted-worker-blocking.sh: CASTLE_PRIVATE_ROOT must be set}"
 # Same reason contract-worker-filer.sh takes it this way: nothing
 # installs a `castle` on $PATH in this no-Nix harness, and a real
@@ -200,6 +201,16 @@ cat <<EOF > "$CASTLE_DIFF_FILE"
 -placeholder before the resumed turn
 +placeholder after the resumed turn
 EOF
+
+# Every fixture here that produces a diff also declares which checkout
+# it is against, since docs/tasks/0024-config-target.md. These
+# fixtures predate that mechanism — they omitted a target because
+# there was none to omit, not because a diff without one is a shape
+# worth exercising — and a diff with no target now draws a note in the
+# result body saying it cannot be routed. Stamping is the honest fix;
+# leaving them silent to keep that note out of unrelated harnesses
+# would be a fixture's convenience deciding a product behaviour.
+printf 'private\n' > "$CASTLE_TARGET_FILE"
 
 printf 'scripted-worker-blocking: finished %s on a resumed turn in %s\n' \
   "$CASTLE_REQUEST_ID" "$CASTLE_PRIVATE_ROOT"

@@ -23,6 +23,7 @@ set -euo pipefail
 
 : "${CASTLE_REQUEST_ID:?contract-worker-filer.sh: CASTLE_REQUEST_ID must be set}"
 : "${CASTLE_DIFF_FILE:?contract-worker-filer.sh: CASTLE_DIFF_FILE must be set}"
+: "${CASTLE_TARGET_FILE:?contract-worker-filer.sh: CASTLE_TARGET_FILE must be set}"
 # The harness passes the castle binary this way rather than assuming a
 # `castle` on $PATH: nothing installs one in this no-Nix harness, and a
 # real tenant on a real host gets it from the system profile.
@@ -35,3 +36,12 @@ printf 'contract-worker-filer: filed follow-up request %s while working %s\n' \
   "$follow_up" "$CASTLE_REQUEST_ID"
 
 printf -- '--- a/synthetic (harness fixture only)\n+++ b/synthetic (harness fixture only)\n' > "$CASTLE_DIFF_FILE"
+# Every fixture here that produces a diff also declares which checkout
+# it is against, since docs/tasks/0024-config-target.md. These
+# fixtures predate that mechanism — they omitted a target because
+# there was none to omit, not because a diff without one is a shape
+# worth exercising — and a diff with no target now draws a note in the
+# result body saying it cannot be routed. Stamping is the honest fix;
+# leaving them silent to keep that note out of unrelated harnesses
+# would be a fixture's convenience deciding a product behaviour.
+printf 'private\n' > "$CASTLE_TARGET_FILE"
