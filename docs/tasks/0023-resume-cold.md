@@ -1722,6 +1722,48 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **Two guards were applying a different rule from the thing they
+  guard**, found together in the sixth review pass and worth recording
+  as one shape rather than two incidents: a check that is *adjacent* to
+  what it protects reports a safety it cannot deliver, and both of these
+  had been introduced by a fix to an earlier finding.
+
+  The reachability check on `--blocking` (§9, as amended two passes
+  earlier) asked whether **any** ref reached a request. `_resumable_
+  answers` hands `_find_root_request` the question record itself, and
+  that walk follows `refs[0]` and nothing else — so
+  `--refs "<wrong-id>,$CASTLE_REQUEST_ID"` satisfied the guard on the
+  strength of an id the fold never reads. The question was written,
+  answered, and permanently unattributable: the exact dead end the
+  guard refuses to write, produced by exactly the mistake its comment
+  predicts. It now tests `refs[0]`, which is the lineage edge claims,
+  results and questions all already key on, and the refusal message
+  names the first ref specifically rather than implying every ref
+  counts.
+
+  `had_prior_turn` (the narrative gate from the pass before that) was
+  satisfied by a bare `claim`, while `render_continuation_packet`
+  renders only `result` bodies as an earlier turn's account. An errand
+  whose only turn crashed therefore had "a prior turn" for the gate and
+  no account for the packet — and `castle work <id>`, which has no
+  reaper ahead of it the way a sweep does, would set
+  `CASTLE_RESUME_ANSWER_IDS`, narrate a RESUMPTION in the claim, and
+  tell a fresh tenant to read an account that is not there. Gated on a
+  prior `result` now: it is the record whose existence makes the
+  sentence true, a reaped turn becomes one anyway, and the only case
+  excluded is the one where the account genuinely does not exist yet.
+
+  **The coverage pins each rule rather than the state it was found in**,
+  because two consecutive mutation escapes came from assertions that
+  only exercised the setup in front of them. For the guard that means a
+  pair going opposite ways — a wrong id first must be refused, and a
+  right id first with a *resolvable* trailing ref that reaches no
+  request must be written — so reverting to `any(...)` fails the first
+  and reverting to `all(...)` fails the second. (The trailing ref
+  resolves deliberately: a dangling one detects `all(...)` just as well
+  and leaves the journal failing `castle validate` for the rest of the
+  run.) For the gate it means an errand with a claim and no result,
+  driven by hand, which is the only path that reaches the disagreement.
 - **The prompt stated a rule its own text broke.** After the previous
   pass, `agent/castle-worker-claude` told the tenant that every
   instruction in the prompt carried the turn's token and that unmarked

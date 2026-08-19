@@ -115,10 +115,14 @@ castle show ID
   says that this question stopped the errand — the one thing no later
   reader could reconstruct, since a question filed *alongside* a result
   and one filed *instead of* one are indistinguishable afterward. It is
-  the only one of the three with a hard refusal attached: `--blocking`
-  with no `--refs` is rejected outright, because a blocking question no
-  fold can attribute to a request is unresumable forever and looks
-  exactly like a working one (`docs/tasks/0023-resume-cold.md`).
+  the only one of the three with a hard refusal attached: a `--blocking`
+  question whose **first** `--refs` entry does not walk back to a
+  `request` record is rejected outright, because a blocking question no
+  fold can attribute to an errand is unresumable forever and looks
+  exactly like a working one. The first ref is the test because it is
+  the only one resumption reads — `_find_root_request` follows `refs[0]`
+  and ignores the rest, so a correct id in second place buys nothing
+  (`docs/tasks/0023-resume-cold.md`).
 - **`route`** — the router. Reads every `result` and `question` record
   not yet referenced by a `decision` record **written by the router
   seat itself** — filtering on `seat: router`, not just record type, is
