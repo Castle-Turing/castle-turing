@@ -178,9 +178,11 @@ let
   # resident's home directory. docs/tasks/0024-config-target.md
   # removed that fallback, but the blindness argument is unchanged:
   # a default-valued fixture proves nothing about the handoff. Nothing
-  # is checked out here; the path exists only to be carried through the
-  # unit's environment into the tenant's, where the scripted worker
-  # prints it back.
+  # is checked out here beyond the `.git` the activation script below
+  # creates — the path exists to be carried through the unit's
+  # environment into the tenant's, where the scripted worker prints it
+  # back, and (since 0024) to satisfy the pre-flight that refuses a
+  # private root which is not a working tree.
   testRepoRoot = "/home/resident/private/checkout";
 
   # Plain, hardware-neutral fixture text — not personal data, never
@@ -312,6 +314,28 @@ in
         "d /home/resident/private 0755 resident users -"
         "d ${testStateDir} 0755 resident users -"
       ];
+
+      # A real git working tree at testRepoRoot, not a bare directory.
+      # Since docs/tasks/0024-config-target.md `castle work` refuses a
+      # turn whose private checkout is not one — the same reasoning as
+      # the state directory above: a real host's private repo is a
+      # clone the resident made before turning dispatch on
+      # (docs/private-layer.md), and this VM has to supply what that
+      # clone supplies. It stays empty apart from `.git`; nothing is
+      # checked out here, and the path exists only to be carried
+      # through the unit's environment into the tenant's, where the
+      # scripted worker prints it back.
+      #
+      # An activation script rather than a tmpfiles rule because
+      # tmpfiles cannot run `git init`, and it runs at boot activation,
+      # well before the 5s-after-login dispatch timer could reach it.
+      system.activationScripts.castleLoopTestCheckout = ''
+        mkdir -p ${testRepoRoot}
+        if [ ! -e ${testRepoRoot}/.git ]; then
+          ${pkgs.git}/bin/git -C ${testRepoRoot} init -q
+        fi
+        chown -R resident:users ${testRepoRoot}
+      '';
 
       castle.agent.dispatch.enable = true;
       castle.agent.worker.command = "${dispatchWorker}";

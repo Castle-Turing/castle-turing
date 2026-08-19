@@ -2772,6 +2772,13 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # `failed` result written through the one result writer, then
         # `TenantNotRunnable`.
         #
+        # First of the four rather than last, because it is the one
+        # that needs nothing resolved to run: the brief's own wording
+        # is "before the tenant command is resolved at all." A host
+        # misconfigured in two ways at once therefore hears about this
+        # one, which is defensible in either order and worth being
+        # deliberate about rather than incidental.
+        #
         # **After the claim write, not before**, which is the
         # ordering docs/tasks/0023 §3 already worked through for a
         # structurally identical check: every path that starts a turn
