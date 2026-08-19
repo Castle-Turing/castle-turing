@@ -1110,6 +1110,12 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
 test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
 ```
 
+On a dev host importing `modules/dev`, python3 is on `$PATH`. Without
+that module, use `nix shell --inputs-from . nixpkgs#python3 --command bash
+test/agent-loop/run.sh` (or another harness name) — the `--inputs-from .`
+resolves python3 through the repo's locked nixpkgs, ensuring the same
+interpreter as the deployed CLI.
+
 - **`run.sh`** (the `agent-loop-test` CI job) runs the whole loop —
   intake, router, a scripted worker, router again, digest — with zero
   models and zero network. Both canned errands now also raise a

@@ -41,7 +41,7 @@ its exported modules:
           castle-turing.nixosModules.host-xps9370 # or your own host module
           castle-turing.nixosModules.home # optional: home-manager + git identity
           castle-turing.nixosModules.desktop # optional: Sway desktop session
-          castle-turing.nixosModules.dev # optional: Emacs, git, gh, ripgrep, fd, claude-code
+          castle-turing.nixosModules.dev # optional: Emacs, git, gh, ripgrep, fd, claude-code, python3
           castle-turing.nixosModules.agent # optional: the agent-layer CLI + state dir
           ./resident.nix
         ];
@@ -76,7 +76,7 @@ The exported modules:
   is set, since a login prompt with no password behind it is a lockout,
   not security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
-  gh, ripgrep, fd, claude-code). No private data, no assertions.
+  gh, ripgrep, fd, claude-code, python3). No private data, no assertions.
 - `nixosModules.agent` — the agent layer's CLI (`castle`, plus
   `castle-modal` and the default `castle-worker-claude` worker tenant)
   and six options: `castle.agent.stateDir` (wired into
