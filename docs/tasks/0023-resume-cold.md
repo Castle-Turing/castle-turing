@@ -1476,6 +1476,28 @@ re-deriving it from the sections above:
   errand doesn't hang."** Rejected outright, and named explicitly as
   forbidden rather than merely unbuilt — see the closing paragraph of
   §6. Nothing may close a question except the resident.
+- **Moving the tenant-runnability checks above the claim write, or
+  omitting the answer refs on those three branches** — proposed by the
+  ninth review pass on correct facts, and rejected. The facts: the
+  claim is written before `CASTLE_WORKER_COMMAND` is checked at all, so
+  a host with an empty or unrunnable tenant spends the resident's
+  answer on a turn in which no process ever started. Both proposed
+  remedies leave the answer unspent, and that is strictly worse. Work
+  it through: the request already carries a `failed` result, so
+  eligibility runs through `_resumable_answers`; the answer is unspent,
+  so it comes back; the request is eligible again on the next timer
+  tick; the tenant is still misconfigured; and it loops at one attempt
+  per minute, forever. That is exactly `docs/tasks/0021` §3.4's
+  unbounded silent retry, reached from a direction 0021 did not have to
+  consider. Spending the answer is what bounds it, and the ordering
+  that spends it — claim first, runnability second — is the same
+  ordering that guarantees every turn which starts leaves a claim (§3).
+  What the finding correctly identified was a *prose* defect rather
+  than a mechanism one: the claim asserted a turn had "begun" and
+  printed an empty tenant command, and the `failed` result never told
+  the resident their answer had been spent or that a hand run would
+  still use it. Both fixed; the mechanism is unchanged. See the
+  As-built section.
 - **A hard refusal on `castle record --blocking` for a non-question
   type**, mirroring `cmd_record`'s hard refusal of `--type correction`.
   Rejected in favor of the softer, existing `--fact`/`--outcome`
@@ -1760,6 +1782,51 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **One errand's fold reached into another's, and three statements
+  about this task's own mechanism were wrong** — the ninth review pass,
+  which also proposed one change that was rejected on the merits (see
+  the considered-and-rejected list; taking it would have traded a burned
+  answer for an unbounded retry loop).
+
+  `_collect_downstream` predates this task and followed *any* ref,
+  which was harmless while every record's later refs pointed inside its
+  own errand. A resuming claim naming the answers it spends ended that:
+  with one answer naming blocking questions on two requests — the shape
+  `resume.sh` itself builds — errand A's fold reached the shared answer,
+  then B's claim (`refs: B, <answer>`), then B's result and decisions,
+  so `castle digest` printed B's records under A and
+  `castle-modal --mode status` listed B's decisions as A's. It now
+  follows the lineage edge, with a second clause for records naming the
+  root directly — which is what keeps the watermark visible in *every*
+  errand it excluded rather than only the one at its `refs[0]`. Both
+  walks were compared over a journal built from every shape this repo
+  writes rather than assumed equivalent; they agree everywhere, and the
+  only divergences are records the generic writer alone can produce
+  (documented in the function's own docstring, including the residual
+  where a two-errand answer sits in the fold of the question it names
+  first).
+
+  That second clause turned out to be unasserted anywhere:
+  `modal-headless-test.sh` planted a watermark naming exactly one
+  request, where `refs[0]` and "names this errand" are the same thing.
+  It now plants one naming two, and asserts the second gets the
+  predates-dispatch label — a coverage gap this repo had before this
+  task, made load-bearing by it.
+
+  Three statements were also false. The claim record said a turn
+  "began" and printed `Tenant command: ``` `` ``` before the command was
+  known to be runnable — worded now for what is true at write time
+  ("took this errand", "will spend"), the same discipline the reaper's
+  sentence needed. `agent/README.md` still documented the spend rule as
+  per-request after the fold went global, so a reader implementing from
+  it would have built the version the code deliberately rejects. And
+  both the README and `render_continuation_packet`'s docstring claimed
+  a first turn's packet "degenerates to the request body", which is
+  false for the case the code supports and `resume.sh` tests: a
+  blocking question filed and answered before any turn ran gives a
+  first turn a question and an answer section. What distinguishes a
+  first turn is the absence of an earlier turn's *account* — which is
+  exactly what the narrative gate keys on.
 - **The choke point was closing the narrower of two doors** — the
   eighth review pass, and the finding that mattered most in it. With
   `CASTLE_WORKER_CLAIM` set, `castle answer` was refused and `castle

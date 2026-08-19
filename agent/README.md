@@ -702,8 +702,14 @@ the one exception to "any result at all bars an automatic attempt" — and
 runs one more worker turn. Exactly one, per answer, ever. **The spend
 token is the `claim` record, not the result**: a resuming turn's claim
 names every answer it was given, after the request id
-(`refs: <request-id>,<answer-id>`), and an answer named by any of the
-request's own claims is spent forever. That has to be the claim, because
+(`refs: <request-id>,<answer-id>`), and an answer named by **any claim
+anywhere in the journal** is spent forever — not merely by this
+request's own claims. The bound is a property of the answer rather than
+of the errand reading it: an answer naming blocking questions on two
+errands would otherwise look unspent to each of them in turn and buy a
+turn on both, which is not "exactly one, per answer, ever". A
+normally-written answer refs one question and cannot tell the two rules
+apart. That has to be the claim, because
 `castle work` writes it before the tenant command is even resolved, so
 every turn that starts leaves one however it ends — while the two paths
 that write results for turns nobody survived (the tenant-fault branches
@@ -728,9 +734,15 @@ onto its stdin, in this order and each verbatim: the request body under
 a heading; every prior result body, in id order; every question the
 errand raised, in id order, flagged blocking or not and answered or not;
 and each answer immediately under the question it answers. Rendered on
-every turn, with no branch for "is this a first turn" — a first turn
-degenerates to the request body under a heading, which is exactly what a
-tenant received before. Nothing is truncated and nothing is capped.
+every turn, with no branch for "is this a first turn" — the fold simply
+finds whatever the errand has. On the ordinary first turn that is the
+request alone, which is what a tenant received before this task; but a
+first turn is not *defined* by carrying only the request, and a
+blocking question filed and answered before any turn ran (possible, and
+tested) gives one a question section and a resident-answer section with
+no prior result between them. What distinguishes a first turn is the
+absence of an earlier turn's account, not the absence of everything
+else. Nothing is truncated and nothing is capped.
 
 **Section boundaries are unforgeable, and nothing else in the packet
 is structure.** Each section is delimited by lines carrying a token
@@ -770,6 +782,21 @@ filtering — the fold can only reach records linked to this request.
 Resident-model entries are absent too, but that is a gap rather than a
 decision about this packet: no worker reads the resident model on any
 turn (`docs/backlog/workers-do-not-read-the-resident-model.md`).
+
+**An answer can be spent by a turn that never ran, and the remedy is the
+same command.** The claim naming an answer is written before the tenant
+command is checked for runnability, so a host with an empty or
+unrunnable `castle.agent.worker.command` spends the answer on a turn in
+which no process started. That ordering is deliberate and is what bounds
+the failure: with the answer left unspent, the request would carry a
+`failed` result *and* an unspent blocking answer, so the fold would find
+it eligible again on the next timer tick against the same broken tenant,
+forever — 0021's unbounded silent retry, reached from a new direction.
+The `failed` result says so, and says what to do: fix the tenant and run
+`castle work <id>` by hand. A hand-run turn re-renders that answer into
+the packet exactly as an automatic resumption would (the errand's
+records are rendered on every turn, spent or not), so nothing about the
+resident's answer is lost — only the automatic attempt is.
 
 **Two kinds of errand can never resume, and the remedy for both is a
 command.** Every other eligibility condition still applies alongside

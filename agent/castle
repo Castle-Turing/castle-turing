@@ -1984,9 +1984,17 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
     verbatim (docs/tasks/0023 §7).
 
     Rendered on **every** turn, with no branch for "is this a first
-    turn." On a first turn it degenerates to one section holding
-    exactly today's stdin — the request body — under a heading, which
-    is what keeps this one function rather than two. That uniformity is
+    turn." The fold renders whatever the errand has, which on the
+    ordinary first turn is the request alone — exactly the stdin a
+    tenant got before this task — and that is what keeps this one
+    function rather than two. It is not, though, an invariant that a
+    first turn carries only the request: a blocking question filed and
+    answered before anything ran (`castle record --blocking` plus
+    `castle answer`, which `resume.sh` exercises) puts a question and a
+    resident-answer section in a first turn's packet with no prior
+    result between them. What a first turn lacks is an earlier turn's
+    *account*, which is precisely why the resumption narrative is gated
+    on a prior result rather than on this function's output. That uniformity is
     the point: every replaceable tenant receives the same record-level
     context, so continuing an errand needs no warm session, no vendor
     resume token, and no hidden transcript (Proposal 03 applied to
