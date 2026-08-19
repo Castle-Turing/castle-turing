@@ -56,7 +56,7 @@
         # assumes and what it deliberately does not (auto-login).
         desktop = ./modules/desktop;
         # This project's own development tools (Emacs, git, gh, ripgrep,
-        # fd, claude-code) — see docs/tasks/0005-dogfooding-desktop.md.
+        # fd, claude-code, python3) — see docs/tasks/0005-dogfooding-desktop.md.
         dev = ./modules/dev;
         # The agent layer's CLI and state-dir option — see
         # docs/architecture.md and docs/tasks/0008-agent-layer-skeleton.md.
