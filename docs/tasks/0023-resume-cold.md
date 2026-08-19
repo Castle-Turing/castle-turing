@@ -1782,6 +1782,50 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **The narrowed walk left two surfaces contradicting each other, and
+  three documentation lines still described the old rules** — the tenth
+  review pass, which found no correctness defect in the resumption
+  mechanism itself.
+
+  The behavioural one was this branch's own doing, one round old.
+  `_errand_state` derived "which of this errand's questions are
+  answered" from the errand walk, so once that walk was narrowed to the
+  lineage edge, an answer written as `--refs Q_A,Q_B` (generic writer
+  only) was missing from errand B's fold: B's status line said "waiting
+  on you — press Mod4+Shift+a to answer" permanently, while the picker,
+  folding every answer record flat, correctly declined to offer Q_B
+  because it is answered. A resident sent to a surface that will not
+  show them what they were sent for is `docs/tasks/0015` scope 3
+  exactly. The previous round's docstring called this "a display
+  imprecision", which understated it — two surfaces do not disagree
+  imprecisely, they disagree.
+
+  Fixed by making the three folds agree rather than by reverting the
+  narrowing, which closes a real leak. `file_answer`'s duplicate guard
+  and `_pending_questions` both already asked "does any answer record
+  name this question"; `_errand_state` now asks the same, from the same
+  flat pass, while still taking *which* questions belong to the errand
+  from the walk. `_pending_questions`' docstring has asserted all three
+  agree since before this branch — a sentence that was false for one
+  round and is true again. `_collect_downstream`'s own docstring is
+  amended, since the residual it documents is now only about which
+  digest section an answer is listed under.
+
+  The three documentation lines: `agent/README.md` still called
+  `--blocking` "question-records-by-convention in the same way" as
+  `--fact` and `--outcome` — contradicted fifteen lines later in its own
+  bullet and by three hard refusals in the code; the `blocking` section
+  described the validator as a value check with no mention of the type
+  scoping added in this same branch, which a resident restoring a
+  hand-edited journal would meet as an unexplained failure; and the
+  eligibility fold's ordering comment claimed the expensive case was the
+  restored-history one the watermark excludes, when this branch's own
+  backlog entry measures the steady state — ordinary completed errands,
+  neither excluded nor stamped — as the case that pays. That last one
+  mattered most: a future reader deciding whether to optimise the fold
+  would have read it and concluded the cost cannot recur. It now carries
+  both numbers (1 ms excluded, 130 ms not) and says plainly that the
+  reorder removed one case and left the other standing.
 - **One errand's fold reached into another's, and three statements
   about this task's own mechanism were wrong** — the ninth review pass,
   which also proposed one change that was rejected on the merits (see

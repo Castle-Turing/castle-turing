@@ -3443,17 +3443,35 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
         # never quietly deleted or downgraded.
         and not rec.fields.get(FILED_DURING_TURN_FIELD, "").strip()
         # Ordered deliberately after the two dict lookups above and
-        # before the syscall below. `_resumable_answers` walks the whole
-        # journal, and the case that makes that expensive is exactly the
-        # case the watermark already excludes: a restored pre-dispatch
-        # history, where every request carries a result and every one of
-        # them is named in the watermark's refs. Folding all of them and
-        # discarding the answer, once a minute, forever, was work with a
-        # guaranteed-empty result. Absent `blocking` means not blocking,
-        # so this returns nothing for every question written before that
-        # field existed — no pre-0023 errand is ever spontaneously
-        # resumed the first time this code runs against a resident's
-        # journal.
+        # before the syscall below — an ordering that removes one case
+        # entirely and leaves the expensive one standing, which is worth
+        # stating precisely because a future reader will weigh whether
+        # to optimise this properly.
+        #
+        # `_resumable_answers` walks the whole journal, once per request
+        # that reaches it, so the fold is requests × records. Putting
+        # the watermark and stamp lookups first means a restored
+        # pre-dispatch history — every request resulted, every one named
+        # in the watermark's refs — never reaches the walk at all: work
+        # with a guaranteed-empty result, once a minute, forever, now
+        # skipped. Measured on a synthetic 2000-record, 500-errand
+        # journal: **1 ms when the watermark excludes every request,
+        # 130 ms when it excludes none.**
+        #
+        # That second number is the steady state on a long-lived host,
+        # and it is the honest cost. Ordinary completed errands are not
+        # watermark-excluded and not tenant-filed, so on a journal that
+        # has simply been used for a while every one of them reaches the
+        # walk on every sweep. This ordering does not fix that; it only
+        # stops the restored-history case paying for it too. The
+        # remaining debt, with the same measurement and the shape of the
+        # real fix (hoisting the per-request scan out of the loop), is
+        # docs/backlog/eligibility-fold-rescans-per-request.md.
+        #
+        # Absent `blocking` means not blocking, so this returns nothing
+        # for every question written before that field existed — no
+        # pre-0023 errand is ever spontaneously resumed the first time
+        # this code runs against a resident's journal.
         and (rec.id not in answered or _resumable_answers(records, rec.id))
         # Checked last, because it is the only condition that costs a
         # syscall — and it subsumes §2.4(c)'s "no claim currently holds

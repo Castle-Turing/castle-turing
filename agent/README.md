@@ -119,7 +119,8 @@ castle show ID
   `--outcome failed` when an errand failed**, because no surface may
   read failure out of prose: a result with no `outcome` field reads as
   done, forever (see "The claim record, and the `outcome` field").
-  `--blocking` is question-records-by-convention in the same way, and
+  `--blocking` is **not** convention-only like those two — it is
+  enforced at write time, and the refusals are listed below — and it
   says that this question stopped the errand — the one thing no later
   reader could reconstruct, since a question filed *alongside* a result
   and one filed *instead of* one are indistinguishable afterward. It is
@@ -694,7 +695,14 @@ importance. It is an observation about the writer's own turn, the same
 epistemic shape `outcome` has. Like `outcome`, `castle validate` checks
 it when present and never requires it; unlike `outcome` there is no
 vocabulary to test membership against, so the check is that the value is
-the one spelling any writer produces.
+the one spelling any writer produces — the literal `true`. The validator
+also refuses the field on any record that is not a `question`, which
+matters to anyone hand-editing or restoring a journal: `castle record`
+will not write `blocking: true` onto a result, and `castle validate`
+will not accept one either. The two were briefly out of step, with the
+writer refusing what the validator called clean; the backstop must not
+be laxer than the door, since the records it exists for are precisely
+the ones the CLI never touched.
 
 **What resumption does.** When the resident answers a blocking question,
 the next `castle dispatch` sweep finds that request eligible again —
