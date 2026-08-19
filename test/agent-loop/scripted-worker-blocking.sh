@@ -6,7 +6,7 @@
 # Conforms to the real castle.agent.worker.command contract, like its
 # contract-worker*.sh siblings and unlike scripted-worker.sh: the
 # errand's records arrive on stdin, CASTLE_REQUEST_ID/CASTLE_DIFF_FILE/
-# CASTLE_REPO_ROOT arrive in the environment. Only a tenant reached
+# CASTLE_PRIVATE_ROOT arrive in the environment. Only a tenant reached
 # through `castle work`/`castle dispatch` sees the continuation packet,
 # the widened claim refs, or CASTLE_RESUME_ANSWER_IDS at all, which is
 # why resume.sh drives everything through those two rather than
@@ -36,7 +36,7 @@ set -euo pipefail
 
 : "${CASTLE_REQUEST_ID:?scripted-worker-blocking.sh: CASTLE_REQUEST_ID must be set}"
 : "${CASTLE_DIFF_FILE:?scripted-worker-blocking.sh: CASTLE_DIFF_FILE must be set}"
-: "${CASTLE_REPO_ROOT:?scripted-worker-blocking.sh: CASTLE_REPO_ROOT must be set}"
+: "${CASTLE_PRIVATE_ROOT:?scripted-worker-blocking.sh: CASTLE_PRIVATE_ROOT must be set}"
 # Same reason contract-worker-filer.sh takes it this way: nothing
 # installs a `castle` on $PATH in this no-Nix harness, and a real
 # tenant on a real host gets one from the system profile.
@@ -202,4 +202,4 @@ cat <<EOF > "$CASTLE_DIFF_FILE"
 EOF
 
 printf 'scripted-worker-blocking: finished %s on a resumed turn in %s\n' \
-  "$CASTLE_REQUEST_ID" "$CASTLE_REPO_ROOT"
+  "$CASTLE_REQUEST_ID" "$CASTLE_PRIVATE_ROOT"

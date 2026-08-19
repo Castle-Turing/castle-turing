@@ -13,7 +13,7 @@
 # moved out from under it), so it stays byte-for-byte untouched. The
 # consequence is that the contract `cmd_work` actually implements —
 # request body on stdin, reasoning on stdout, a diff or nothing to
-# $CASTLE_DIFF_FILE, $CASTLE_REQUEST_ID/$CASTLE_REPO_ROOT in the
+# $CASTLE_DIFF_FILE, $CASTLE_REQUEST_ID/$CASTLE_PRIVATE_ROOT in the
 # environment — was exercised nowhere at all before this file.
 #
 # This one is the happy path: it succeeds and writes a diff. Its
@@ -25,7 +25,7 @@ set -euo pipefail
 # a regression in cmd_work's env setup pass this harness unnoticed.
 : "${CASTLE_REQUEST_ID:?contract-worker.sh: CASTLE_REQUEST_ID must be set}"
 : "${CASTLE_DIFF_FILE:?contract-worker.sh: CASTLE_DIFF_FILE must be set}"
-: "${CASTLE_REPO_ROOT:?contract-worker.sh: CASTLE_REPO_ROOT must be set}"
+: "${CASTLE_PRIVATE_ROOT:?contract-worker.sh: CASTLE_PRIVATE_ROOT must be set}"
 
 # Named for what `castle work` actually pipes here. Since
 # docs/tasks/0023-resume-cold.md that is the errand's whole
@@ -68,7 +68,7 @@ if [ -n "${CASTLE_TEST_WORKER_BINARY:-}" ]; then
   printf 'a stray byte in the diff too: \377\n' >> "$CASTLE_DIFF_FILE"
 fi
 
-printf 'contract-worker: handled %s in %s\n' "$CASTLE_REQUEST_ID" "$CASTLE_REPO_ROOT"
+printf 'contract-worker: handled %s in %s\n' "$CASTLE_REQUEST_ID" "$CASTLE_PRIVATE_ROOT"
 # Reports something true of the packet rather than mislabelling its
 # first line. The line count is the honest one-line summary a fixture
 # can give of a document whose shape is the mechanism's business, and

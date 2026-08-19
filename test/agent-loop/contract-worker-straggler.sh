@@ -13,17 +13,17 @@
 # It was reachable in theory and not in practice: the kill only ran
 # when the tenant itself was still alive, so a tenant that exited
 # leaving this child behind had its turn recorded `completed` while
-# the child lived on — free to keep writing into $CASTLE_REPO_ROOT
+# the child lived on — free to keep writing into $CASTLE_PRIVATE_ROOT
 # after the journal's account of the turn was already final.
 #
 # The pid file is how the harness checks the child is gone. It goes in
-# $CASTLE_REPO_ROOT because that is the directory the escape actually
+# $CASTLE_PRIVATE_ROOT because that is the directory the escape actually
 # threatens.
 set -euo pipefail
 
 : "${CASTLE_REQUEST_ID:?contract-worker-straggler.sh: CASTLE_REQUEST_ID must be set}"
 : "${CASTLE_DIFF_FILE:?contract-worker-straggler.sh: CASTLE_DIFF_FILE must be set}"
-: "${CASTLE_REPO_ROOT:?contract-worker-straggler.sh: CASTLE_REPO_ROOT must be set}"
+: "${CASTLE_PRIVATE_ROOT:?contract-worker-straggler.sh: CASTLE_PRIVATE_ROOT must be set}"
 
 cat > /dev/null
 
@@ -34,6 +34,6 @@ echo "contract-worker-straggler: work done; leaving an in-group child holding th
 # and inherits the pipes `castle work` is reading. Long enough that
 # only a kill can end it inside this harness's lifetime.
 sleep 45 &
-echo "$!" > "$CASTLE_REPO_ROOT/straggler.pid"
+echo "$!" > "$CASTLE_PRIVATE_ROOT/straggler.pid"
 
 exit 0

@@ -12,7 +12,7 @@
 # It is also the first harness in this directory to exercise the REAL
 # castle.agent.worker.command contract: request body on stdin,
 # reasoning on stdout, a diff or nothing to $CASTLE_DIFF_FILE,
-# $CASTLE_REQUEST_ID/$CASTLE_REPO_ROOT in the environment. run.sh and
+# $CASTLE_REQUEST_ID/$CASTLE_PRIVATE_ROOT in the environment. run.sh and
 # tenant-swap.sh still call scripted-worker.sh with two positional
 # arguments and bypass `cmd_work` entirely — see contract-worker.sh's
 # header for why those stay exactly as they are. (test/desktop-loop
@@ -48,10 +48,10 @@ export CASTLE_NOTIFY_COMMAND="$REPO_ROOT/test/agent-loop/notify-stub.sh"
 : > "$CASTLE_NOTIFY_LOG"
 
 # A real (empty) directory rather than whatever this script's cwd
-# happens to be: $CASTLE_REPO_ROOT is part of the worker contract, and
+# happens to be: $CASTLE_PRIVATE_ROOT is part of the worker contract, and
 # contract-worker.sh asserts it is set.
-export CASTLE_REPO_ROOT="$WORKDIR/repo"
-mkdir -p "$CASTLE_REPO_ROOT"
+export CASTLE_PRIVATE_ROOT="$WORKDIR/repo"
+mkdir -p "$CASTLE_PRIVATE_ROOT"
 export CASTLE_WORKER_COMMAND="$WORKER_OK"
 
 log() { printf '>>> %s\n' "$*"; }
@@ -446,14 +446,14 @@ log "an IN-GROUP child left holding the pipes is killed with the turn, not left 
 # This fixture's child stays in the tenant's process group — and until
 # now nothing killed it, because _kill_tenant_group ran only while the
 # tenant itself was still alive. So the turn was recorded `completed`
-# and the child ran on, able to keep writing into $CASTLE_REPO_ROOT
+# and the child ran on, able to keep writing into $CASTLE_PRIVATE_ROOT
 # after the journal's account of that turn was final.
 #
 # Three things at once: the wait is sliced (large timeout, seconds
 # elapsed), the child is dead once the sweep returns, and killing it
 # is what lets the drain finally succeed — so the tenant's own stdout
 # lands in the result instead of the "could not be collected" note.
-rm -f "$CASTLE_REPO_ROOT/straggler.pid"
+rm -f "$CASTLE_PRIVATE_ROOT/straggler.pid"
 REQ_STRAG="$("$CASTLE" ask "Dispatch test: the tenant exits 0 leaving an in-group child on the pipes.")"
 STRAG_START="$(date +%s)"
 CASTLE_WORKER_COMMAND="$WORKER_STRAGGLER" CASTLE_WORKER_TIMEOUT=600 "$CASTLE" dispatch >"$WORKDIR/straggler-sweep.out" 2>&1 \
@@ -463,7 +463,7 @@ STRAG_ELAPSED=$(( $(date +%s) - STRAG_START ))
 RESULT_STRAG_FILE="$(referencing result "$REQ_STRAG")"
 [ -n "$RESULT_STRAG_FILE" ] || fail "the in-group-straggler tenant produced no result record"
 grep -q '^outcome: completed$' "$RESULT_STRAG_FILE" || fail "$RESULT_STRAG_FILE should carry outcome: completed — the tenant exited 0; got: $(grep '^outcome:' "$RESULT_STRAG_FILE" || echo none)"
-STRAG_PID="$(cat "$CASTLE_REPO_ROOT/straggler.pid" 2>/dev/null || true)"
+STRAG_PID="$(cat "$CASTLE_PRIVATE_ROOT/straggler.pid" 2>/dev/null || true)"
 [ -n "$STRAG_PID" ] || fail "the straggler fixture wrote no pid file — it never ran as intended"
 # The kill is a signal, so allow the exit to land; a couple of seconds
 # is generous for a SIGKILL the sweep already issued before returning.

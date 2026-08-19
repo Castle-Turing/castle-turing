@@ -11,7 +11,7 @@ errand boundary is what makes continuation possible, so nothing about
 it may depend on the same harness being on both sides of the question.
 
 Same contract as its bash twin (the packet on stdin,
-CASTLE_REQUEST_ID/CASTLE_DIFF_FILE/CASTLE_REPO_ROOT and
+CASTLE_REQUEST_ID/CASTLE_DIFF_FILE/CASTLE_PRIVATE_ROOT and
 CASTLE_TEST_CASTLE_BIN in the environment, reasoning on stdout, a diff
 or nothing to $CASTLE_DIFF_FILE) and the same two shapes: a
 `--blocking` question and nothing else on a first invocation; on a
@@ -42,7 +42,7 @@ def need(name: str) -> str:
 def main() -> int:
     request_id = need("CASTLE_REQUEST_ID")
     diff_file = need("CASTLE_DIFF_FILE")
-    repo_root = need("CASTLE_REPO_ROOT")
+    repo_root = need("CASTLE_PRIVATE_ROOT")
     castle = need("CASTLE_TEST_CASTLE_BIN")
 
     packet = sys.stdin.read()

@@ -170,7 +170,7 @@ castle show ID
   `request` record, runs `CASTLE_WORKER_COMMAND` (default: a headless
   `claude -p` via `agent/castle-worker-claude`) with the request body
   on its stdin and `$CASTLE_REQUEST_ID`/`$CASTLE_DIFF_FILE`/
-  `$CASTLE_REPO_ROOT` in its environment, and folds the command's
+  `$CASTLE_PRIVATE_ROOT` in its environment, and folds the command's
   stdout (reasoning) and `$CASTLE_DIFF_FILE` (a diff, or nothing) into
   a `result` record. The contract sits at the errand boundary
   (Proposal 03): what runs inside the command is free, but a result

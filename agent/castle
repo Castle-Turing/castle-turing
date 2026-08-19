@@ -146,6 +146,24 @@ WORKER_CLAIM_ENV = "CASTLE_WORKER_CLAIM"
 # can be attributed without parsing anything.
 RESUME_ANSWER_IDS_ENV = "CASTLE_RESUME_ANSWER_IDS"
 
+# The two checkouts a worker tenant may be given, and the third
+# variable that reports a mechanism checkout configured but unusable
+# (docs/tasks/0024-config-target.md §2, §16). These replace a single
+# CASTLE_REPO_ROOT outright rather than renaming it: "the repo root"
+# as a singular concept is exactly what could not express the
+# Principle 01 split the worker seat is asked to decide a fix against,
+# and one renamed alias would have relocated that ambiguity under a
+# new name.
+#
+# Absence is the signal, throughout. A root that was never configured
+# is simply not in the tenant's environment — there is no empty-string
+# spelling and no guessed default, which is what retired the old
+# `setdefault(..., cwd())` that told a dispatched worker its repo was
+# the resident's home directory.
+PRIVATE_ROOT_ENV = "CASTLE_PRIVATE_ROOT"
+MECHANISM_ROOT_ENV = "CASTLE_MECHANISM_ROOT"
+MECHANISM_ROOT_INVALID_ENV = "CASTLE_MECHANISM_ROOT_INVALID"
+
 # The closed vocabulary of the `outcome` field on `result` records
 # (docs/tasks/0021 §3.5). `completed`/`failed`/`timeout` are written by
 # whichever invoker watched the tenant finish, fail, or hang;
@@ -1827,7 +1845,7 @@ def _drain_after_exit(
     is still in the tenant's process group then this turn can — and
     must — end it: the journal's account of the turn is about to be
     final, and a child that outlives it can still be writing to
-    $CASTLE_REPO_ROOT afterwards, mutating a working tree whose result
+    $CASTLE_PRIVATE_ROOT afterwards, mutating a working tree whose result
     record already claims to describe what happened. `_kill_tenant_group`
     was previously unreachable on this path (it ran only when
     `poll()` was None), so an in-group straggler survived the turn
@@ -2362,6 +2380,13 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
     spend_lock = None
     try:
         command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
+        # Read from the ambient environment here, before any tenant-
+        # facing `env` dict exists, because several paths below need
+        # them earlier than that dict is built — see the env block near
+        # the tenant spawn for what is done with them and why the
+        # ambient copies are popped rather than inherited.
+        private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+        mechanism_root = os.environ.get(MECHANISM_ROOT_ENV, "").strip()
         started = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
 
         # What this turn is resuming, and the context it will be handed
@@ -2665,7 +2690,35 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # consuming the request's one automatic attempt. A channel
             # nothing reads is not worth a size limit nobody documented.
             env["CASTLE_DIFF_FILE"] = str(diff_path)
-            env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
+            # The two roots, and the third variable that reports a
+            # configured-but-unusable mechanism checkout
+            # (docs/tasks/0024-config-target.md §2). Three properties
+            # here are deliberate and each replaces something worse.
+            #
+            # **Popped first, unconditionally.** `env` starts as a copy
+            # of os.environ, so merely declining to set a key would
+            # leave whatever the ambient environment happened to carry
+            # — a stale export from an earlier login, or a value a
+            # tenant that itself runs `castle work` inherited — and a
+            # turn would silently operate on a checkout nobody
+            # configured for it. Same defensive shape
+            # RESUME_ANSWER_IDS_ENV uses a few lines below, for the
+            # same reason.
+            #
+            # **Assigned, never `setdefault`.** What was here before
+            # defaulted the (single) repo root to `pathlib.Path.cwd()`,
+            # which under the dispatch unit is `%h`: an unconfigured
+            # dispatched worker was unconditionally told its repo was
+            # the resident's home directory. Nothing replaces that
+            # guess. Absent configuration means the variable is absent,
+            # and `run_worker_turn`'s own pre-flight above is what a
+            # turn does about it.
+            for key in (PRIVATE_ROOT_ENV, MECHANISM_ROOT_ENV, MECHANISM_ROOT_INVALID_ENV):
+                env.pop(key, None)
+            if private_root:
+                env[PRIVATE_ROOT_ENV] = private_root
+            if mechanism_root:
+                env[MECHANISM_ROOT_ENV] = mechanism_root
             # On the TENANT's environment only — never on os.environ,
             # which would stamp every request this process later wrote
             # as though a turn had filed it. Any `castle` the tenant
