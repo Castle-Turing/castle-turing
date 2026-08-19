@@ -99,11 +99,14 @@ The exported modules:
   with no private checkout writes a `failed` result naming the option
   rather than guessing a directory; `worker.command` and `worker.timeoutSeconds`
   always have a usable default (a headless `claude -p`, and fifteen
-  minutes) since the worker seat needs *something* to default to. One
-  assertion beyond the "no literal `"` in the value" check every
-  string option here carries: `dispatch.enable` requires `stateDir`,
-  because unattended writing is exactly when the journal has to be the
-  durable one you chose rather than a per-user fallback.
+  minutes) since the worker seat needs *something* to default to.
+  Three assertions beyond the "no literal `"` in the value" check
+  every string option here carries: `dispatch.enable` requires
+  `stateDir`, because unattended writing is exactly when the journal
+  has to be the durable one you chose rather than a per-user fallback;
+  and each of `repo.private`/`repo.mechanism`, when set at all, must
+  be an **absolute** path, since a relative one names a different
+  place depending on who invoked the worker turn.
 - `nixosModules.installer` — the agentic installer image: bootable NixOS
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
@@ -234,6 +237,25 @@ The values this repo may never contain:
   attempt for good. Must be an absolute path. Renamed from
   `castle.agent.worker.repoRoot`, which still works and prints a
   deprecation warning.
+- **The worker checks your private checkout before every turn, and
+  git has to be able to use it.** Beyond existing and being absolute,
+  the path must be the **root** of a git working tree — not a
+  subdirectory of one, since a diff produced there would carry paths
+  relative to the wrong root. Where `git` is on the worker's `$PATH`
+  it is asked directly; where it is not (it arrives via
+  `nixosModules.dev`, which is optional) the check falls back to
+  looking for `.git` and says so rather than claiming more.
+
+  One failure here is worth knowing in advance because the fix is not
+  obvious: if your checkout was cloned by `root` during install, or
+  lives on a mount owned by a different uid, git refuses it with
+  "detected dubious ownership" and the turn writes a `failed` result.
+  That refusal is deliberate — a repository git will not touch is not
+  one this can work in reliably — and the result record names the fix
+  in place. It is either taking ownership of the directory, or:
+
+      git config --global --add safe.directory /home/<you>/private
+
 - `castle.agent.repo.mechanism` — a checkout of the *public* Castle
   Turing framework, if you happen to keep one
   (`$CASTLE_MECHANISM_ROOT`). **Leaving this unset is the normal

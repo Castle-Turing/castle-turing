@@ -576,7 +576,38 @@ does not need.
 1. **Is there an option covering this symptom at all?** If not, the
    fix is *mechanism* — a new or widened option under `modules/` — not
    a configuration change. This requires `repo.mechanism`; if it is
-   null (§3), the worker says so and stops. Grounded in Principle 01
+   null (§3), the worker says so and stops.
+
+   **Corrected during implementation: that requirement belongs to the
+   "if not" branch alone, and the prompt derived from this step read
+   it as belonging to the whole step.** Step 1 is the first of an
+   ordered rule, so every errand passes through it — and a tenant on
+   a host with `repo.mechanism = null`, which §3 of this same brief
+   calls the normal case, read "this step needs a mechanism checkout;
+   if there is none, say so and stop" and stopped on *everything*,
+   including pure private-layer work. The whole feature failing
+   closed on the common configuration. Only the mechanism-fix branch
+   needs the checkout; the question "is there an option covering this
+   symptom" is answerable without one, through the flake input, which
+   is what §8's own `.files`/`nix eval` approach already does.
+
+   **The same audit found a second, quieter instance in step 2**, and
+   it is recorded here because the shape is what matters rather than
+   the one line. Step 2 routes to "that machine's host module" without
+   asking where that module *is*. For a resident who wrote their own
+   it is inside the private checkout and always reachable; for one
+   using a host module this framework ships it is not, and needs
+   `repo.mechanism`. Unlike step 1 this failed silently rather than
+   stopping — the likely outcome being a tenant that writes the change
+   into `resident.nix` instead, which is a different fix with a
+   different meaning (that is step 3) rather than a workaround for an
+   unreachable checkout. §8's `.files` is exactly the instrument for
+   this and the prompt now says to use it here too, ending at the same
+   honest refusal as step 1's mechanism branch when the module lives
+   somewhere this host cannot reach. Steps 3 and 4, and the override,
+   were re-read against the same test and are clean: `resident.nix`
+   and filing a question are always reachable, and the override routes
+   *toward* private rather than away from it. Grounded in Principle 01
    consequence 5: a feature that cannot split into mechanism plus
    configuration is not designed yet, and silently inventing the
    option in the private layer instead — a `resident.nix` that grows
@@ -724,6 +755,30 @@ pass unless noted otherwise below:
 - `git -C <root> status --porcelain`, `git -C <root> log -1`,
   `git -C <root> diff` — read-only git, and the mechanism by which the
   worker forms its own diff.
+
+  **Corrected during implementation: the second half of that sentence
+  contradicts this same section's forbidden list, and following it
+  would dirty the resident's real working tree.** `git diff` prints
+  nothing on a clean checkout, so a tenant using it to *form* a patch
+  must first edit a tracked file under a configured root — which the
+  list below forbids outright ("any write under either configured
+  root"), and which is the precise mutation §19's
+  `assert_checkouts_untouched` exists to catch in a fixture and which
+  nothing catches in production. A tenant obeying the other rule
+  instead runs `git diff` on a clean tree, gets nothing, and produces
+  no proposal at all. Either way the errand fails, and the two rules
+  cannot both be followed.
+
+  The contract was never diff-by-editing: the pre-0024 prompt already
+  said "Produce a unified diff of the fix and write it, and only it,
+  to `$CASTLE_DIFF_FILE`", and §5 of this brief keeps that shape.
+  "and the mechanism by which the worker forms its own diff" is what
+  introduced the conflict, and it is wrong. `git diff` stays allowed
+  strictly as **inspection of pre-existing uncommitted state** — is
+  the resident mid-edit, is there work in flight not to tread on —
+  and the prompt now says so, restating that the proposal is composed
+  and written to `$CASTLE_DIFF_FILE` with no tracked file touched at
+  any point.
 - Reading any file under either configured root.
 
 **Forbidden, listed explicitly rather than left to a "read-only" norm
@@ -1121,6 +1176,23 @@ refusal fires when, and only when:
   because it runs before every turn and a stalled network filesystem
   must degrade this check rather than wedge a sweep holding the
   dispatch lock.
+
+  **One consequence accepted rather than softened: git's "dubious
+  ownership" refusal now fails a turn that the old existence test
+  passed.** A checkout cloned by `root` during an install, or living
+  on a mount owned by another uid, is a real shape — this repo's own
+  VM fixture produced the adjacent version of it — and such a turn now
+  writes `outcome: failed`, permanently spending that errand's one
+  automatic attempt under docs/tasks/0021's rule. The refusal stands:
+  a repository git will not touch is not one this feature can work in
+  reliably, and failing loudly beats proceeding into a partial failure
+  the resident then has to diagnose. What the refusal must not do is
+  diagnose without prescribing, so this one case carries its fix in
+  the result body — `git config --global --add safe.directory <path>`,
+  or taking ownership of the directory — and `docs/private-layer.md`
+  names it where it describes the private checkout, since a resident
+  meeting it on a fresh install should not have to search for
+  something this code already knows.
 - **Added during implementation: or is not absolute.** §1 puts an
   absolute-path assertion on the Nix options, which covers a value
   arriving through Nix and nothing else — while §4 of this brief

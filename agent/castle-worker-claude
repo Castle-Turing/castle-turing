@@ -214,6 +214,17 @@ fi
 # gotcha test/agent-loop/scripted-worker.sh's own comment documents for
 # backticks; writing to a file first sidesteps the whole class of it,
 # for the same reason.
+#
+# NO BACKTICKS IN THE PROMPT BODY. The delimiter below is unquoted —
+# it has to be, since every ${...} in the prose is a real
+# interpolation — so a backtick pair inside the heredoc is COMMAND
+# SUBSTITUTION, not markdown. This is not hypothetical: a review pass
+# added "`git diff`" and "`.files`" as ordinary prose emphasis, and
+# rendering the prompt ran `git diff` and tried to execute `.files`,
+# leaving the tenant's own instructions with holes where the words
+# had been. Use plain words or double quotes for emphasis here. The
+# escaped \$VAR spellings elsewhere in this prompt are the same
+# hazard's other half, already handled.
 prompt_file="$(mktemp)"
 cat <<PROMPT > "$prompt_file"
 ${packet_nonce} BEGIN harness instruction: who you are, and how to read this prompt
@@ -273,21 +284,39 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    piece of glass. Do not route an ordinary taste question through a
    privacy argument it does not need.
 
-   1a. Is there an option covering this symptom at all? If not, the
-       fix is MECHANISM — a new or widened option under modules/ — and
-       not a configuration change at all. Do not instead invent an
-       ad-hoc knob in resident.nix that no modules/ option declares:
-       a feature that cannot split into public mechanism plus private
-       configuration is not designed yet, and inventing only the
-       private half is exactly how that discipline gets skipped. This
-       step needs a mechanism checkout; if there is none, say so and
-       stop.
+   1a. Is there an option covering this symptom at all? Answering
+       this needs no mechanism checkout — read the option declarations
+       through the flake input, as OBSERVE below describes. If there
+       IS one, go straight on to 1b; this step is a fork, not a gate,
+       and most errands pass through it without stopping.
+
+       If there is NOT one, the fix is MECHANISM — a new or widened
+       option under modules/ — and not a configuration change at all.
+       Do not instead invent an ad-hoc knob in resident.nix that no
+       modules/ option declares: a feature that cannot split into
+       public mechanism plus private configuration is not designed
+       yet, and inventing only the private half is exactly how that
+       discipline gets skipped. THAT branch, and only that branch,
+       needs a mechanism checkout: if none is configured, say so in
+       your reasoning and stop, having proposed nothing.
    1b. Would the same value be right for a DIFFERENT PERSON on the
        SAME MACHINE? If yes, the fix belongs in that machine's host
        module, at lib.mkDefault priority. This is the panel-DPI,
        pixel-grid, chassis-port, can-this-machine-hibernate row —
        scale, cursorSize, cursorTheme, consoleFont, and the hardware
        and power facts beside them.
+
+       FIND OUT WHERE THAT HOST MODULE ACTUALLY IS before assuming you
+       can reach it. .files (see OBSERVE) reports the real answer,
+       and there are two: a resident who wrote their own host module
+       keeps it inside their private checkout, which you always have;
+       one using a host module this framework ships does not, and
+       reaching it needs a mechanism checkout. If it lives in the
+       framework and none is configured, that is the same dead end as
+       1a's mechanism branch — say so and stop, rather than writing
+       the change into resident.nix instead. Overriding in the private
+       layer is a DIFFERENT fix with a different meaning (that is 1c),
+       not a workaround for a checkout you cannot reach.
    1c. Would the same value be right for the SAME PERSON on a
        DIFFERENT MACHINE? If yes, and 1b said no, it is taste:
        resident.nix in the private checkout, at normal (unprefixed)
@@ -383,16 +412,28 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
      * fc-list, fc-match.
      * nix eval against a configured flake, as in 1.
      * git -C <root> status --porcelain, git -C <root> log -1, and
-       git -C <root> diff — read-only git, and how you form your own
-       diff.
+       git -C <root> diff — read-only git, for INSPECTING state that
+       is already there: what the checkout is, what changed last, and
+       whether the resident has uncommitted work in flight you should
+       not tread on. NOT a way to produce your own proposal. A
+       "git diff" prints nothing on a clean tree, so using it to form
+       a patch would mean editing a tracked file in the resident's real
+       checkout first — a write under a configured root, which the
+       list below forbids outright. You COMPOSE the unified diff and
+       write it to \$CASTLE_DIFF_FILE, exactly as step 2 says; no
+       tracked file is touched at any point.
      * Reading any file under either configured root.
 
    Forbidden, listed rather than left to be inferred from "read-only":
    nixos-rebuild in any form; systemctl; git commit, git add, git
    checkout, git apply, git stash; any swaymsg invocation that is not
    -t get_* (a bare swaymsg <command> mutates the live session);
-   gsettings set; setfont; sudo; any write under either configured
-   root; and any network access beyond your own model call.
+   gsettings set; setfont; sudo; any network access beyond your own
+   model call; and ANY WRITE UNDER EITHER CONFIGURED ROOT — including
+   editing a file in order to make a "git diff" show something. The
+   resident's checkout is yours to read and never to modify. Your
+   whole output is the reasoning on stdout, the composed diff in
+   \$CASTLE_DIFF_FILE, and the one word in \$CASTLE_TARGET_FILE.
 
    One trap worth naming so you do not spend a cycle rediscovering it:
    nixos-option ships on \$PATH and looks like exactly the right tool

@@ -1906,14 +1906,14 @@ WORKER_PROPOSES_NOTE = (
 # it. Small on purpose: a sweep holding the global dispatch lock while
 # it waits on a process nobody is going to kill is worse than a result
 # record missing the last words of a tenant that had already timed out.
+TENANT_DRAIN_SECONDS = 5
+
 # How long the checkout pre-flight waits on its one `git rev-parse`
 # (docs/tasks/0024 §16). Generous for a command that answers instantly
 # on any local checkout, and bounded because the pre-flight runs before
 # every turn: a stalled network filesystem must degrade this check, not
 # wedge the sweep that is holding the dispatch lock.
 CHECKOUT_PROBE_SECONDS = 10
-
-TENANT_DRAIN_SECONDS = 5
 
 # How often, while waiting on a tenant, to stop waiting on its *pipes*
 # and ask the *process* whether it is still alive.
@@ -2510,6 +2510,24 @@ def _checkout_fault(root: str) -> str | None:
     if probe.returncode != 0:
         detail = (probe.stderr or "").strip().splitlines()
         reason = detail[0] if detail else f"git exited {probe.returncode}"
+        # Ownership is worth prescribing for rather than merely
+        # reporting. A checkout cloned by root during an install, or
+        # living on a shared mount owned by another uid, is a real
+        # shape — this repo's own VM fixture produced the adjacent
+        # version of it — and git's refusal is deliberate rather than
+        # broken. The refusal stands: a repository git will not touch
+        # is not one this feature can work in reliably, and failing
+        # loudly beats proceeding into a confusing partial failure.
+        # But the fix is one command, it is already known here, and
+        # making the resident go and find it is a refusal that
+        # diagnoses without prescribing.
+        if "dubious ownership" in reason:
+            return (
+                f"git refuses to use it ({reason}) — this is an ownership "
+                "mismatch, not a broken checkout. Either take ownership of the "
+                f"directory, or tell git it is safe: `git config --global --add "
+                f"safe.directory {root}`"
+            )
         return f"git cannot use it as a working tree ({reason})"
 
     toplevel = probe.stdout.strip()
@@ -4409,11 +4427,22 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                 # single pass, and exit 0 while doing it. Stop at one,
                 # and let the unit go red so the health signal says
                 # what is actually wrong.
+                # Worded for what this handler actually knows, which
+                # is less than it used to claim. `TenantNotRunnable`
+                # covered three tenant-command faults when this line
+                # was written, so naming the tenant was fair;
+                # docs/tasks/0024 added a fourth that is not about the
+                # command at all, and a resident whose sweep went red
+                # over an unconfigured `castle.agent.repo.private` was
+                # pointed at `castle.agent.worker.command` instead.
+                # The parenthetical always carried the truth — now the
+                # sentence does too, and defers to it.
                 print(
-                    f"castle dispatch: the configured worker tenant could not be "
-                    f"run ({exc}); recorded {exc.result_id} for {request.id} and "
-                    "stopping this sweep rather than spending every other eligible "
-                    "request's one automatic attempt on the same fault",
+                    f"castle dispatch: this turn could not start ({exc}); recorded "
+                    f"{exc.result_id} for {request.id} and stopping this sweep "
+                    "rather than spending every other eligible request's one "
+                    "automatic attempt on the same fault. That result record names "
+                    "the specific misconfiguration and how to fix it",
                     file=sys.stderr,
                 )
                 # Route before returning. This path writes a `failed`

@@ -197,18 +197,18 @@ castle show ID
   this framework. A turn with no usable private root refuses before it
   runs anything, writing a `failed` result that names the option
   (`castle.agent.repo.private`) rather than falling back to the
-  working directory. "Usable" is checked in layers: absolute, exists,
-  is a directory — then, when `git` is on `$PATH`, `git rev-parse
-  --show-toplevel`, which catches both a directory git cannot use at
-  all (an empty `.git`, a dangling worktree link) and a path that is a
-  *subdirectory* of a checkout rather than its root, where a diff
-  would carry paths relative to the wrong root. Where `git` is not
-  reachable — it arrives only via `modules/dev`, which is optional —
-  the check degrades to testing that `.git` exists and says so rather
-  than claiming more than it verified, because a tenant can still
-  write a diff by hand on such a host — which under the dispatch unit is the resident's
+  working directory — which under the dispatch unit is the resident's
   home folder, and used to be exactly what an unconfigured worker was
-  told its repository was. A mechanism root that is configured but is
+  told its repository was. "Usable" is checked in layers: absolute,
+  exists, is a directory — then, when `git` is on `$PATH`, `git
+  rev-parse --show-toplevel`, which catches both a directory git
+  cannot use at all (an empty `.git`, a dangling worktree link) and a
+  path that is a *subdirectory* of a checkout rather than its root,
+  where a diff would carry paths relative to the wrong root. Where
+  `git` is not reachable — it arrives only via `modules/dev`, which is
+  optional — the check degrades to testing that `.git` exists and says
+  so rather than claiming more than it verified, because a tenant can
+  still write a diff by hand on a host with no git. A mechanism root that is configured but is
   not a usable git working tree does *not* refuse the turn: it is
   reported to the tenant in a third variable,
   `$CASTLE_MECHANISM_ROOT_INVALID`, and named in one sentence appended
@@ -1264,7 +1264,7 @@ plan for how that first entry gets written on the reference host.
 
 Six harnesses, all plain bash and stdlib Python — no Nix involved,
 unlike `test/vm-install/`'s harness — runnable locally with nothing
-beyond `bash` and `python3` on `$PATH`:
+beyond `bash`, `python3` and `git` on `$PATH`:
 
 ```
 test/agent-loop/run.sh                   # the full loop, both channels, the router-bug regression, Proposal 05's write path
@@ -1274,6 +1274,17 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
 test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
 test/agent-loop/config-target.sh         # two real checkouts: which one a diff targets, and what happens when one is missing or broken
 ```
+
+**`git` is a real prerequisite, not just python3.** Three of the six
+need it: `config-target.sh` builds its two fixture checkouts with `git
+init` and `git archive`, and `dispatch-test.sh` and `resume.sh` each
+`git init` the private root the target pre-flight now requires
+(`docs/tasks/0024-config-target.md`). On a host without it those three
+die with `git: command not found` rather than failing an assertion.
+`modules/dev` supplies it, exactly as it supplies python3 — the same
+shape `docs/tasks/0029-python3-on-dev-hosts.md` fixed for the
+interpreter, and named here in the same breath so the next person
+reading this paragraph learns both prerequisites at once.
 
 On a dev host importing `modules/dev`, python3 is on `$PATH`. Without
 that module, use `nix shell --inputs-from . nixpkgs#python3 --command bash
