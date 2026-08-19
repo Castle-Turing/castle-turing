@@ -116,6 +116,39 @@ FILED_DURING_TURN_FIELD = "filed-during-turn"
 # rather than a judgment about anyone else's.
 BLOCKING_FIELD = "blocking"
 
+# The `target` field on `result` records: which checkout the diff a
+# turn produced is meant to be applied to
+# (docs/tasks/0024-config-target.md §6). Written from what the tenant
+# put in $CASTLE_TARGET_FILE, so it is an observation about which file
+# the tenant wrote — never an inference about the resident, and never
+# a route into the resident model.
+#
+# It carries a **role** (`private`, `mechanism`), not a path. A role is
+# legible cold, to a human or a tenant, years later: an absolute path
+# would read fine today and be a lie the first time the checkout moved
+# or the machine was reinstalled. The resolved path is stated in the
+# result's body prose beside the diff, where staleness is obvious
+# rather than load-bearing.
+#
+# Deliberately **not** a closed vocabulary the way OUTCOME_VALUES is,
+# and the difference is a decision rather than an oversight. There are
+# two roles today; a third checkout — a resident's own fork of
+# something they depend on — would widen the set, and a membership
+# check here would make that a schema migration for no safety anyone
+# needs. `cmd_validate` asks only "non-blank, and on a result record."
+# The two known values are documented in agent/README.md.
+TARGET_FIELD = "target"
+
+# Where the tenant writes that one word. A second output file, exactly
+# symmetric with $CASTLE_DIFF_FILE, rather than a sentinel line on
+# stdout: stdout is the reasoning channel, quoted verbatim into the
+# result body, and parsing structure out of prose is the thing the flat
+# frontmatter format exists to avoid. Nor a `castle record` call from
+# inside the tenant — `_write_worker_result` is the one writer of a
+# turn's result, and a second writer for one record is the defect shape
+# docs/tasks/0023 §5 already had to close once.
+TARGET_FILE_ENV = "CASTLE_TARGET_FILE"
+
 # The environment variable that carries the running turn's claim id
 # into the tenant's own environment, and from there into any `castle`
 # the tenant invokes. Set on the tenant's env dict only — never on
@@ -218,6 +251,12 @@ CHANNELS = ("notify", "digest")
 # and a reader skimming a result should meet it before the prose;
 # `watermark` sits at the end, beside the other decision-only fields,
 # where it leaves `channel`'s sorted-remainder placement untouched.
+#
+# `target` (result-only, docs/tasks/0024 §6) sits immediately after
+# `outcome` for the identical reason and by the same presentation-only
+# rule: the two together are what a result says about itself before
+# any prose — what happened to the turn, and which checkout its diff
+# is against.
 FIELD_ORDER = (
     "id",
     "type",
@@ -226,6 +265,7 @@ FIELD_ORDER = (
     "seat",
     "created",
     "outcome",
+    "target",
     # Request-only, and next to `outcome` for the same reason: it is
     # the machine-readable half of what the record says about its own
     # circumstances, and a reader skimming a request should meet it
@@ -1411,6 +1451,11 @@ def cmd_record(args: argparse.Namespace) -> int:
         extra["fact"] = args.fact
     if getattr(args, "outcome", None):
         extra["outcome"] = args.outcome
+    # `args.target`, spelled out rather than shadowed: the local
+    # `target` a few lines above is the *directory* this record is
+    # being written into, and the two are unrelated.
+    if getattr(args, "target", None):
+        extra[TARGET_FIELD] = args.target
     if getattr(args, "blocking", False):
         # The literal the validator checks for, and the only spelling
         # any writer in this repo produces.
@@ -2305,7 +2350,12 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
 
 
 def _write_worker_result(
-    request: Record, *, outcome: str, body_lines: list[str], claim_id: str
+    request: Record,
+    *,
+    outcome: str,
+    body_lines: list[str],
+    claim_id: str,
+    target: str | None = None,
 ) -> str:
     """Every result `run_worker_turn` writes goes through here, so the
     `outcome` field cannot be forgotten on one branch and remembered on
@@ -2326,6 +2376,15 @@ def _write_worker_result(
     body_lines = list(body_lines)
     body_lines.append("")
     body_lines.append(WORKER_PROPOSES_NOTE)
+    extra = {"outcome": outcome}
+    # Only ever non-None from the one call site that follows a tenant
+    # that actually ran (docs/tasks/0024 §17). Every `TenantNotRunnable`
+    # branch — including this task's own target pre-flight — calls this
+    # with no target at all, because no tenant existed to write one, and
+    # a blank field asserting "no target" would be a claim those turns
+    # are in no position to make.
+    if target:
+        extra[TARGET_FIELD] = target
     return write_record(
         journal_dir(),
         type="result",
@@ -2333,7 +2392,7 @@ def _write_worker_result(
         seat="worker",
         refs=[request.id, claim_id],
         body="\n".join(body_lines),
-        extra={"outcome": outcome},
+        extra=extra,
     )
 
 
@@ -4268,6 +4327,40 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "other value."
             )
 
+        # `target` (result-only, docs/tasks/0024 §6), same append-only
+        # treatment again: checked when present, never required, so no
+        # result written before this field existed is failed
+        # retroactively.
+        #
+        # Two checks and deliberately not a third. Scoped to results,
+        # mirroring `blocking`'s question-only scoping and for the same
+        # reason: nothing anywhere reads `target` off another record
+        # type, so one written there would validate, read as
+        # meaningful, and do nothing. And non-blank, because a present
+        # but empty field claims to name a checkout while naming none.
+        #
+        # What is deliberately absent is a membership test against a
+        # fixed pair of words. `outcome` gets one because its four
+        # values are a named cross-task contract several surfaces
+        # branch on; `target` is two values today with room for a third
+        # checkout role, and a closed vocabulary here would turn adding
+        # one into a schema migration to buy safety nothing needs. See
+        # TARGET_FIELD's own comment.
+        target_raw = rec.fields.get(TARGET_FIELD)
+        if target_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{TARGET_FIELD}' is a result-record field and this "
+                f"is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0024-config-target.md)."
+            )
+        elif target_raw is not None and not target_raw.strip():
+            errors.append(
+                f"{path.name}: '{TARGET_FIELD}' is present but blank. It names which "
+                "checkout this turn's diff is against; absent means no target was "
+                "stamped, and there is no empty spelling of one."
+            )
+
         considered_raw = rec.fields.get("considered")
         considered_list: list[str] | None = None
         if considered_raw is not None:
@@ -4409,6 +4502,22 @@ def build_parser() -> argparse.ArgumentParser:
             "holding the worker seat by hand should pass this: no surface may "
             "read failure out of prose, so a failed errand with no `outcome` "
             "field reads as done, forever (docs/tasks/0021-auto-dispatch.md)."
+        ),
+    )
+    p_record.add_argument(
+        "--target",
+        default=None,
+        help=(
+            "which checkout this turn's diff is against — `private` or "
+            "`mechanism` (result records only, by convention, the same way "
+            "--outcome is). The automatic path fills this in from whatever the "
+            "tenant wrote to $CASTLE_TARGET_FILE; this flag is the same lever "
+            "for a human holding the worker seat by hand, or a fixture building "
+            "a result record directly. Deliberately not restricted to those two "
+            "words, and deliberately not hard-refused on other record types the "
+            "way --blocking is: it carries none of --blocking's hazard, since no "
+            "fold silently mis-attributes a stray target the way an unresumable "
+            "question dead-ends an errand (docs/tasks/0024-config-target.md)."
         ),
     )
     p_record.add_argument(
