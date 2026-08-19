@@ -1674,6 +1674,37 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **The packet emits every body byte-for-byte; the first
+  implementation stripped them.** §7 says each record is rendered
+  "verbatim — nothing paraphrased or summarised," and the first version
+  wrote `body.strip()` at all four sites, which is a contradiction the
+  word "verbatim" was already supposed to have closed. The cross-model
+  review caught it, and the codebase makes the case stronger than the
+  finding did: `parse_record` removes only the single blank line after
+  the closing fence and carries a comment saying why — "so a body that
+  starts with real whitespace-sensitive markdown (a code block) is not
+  mangled" — so the parser was deliberately preserving exactly what the
+  renderer then discarded. It costs most on this task's own path: a
+  `result` body carries an embedded unified diff whose leading spaces
+  are its meaning, and a resumed tenant reads that diff to work out
+  what the earlier turn already did. It also silently changed first-turn
+  behaviour, which used to hand a tenant an unmodified `request.body`.
+
+  Fixed by making the separation the renderer's own rather than the
+  body's: sections are assembled as chunks, and each writes its heading,
+  a blank line, the body exactly as parsed, and then its own `\n\n`.
+  A body ending mid-line and a body ending in three blank lines both
+  leave the next heading at the start of its own line, with neither
+  body edited to arrange it — deliberately not an `rstrip()`, which
+  would have made the output tidy while still editing the record. Both
+  halves are asserted: `resume.sh` files its first request through
+  stdin with an indented first line and no trailing newline, and checks
+  the indentation survives into the tenant's stdin; the fixtures
+  themselves refuse the turn if a section heading is not a whole line
+  of its own, which is the only way to see that the blank line came
+  from the renderer rather than from whatever the body happened to end
+  with. Both were mutation-tested — restoring the strip fails the
+  first, removing the separator fails the second.
 - **A stated limit was added to §4 and to `agent/README.md`: a
   watermarked errand can never resume.** Behaviour unchanged and
   deliberately so (the reasoning is in §4). Verified empirically rather

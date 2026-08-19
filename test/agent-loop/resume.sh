@@ -83,7 +83,20 @@ ANSWER_MARKER="RESUME-FIXTURE-ANSWER-MARKER"
 # ---------------------------------------------------------------------
 log "a blocking question stops the errand, and an ANSWER to it resumes exactly one further turn"
 # ---------------------------------------------------------------------
-REQ1="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — an invented errand the tenant cannot finish alone.")"
+# Filed through stdin rather than as an argument so the body keeps a
+# shape a packet builder could plausibly damage: an indented first line
+# (an obviously-fake code block, invented like everything else here),
+# and a last line with no trailing newline at all. `parse_record`
+# preserves both deliberately — it strips only the single blank line
+# after the closing fence, and says why in its own comment — so the
+# renderer must too. A worker result carries an embedded unified diff,
+# where leading spaces ARE the content, and a resumed tenant reads that
+# diff to work out what an earlier turn already did.
+REQ1="$(printf '%s\n%s\n\n%s' \
+  "    $REQUEST_MARKER — indented first line, an invented code block" \
+  "        placeholder deeper line" \
+  "Resume test: an invented errand the tenant cannot finish alone." \
+  | "$CASTLE" ask)"
 log "  -> $REQ1"
 "$CASTLE" dispatch >/dev/null
 [ "$(count_referencing claim "$REQ1")" -eq 1 ] || fail "the first sweep did not run a turn on $REQ1"
@@ -135,6 +148,14 @@ grep -q '^outcome: completed$' "$RESUME_RESULT_FILE" || fail "the resumed turn d
 log "  -- the tenant proves it actually READ the packet: request, question and answer all reached its stdin"
 grep -q "packet carried the request: .*$REQUEST_MARKER" "$RESUME_RESULT_FILE" \
   || fail "the resumed tenant did not see the original request in its continuation packet"
+# And saw it unmodified. The fixture echoes the matched line verbatim
+# after a one-space separator, so the expected string is that space
+# plus the body's own four — which exist only if nothing stripped the
+# body on the way to stdin. A `.strip()` anywhere in the packet builder
+# collapses this to a single space and fails here.
+EXPECTED_INDENT="$(printf 'packet carried the request:     %s' "$REQUEST_MARKER")"
+grep -qF "$EXPECTED_INDENT" "$RESUME_RESULT_FILE" \
+  || fail "the packet mangled the request body's leading whitespace: $(grep -n 'packet carried the request' "$RESUME_RESULT_FILE")"
 grep -q "packet carried the question: .*the errand cannot continue until this is answered" "$RESUME_RESULT_FILE" \
   || fail "the resumed tenant did not see the blocking question in its continuation packet"
 grep -q "packet carried the answer: .*$ANSWER_MARKER" "$RESUME_RESULT_FILE" \

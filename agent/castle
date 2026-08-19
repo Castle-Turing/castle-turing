@@ -1824,8 +1824,38 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
     invented constant with no measurement behind it, and silently
     withholding the context this whole path exists to deliver is a
     worse failure than an occasionally long prompt.
+
+    **Every body is emitted byte-for-byte — no strip, no rstrip, no
+    reflow — and that is a repo-level intent, not this function's
+    preference.** `parse_record` goes out of its way to preserve it:
+    it removes only the single blank line after the closing fence, and
+    says why in its own comment ("strip only the leading blank so a
+    body that starts with real whitespace-sensitive markdown (a code
+    block) is not mangled"). A renderer that stripped what the parser
+    deliberately kept would undo that on the one path where it costs
+    most — a `result` body carries an embedded unified diff, whose
+    leading spaces are its meaning, and a resumed tenant reads that
+    diff to work out what the earlier turn already did. Whitespace is
+    content here. If a later change wants tidier output, it belongs in
+    the separators below, never in a body.
     """
-    lines = [f"# Errand `{request.id}` — everything this errand has recorded so far", ""]
+    # Sections are assembled as whole chunks rather than as lines,
+    # because the separation between them has to be the renderer's own
+    # and never the body's. `section()` writes a heading, one blank
+    # line, the body exactly as parsed, and then its own "\n\n" — so a
+    # body that ends mid-line and a body that ends in three blank lines
+    # both leave the next heading at the start of its own line, with
+    # nothing about either body edited to arrange it.
+    parts: list[str] = []
+
+    def section(heading: str, body: str) -> None:
+        parts.append(heading)
+        parts.append("\n\n")
+        parts.append(body)
+        parts.append("\n\n")
+
+    parts.append(f"# Errand `{request.id}` — everything this errand has recorded so far")
+    parts.append("\n\n")
     # Whose words these are is a fact the record carries, not a
     # constant to hardcode. Most requests are the resident's own, but
     # two shapes are not: `castle ask --provenance initiated` files on
@@ -1848,16 +1878,17 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
             "filed on the system's own initiative, not typed by the resident "
             f"(provenance: {request.fields.get('provenance', 'unrecorded')})"
         )
-    lines += [f"## The original request, {origin}", ""]
-    lines += [request.body.strip(), ""]
+    section(f"## The original request, {origin}", request.body)
 
     results = sorted(
         (rec for rec in records.values() if rec.type == "result" and request.id in rec.refs),
         key=lambda rec: rec.id,
     )
     for index, result in enumerate(results, start=1):
-        lines += [f"## Account of an earlier turn on this errand ({index} of {len(results)})", ""]
-        lines += [result.body.strip(), ""]
+        section(
+            f"## Account of an earlier turn on this errand ({index} of {len(results)})",
+            result.body,
+        )
 
     questions = sorted(
         (
@@ -1883,13 +1914,11 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
         # differently from the way resumption treated it.
         blocking = "blocking" if _is_blocking(question) else "not blocking"
         answered = "answered below" if answers else "not answered yet"
-        lines += [f"## A question this errand raised ({blocking}, {answered})", ""]
-        lines += [question.body.strip(), ""]
+        section(f"## A question this errand raised ({blocking}, {answered})", question.body)
         for answer in answers:
-            lines += ["### The resident's answer, verbatim", ""]
-            lines += [answer.body.strip(), ""]
+            section("### The resident's answer, verbatim", answer.body)
 
-    return "\n".join(lines).rstrip("\n") + "\n"
+    return "".join(parts)
 
 
 def _write_worker_result(

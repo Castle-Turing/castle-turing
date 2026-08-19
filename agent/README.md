@@ -676,6 +676,18 @@ every turn, with no branch for "is this a first turn" — a first turn
 degenerates to the request body under a heading, which is exactly what a
 tenant received before. Nothing is truncated and nothing is capped.
 
+**Verbatim there means byte-for-byte.** No body is stripped, rstripped
+or reflowed on its way to a tenant: `parse_record` removes only the
+single blank line after a record's closing fence, precisely so a body
+that begins with whitespace-sensitive markdown survives, and this
+renderer keeps what the parser kept. It matters most on exactly this
+path — a result body carries an embedded unified diff, whose leading
+spaces are its content, and a resumed tenant reads that diff to work out
+what an earlier turn already did. What separates one section from the
+next is the renderer's own blank line, never the body's trailing
+whitespace, so a body that ends mid-line still leaves the following
+heading on a line of its own.
+
 Three things are deliberately kept out of it. `correction` records: a
 correction is the resident judging the *system*, and feeding a verdict
 about the system into the work being judged is backwards (`castle

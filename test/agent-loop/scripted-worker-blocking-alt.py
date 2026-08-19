@@ -69,6 +69,18 @@ def main() -> int:
         return 0
 
     print(f"scripted-worker-blocking-alt: RESUMED with {resuming}")
+
+    # Same check the bash twin makes, for the same reason: bodies are
+    # emitted byte-for-byte, so a heading sitting on a line of its own
+    # is proof the separator came from the renderer rather than from
+    # whatever the previous body happened to end with.
+    if "## A question this errand raised (blocking, answered below)" not in packet.splitlines():
+        print(
+            "scripted-worker-blocking-alt: the packet's question heading is not on a "
+            "line of its own",
+            file=sys.stderr,
+        )
+        return 8
     for label, needle in (
         ("request", "RESUME-FIXTURE-REQUEST-MARKER"),
         ("question", "the errand cannot continue until this is answered"),

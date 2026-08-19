@@ -92,6 +92,17 @@ echoed() {
   }
   printf 'scripted-worker-blocking: packet carried the %s: %s\n' "$label" "$line"
 }
+# The heading has to be a WHOLE line of its own. `castle work` emits
+# every body byte-for-byte, so the blank line before this heading can
+# only have come from the renderer — a request body that ends mid-line,
+# which resume.sh deliberately files, would otherwise have this heading
+# welded onto its last line and `grep -x` would not find it. That is
+# the half of "verbatim bodies" a marker search cannot see.
+if ! printf '%s\n' "$packet" | grep -qx -- "## A question this errand raised (blocking, answered below)"; then
+  echo "scripted-worker-blocking: the packet's question heading is not on a line of its own" >&2
+  exit 8
+fi
+
 echoed "request" "RESUME-FIXTURE-REQUEST-MARKER"
 echoed "question" "the errand cannot continue until this is answered"
 echoed "answer" "RESUME-FIXTURE-ANSWER-MARKER"
