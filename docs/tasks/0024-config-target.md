@@ -752,9 +752,48 @@ pass unless noted otherwise below:
 - `fc-list`, `fc-match`.
 - `nix eval` against the configured private and/or mechanism flake
   (§8/§9).
+
+  **Corrected during implementation, twice over.** First: `nix eval`
+  against a local path flake **creates or updates `flake.lock` in that
+  directory** when the lock is missing or stale — a write into the
+  resident's real repository, forbidden by this same section's own
+  list, and the one kind of mutation that outlives a turn. Verified by
+  running it: a flake with one input gains a `flake.lock` on a bare
+  `nix eval`, and does not with `--no-write-lock-file`. Every `nix
+  eval` the prompt instructs now carries that flag, with the prompt
+  saying *why* so a later editor does not trim it as noise.
+
+  Second: §8 wrote the command as `nix eval --json <flake>#...` and
+  never defined `<flake>` anywhere, while defining `<host>` precisely.
+  A tenant meeting that guesses between the two roots and a registry
+  reference — the same guessing this whole task removes one layer up.
+  It is **always `$CASTLE_PRIVATE_ROOT`**: only the resident's own
+  flake declares a `nixosConfigurations` entry for *this* machine,
+  while the framework's carries example configurations that are
+  somebody else's. Stated at first use in the prompt.
 - `git -C <root> status --porcelain`, `git -C <root> log -1`,
   `git -C <root> diff` — read-only git, and the mechanism by which the
   worker forms its own diff.
+
+  **Also corrected: two of these three write, and "read-only" was the
+  wrong word for them.** `git status` and `git diff` refresh the index
+  as a side effect, rewriting `.git/index` inside the checkout —
+  reproduced by touching a tracked file and watching the index mtime
+  move. No tracked file and no commit changes, so `assert_checkouts_
+  untouched` would not have caught it, which is precisely why it needed
+  finding rather than assuming. All the git lines in the prompt now
+  carry `--no-optional-locks`, git's own "answer the question, take no
+  locks, write nothing" flag. `git log -1` and the pre-flight's own
+  `git rev-parse` never write and carry it only for uniformity.
+
+  **The rest of the allowed list was audited with the same question and
+  is clean**, which is worth recording so nobody re-derives it:
+  `swaymsg -t get_*` is read-only by IPC type; `cat`/`readlink -f` and
+  the `/sys` read write nothing; `fc-list`/`fc-match` do write a
+  fontconfig cache, but under `$XDG_CACHE_HOME/fontconfig`, outside
+  any configured root, so they violate no rule stated here — named
+  anyway, because "writes nothing at all" and "writes nothing where it
+  matters" are different claims and the second is the true one.
 
   **Corrected during implementation: the second half of that sentence
   contradicts this same section's forbidden list, and following it
@@ -1176,6 +1215,30 @@ refusal fires when, and only when:
   because it runs before every turn and a stalled network filesystem
   must degrade this check rather than wedge a sweep holding the
   dispatch lock.
+
+  **The probe runs with every `GIT_*` variable stripped from its
+  environment, and this too was found by execution rather than
+  reasoning.** git reads its own environment to decide what a
+  repository is, so an inherited `GIT_DIR` makes any directory look
+  like a checkout (a non-checkout accepted, a model call spent) and an
+  inherited `GIT_WORK_TREE` makes a good checkout look like the wrong
+  one (a valid root refused). Both reproduced. Reachable from a git
+  hook, a `git rebase --exec`, or a resident with either exported in
+  their shell — and it is the same ambient-inheritance defect §2 exists
+  to delete, arriving inside the check meant to close it.
+
+  Stripping an enumerated list is **not** sufficient, and the
+  documentation is what misleads: git's manual sorts these into
+  "repository location" and "object storage", and `GIT_OBJECT_DIRECTORY`
+  sits firmly in the second — yet setting it to a nonexistent path
+  makes `rev-parse --show-toplevel` call a *valid* checkout "not a git
+  repository", because repository setup validates the object store. An
+  enumeration the documentation's own categories mispredict will
+  drift, so the whole `GIT_*` prefix goes. Accepted cost: a resident
+  relocating their git config with `GIT_CONFIG_GLOBAL` loses it here,
+  so a `safe.directory` living only in that file can produce a wrong
+  ownership refusal — the loud direction, carrying its own remedy,
+  which is the right one to fail in against a silent false accept.
 
   **One consequence accepted rather than softened: git's "dubious
   ownership" refusal now fails a turn that the old existence test

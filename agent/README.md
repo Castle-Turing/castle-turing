@@ -201,7 +201,10 @@ castle show ID
   home folder, and used to be exactly what an unconfigured worker was
   told its repository was. "Usable" is checked in layers: absolute,
   exists, is a directory — then, when `git` is on `$PATH`, `git
-  rev-parse --show-toplevel`, which catches both a directory git
+  rev-parse --show-toplevel` — run with every `GIT_*` variable
+  stripped, since an inherited `GIT_DIR` or `GIT_WORK_TREE` otherwise
+  makes git answer about a different repository than the one being
+  checked. It catches both a directory git
   cannot use at all (an empty `.git`, a dangling worktree link) and a
   path that is a *subdirectory* of a checkout rather than its root,
   where a diff would carry paths relative to the wrong root. Where

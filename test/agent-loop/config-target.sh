@@ -297,8 +297,8 @@ log "a checkout git cannot actually use is refused, not merely one with no .git"
 # `git archive`. On a host with no git the pre-flight degrades to the
 # old existence test and these three cases legitimately pass — that is
 # the documented fallback, and refusing there would break work that
-# can still succeed. It is verified directly against
-# `_checkout_fault`, since it is unreachable from here.
+# can still succeed. The block after these four covers that fallback
+# for real, in-process.
 EMPTY_GIT="$WORKDIR/empty-git"
 mkdir -p "$EMPTY_GIT/.git"
 REQ_EMPTYGIT="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint against a directory with an empty .git.")"
@@ -354,6 +354,75 @@ grep -q '^outcome: completed$' "$R_STILLOK" \
 grep -q '^target: private$' "$R_STILLOK" || fail "the control turn produced no target"
 "$CASTLE" validate >/dev/null
 assert_checkouts_untouched "after the checkout-probe cases"
+
+# ---------------------------------------------------------------------
+log "the no-git fallback: degrade to the .git test, and say only what was checked"
+# ---------------------------------------------------------------------
+# This path cannot be reached through `castle work` from here — the
+# harness itself needs git, so a run without it never gets this far —
+# and for a while these lines were a COMMENT claiming it was "verified
+# directly against _checkout_fault" when nothing verified it at all.
+# That is worse than no comment: it tells the next reader not to
+# bother, which is exactly how the dead assertion earlier in this same
+# branch survived. So the claim is now the test.
+#
+# In-process, importing agent/castle the way castle-modal already does
+# (its `_load_castle_module`), because the branch is selected by
+# `shutil.which("git")` and the only honest way to reach it is to make
+# that return None. `python3` bare, matching resume.sh's own snippets.
+(
+python3 - "$CASTLE" "$WORKDIR" <<'NOGIT'
+import importlib.machinery, importlib.util, pathlib, sys
+
+castle_path, workdir = sys.argv[1], sys.argv[2]
+loader = importlib.machinery.SourceFileLoader("castle_lib", castle_path)
+spec = importlib.util.spec_from_file_location("castle_lib", castle_path, loader=loader)
+castle = importlib.util.module_from_spec(spec)
+loader.exec_module(castle)
+
+failures = []
+
+def check(label, path, want_fault, needle=None):
+    got = castle._checkout_fault(path)
+    if want_fault and got is None:
+        failures.append(f"{label}: expected a refusal, got none")
+    elif not want_fault and got is not None:
+        failures.append(f"{label}: expected no fault, got {got!r}")
+    elif needle and got is not None and needle not in got:
+        failures.append(f"{label}: refusal does not say {needle!r}: {got!r}")
+
+# With git reachable, an empty .git is refused — the whole point of the
+# probe, and the control proving the stub below really changes things.
+check("git present, empty .git", f"{workdir}/empty-git", True, "cannot use it as a working tree")
+
+castle.shutil.which = lambda _name: None   # a host with no git at all
+
+check("no git, real checkout", f"{workdir}/private", False)
+check("no git, empty .git dir", f"{workdir}/empty-git", False)
+check("no git, dangling link", f"{workdir}/broken-worktree-link", False)
+# Refused, but by the weaker route and for the weaker reason: with no
+# git there is no way to learn that this is INSIDE a checkout, only
+# that it is not the root of one. The decision lands in the right
+# place; the explanation is honestly smaller.
+check("no git, subdirectory", f"{workdir}/private/state", True, "has no `.git` entry")
+check("no git, plain directory", f"{workdir}/not-a-checkout", True, "has no `.git` entry")
+check("no git, missing path", f"{workdir}/nowhere-at-all", True, "does not exist")
+check("no git, relative path", "private", True, "not absolute")
+
+# The wording half: a check that never ran must not claim it did.
+fault = castle._checkout_fault(f"{workdir}/not-a-checkout")
+if "nothing stronger than that was checked" not in fault:
+    failures.append(f"the no-git refusal claims more than it verified: {fault!r}")
+if "working tree" in fault:
+    failures.append(f"the no-git refusal asserts a git-verified fact no git verified: {fault!r}")
+
+if failures:
+    for f in failures:
+        print(f"  {f}", file=sys.stderr)
+    sys.exit(1)
+print("  no-git fallback: 9 cases, wording included")
+NOGIT
+) || fail "the no-git fallback does not behave as documented"
 
 # ---------------------------------------------------------------------
 log "a RELATIVE private root refuses too, and never resolves against the caller's cwd"

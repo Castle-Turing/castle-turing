@@ -1910,9 +1910,20 @@ TENANT_DRAIN_SECONDS = 5
 
 # How long the checkout pre-flight waits on its one `git rev-parse`
 # (docs/tasks/0024 §16). Generous for a command that answers instantly
-# on any local checkout, and bounded because the pre-flight runs before
-# every turn: a stalled network filesystem must degrade this check, not
-# wedge the sweep that is holding the dispatch lock.
+# on any local checkout, and bounded so a git that hangs — on a repo
+# whose objects live behind a dead network mount, say — cannot hold
+# the sweep open indefinitely.
+#
+# **This bounds the subprocess and nothing else, which is less than an
+# earlier version of this comment claimed.** It said a stalled network
+# filesystem "must degrade this check, not wedge the sweep," and that
+# is not what it buys: `_checkout_fault` calls `path.exists()` and
+# `path.is_dir()` before ever reaching the probe, both unbounded
+# syscalls, so a root on a hung NFS or autofs mount wedges dispatch in
+# `stat()` and never gets here. Bounding those needs a different
+# mechanism than a subprocess timeout — see
+# docs/backlog/stalled-mount-wedges-a-sweep.md, which records the gap
+# rather than pretending this constant closes it.
 CHECKOUT_PROBE_SECONDS = 10
 
 # How often, while waiting on a tenant, to stop waiting on its *pipes*
@@ -2487,6 +2498,39 @@ def _checkout_fault(root: str) -> str | None:
             )
         return None
 
+    # **Every GIT_* variable is stripped, and the blanket is
+    # deliberate rather than lazy.** This subprocess would otherwise
+    # inherit the ambient environment, and git reads that environment
+    # to decide what a repository even is — so the answer this whole
+    # pre-flight turns on becomes a property of whoever happened to
+    # export something, which is the exact ambient-inheritance defect
+    # this task exists to delete, reappearing inside the check meant
+    # to close it. Two directions, both reproduced: with GIT_DIR set,
+    # a directory that is not a checkout at all reports a toplevel and
+    # is accepted, spending a model call; with GIT_WORK_TREE set, a
+    # perfectly good checkout is refused as "inside the working tree
+    # rooted at" somewhere else. A git hook, a `git rebase --exec`, or
+    # a resident with either in their shell profile all reach here.
+    #
+    # Stripping an enumerated list was tried first and is not safe:
+    # git's own manual sorts these into "repository location" versus
+    # "object storage", and reasoning from that split gets it wrong.
+    # GIT_OBJECT_DIRECTORY is documented purely as where objects live
+    # and looks irrelevant to `--show-toplevel`, which reads no
+    # objects — but setting it to a nonexistent path makes git call a
+    # valid checkout "not a git repository", because repository setup
+    # validates the object store. Discovered by running it, not by
+    # reading. An enumeration that the documentation's own categories
+    # mispredict is an enumeration that will drift.
+    #
+    # The accepted cost: a resident who relocates their git config
+    # with GIT_CONFIG_GLOBAL loses it here, so a `safe.directory`
+    # entry living only in that file will not be seen and the
+    # ownership refusal below can fire wrongly. That refusal is loud
+    # and carries its own remedy, which is the direction to fail in —
+    # the alternative is a silent false accept, a spent model call and
+    # a diff computed against the wrong tree.
+    probe_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
         probe = subprocess.run(
             [git, "-C", root, "rev-parse", "--show-toplevel"],
@@ -2494,6 +2538,7 @@ def _checkout_fault(root: str) -> str | None:
             text=True,
             errors="replace",
             timeout=CHECKOUT_PROBE_SECONDS,
+            env=probe_env,
         )
     except (OSError, subprocess.TimeoutExpired):
         # git resolved but would not run, or hung — a stalled network

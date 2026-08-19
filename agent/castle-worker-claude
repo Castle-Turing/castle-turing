@@ -338,8 +338,25 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md â
    actually define an option and which definition won, rather than
    reading module source and guessing at priority:
 
-     nix eval --json <flake>#nixosConfigurations.<host>.options.castle.display.<opt>.files
-     nix eval --json <flake>#nixosConfigurations.<host>.options.castle.display.<opt>.definitionsWithLocations
+     nix eval --no-write-lock-file --json ${CASTLE_PRIVATE_ROOT}#nixosConfigurations.<host>.options.castle.display.<opt>.files
+     nix eval --no-write-lock-file --json ${CASTLE_PRIVATE_ROOT}#nixosConfigurations.<host>.options.castle.display.<opt>.definitionsWithLocations
+
+   THE FLAKE IS ALWAYS THE PRIVATE ONE, ${CASTLE_PRIVATE_ROOT}, and
+   never the mechanism checkout. Only the resident's own flake defines
+   a nixosConfigurations entry for THIS machine; the framework's flake
+   carries example configurations that are not this host, so
+   evaluating it would answer a question about somebody else's
+   machine. Do not substitute a registry reference or a bare "." for
+   it either â€” the first resolves to whatever the registry happens to
+   point at, and the second to whatever directory you are standing in.
+
+   --no-write-lock-file IS NOT OPTIONAL AND IS NOT NOISE. A nix eval
+   against a local path flake CREATES OR UPDATES flake.lock in that
+   directory when the lock is missing or stale. That is a write into
+   the resident's real repository â€” forbidden absolutely by the rule
+   below, and the one kind of mutation that would survive your turn.
+   Reading an option must not modify the tree you are reading. Keep
+   the flag on every nix eval you run, including ones you improvise.
 
    <host> is this machine's own hostname, read from
    /proc/sys/kernel/hostname: the attribute to try is
@@ -411,8 +428,10 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md â
        a Wayland session at all.
      * fc-list, fc-match.
      * nix eval against a configured flake, as in 1.
-     * git -C <root> status --porcelain, git -C <root> log -1, and
-       git -C <root> diff â€” read-only git, for INSPECTING state that
+     * git --no-optional-locks -C <root> status --porcelain,
+       git --no-optional-locks -C <root> log -1, and
+       git --no-optional-locks -C <root> diff â€” read-only git, for
+       INSPECTING state that
        is already there: what the checkout is, what changed last, and
        whether the resident has uncommitted work in flight you should
        not tread on. NOT a way to produce your own proposal. A
@@ -422,6 +441,15 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md â
        list below forbids outright. You COMPOSE the unified diff and
        write it to \$CASTLE_DIFF_FILE, exactly as step 2 says; no
        tracked file is touched at any point.
+
+       --no-optional-locks for the same reason --no-write-lock-file
+       appears above: "status" and "diff" REFRESH THE INDEX as a side
+       effect, rewriting .git/index inside the resident's checkout.
+       That is a write under a configured root by any honest reading,
+       even though it changes no tracked file and no commit. The flag
+       is git's own way of saying "answer the question, take no
+       locks, write nothing." Keep it. "log" and "rev-parse" never
+       write, and carry it only so every git line here looks alike.
      * Reading any file under either configured root.
 
    Forbidden, listed rather than left to be inferred from "read-only":
@@ -439,7 +467,15 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md â
    nixos-option ships on \$PATH and looks like exactly the right tool
    for reading a running value. On a flake-built host it fails with
    "file 'nixos-config' was not found in the Nix search path". Use nix
-   eval, as in 1.
+   eval, as in 1 â€” with --no-write-lock-file, as in 1.
+
+   The general rule behind both flags, worth carrying to any command
+   this list does not name: "read-only" is a claim about intent, and
+   several perfectly ordinary read commands write caches, locks or
+   metadata as a side effect. Before running something not listed
+   here, ask what it writes and where. If it writes anywhere under
+   ${CASTLE_PRIVATE_ROOT} or a configured mechanism root, it is
+   forbidden regardless of what it was for.
 5. If you need the resident's own judgment mid-errand (a genuine
    posture question, not something inferrable from the repo), append a
    question record instead of guessing:
