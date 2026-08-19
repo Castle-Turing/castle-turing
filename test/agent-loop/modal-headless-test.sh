@@ -848,6 +848,39 @@ refute() {
   fi
 }
 
+log "status and the picker agree about one answered question, even when the answer names two errands"
+# docs/tasks/0015 scope 3, in the shape docs/tasks/0023's narrowed
+# errand walk could have produced: an answer written through the
+# generic door as `--refs Q_A,Q_B` belongs to A's fold and not B's, so
+# a "waiting on you" overlay derived from that walk would nag about
+# Q_B forever while the picker — which folds every answer record flat
+# — correctly declines to offer it. Telling the resident to answer
+# something the answer surface will not show them is worse than either
+# surface being wrong alone, so all three folds (this overlay,
+# `_pending_questions`, and `file_answer`'s duplicate guard) read
+# answeredness the same way.
+REQ_SHARED_A="$("$CASTLE" ask "Shared-answer errand A: an invented request.")"
+REQ_SHARED_B="$("$CASTLE" ask "Shared-answer errand B: another invented request.")"
+Q_SHARED_A="$(plant_question "$REQ_SHARED_A" 20260201T000010Z "Errand A's question, answered jointly.")"
+Q_SHARED_B="$(plant_question "$REQ_SHARED_B" 20260201T000011Z "Errand B's question, answered jointly.")"
+"$CASTLE" record --type answer --provenance requested --seat intake \
+  --refs "$Q_SHARED_A,$Q_SHARED_B" \
+  --body "One answer closing both errands' questions." >/dev/null
+"$CASTLE" validate >/dev/null || fail "the shared-answer fixture does not validate"
+
+STATUS_SHARED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_B\]" | grep -q "waiting on you" \
+  && fail "errand B says 'waiting on you' for a question that IS answered: $(echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_B\]")"
+echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_A\]" | grep -q "waiting on you" \
+  && fail "errand A says 'waiting on you' for a question that IS answered: $(echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_A\]")"
+# And the picker agrees: neither question is offered, which is the half
+# that was already right and that the overlay now matches.
+PICKER_SHARED="$("$MODAL" --mode answer </dev/null)"
+echo "$PICKER_SHARED" | grep -q "$Q_SHARED_B" \
+  && fail "the picker offered an answered question"
+echo "$PICKER_SHARED" | grep -q "Errand B's question" \
+  && fail "the picker offered an answered question by its text"
+
 log "answer mode: nothing pending prints a friendly line and exits 0 (test 1)"
 ANSWER_NONE_OUT="$("$MODAL" --mode answer </dev/null)" || fail "answer mode with nothing pending should exit 0"
 echo "$ANSWER_NONE_OUT" | grep -q "Nothing is waiting on you." \

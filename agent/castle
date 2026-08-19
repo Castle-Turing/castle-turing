@@ -3810,12 +3810,24 @@ def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record
     fold only, not in B's — which is what `closing_result`'s own
     narrowing already decided about that record, applied one layer out.
     And a single answer naming questions on two errands appears in the
-    fold of the errand whose question it names *first*, so the other
-    errand's status surface can still show its question as unanswered.
-    That is a display imprecision on a shape `file_answer` cannot
-    write, and it costs nothing structural: `_resumable_answers` does
-    not use this walk at all, so spend and eligibility are untouched by
-    it.
+    fold of the errand whose question it names *first*, and not in the
+    other's.
+
+    That second one was briefly worse than it sounds, and the fix
+    belongs on the record here because the shape of the residual
+    changed. While `_errand_state` derived "which questions are
+    answered" from this walk, an errand missing the shared answer said
+    "waiting on you" permanently while the answer picker — which folds
+    flat — declined to offer the question, because it is answered. Two
+    surfaces contradicting each other about one record is the failure
+    docs/tasks/0015 scope 3 names, and it was this narrowing that
+    introduced it. `_errand_state` now takes `answered` from a flat
+    pass, as `_pending_questions` and `file_answer`'s duplicate guard
+    already did, so what remains is genuinely only which errand's
+    *section* the answer record is listed under in the digest.
+    Structurally it costs nothing either way: `_resumable_answers` does
+    not use this walk at all, so spend and eligibility never depended
+    on it.
     """
     collected: list[Record] = []
     seen = {root_id}

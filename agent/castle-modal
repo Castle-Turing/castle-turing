@@ -605,7 +605,7 @@ def _outcome_label(outcome: str, request_id: str) -> str:
     return "done"
 
 
-def _errand_state(castle, request, downstream: list) -> str:
+def _errand_state(castle, request, downstream: list, records: dict) -> str:
     """`result` was checked before question/answer, so 'done' won any
     errand that also had an unanswered question — but the worker prompt
     (agent/castle-worker-claude) explicitly tells tenants to "file the
@@ -663,7 +663,27 @@ def _errand_state(castle, request, downstream: list) -> str:
     # walk (a follow-up request's question is still this errand chain
     # waiting on the resident), so unlike the turn state below they are
     # deliberately NOT keyed to this request id.
-    answered = {ref for rec in downstream if rec.type == "answer" for ref in rec.refs}
+    #
+    # **`answered` comes from a flat pass over the whole journal, not
+    # from `downstream`, so that three surfaces cannot disagree about
+    # one question.** `file_answer`'s duplicate guard scans every
+    # answer file in the journal, and `_pending_questions` folds every
+    # answer record — both treat a question as closed if *any* answer
+    # names it. Taking this one from the errand walk made it the odd
+    # one out the moment docs/tasks/0023 narrowed that walk to the
+    # lineage edge: an answer written through the generic door as
+    # `--refs Q_A,Q_B` sits in A's fold and not in B's, so B's overlay
+    # would say "waiting on you — press Mod4+Shift+a to answer" forever
+    # while the picker, folding flat, correctly refused to offer Q_B
+    # because it is answered. Telling a resident to answer something
+    # the answer surface will not show them is docs/tasks/0015 scope 3
+    # exactly, and it would have been this branch's own doing. Which
+    # questions belong to this errand still comes from `downstream` —
+    # that is an errand question — but whether one is answered is a
+    # property of the question, and every surface now reads it alike.
+    answered = {
+        ref for rec in records.values() if rec.type == "answer" for ref in rec.refs
+    }
     waiting = any(
         rec.type == "question" and rec.id not in answered for rec in downstream
     )
@@ -785,7 +805,7 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
 
     for req in requests:
         downstream = castle._collect_downstream(records, req.id)
-        state = _errand_state(castle, req, downstream)
+        state = _errand_state(castle, req, downstream, records)
         first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
         print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
         print(f"    asked: {first_line}", file=out)
