@@ -97,9 +97,10 @@ The exported modules:
   are, and the two `repo.*` options do not fail evaluation either — the
   refusal they carry happens at errand time instead, when a worker turn
   with no private checkout writes a `failed` result naming the option
-  rather than guessing a directory; `worker.command` and `worker.timeoutSeconds`
-  always have a usable default (a headless `claude -p`, and fifteen
-  minutes) since the worker seat needs *something* to default to.
+  rather than guessing a directory; `worker.command` and
+  `worker.timeoutSeconds` always have a usable default (a headless
+  `claude -p`, and fifteen minutes) since the worker seat needs
+  *something* to default to.
   Three assertions beyond the "no literal `"` in the value" check
   every string option here carries: `dispatch.enable` requires
   `stateDir`, because unattended writing is exactly when the journal

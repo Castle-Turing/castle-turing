@@ -208,8 +208,9 @@ castle show ID
   `git` is not reachable — it arrives only via `modules/dev`, which is
   optional — the check degrades to testing that `.git` exists and says
   so rather than claiming more than it verified, because a tenant can
-  still write a diff by hand on a host with no git. A mechanism root that is configured but is
-  not a usable git working tree does *not* refuse the turn: it is
+  still write a diff by hand on a host with no git. A mechanism root
+  that is configured but is not a usable git working tree does *not*
+  refuse the turn: it is
   reported to the tenant in a third variable,
   `$CASTLE_MECHANISM_ROOT_INVALID`, and named in one sentence appended
   to every result the turn writes — see "The claim record" below for
@@ -1012,7 +1013,9 @@ stop the errand and then hand the resident a path that is not on their
 machine. Where a mechanism checkout is configured the tenant names the
 real absolute path; where it is not, the question describes what would
 settle the value instead. Packaging those tools for a deployed host is
-a separate decision this task does not take. The resident runs the sweep, answers with a number, and
+a separate decision this task does not take.
+
+The resident runs the sweep, answers with a number, and
 one further turn — a fresh tenant handed that account and that answer —
 writes the diff around their number and stamps its target.
 
