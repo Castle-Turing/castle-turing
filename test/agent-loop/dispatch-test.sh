@@ -52,6 +52,12 @@ export CASTLE_NOTIFY_COMMAND="$REPO_ROOT/test/agent-loop/notify-stub.sh"
 # contract-worker.sh asserts it is set.
 export CASTLE_PRIVATE_ROOT="$WORKDIR/repo"
 mkdir -p "$CASTLE_PRIVATE_ROOT"
+# A real working tree, not a bare directory: since
+# docs/tasks/0024-config-target.md `castle work` refuses a turn whose
+# private checkout is not one, so a fixture that skipped this would
+# fail every errand below on the pre-flight instead of exercising
+# anything this file is about.
+git init -q "$CASTLE_PRIVATE_ROOT"
 export CASTLE_WORKER_COMMAND="$WORKER_OK"
 
 log() { printf '>>> %s\n' "$*"; }

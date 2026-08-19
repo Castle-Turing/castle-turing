@@ -38,6 +38,10 @@ export CASTLE_NOTIFY_COMMAND="$REPO_ROOT/test/agent-loop/notify-stub.sh"
 
 export CASTLE_PRIVATE_ROOT="$WORKDIR/repo"
 mkdir -p "$CASTLE_PRIVATE_ROOT"
+# See dispatch-test.sh's identical line: the target pre-flight
+# (docs/tasks/0024-config-target.md §16) refuses a private root that is
+# not a git working tree, so this fixture supplies one.
+git init -q "$CASTLE_PRIVATE_ROOT"
 # The tenants file their question with this rather than a `castle` on
 # $PATH, which no-Nix CI does not have.
 export CASTLE_TEST_CASTLE_BIN="$CASTLE"

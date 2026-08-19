@@ -2349,6 +2349,29 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
     return "".join(parts)
 
 
+def _checkout_fault(root: str) -> str | None:
+    """Why `root` is not usable as a checkout to work in, or None if it
+    is (docs/tasks/0024-config-target.md §16).
+
+    A plain filesystem test and not a `git` subprocess, deliberately.
+    This runs on every turn, before any tenant exists, to answer a
+    question `.git`'s presence already answers; shelling out would add
+    a process, a $PATH dependency and an error mode to a check whose
+    whole job is to fail cleanly. `.exists()` rather than `.is_dir()`
+    on the `.git` entry itself, because a linked worktree and a
+    submodule both carry a `.git` *file* pointing elsewhere, and both
+    are perfectly ordinary things for a resident's checkout to be.
+    """
+    path = pathlib.Path(root)
+    if not path.exists():
+        return "the path does not exist"
+    if not path.is_dir():
+        return "the path is not a directory"
+    if not (path / ".git").exists():
+        return "the path is not the root of a git working tree (it has no .git)"
+    return None
+
+
 def _write_worker_result(
     request: Record,
     *,
@@ -2414,8 +2437,17 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
     to agent/castle-worker-claude, a thin wrapper around a headless
     `claude -p` that this function knows nothing about beyond its
     contract: read the request body on stdin, write reasoning to
-    stdout, write a diff (or nothing) to $CASTLE_DIFF_FILE, and — this
+    stdout, write a diff (or nothing) to $CASTLE_DIFF_FILE, name which
+    checkout that diff is against in $CASTLE_TARGET_FILE, and — this
     is a hard product decision, not a nicety — never deploy anything.
+
+    Which checkouts exist is configuration, not a guess. A turn is
+    handed $CASTLE_PRIVATE_ROOT when one is configured and usable, and
+    refuses outright when it is not: there is no fallback to the
+    working directory any more, because under the dispatch unit that
+    directory is the resident's home folder
+    (docs/tasks/0024-config-target.md). $CASTLE_MECHANISM_ROOT is
+    optional and its absence is the normal case.
 
     THE WORKER MUST NOT DEPLOY. This function never runs nixos-rebuild,
     never commits, never applies the diff it collects; it only ever
@@ -2447,6 +2479,42 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
         mechanism_root = os.environ.get(MECHANISM_ROOT_ENV, "").strip()
         started = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+
+        # The mechanism checkout has three states, not two, and the
+        # tenant is told them apart (docs/tasks/0024 §16). Unset is the
+        # NORMAL case — a resident consumes this framework as a pinned
+        # flake input, not as a working tree they keep — so it is never
+        # a fault and never refuses anything. Configured and usable
+        # sets CASTLE_MECHANISM_ROOT. Configured and broken sets
+        # neither: it sets CASTLE_MECHANISM_ROOT_INVALID instead,
+        # carrying the raw path so the tenant can name it, because
+        # "there is no mechanism checkout" and "the one you configured
+        # is not a git working tree" are different things to tell a
+        # resident and collapsing them makes a typo indistinguishable
+        # from a deliberate choice.
+        mechanism_fault = _checkout_fault(mechanism_root) if mechanism_root else None
+        mechanism_invalid = mechanism_root if mechanism_fault else ""
+        if mechanism_fault:
+            mechanism_root = ""
+
+        # And the same fact, stated in the result body on EVERY errand
+        # this turn produces a result for — not only ones whose
+        # diagnosis happened to need mechanism. This is harness-level
+        # on purpose. A tenant working a private-layer errand has no
+        # reason to mention a mechanism-root typo it never touched, so
+        # leaving the disclosure to the model would make the
+        # misconfiguration silent on every errand except the rare one
+        # that needed it — which is the same shape of quietly-tolerated
+        # defect this whole task exists to remove one layer down.
+        mechanism_note: list[str] = []
+        if mechanism_fault:
+            mechanism_note = [
+                "",
+                f"Note: `castle.agent.repo.mechanism` is configured "
+                f"(`{mechanism_invalid}`) but {mechanism_fault}, so this turn "
+                "treated the mechanism checkout as unavailable. Nothing else "
+                "about the turn was refused on that account.",
+            ]
 
         # What this turn is resuming, and the context it will be handed
         # to resume it with, pinned here — after the lease, before the
@@ -2664,19 +2732,28 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # says so. Without this the resident reads "nothing ran",
         # believes their answer is still waiting, and has no reason to
         # think the errand needs anything but a fixed config.
-        spent_note: list[str] = []
-        if resuming:
-            spent_note = [
+        # `remedy` names what has to change before a hand retry is
+        # worth typing, and it differs by branch: the three tenant
+        # faults below are fixed by fixing the tenant, while this
+        # task's target pre-flight is fixed by configuring a checkout.
+        # One paragraph, parameterised, rather than two nearly-
+        # identical ones drifting apart.
+        def spent_note_for(remedy: str) -> list[str]:
+            if not resuming:
+                return []
+            return [
                 "",
                 "The answer(s) this turn was going to resume on — "
                 + ", ".join(f"`{answer.id}`" for answer in resuming)
                 + " — are spent by its claim, which is what stops a misconfigured "
                 "tenant being retried automatically once a minute forever. No sweep "
                 "will pick this errand up again on their account. Running "
-                f"`castle work {request.id}` by hand once the tenant is fixed still "
+                f"`castle work {request.id}` by hand once {remedy} still "
                 "hands those answers to it: the errand's records are rendered into "
                 "the tenant's context on every turn, spent or not.",
             ]
+
+        spent_note = spent_note_for("the tenant is fixed")
 
         # The three recordless failure paths this task fixes
         # (docs/tasks/0021 §3.4). Under a human typing `castle work`
@@ -2689,6 +2766,92 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # exactly one automatic attempt) and tells the resident through
         # the ordinary router path instead of leaving them to notice a
         # growing pile of nothing.
+        # The target pre-flight (docs/tasks/0024 §16): a fourth
+        # configuration-shaped fault, structurally identical to the
+        # three below it — after the claim, no tenant started, a
+        # `failed` result written through the one result writer, then
+        # `TenantNotRunnable`.
+        #
+        # **After the claim write, not before**, which is the
+        # ordering docs/tasks/0023 §3 already worked through for a
+        # structurally identical check: every path that starts a turn
+        # has to leave a claim, or a misconfigured host retries forever
+        # at one model call per timer tick. It costs this errand its
+        # one automatic attempt, permanently — see the body text below,
+        # which says so rather than letting a resident discover it.
+        #
+        # **`repo.private` only.** A configured-but-unusable
+        # `repo.mechanism` degrades that checkout for the turn and
+        # nothing more (see the three-state split above). An earlier
+        # draft of this design refused symmetrically, on the reasonable-
+        # sounding theory that a resident who set either root expects it
+        # to work; working the blast radius through killed it. The
+        # errands this seat handles overwhelmingly target the private
+        # checkout or a host module inside it, so a typo in the
+        # mechanism path would refuse nearly all of them to report a
+        # fault in something they never touched — and refusing buys
+        # nothing even in the case it is about, since a tenant asked to
+        # fix something in mechanism answers "I cannot" identically
+        # whether that checkout is absent or broken.
+        private_fault = _checkout_fault(private_root) if private_root else None
+        if not private_root or private_fault:
+            if not private_root:
+                message = (
+                    "no private checkout configured "
+                    f"(castle.agent.repo.private / {PRIVATE_ROOT_ENV} is unset)"
+                )
+                diagnosis = [
+                    f"Errand `{request.id}` could not start: this host has no private "
+                    "configuration checkout configured, so there is nowhere for a "
+                    "worker tenant to diagnose in or propose a change against "
+                    f"(`castle.agent.repo.private` is unset, so {PRIVATE_ROOT_ENV} is "
+                    "absent from the tenant's environment).",
+                    "",
+                    "Nothing ran. `castle work` deliberately does not guess a "
+                    "directory here — it used to fall back to its own working "
+                    "directory, which under the dispatch unit is the resident's home "
+                    "folder (docs/tasks/0024-config-target.md). Set "
+                    "`castle.agent.repo.private` (modules/agent) to your private "
+                    f"repository's checkout path, then re-run `castle work "
+                    f"{request.id}`.",
+                ]
+            else:
+                message = (
+                    f"private checkout {private_root!r} is not usable: {private_fault}"
+                )
+                diagnosis = [
+                    f"Errand `{request.id}` could not start: "
+                    f"`castle.agent.repo.private` names `{private_root}`, but "
+                    f"{private_fault} — so there is no working tree for a worker "
+                    "tenant to diagnose in or propose a change against.",
+                    "",
+                    "Nothing ran. Point `castle.agent.repo.private` (modules/agent) "
+                    "at the checkout you actually want worked on, or clone it into "
+                    f"place, then re-run `castle work {request.id}`.",
+                ]
+            print(f"castle work: {message}", file=sys.stderr)
+            raise TenantNotRunnable(
+                message,
+                _write_worker_result(
+                    request,
+                    outcome="failed",
+                    claim_id=claim_id,
+                    body_lines=diagnosis
+                    + [
+                        "",
+                        "This `failed` result also makes the errand permanently "
+                        "ineligible for AUTOMATIC dispatch, per "
+                        "docs/tasks/0021-auto-dispatch.md's one-automatic-attempt "
+                        "rule: any result at all bars a further automatic turn, and "
+                        "configuring the checkout later does not undo that. A hand-run "
+                        f"`castle work {request.id}` is the way back, and it is "
+                        "unbounded.",
+                    ]
+                    + spent_note_for("the checkout is configured")
+                    + mechanism_note,
+                ),
+            )
+
         if not command.strip():
             message = "no worker command configured (CASTLE_WORKER_COMMAND is empty)"
             print(f"castle work: {message}", file=sys.stderr)
@@ -2706,7 +2869,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         "to whatever should hold the worker seat, then re-run "
                         f"`castle work {request.id}`.",
                     ]
-                    + spent_note,
+                    + spent_note
+                    + mechanism_note,
                 ),
             )
         try:
@@ -2727,13 +2891,23 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         "Nothing ran. Fix `castle.agent.worker.command` (modules/agent) "
                         f"and re-run `castle work {request.id}`.",
                     ]
-                    + spent_note,
+                    + spent_note
+                    + mechanism_note,
                 ),
             )
 
         diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
         os.close(diff_fd)
         diff_path = pathlib.Path(diff_path_str)
+        # The second output file (docs/tasks/0024 §5): at most one word,
+        # naming which checkout the diff is against. Created the same
+        # way, handed over the same way, read back the same way and
+        # unlinked in the same `finally` as the diff — a tenant that
+        # already knows how to write one output file needs no second
+        # mechanism explained to it.
+        target_fd, target_path_str = tempfile.mkstemp(prefix="castle-work-target-")
+        os.close(target_fd)
+        target_path = pathlib.Path(target_path_str)
         timeout = worker_timeout_seconds()
         try:
             env = dict(os.environ)
@@ -2749,6 +2923,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # consuming the request's one automatic attempt. A channel
             # nothing reads is not worth a size limit nobody documented.
             env["CASTLE_DIFF_FILE"] = str(diff_path)
+            env[TARGET_FILE_ENV] = str(target_path)
             # The two roots, and the third variable that reports a
             # configured-but-unusable mechanism checkout
             # (docs/tasks/0024-config-target.md §2). Three properties
@@ -2778,6 +2953,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 env[PRIVATE_ROOT_ENV] = private_root
             if mechanism_root:
                 env[MECHANISM_ROOT_ENV] = mechanism_root
+            if mechanism_invalid:
+                env[MECHANISM_ROOT_INVALID_ENV] = mechanism_invalid
             # On the TENANT's environment only — never on os.environ,
             # which would stamp every request this process later wrote
             # as though a turn had filed it. Any `castle` the tenant
@@ -2859,7 +3036,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                             "executable, then re-run "
                             f"`castle work {request.id}`.",
                         ]
-                    + spent_note,
+                    + spent_note
+                    + mechanism_note,
                     ),
                 )
 
@@ -2988,11 +3166,31 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 diff_text = diff_path.read_bytes().decode("utf-8", errors="replace").strip()
             except OSError:
                 diff_text = ""
-        finally:
+
+            # Read exactly as leniently as the diff, and for the same
+            # reason: a tenant's output encoding is not part of the
+            # contract. One word is expected, so only the first
+            # non-blank line is taken and the rest ignored — a tenant
+            # that wrote a paragraph here has said something the
+            # contract has no room for, and truncating is more honest
+            # than folding prose into a frontmatter field. Empty or
+            # unreadable means no target stamped, the same handling an
+            # empty $CASTLE_DIFF_FILE already gets.
+            target_text = ""
             try:
-                diff_path.unlink()
+                raw_target = target_path.read_bytes().decode("utf-8", errors="replace")
+                for line in raw_target.splitlines():
+                    if line.strip():
+                        target_text = line.strip()
+                        break
             except OSError:
-                pass
+                target_text = ""
+        finally:
+            for scratch in (diff_path, target_path):
+                try:
+                    scratch.unlink()
+                except OSError:
+                    pass
 
         if timed_out:
             outcome = "timeout"
@@ -3037,6 +3235,34 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "(no diff produced — either no change was proposed, or the worker "
                 "tenant did not write one to $CASTLE_DIFF_FILE)"
             )
+        # The role goes in the frontmatter field; the resolved path goes
+        # here, in prose next to the diff it belongs to
+        # (docs/tasks/0024 §6). Splitting them that way is the point: a
+        # role stays true forever and a path goes stale the first time
+        # the checkout moves, so only one of them belongs in a field
+        # something else will key on.
+        #
+        # A target this turn does not recognise is stated verbatim with
+        # no path resolution attempted, rather than guessed at. There is
+        # no variable to look a third role up against, and naming the
+        # wrong directory would be worse than naming none.
+        if target_text:
+            resolved = {
+                "private": env.get(PRIVATE_ROOT_ENV),
+                "mechanism": env.get(MECHANISM_ROOT_ENV),
+            }.get(target_text)
+            body_lines.append("")
+            if resolved:
+                body_lines.append(
+                    f"This diff targets the **{target_text}** checkout, which on this "
+                    f"host resolved to `{resolved}`."
+                )
+            else:
+                body_lines.append(
+                    f"This diff targets `{target_text}`, which is not a checkout role "
+                    "this turn had a configured path for, so no path is resolved for "
+                    "it here."
+                )
         if timed_out:
             body_lines.append("")
             body_lines.append(
@@ -3054,9 +3280,14 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "and this turn cannot end it. Nothing above came from the tenant's "
                 "output stream."
             )
+        body_lines += mechanism_note
         return (
             _write_worker_result(
-                request, outcome=outcome, body_lines=body_lines, claim_id=claim_id
+                request,
+                outcome=outcome,
+                body_lines=body_lines,
+                claim_id=claim_id,
+                target=target_text,
             ),
             outcome,
         )
