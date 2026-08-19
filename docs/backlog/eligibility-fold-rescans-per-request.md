@@ -26,6 +26,22 @@ with `render_record`, `load_all` it, and time `_eligible_requests` alone.
 Scaling is requests × records, so ~20k records with ~5k errands lands in
 the seconds-per-sweep range.
 
+**One cheap half of this was already taken, and the measurement above is
+now pessimistic for the case it described.** A later review pass in the
+same task moved the two dict-lookup exclusions — the watermark's `refs`
+and the `filed-during-turn` stamp — *ahead* of `_resumable_answers` in
+the `and` chain, so a request excluded by either never reaches the scan.
+That was worth doing precisely because the scenario that made the
+original number alarming is a restored pre-dispatch history, where every
+request carries a result **and** is named in the watermark's refs: the
+fold used to run for all of them and discard the answer, once a minute,
+forever. Re-measured on the identical 2000-record journal: **1 ms when
+the watermark excludes every request, 130 ms when it excludes none.**
+So the debt that remains is the honest one — a journal of live errands,
+each with a result and none excluded, still pays requests × records per
+sweep — and the pathological restored-history case is gone. `lease_is_held`
+deliberately stays last: it is the only condition costing a syscall.
+
 Two things keep this from being urgent. `load_all` already re-parses
 every file in the journal on every sweep, so at the sizes where this
 fold hurts, file I/O and parsing dominate anyway — this is not a
@@ -35,10 +51,11 @@ fast. And 0021's own precedent applies: it declined a concurrency knob
 117 ms on a journal larger than the reference host will see for years is
 not that evidence.
 
-The obvious fix, if it is ever wanted, is already modelled in the same
+The remaining fix, if it is ever wanted, is already modelled in the same
 function: hoist the blocking-question-to-root-request map and the spent
 set out of the per-request call and compute them once per sweep, the way
-`_requests_with_results` is already hoisted. That changes
+`_requests_with_results` is already hoisted. Reordering bought what
+reordering could; hoisting is what is left. That changes
 `_resumable_answers`'s signature, which `run_worker_turn` also calls
 (deliberately, so a hand-run `castle work` resumes exactly what a
 dispatched turn would — `docs/tasks/0023-resume-cold.md` §7), so the two

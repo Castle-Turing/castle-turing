@@ -589,6 +589,17 @@ RESULTS_BEFORE_RETRY_REAP="$(count_referencing result "$REQ_FAIL")"
 RETRY_RESULT_FILE="$(grep -l "^refs: .*$RETRY_CLAIM" "$JOURNAL"/*-result-*.md 2>/dev/null || true)"
 [ -n "$RETRY_RESULT_FILE" ] || fail "no result record references the retry's claim $RETRY_CLAIM"
 grep -q '^outcome: interrupted$' "$RETRY_RESULT_FILE" || fail "$RETRY_RESULT_FILE does not carry outcome: interrupted"
+# The account a reaper writes is permanent and routed to the resident,
+# so it may not promise something it cannot know (docs/tasks/0023,
+# pass-7 finding 3). The crashed turn may itself have been a resumption,
+# in which case its answer is already spent and nothing further runs —
+# so the sentence has to be true in both cases without consulting a fold
+# at write time, which would be right at the instant it ran and wrong by
+# the time anyone read it.
+grep -q "has not already resumed on" "$RETRY_RESULT_FILE" \
+  || fail "the interrupted account does not carry the conditional that makes it true for a crashed resumption: $(sed -n '/^---$/,$p' "$RETRY_RESULT_FILE" | head -20)"
+grep -q "the resident's answer to it starts one further turn" "$RETRY_RESULT_FILE" \
+  && fail "the interrupted account still promises a further turn unconditionally — false when the crashed turn was itself the resumption"
 # And it is still not re-dispatched: eligibility is per request, and
 # this request has results. Only the reaping is per turn.
 [ "$(count_referencing claim "$REQ_FAIL")" -eq 2 ] || fail "a further automatic turn was started on the failed errand"

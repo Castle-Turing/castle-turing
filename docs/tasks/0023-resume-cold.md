@@ -1468,6 +1468,27 @@ re-deriving it from the sections above:
   own precedent already established for structurally identical fields.
   See §9.
 
+  **REVERSED during implementation, at the seventh review pass, and the
+  original reasoning above is kept rather than edited because a
+  reversal that erases what it reversed teaches nobody anything.** The
+  argument was sound when it was made and stopped being sound because
+  of this task's own later work, not because anyone re-weighed it. It
+  rested on `--blocking` resembling `--fact` and `--outcome`: flags that
+  name their record type by convention and enforce nothing at write
+  time. `--blocking` no longer resembles them. It acquired a write-time
+  guard two passes earlier (first refusing empty `--refs`, then
+  refusing refs whose first entry reaches no request), and once a flag
+  is enforced at write time, "this flag is unenforced by precedent" is
+  no longer a description of it. What remained was a line nobody could
+  defend: refusing a question that could never be attributed to an
+  errand, while accepting `blocking: true` on a `result` — a record
+  that writes cleanly, validates cleanly, reads as meaningful to any
+  human skimming the journal, and does nothing at all. Both are the
+  same mistake by a writer: believing it has stopped an errand when it
+  has not. The refusal was added, with the same shape as the two guards
+  beside it, and `resume.sh` asserts a `--type result --blocking` write
+  is refused.
+
 ## Hard constraints, restated
 
 - **Never write personal data into this repo.** Every fixture in §11
@@ -1722,6 +1743,63 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **Three more ways `--blocking` could mean nothing, one false sentence
+  in a routed record, and one ordering fix** — the seventh review pass,
+  recorded together because four of the five are the same question:
+  what happens when a writer believes it has stopped an errand and has
+  not.
+
+  `--spool` defeated the reachability guard outright: the guard resolves
+  refs against the journal, the record goes to the spool, so
+  `--blocking --refs "$CASTLE_REQUEST_ID" --spool` passed on a ref that
+  really did reach a request and landed the question somewhere no fold
+  reads and logout deletes. Refused as a combination rather than
+  resolved against the spool, because the incoherence is prior to the
+  unreadability: a blocking question is a durable claim that an errand
+  has stopped until the resident answers, and the spool is the store
+  that promises to forget (docs/architecture.md).
+
+  `--blocking` on a non-question type is now refused too, which
+  **reverses** this brief's own considered-and-rejected entry — see that
+  entry, which keeps its original reasoning and records why the
+  precedent it rested on stopped applying.
+
+  The reaper's account said "if this errand raised a blocking question,
+  the resident's answer to it starts one further turn on its own",
+  unconditionally, in a permanent record routed to the resident. False
+  exactly when the crashed turn *was* the resumption: its claim already
+  spent the answer. Reworded to be true in both cases rather than
+  computed — a fold at write time would be correct at the instant it ran
+  and wrong by the time anyone read the record, which §3's own reasoning
+  about conditional sentences already rejected. It now says an answer to
+  a blocking question the errand "has not already resumed on" makes it
+  eligible for one further turn. *Eligible* rather than *starts* is a
+  small deliberate strengthening beyond the wording the review
+  suggested: a watermarked or `filed-during-turn` errand is never
+  started automatically whatever is answered, and "starts" would have
+  been the same class of overclaim one exclusion further out.
+
+  `_resumable_answers` also moved behind the two dict-lookup exclusions
+  in `_eligible_requests`. Pure ordering, no behaviour change, and it
+  removes the case that made the scan expensive in the first place: a
+  restored pre-dispatch history where every request has a result and is
+  named in the watermark's refs, folded in full and discarded once a
+  minute forever. Re-measured on the same 2000-record journal as the
+  original 117 ms figure: **1 ms when the watermark excludes everything,
+  130 ms when it excludes nothing.** `docs/backlog/eligibility-fold-
+  rescans-per-request.md` is amended to say what reordering bought and
+  what hoisting is still owed, so the entry does not overstate the debt.
+
+  And `agent/castle-worker-claude` no longer invents a boundary token
+  when the packet declares none. The fallback fenced the harness's
+  instructions with a token the packet's boundaries do not carry, while
+  the prompt tells the tenant one token marks both — a prompt whose
+  stated rule is false, reachable only if `castle`'s packet format ever
+  changed underneath that file, which is exactly when nobody would be
+  looking for it. It exits nonzero naming the mismatch: the errand
+  spends its one automatic attempt and the result record says why, which
+  is a better failure than a tenant that cannot tell an instruction from
+  a quotation being handed a repository.
 - **Two guards were applying a different rule from the thing they
   guard**, found together in the sixth review pass and worth recording
   as one shape rather than two incidents: a check that is *adjacent* to

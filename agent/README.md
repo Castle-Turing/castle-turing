@@ -121,7 +121,13 @@ castle show ID
   fold can attribute to an errand is unresumable forever and looks
   exactly like a working one. The first ref is the test because it is
   the only one resumption reads — `_find_root_request` follows `refs[0]`
-  and ignores the rest, so a correct id in second place buys nothing
+  and ignores the rest, so a correct id in second place buys nothing.
+  Two further combinations are refused for the same reason, that a
+  record which looks meaningful and does nothing is worse than one that
+  was never written: `--blocking` with `--spool` (the spool is
+  ephemeral by design and no fold reads it, so a durable claim that an
+  errand has stopped does not belong there) and `--blocking` on any
+  `--type` but `question` (nothing reads the field anywhere else)
   (`docs/tasks/0023-resume-cold.md`).
 - **`route`** — the router. Reads every `result` and `question` record
   not yet referenced by a `decision` record **written by the router
