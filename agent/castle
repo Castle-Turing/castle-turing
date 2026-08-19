@@ -484,6 +484,57 @@ def dispatch_lock_path() -> pathlib.Path:
     return d / "dispatch.lock"
 
 
+def spend_lock_path() -> pathlib.Path:
+    """The global answer-spend lock (docs/tasks/0023, cross-model
+    review): one process at a time may read which answers are unspent
+    and write the claim that spends them.
+
+    **Why it must be global when the lease is per-request.** The bound
+    this protects — one further turn per answer, ever — is a property of
+    the *answer*, and an answer can name blocking questions on more than
+    one request (only the generic writer can produce that shape;
+    `file_answer` refs exactly one question). `_resumable_answers`
+    accounts for that: it treats an answer as spent when any claim
+    anywhere names it. But two `castle work` invocations on two
+    different requests take two different leases, exclude each other not
+    at all, and can both load the journal before either writes its
+    claim — so both see the same answer unspent, both spend it, and one
+    answer buys two turns. The invariant is global, so the mutual
+    exclusion has to be.
+
+    Held across the recomputation and the claim write, and released
+    immediately after — never across the tenant call. A turn may run for
+    CASTLE_WORKER_TIMEOUT (900s by default), and serialising *that*
+    would turn "one turn at a time per errand" into "one turn at a time
+    on this machine", which is a behavioural change and not a fix. The
+    section this covers is a journal read, a fold and one file write:
+    microseconds.
+
+    Blocking, unlike the lease, and the difference is the same judgment
+    `acquire_lock_blocking` already documents for routing. A lease
+    conflict means another worker is doing this errand and there is
+    nothing useful left to do, so the caller skips. A spend-lock
+    conflict means another turn is a few microseconds from finishing its
+    accounting, after which this one has a correct answer to compute
+    from — waiting is right, and skipping would strand a turn that has
+    already taken its lease and is entitled to run.
+
+    **LOCK ORDERING, and nothing may ever depart from it:**
+
+        dispatch sweep lock  ->  per-request lease  ->  this lock
+
+    `cmd_dispatch` takes the sweep lock and holds it for the whole
+    sweep; `run_worker_turn` takes the lease, then this. Every path
+    acquires a subset of that sequence in that order, so no cycle
+    exists and none can deadlock. The next person adding a lock here is
+    the one who could break it: acquire later in the sequence than
+    anything you already hold, or take nothing you cannot take first.
+    """
+    d = runtime_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "spend.lock"
+
+
 def acquire_lock_blocking(path: pathlib.Path):
     """Take `flock(LOCK_EX)` on `path`, waiting for it if held.
 
@@ -2287,6 +2338,9 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
     if lease is None:
         raise LeaseHeld(request.id)
 
+    # Bound before the try so the `finally` can release it whatever
+    # happens, including a failure inside the critical section itself.
+    spend_lock = None
     try:
         command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
         started = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
@@ -2316,6 +2370,21 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # and a second automatic attempt on an errand whose one
         # authorisation somebody else already used. That is outside the
         # bound this whole design rests on, not merely untidy.
+        # The global spend lock opens here and closes the moment the
+        # claim is written — see `spend_lock_path` for why the lease
+        # cannot stand in for it (the bound is per *answer*, and one
+        # answer can belong to two errands holding two different
+        # leases), why this is blocking rather than try-and-skip, and
+        # the lock ordering every path here obeys.
+        #
+        # Released twice on purpose: explicitly at the end of the
+        # critical section, so the tenant call — up to fifteen minutes
+        # — never runs under it, and again in this function's own
+        # `finally` as the backstop for the paths that leave the
+        # section by raising (`ResumptionLost`, or anything unforeseen).
+        # Closing an already-closed handle is a no-op, so the pair is
+        # safe rather than merely tolerable.
+        spend_lock = acquire_lock_blocking(spend_lock_path())
         turn_records = load_all(journal_dir())
         resuming = _resumable_answers(turn_records, request.id)
 
@@ -2472,6 +2541,10 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 ]
             ),
         )
+        # The spend is now durable in the journal, so every other
+        # process can see it. Nothing below this line needs the lock,
+        # and the tenant call certainly must not hold it.
+        spend_lock.close()
 
         # What the three branches below owe a resident whose answer this
         # turn already spent. The claim naming that answer is what stops
@@ -2857,6 +2930,11 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # and a leftover, unheld lease file means nothing on its own.
         # The journal, not this directory, says what happened.
         lease.close()
+        # Backstop for the exceptional paths out of the critical
+        # section; the ordinary path already released it right after
+        # the claim write.
+        if spend_lock is not None:
+            spend_lock.close()
 
 
 def cmd_work(args: argparse.Namespace) -> int:
