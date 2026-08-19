@@ -688,6 +688,27 @@ Resident-model entries are absent too, but that is a gap rather than a
 decision about this packet: no worker reads the resident model on any
 turn (`docs/backlog/workers-do-not-read-the-resident-model.md`).
 
+**One errand can never resume, and the remedy is a command.** Every
+other eligibility condition still applies alongside resumption,
+including the watermark's — so a request filed *before* dispatch existed
+on this journal, which the watermark names in its own `refs`, stays
+excluded no matter what. That produces one reachable dead end worth
+knowing about: a resident hand-runs such an errand with `castle work
+<id>`, its tenant marks a question blocking and stops, the resident
+answers — and no sweep will ever pick it up, because the watermark
+clause rejects the request whatever `_resumable_answers` found. The
+modal says only "Filed.", so nothing on screen explains the silence.
+
+That is deliberate rather than an oversight. The watermark's whole
+promise is that errands predating dispatch do not start themselves, and
+letting one begin producing automatic turns because it was hand-run once
+would erode exactly that promise. **The remedy is the same command that
+started it: `castle work <id>` again.** A hand-run turn resumes whatever
+is unspent on the errand — it goes through the same `run_worker_turn`
+and the same fold as a dispatched one, and never consults the watermark
+— so the answer is picked up, spent by that turn's claim, and delivered
+in its continuation packet exactly as an automatic resumption would.
+
 **What resumption is not.** It is not retry — a resumed turn that fails
 writes an ordinary `outcome: failed` result and is not attempted again,
 because its claim spent the answer the moment the turn started. It is

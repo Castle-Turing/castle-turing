@@ -501,6 +501,37 @@ private journal, accumulated over months, suddenly producing worker
 turns on errands the resident had long since considered finished, the
 first time this task's code runs against it.
 
+**A stated limit, not an oversight: a watermarked errand can never
+resume, even after a hand-run turn raises a blocking question on it.**
+Resumption is ANDed with every other condition, the watermark exclusion
+included, so this sequence ends in silence: a request predating
+dispatch is excluded by name; the resident runs it by hand with `castle
+work <id>`; that turn files a `--blocking` question and stops; the
+resident answers it — and nothing happens. `_resumable_answers` finds
+the unspent answer, and the watermark clause rejects the request
+anyway. The modal says only "Filed.", so there is no surface saying
+why.
+
+Kept deliberately, for the reason the watermark exists at all: its
+promise is specifically that errands predating dispatch do not start
+themselves, and letting one begin producing automatic turns because a
+resident hand-ran it once would erode exactly that promise — a
+restored journal's history would gain a second route into automatic
+work, which is the failure `docs/tasks/0021` §2.2 built the watermark
+to close. The conservative direction is also the safe one: the cost of
+this limit is a turn that has to be started by hand, and the cost of
+the alternative is unattended spend on errands a resident considered
+finished months ago.
+
+What is *not* acceptable is leaving the interaction undocumented, so a
+resident meets a silent dead end this very task exists to remove and
+nothing anywhere explains it. It is stated here and in
+`agent/README.md`'s "Resuming an errand" subsection, in both cases with
+the remedy, which is the same command that started the turn in the
+first place: **`castle work <id>` by hand** continues the errand,
+because `run_worker_turn` resumes whatever is unspent on any path,
+dispatched or hand-run (§7), and never consults the watermark.
+
 **The skip-set comment `cmd_dispatch` carries must be revisited, not
 just the predicate.** `agent/castle:2781-2786` reads:
 
@@ -1610,6 +1641,47 @@ shaped than the text specifies, each with the reason.
   deleted confirmation string, not one.** §10 names line 858; the piped-
   stdout assertion later in the same file carried it too. Both were
   updated.
+- **Three sentences this task falsified were rewritten where they
+  stood, and one of them is a record a resident actually reads.** The
+  reaper's `interrupted` result body said "Nothing is re-run
+  automatically: one automatic attempt per request, always" — routed to
+  notify, permanent in an append-only journal, and false in a case
+  reachable *within the same sweep that writes it* (a turn dies after
+  filing a blocking question, the resident answers, and the loop below
+  the reaper re-folds and starts another turn seconds later). It now
+  states the rule that is true unconditionally: this *turn* is not
+  retried, an answer to a blocking question starts one further turn,
+  otherwise `castle work <id>`. Deliberately not made conditional on
+  `_resumable_answers` at write time — the answer may not have arrived
+  when the reaper runs, so a conditional sentence would be right
+  sometimes and wrong the rest, which is worse than a flat one.
+  `cmd_work`'s docstring ("automatic dispatch never re-runs anything by
+  construction of its eligibility fold") was corrected the same way, and
+  `_requests_with_results` keeps its sentence — still true of what that
+  function returns — with a pointer to the one caller-level override and
+  a note that the spend-on-claim rule is what keeps the bound
+  structural through it.
+- **The packet no longer claims every request is the resident's own
+  words.** §7 specifies the heading as "identifying it as the original
+  request," and the first implementation hardcoded "in the resident's
+  own words." Two shapes make that false — `castle ask --provenance
+  initiated`, and a tenant-filed follow-up carrying `filed-during-turn`,
+  which is never auto-started but is hand-runnable and so reaches this
+  function. The heading is now keyed off what the record actually
+  carries, with no new vocabulary invented, and
+  `agent/castle-worker-claude`'s prompt says the headings are what tell
+  a tenant whose words it is reading. This is the one turn where
+  everything else in this task insists an answer grants no authority;
+  attributing machine-authored text to the resident pushes precisely
+  the other way.
+- **A stated limit was added to §4 and to `agent/README.md`: a
+  watermarked errand can never resume.** Behaviour unchanged and
+  deliberately so (the reasoning is in §4). Verified empirically rather
+  than reasoned about: a pre-watermark request, hand-run until its
+  tenant filed a blocking question, then answered, is untouched by two
+  further sweeps — and a second `castle work <id>` resumes it, spends
+  the answer in its claim, and delivers the packet, which is why the
+  documented remedy is that command.
 - **One cost this task adds is deferred rather than paid, and is filed
   rather than left in a review thread:
   `docs/backlog/eligibility-fold-rescans-per-request.md`.** §4's

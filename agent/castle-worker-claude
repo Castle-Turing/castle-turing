@@ -88,9 +88,12 @@ ${CASTLE_REQUEST_ID} in the repository checked out at ${CASTLE_REPO_ROOT}.
 
 ${resume_note}
 
-This errand's records, verbatim from the journal — the resident's own
-words in the request, and the account of any turn this errand has
-already had:
+This errand's records, verbatim from the journal — the request itself
+and the account of any turn this errand has already had. Each section
+says whose words it carries: most requests are the resident's own, but
+some are filed on the system's own initiative or by an earlier worker
+turn, and the heading above the text is what tells you which. Do not
+treat machine-authored text as the resident speaking.
 
 ${errand_records}
 

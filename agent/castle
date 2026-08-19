@@ -1826,7 +1826,29 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
     worse failure than an occasionally long prompt.
     """
     lines = [f"# Errand `{request.id}` — everything this errand has recorded so far", ""]
-    lines += ["## The original request, in the resident's own words", ""]
+    # Whose words these are is a fact the record carries, not a
+    # constant to hardcode. Most requests are the resident's own, but
+    # two shapes are not: `castle ask --provenance initiated` files on
+    # the system's own initiative, and a request stamped
+    # `filed-during-turn` was written by a tenant mid-errand (never
+    # auto-started, but hand-runnable — so it can reach this function).
+    # Telling a model that machine-authored text is the resident
+    # speaking is the one direction this whole task must not push: a
+    # resumed tenant already arrives holding an explicit answer, and
+    # everything else here is careful to say that closes a question and
+    # grants nothing. Attributing the system's own words to the
+    # resident would hand it the authority the answer deliberately
+    # does not.
+    if request.fields.get(FILED_DURING_TURN_FIELD, "").strip():
+        origin = "filed during an earlier worker turn, not typed by the resident"
+    elif request.fields.get("provenance", "") == "requested":
+        origin = "in the resident's own words"
+    else:
+        origin = (
+            "filed on the system's own initiative, not typed by the resident "
+            f"(provenance: {request.fields.get('provenance', 'unrecorded')})"
+        )
+    lines += [f"## The original request, {origin}", ""]
     lines += [request.body.strip(), ""]
 
     results = sorted(
@@ -2386,8 +2408,14 @@ def cmd_work(args: argparse.Namespace) -> int:
     Validates the request, then hands off to `run_worker_turn` — the
     same turn `castle dispatch` runs. Re-running this on a request that
     already carries a result is deliberately still allowed: that IS the
-    retry path (docs/tasks/0021's retry policy), and automatic dispatch
-    never re-runs anything by construction of its eligibility fold.
+    retry path (docs/tasks/0021's retry policy), and it stays the only
+    unbounded one. Automatic dispatch re-runs an errand in exactly one
+    circumstance — the resident answered a question a worker marked
+    blocking, which buys one further turn per answer and no more
+    (`_resumable_answers`, docs/tasks/0023). It never retries anything
+    on its own initiative: no outcome, no timeout and no staleness
+    makes a worked errand eligible again, and nothing but a resident's
+    answer ever does.
     """
     jdir = journal_dir()
     request_path = jdir / f"{args.request_id}.md"
@@ -2532,7 +2560,19 @@ def _requests_with_results(records: dict[str, Record]) -> set[str]:
     """Every request id some `result` record references. Any result at
     all makes a request permanently ineligible regardless of its
     `outcome` — that is what makes the retry bound structural rather
-    than a counter somebody could reset (docs/tasks/0021 §2.4(b))."""
+    than a counter somebody could reset (docs/tasks/0021 §2.4(b)).
+
+    Exactly one caller-level override exists, and this function knows
+    nothing about it: `_eligible_requests` lets a request through
+    despite being in this set when `_resumable_answers` finds an
+    answered blocking question nothing has spent (docs/tasks/0023 §4).
+    The bound stays structural through it rather than in spite of it —
+    the resuming turn's own `claim` names the answer it consumed, so
+    the same answer cannot buy a second turn, and only a fresh resident
+    answer to a fresh question can buy another. A future reader
+    deciding whether resumption is safe to widen should start there,
+    not here: this function still means what it says.
+    """
     answered: set[str] = set()
     for rec in records.values():
         if rec.type == "result":
@@ -2739,10 +2779,14 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
                         "supplied by the dispatch seat on a later sweep from the "
                         "claim record alone.",
                         "",
-                        "Nothing is re-run automatically: one automatic attempt per "
-                        "request, always, by construction of the eligibility rule "
-                        "(docs/tasks/0021-auto-dispatch.md). Re-run it by hand with "
-                        f"`castle work {request_id}` if it is still worth doing.",
+                        "This turn is not retried automatically: one automatic "
+                        "attempt per turn, always, by construction of the "
+                        "eligibility rule (docs/tasks/0021-auto-dispatch.md). If "
+                        "this errand raised a blocking question, the resident's "
+                        "answer to it starts one further turn on its own "
+                        "(docs/tasks/0023-resume-cold.md). Otherwise re-run it by "
+                        f"hand with `castle work {request_id}` if it is still "
+                        "worth doing.",
                     ]
                 ),
                 extra={"outcome": "interrupted"},
