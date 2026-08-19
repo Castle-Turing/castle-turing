@@ -2394,10 +2394,23 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # `closing_result`, castle-modal's `_errand_state` — so the ids
         # after it are invisible to all three, and a first turn's claim
         # is byte-identical to what it always was.
+        # Worded for what is true at the instant this is written, which
+        # is earlier than it looks. The claim goes down before the
+        # tenant command has been checked for runnability at all — that
+        # ordering is deliberate and load-bearing (see the refs comment
+        # above), and it means "began" and "Tenant command: ``" were
+        # both capable of being false: on a host with an empty or
+        # unrunnable CASTLE_WORKER_COMMAND, no process ever starts and
+        # this record claimed one had. Saying "took this errand" and
+        # naming the command as *configured* is true on every path,
+        # including the three that fail before anything runs. The same
+        # discipline the reaper's own sentence needed: a permanent
+        # record must not assert what the next few lines may contradict.
         claim_body_lines = [
-            f"Worker turn on errand `{request.id}` began at {started}.",
+            f"A worker turn took errand `{request.id}` at {started}.",
             "",
-            f"Tenant command: `{command}`",
+            f"Configured tenant command: `{command}`"
+            + ("" if command.strip() else " (empty — nothing will run)"),
             "",
         ]
         # Two sentences, gated differently, because they say different
@@ -2410,11 +2423,15 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # gate closes.
         if resuming:
             claim_body_lines += [
-                "This turn was given "
+                "This turn will spend "
                 + ", ".join(f"`{answer.id}`" for answer in resuming)
                 + " — the answer id(s) after the request id in this record's own "
                 "refs. Naming them here is what spends them, so no later sweep "
-                "starts another turn off the same answer, however this turn ends "
+                "starts another turn off the same answer, whatever becomes of this "
+                "one — including the case where the configured tenant never starts "
+                "at all. A hand-run `castle work "
+                + request.id
+                + "` still renders those answers into its tenant's context "
                 "(docs/tasks/0023-resume-cold.md §3).",
                 "",
             ]
@@ -2423,7 +2440,9 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             claim_body_lines += [
                 "It is a RESUMPTION: the resident answered a blocking question an "
                 "earlier turn on this errand raised, and that earlier turn's own "
-                "account is among the records this turn was handed.",
+                "account is among the records rendered for this turn — rendered, "
+                "not necessarily delivered, since this record is written before "
+                "the tenant is known to be runnable.",
                 "",
             ]
         claim_id = write_record(
@@ -2445,6 +2464,28 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 ]
             ),
         )
+
+        # What the three branches below owe a resident whose answer this
+        # turn already spent. The claim naming that answer is what stops
+        # a misconfigured tenant being retried once a minute forever
+        # (docs/tasks/0021 §3.4, reached from a new direction by
+        # docs/tasks/0023) — correct, and invisible unless the result
+        # says so. Without this the resident reads "nothing ran",
+        # believes their answer is still waiting, and has no reason to
+        # think the errand needs anything but a fixed config.
+        spent_note: list[str] = []
+        if resuming:
+            spent_note = [
+                "",
+                "The answer(s) this turn was going to resume on — "
+                + ", ".join(f"`{answer.id}`" for answer in resuming)
+                + " — are spent by its claim, which is what stops a misconfigured "
+                "tenant being retried automatically once a minute forever. No sweep "
+                "will pick this errand up again on their account. Running "
+                f"`castle work {request.id}` by hand once the tenant is fixed still "
+                "hands those answers to it: the errand's records are rendered into "
+                "the tenant's context on every turn, spent or not.",
+            ]
 
         # The three recordless failure paths this task fixes
         # (docs/tasks/0021 §3.4). Under a human typing `castle work`
@@ -2473,7 +2514,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         "Nothing ran. Set `castle.agent.worker.command` (modules/agent) "
                         "to whatever should hold the worker seat, then re-run "
                         f"`castle work {request.id}`.",
-                    ],
+                    ]
+                    + spent_note,
                 ),
             )
         try:
@@ -2493,7 +2535,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         "",
                         "Nothing ran. Fix `castle.agent.worker.command` (modules/agent) "
                         f"and re-run `castle work {request.id}`.",
-                    ],
+                    ]
+                    + spent_note,
                 ),
             )
 
@@ -2596,7 +2639,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                             "Nothing ran. Check that the command exists and is "
                             "executable, then re-run "
                             f"`castle work {request.id}`.",
-                        ],
+                        ]
+                    + spent_note,
                     ),
                 )
 
@@ -3717,7 +3761,54 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
 
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
-    """Every record transitively reachable from `root_id` via `refs`."""
+    """Every record reachable from `root_id` along the lineage edge,
+    plus anything naming `root_id` directly.
+
+    **The lineage edge is `refs[0]`, and honouring it here is what stops
+    one errand's fold reaching into another's.** This walk predates
+    docs/tasks/0023 and used to follow *any* ref, which was harmless
+    while every record's later refs pointed at things inside its own
+    errand. That stopped being true when a resuming claim began naming
+    the answers it spends: an `answer` can name blocking questions on
+    two different errands (only the generic writer can produce that
+    shape — `file_answer` refs one question), so from errand A the old
+    walk reached A's question, the shared answer, then B's claim
+    (`refs: B, <answer>`), and from there B's whole subtree. `castle
+    digest` printed B's records under A, and `castle-modal --mode
+    status` listed B's decisions as A's.
+
+    The second clause — a record naming `root_id` anywhere in its refs
+    — is not a loophole in the first; it is what keeps two existing
+    shapes working. The dispatch watermark names every request it
+    excluded in one record's `refs`, and only the first of them is at
+    `refs[0]`, yet `_errand_state` finds that record in each excluded
+    errand's fold to explain why nothing is happening. A result a
+    resident hand-closed with `--refs <request>,<some-claim>` names its
+    request directly too. Both are records *about* this root; what the
+    first clause refuses is records about somebody else that merely
+    mention something of ours in passing.
+
+    Every record this repo writes is unaffected: a result's refs are
+    `[request, claim]`, a claim's `[request, ...]`, a question's
+    `[request]` or `[result]`, an answer's `[question]`, a decision's
+    `[record]` — lineage first in every case. Proved by comparing both
+    traversals over a journal built from all of those shapes rather
+    than assumed; the only records the two walks disagree about are
+    ones the generic writer alone can produce.
+
+    Two such disagreements, both narrower than the leak they close and
+    both stated rather than discovered later. A result a resident
+    hand-closed as `--refs <request-A>,<claim-of-B>` now appears in A's
+    fold only, not in B's — which is what `closing_result`'s own
+    narrowing already decided about that record, applied one layer out.
+    And a single answer naming questions on two errands appears in the
+    fold of the errand whose question it names *first*, so the other
+    errand's status surface can still show its question as unanswered.
+    That is a display imprecision on a shape `file_answer` cannot
+    write, and it costs nothing structural: `_resumable_answers` does
+    not use this walk at all, so spend and eligibility are untouched by
+    it.
+    """
     collected: list[Record] = []
     seen = {root_id}
     changed = True
@@ -3726,7 +3817,8 @@ def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record
         for rec in records.values():
             if rec.id in seen:
                 continue
-            if any(ref in seen for ref in rec.refs):
+            refs = rec.refs
+            if refs and (refs[0] in seen or root_id in refs):
                 collected.append(rec)
                 seen.add(rec.id)
                 changed = True

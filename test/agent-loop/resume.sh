@@ -136,7 +136,7 @@ log "  -- the resuming claim names the answer it spent, after the request id"
 RESUME_CLAIM_FILE="$(grep -l "^refs: $REQ1,$A1\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
 [ -n "$RESUME_CLAIM_FILE" ] || fail "no claim record carries 'refs: $REQ1,$A1' — the answer was never spent, which is the unbounded-retry loop"
 RESUME_CLAIM="$(basename "$RESUME_CLAIM_FILE" .md)"
-grep -q "This turn was given .*$A1" "$RESUME_CLAIM_FILE" \
+grep -q "This turn will spend .*$A1" "$RESUME_CLAIM_FILE" \
   || fail "the resuming claim does not say which answer it spent"
 grep -q "It is a RESUMPTION" "$RESUME_CLAIM_FILE" \
   || fail "the resuming claim does not say it is continuing an earlier turn"
@@ -368,7 +368,7 @@ grep -q "RESUMPTION" "$FIRST_CLAIM11" \
 # unexplained extra id in an append-only record is the defect the
 # paragraph exists to prevent, and gating the explanation on history
 # rather than on the spend would reopen it in exactly this case.
-grep -q "This turn was given .*$A11" "$FIRST_CLAIM11" \
+grep -q "This turn will spend .*$A11" "$FIRST_CLAIM11" \
   || fail "the first turn's claim names $A11 in its refs and never says why: $(sed -n '/^---$/,$p' "$FIRST_CLAIM11" | head -20)"
 FIRST_RESULT11="$(referencing result "$REQ11")"
 grep -q "RESUMED with" "$FIRST_RESULT11" \
@@ -547,7 +547,7 @@ A14="$("$CASTLE" answer "$Q14" "Resume test: $ANSWER_MARKER — answered while t
 "$CASTLE" work "$REQ14" >/dev/null 2>&1 || true
 SPENDING_CLAIM="$(grep -l "^refs: $REQ14,$A14\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
 [ -n "$SPENDING_CLAIM" ] || fail "the hand-run turn did not spend $A14 — the spend must not depend on there being an account"
-grep -q "This turn was given .*$A14" "$SPENDING_CLAIM" \
+grep -q "This turn will spend .*$A14" "$SPENDING_CLAIM" \
   || fail "the spending claim does not say which answer it spent"
 grep -q "It is a RESUMPTION" "$SPENDING_CLAIM" \
   && fail "a turn whose errand has only a crashed claim claimed an earlier turn's account is in its packet"
@@ -960,6 +960,41 @@ TURNS_B=$(( $(count_referencing claim "$REQ15B") - CLAIMS15B_BEFORE ))
 [ $(( TURNS_A + TURNS_B )) -eq 1 ] \
   || fail "one answer bought $(( TURNS_A + TURNS_B )) turns ($TURNS_A on A, $TURNS_B on B) — the stated bound is one per answer, ever"
 "$CASTLE" validate >/dev/null
+
+log "  -- and neither errand's fold reaches into the other through that shared answer"
+# The same fixture, read from the surfaces. `_collect_downstream` was
+# transitive over every ref, so from A it reached the shared answer,
+# then B's claim (refs: B,answer), then B's whole subtree — and `castle
+# digest` printed B's records under A while the status surface listed
+# B's decisions as A's. The lineage edge is refs[0]; anything after it
+# is context, and a fold that ignores that cannot stay inside an errand.
+"$CASTLE" digest > "$WORKDIR/digest-shared.txt" 2>&1 || fail "castle digest failed on the shared-answer journal"
+python3 - "$WORKDIR/digest-shared.txt" "$REQ15A" "$REQ15B" <<'DIGEST_PY' || fail "one errand's digest section contains the other errand's records"
+import sys
+
+text, a, b = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+# Each errand's section runs from its own heading to the next one. The
+# heading is "## Errand <id>" — matching a bare "Errand " prefix picks
+# up result bodies too ("Errand `<id>` completed by worker tenant ..."),
+# which splits a section in the middle and mis-attributes everything
+# after it. That mistake made this assertion fail against correct code
+# once already.
+sections = {}
+current = None
+for line in text.splitlines():
+    if line.startswith("## Errand "):
+        current = line.split()[2].strip()
+        sections[current] = []
+    elif current:
+        sections[current].append(line)
+for this, other in ((a, b), (b, a)):
+    body = chr(10).join(sections.get(this, []))
+    if other in body:
+        print(f"the digest section for {this} names the other errand {other}", file=sys.stderr)
+        print(body[:400], file=sys.stderr)
+        raise SystemExit(1)
+print("neither errand's digest section names the other")
+DIGEST_PY
 
 # ---------------------------------------------------------------------
 log "the reference tenant refuses a prompt it could not authenticate"
