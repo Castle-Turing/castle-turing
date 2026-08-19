@@ -1214,20 +1214,33 @@ def cmd_record(args: argparse.Namespace) -> int:
     # before any request, and this refuses that too, because the flag
     # this task added is what makes it a permanent silent failure rather
     # than a cosmetic one.
+    # **`refs[0]` only, because that is the edge the fold follows.**
+    # `_find_root_request` walks `refs[0]` and nothing else, and
+    # `_resumable_answers` hands it the question record itself — so a
+    # question's first ref is its lineage and every later ref is
+    # context, the same split claims and results already rely on. An
+    # earlier version of this guard asked whether *any* ref reached a
+    # request, which let `--refs "<wrong-id>,$CASTLE_REQUEST_ID"`
+    # through: the guard was satisfied by the second id while the fold
+    # only ever looked at the first, so the question was written,
+    # answered, and never attributable — the exact dead end this refuses
+    # to write, reached by exactly the mistake it predicts. A guard that
+    # applies a different rule from the thing it guards is not a guard.
     if getattr(args, "blocking", False):
         journal = load_all(journal_dir())
-        reachable = any(
-            ref in journal and _find_root_request(journal, journal[ref]) is not None
-            for ref in refs
+        lineage = refs[0] if refs else ""
+        reachable = (
+            lineage in journal
+            and _find_root_request(journal, journal[lineage]) is not None
         )
         if not reachable:
             print(
-                "castle record: refusing to write a --blocking question whose --refs "
-                f"({', '.join(refs) if refs else 'empty'}) reach no request record. "
-                "A blocking question is resumable only if some request can be reached "
-                "from its refs, so this one could never unblock anything: the resident "
+                "castle record: refusing to write a --blocking question whose first "
+                f"--refs entry ({lineage or 'empty'}) reaches no request record. "
+                "Resumption follows the FIRST ref back to an errand and ignores the "
+                "rest, so this question could never unblock anything: the resident "
                 "would answer it and no fold would ever find the errand "
-                "(docs/tasks/0023-resume-cold.md §9). Pass "
+                "(docs/tasks/0023-resume-cold.md §9). Put this errand's request first: "
                 "--refs \"$CASTLE_REQUEST_ID\".",
                 file=sys.stderr,
             )
@@ -2246,9 +2259,22 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # when there is none is the same class of defect as the reaper's
         # sentence promising nothing would re-run: prose asserting what
         # the record contradicts.
+        #
+        # A prior **result**, not a prior claim, and for the same reason
+        # the gate exists at all: `render_continuation_packet` renders
+        # result bodies as an earlier turn's account and nothing else,
+        # so a result is exactly the record whose existence makes the
+        # narrative true. A bare claim is not enough — an errand whose
+        # earlier turn crashed leaves a claim with no result, and a
+        # hand-run `castle work` on it (there is no reaper on that path)
+        # would otherwise assert that the earlier turn's account is
+        # among the records this turn was handed when the packet holds
+        # no such account. Nothing is lost by the narrower test: a
+        # crashed turn becomes a result the moment any sweep reaps it,
+        # and until then the only case excluded is the one where the
+        # account genuinely does not exist yet.
         had_prior_turn = any(
-            (rec.type == "claim" and rec.refs and rec.refs[0] == request.id)
-            or (rec.type == "result" and request.id in rec.refs)
+            rec.type == "result" and request.id in rec.refs
             for rec in turn_records.values()
         )
         continuing = bool(resuming) and had_prior_turn

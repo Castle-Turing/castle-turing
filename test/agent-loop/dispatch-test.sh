@@ -646,7 +646,7 @@ if "$CASTLE" record --type question --provenance requested --seat worker --block
   --body "Dispatch test: a blocking question with nothing to attribute it to." >"$WORKDIR/blocking-norefs.out" 2>&1; then
   fail "castle record wrote a --blocking question with no --refs"
 fi
-grep -q "reach no request record" "$WORKDIR/blocking-norefs.out" \
+grep -q "reaches no request record" "$WORKDIR/blocking-norefs.out" \
   || fail "the --blocking/--refs refusal did not explain itself: $(cat "$WORKDIR/blocking-norefs.out")"
 # The same refusal covers a ref that exists but walks back to nothing —
 # the shape a model produces by getting an id slightly wrong, rather
@@ -662,7 +662,7 @@ if "$CASTLE" record --type question --provenance requested --seat worker --block
   >"$WORKDIR/blocking-unreachable.out" 2>&1; then
   fail "castle record wrote a --blocking question whose refs resolve but reach no request"
 fi
-grep -q "reach no request record" "$WORKDIR/blocking-unreachable.out" \
+grep -q "reaches no request record" "$WORKDIR/blocking-unreachable.out" \
   || fail "the reachability refusal did not explain itself: $(cat "$WORKDIR/blocking-unreachable.out")"
 
 log "  -- and validate rejects a hand-planted blocking value that is not the one spelling any writer produces"

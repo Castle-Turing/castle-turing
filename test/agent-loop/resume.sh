@@ -396,7 +396,7 @@ if "$CASTLE" record --type question --provenance requested --seat worker \
   >"$WORKDIR/unreachable.out" 2>&1; then
   fail "castle record wrote a --blocking question whose refs reach no request"
 fi
-grep -q "reach no request record" "$WORKDIR/unreachable.out" \
+grep -q "reaches no request record" "$WORKDIR/unreachable.out" \
   || fail "the reachability refusal did not explain itself: $(cat "$WORKDIR/unreachable.out")"
 # A ref that does not resolve at all is refused by the same test.
 if "$CASTLE" record --type question --provenance requested --seat worker \
@@ -405,6 +405,39 @@ if "$CASTLE" record --type question --provenance requested --seat worker \
   >"$WORKDIR/dangling.out" 2>&1; then
   fail "castle record wrote a --blocking question whose refs name nothing at all"
 fi
+# The pair that pins the RULE rather than the behaviour. Resumption
+# follows `refs[0]` and ignores the rest, so the guard must too — and
+# the two ways of getting that wrong fail in opposite directions, so
+# only asserting both says which rule is in force.
+#
+# Wrong id first, good id second: refused. Under an `any(...)` guard
+# this writes, and the question is then permanently unattributable
+# because the fold never looks past the first ref — the guard satisfied
+# by an id the fold ignores.
+if "$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "20260101T000000Z-request-nots0,$REQ1" --blocking \
+  --body "Resume test: a blocking question whose FIRST ref is wrong and whose second is right." \
+  >"$WORKDIR/refs-first-wrong.out" 2>&1; then
+  fail "castle record wrote a --blocking question whose first ref reaches nothing — the guard is not testing refs[0]"
+fi
+grep -q "first --refs entry" "$WORKDIR/refs-first-wrong.out" \
+  || fail "the refusal does not name the first ref as the one that matters: $(cat "$WORKDIR/refs-first-wrong.out")"
+# Good id first, junk second: written. Under an `all(...)` guard this is
+# refused, which would be the same disagreement in the other direction —
+# refusing a question the fold would have resumed perfectly well.
+# The trailing ref resolves — it is the correction filed above — and
+# still reaches no request, which is what makes this an `all(...)`
+# detector. A dangling id would work as one too, and would leave the
+# journal failing `castle validate` for the rest of the run.
+# `|| fail` rather than a bare assignment: under `set -e` a refusal here
+# would kill the script at the command substitution, and the run would
+# report a dead shell instead of which rule broke.
+Q_TRAILING="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ1,$CORRECTION_FOR_REFS" --blocking \
+  --body "Resume test: a blocking question whose first ref is right and whose trailing ref is context.")" \
+  || fail "the guard refused a question whose FIRST ref reaches its request — it is stricter than the fold, which never looks past refs[0]"
+[ -n "$Q_TRAILING" ] || fail "the guard wrote nothing for a question whose first ref reaches its request"
+
 # And the canonical shape still writes, or this guard would have eaten
 # the mechanism it protects.
 Q_OK="$("$CASTLE" record --type question --provenance requested --seat worker \
@@ -464,6 +497,36 @@ A13B="$("$CASTLE" answer "$Q13B" "Resume test: $ANSWER_MARKER — the resident's
   || fail "the resident's own answer did not resume $REQ13 — the filter caught more than it should"
 grep -q "^refs: $REQ13,$A13B\$" "$JOURNAL"/*-claim-*.md \
   || fail "the resumption of $REQ13 spent something other than the resident's answer"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "an earlier turn that left a claim and no result is not narrated as an account the packet does not have"
+# ---------------------------------------------------------------------
+# The narrative gate has to use the same rule the packet uses. The
+# packet renders `result` bodies as an earlier turn's account and
+# nothing else, so a bare `claim` — an earlier turn that crashed and has
+# not been reaped — is not a prior account, however much it proves a
+# turn began. Dispatch never meets this state, because its reaper runs
+# first and turns that claim into a result; `castle work <id>` has no
+# reaper in front of it, which is why the hand path is what this drives.
+REQ14="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a fourteenth invented errand whose first turn crashed.")"
+CRASHED_CLAIM="$("$CASTLE" record --type claim --provenance requested --seat worker --refs "$REQ14" \
+  --body "Planted claim: a turn that began and died before writing anything.")"
+log "  -> planted $CRASHED_CLAIM, with no result of its own"
+Q14="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ14" \
+  --blocking --body "Resume test: a blocking question on an errand whose only turn crashed.")"
+A14="$("$CASTLE" answer "$Q14" "Resume test: $ANSWER_MARKER — answered while the crashed turn is still unreaped.")"
+"$CASTLE" work "$REQ14" >/dev/null 2>&1 || true
+SPENDING_CLAIM="$(grep -l "^refs: $REQ14,$A14\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
+[ -n "$SPENDING_CLAIM" ] || fail "the hand-run turn did not spend $A14 — the spend must not depend on there being an account"
+grep -q "This turn was given .*$A14" "$SPENDING_CLAIM" \
+  || fail "the spending claim does not say which answer it spent"
+grep -q "It is a RESUMPTION" "$SPENDING_CLAIM" \
+  && fail "a turn whose errand has only a crashed claim claimed an earlier turn's account is in its packet"
+WORK14_RESULT="$(grep -l "^refs: $REQ14,\(.*\)$" "$JOURNAL"/*-result-*.md 2>/dev/null | head -1 || true)"
+[ -n "$WORK14_RESULT" ] || fail "the hand-run turn on $REQ14 wrote no result"
+grep -q "RESUMED with" "$WORK14_RESULT" \
+  && fail "the tenant was told to read an earlier account on an errand that has none"
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
