@@ -1074,6 +1074,66 @@ print("neither errand's digest section names the other")
 DIGEST_PY
 
 # ---------------------------------------------------------------------
+log "another errand's result naming this one in a trailing ref stays out of its packet"
+# ---------------------------------------------------------------------
+# The last surface still matching a request anywhere in a result's refs
+# (Codex, cross-model pass, second finding). `castle record --type
+# result --refs <B>,<A>` is permitted — the generic writer resolves
+# nothing — and under a broad test B's output was rendered into A's
+# packet as "an earlier turn on this errand", with `had_prior_turn`
+# reading the same record and telling the tenant to go read an account
+# the packet does not hold. Both key on refs[0] now, which is where
+# every result this repo writes puts its request.
+REQ16B="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — the errand whose result mentions the other.")"
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" dispatch >/dev/null
+# Filed AFTER that sweep, so this errand has no turn of its own: a
+# sweep works every eligible request, and an errand with a legitimate
+# result of its own would make the resumption narrative correct and
+# this case prove nothing.
+REQ16="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a sixteenth invented errand, never worked.")"
+# A result belonging to B that mentions A in a trailing, contextual ref.
+CLAIM16B="$(basename "$(referencing claim "$REQ16B" | head -1)" .md)"
+STRAY_RESULT="$("$CASTLE" record --type result --provenance requested --seat worker \
+  --outcome completed --refs "$REQ16B,$CLAIM16B,$REQ16" \
+  --body "STRAY-RESULT-MARKER: errand B's own account, mentioning A only in passing.")"
+log "  -> $STRAY_RESULT belongs to $REQ16B and names $REQ16 third"
+
+# A blocking question and an answer on A, so A takes a turn and we can
+# read what its packet contained.
+Q16="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ16" \
+  --blocking --body "Resume test: a blocking question on the errand that was never worked.")"
+A16="$("$CASTLE" answer "$Q16" "Resume test: $ANSWER_MARKER — answered on the never-worked errand.")"
+# A tenant that echoes its whole stdin, because the packet's *contents*
+# are what this case is about. The blocking fixture would take its
+# first-turn branch here (nothing is being resumed) and never report
+# what it read — which is exactly how a broadened packet slipped past
+# an earlier version of this assertion.
+PACKET_DUMP="$WORKDIR/packet-dump.sh"
+cat > "$PACKET_DUMP" <<'DUMP_EOF'
+#!/usr/bin/env bash
+sed 's/^/packet| /'
+DUMP_EOF
+chmod +x "$PACKET_DUMP"
+CASTLE_WORKER_COMMAND="$PACKET_DUMP" "$CASTLE" work "$REQ16" >/dev/null 2>&1 || true
+A16_RESULT="$(grep -l "^refs: $REQ16," "$JOURNAL"/*-result-*.md 2>/dev/null | head -1 || true)"
+[ -n "$A16_RESULT" ] || fail "the hand-run turn on $REQ16 wrote no result"
+grep -q "^packet| " "$A16_RESULT" \
+  || fail "the dumping tenant reported no packet at all — this case would prove nothing"
+grep -q "STRAY-RESULT-MARKER" "$A16_RESULT" \
+  && fail "another errand's result was rendered into this errand's packet as an earlier turn"
+grep -q "packet| .*$REQUEST_MARKER" "$A16_RESULT" \
+  || fail "the packet did not carry this errand's own request — the fold is now too narrow"
+# And the turn did not announce itself as a resumption, because that
+# stray result is not this errand's account.
+grep -q "RESUMED with" "$A16_RESULT" \
+  && fail "the tenant was told to read an earlier account that belongs to another errand"
+A16_CLAIM="$(grep -l "^refs: $REQ16,$A16\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
+[ -n "$A16_CLAIM" ] || fail "the turn on $REQ16 did not spend $A16"
+grep -q "It is a RESUMPTION" "$A16_CLAIM" \
+  && fail "the claim narrated a resumption off another errand's result"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
 log "the reference tenant refuses a prompt it could not authenticate"
 # ---------------------------------------------------------------------
 # The fallback that used to sit here invented a token of its own when

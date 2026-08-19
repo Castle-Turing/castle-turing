@@ -1782,6 +1782,49 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **Results were the last surface still matching a request anywhere in
+  a record's refs** — the cross-model pass again, on the tree that fixed
+  its first finding. Questions went through `_find_root_request`, claims
+  were keyed `refs[0]`, `_collect_downstream` was narrowed a round
+  earlier; `render_continuation_packet`'s result selection and
+  `had_prior_turn` were the two that never got converted. Since `castle
+  record --type result --refs <B>,<A>` is permitted, errand B's output
+  could be rendered into A's packet as "an earlier turn on this errand"
+  — another errand's work quoted to a tenant as its own history — while
+  the same broad test set `CASTLE_RESUME_ANSWER_IDS` and narrated a
+  resumption whose account the packet did not contain. Both key on
+  `refs[0]` now, which is invisible to every result this repo writes:
+  `_write_worker_result` writes `[request.id, claim_id]` and the reaper
+  `[request_id, claim.id]`, checked rather than assumed.
+
+  **`_requests_with_results` deliberately keeps the broad test, and the
+  two folds now each point at the other saying why.** An unexplained
+  inconsistency between two folds is what several of these findings
+  have been, so this one is argued rather than left: same records, same
+  ambiguous input, opposite risk. For eligibility, guessing wrong
+  withholds an automatic turn and costs a resident one typed command —
+  and the broad test is what keeps 0021 §2.4(b)'s bound intact,
+  including for a resident who hand-closed an errand as `--refs
+  <claim>,<request>` and would otherwise have it silently reopened. For
+  the packet, guessing wrong hands a tenant another errand's output;
+  there is no benign side. Bounds fail toward not spending, context
+  fails toward not fabricating. The one residual that reasoning leaves
+  is named in `_requests_with_results`'s own docstring rather than left
+  to be found: a stray secondary ref written before dispatch ever ran
+  keeps a request off the watermark's exclusion list, so a blocking
+  answer could later resume an errand that predates dispatch — four
+  things that must line up, against an alternative that needs only two
+  refs typed in the order that reads more naturally.
+
+  Two fixture mistakes of my own on the way here, both the same shape
+  as ones this task has already paid for: the first version let the
+  sweep work the errand that was supposed to have no turn of its own
+  (making a correct resumption narrative look like the bug), and the
+  second used a tenant whose first-turn branch never echoes the packet,
+  so a broadened packet fold passed unnoticed until the mutation test
+  said so. The case now runs a tenant that dumps its stdin and asserts
+  both directions — the stray result absent, this errand's own request
+  present.
 - **One answer could still buy two turns, and it took the cross-model
   pass to see it.** Ten review passes of the same family cleared the
   spend bound repeatedly — including a pass that specifically probed
