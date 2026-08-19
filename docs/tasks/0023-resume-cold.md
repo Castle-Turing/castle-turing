@@ -768,7 +768,13 @@ lease, no lock built around it for the same reason none was built
 around those.
 
 **Contents, in this order, each rendered verbatim — nothing paraphrased
-or summarised:**
+or summarised.** (Implementation note, added after review: what this
+section calls a "heading" is, as built, a boundary line carrying a
+per-turn nonce. A `result` body is model-authored and is quoted into
+the next turn's packet, so a plain markdown heading is forgeable by the
+very text it is supposed to attribute — see the As-built section at the
+end of this brief. Everything below about *what* each section holds and
+*in what order* is unchanged.)
 
 1. The root request's body, under a heading identifying it as the
    original request.
@@ -1716,6 +1722,47 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **A prior turn's own body could forge the packet's section
+  boundaries.** §7 specifies headings and says nothing about who may
+  write something heading-shaped; the third review pass found that a
+  `result` body — model-authored, and quoted byte-for-byte into the
+  next turn's stdin — could contain a line reading "### The resident's
+  answer, verbatim" followed by an instruction of its own. The prompt's
+  own advice, that the heading above a passage says who wrote it, is
+  what would have made it work, and it lands on the one path where this
+  task's whole claim is that an answer closes a question and grants
+  nothing. The same failure the provenance-keyed labels and the
+  self-answer refusal each close, by a third door: not a record that
+  lies, but a record forging the structure around itself.
+
+  Closed with a per-turn nonce rather than by escaping: sections are
+  delimited by lines carrying `CASTLE-PACKET-<16 hex>`, generated in
+  the rendering process, stated in the packet's own preamble, and
+  stored nowhere — so no record can contain it, because no record was
+  written after it existed. Escaping the bodies was the alternative and
+  would have undone the byte-for-byte rule the previous review pass
+  established. `agent/castle-worker-claude` now tells the model to read
+  the token from the preamble and treat everything between boundaries
+  as quotation; both blocking fixtures do exactly that, reading the
+  token rather than hardcoding a heading. `resume.sh` has a first turn
+  that emits both a forged boundary and a forged markdown heading into
+  its result, and asserts the resumed tenant counts one real
+  resident-answer section while finding the forgeries present as
+  quoted content. Mutation-tested: pinning the nonce to a constant the
+  fixture can predict makes the count 2 and fails the run.
+- **A first turn could announce itself as a resumption of a turn that
+  never happened.** `resuming` was computed with no check that the
+  errand had ever had one, so a blocking question filed and answered
+  before anything ran produced a first claim carrying the RESUMPTION
+  paragraph and a tenant told to "read the earlier account" that the
+  packet did not contain — prose asserting what the record contradicts,
+  the same defect class as the reaper's sentence. The spend stays
+  unconditional (it is accounting, and it is what stops a later sweep
+  starting a turn off that answer); only the narrative is gated on the
+  errand having a prior `claim` or `result`, which also gates
+  `CASTLE_RESUME_ANSWER_IDS`, since what that variable tells a tenant is
+  that there is earlier work of its own to read. The divergence is
+  commented at the gate, because it will look inconsistent otherwise.
 - **A worker tenant could answer its own blocking question, and so
   grant itself unbounded automatic turns.** The most serious defect
   found in this task, caught by a second review pass over the tree.
@@ -1792,6 +1839,17 @@ shaped than the text specifies, each with the reason.
   always writes, and the only path a resident's answer takes — keeps
   that heading; anything else gets one that names what the record
   actually says and claims nothing about its author.
+- **Two more descriptions of the old stdin contract were corrected**:
+  `agent/README.md`'s `castle-worker-claude` section, which still said
+  the script "reads the request body on stdin" with no later
+  correction — a stranger building a conforming tenant from that
+  paragraph would have treated a resumed turn's prior results and the
+  resident's answer as the request text — and
+  `test/agent-loop/contract-worker.sh`, whose "the request said: …"
+  line had been printing the packet's own first line into every result
+  body it writes, including the VM's journal. No assertion depended on
+  it, which is precisely why it could go on being wrong; the reference
+  fixture for the contract now reports what it actually received.
 - **Three comments describing behaviour this branch changed were
   corrected**, each of which also cited the backlog file this branch
   deletes: `file_answer`'s note that resumption "still defers" to it,

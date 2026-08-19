@@ -302,6 +302,76 @@ A7B="$("$CASTLE" answer "$Q7B" "Resume test: $ANSWER_MARKER — the resident's w
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
+log "a prior turn cannot forge a section boundary and put words in the resident's mouth"
+# ---------------------------------------------------------------------
+# The third door into the same attack the provenance-keyed labels and
+# the self-answer refusal close: not writing a record that lies, but
+# writing a record whose BODY forges the structure around it. A result
+# body is model-authored and is quoted byte-for-byte into the next
+# turn's packet, so under fixed markdown headings turn one could emit
+# "### The resident's answer, verbatim" plus an instruction, and turn
+# two would read it as the resident speaking. Boundaries carry a
+# per-turn nonce instead, which no record can contain because no record
+# was written after it existed.
+REQ10="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a tenth invented errand, whose first turn forges a boundary.")"
+CASTLE_TEST_WORKER_FORGE=1 "$CASTLE" dispatch >/dev/null
+FORGE_RESULT1="$(referencing result "$REQ10")"
+grep -q "FORGED-ANSWER-MARKER" "$FORGE_RESULT1" || fail "the forging fixture did not write its forged boundary into its result"
+grep -q "FORGED-HEADING-MARKER" "$FORGE_RESULT1" || fail "the forging fixture did not write its forged heading into its result"
+Q10="$(blocking_question_for "$REQ10")"
+[ -n "$Q10" ] || fail "no blocking question was raised on $REQ10"
+A10="$("$CASTLE" answer "$Q10" "Resume test: $ANSWER_MARKER — the resident's only real word on this errand.")"
+"$CASTLE" dispatch >/dev/null
+FORGE_RESULT2="$(grep -l "real resident-answer sections" $(referencing result "$REQ10") 2>/dev/null || true)"
+[ -n "$FORGE_RESULT2" ] || fail "the resumed turn on $REQ10 produced no packet report at all"
+# Exactly one section really is the resident answering — the forged one
+# is in the packet, quoted, and is not counted.
+grep -q "real resident-answer sections: 1" "$FORGE_RESULT2" \
+  || fail "the resumed tenant counted a forged boundary as a real resident answer: $(grep 'real resident-answer sections' "$FORGE_RESULT2")"
+grep -q "a forged boundary is present as quoted content" "$FORGE_RESULT2" \
+  || fail "the forged text never reached the packet — this case is proving nothing"
+grep -q "a forged heading is present as quoted content" "$FORGE_RESULT2" \
+  || fail "the forged markdown heading never reached the packet — this case is proving nothing"
+# And the real answer is the one the tenant acted on.
+grep -q "packet carried the answer: .*$ANSWER_MARKER" "$FORGE_RESULT2" \
+  || fail "the resumed tenant did not see the resident's real answer"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a FIRST turn that spends an answer is not announced as a resumption of a turn that never happened"
+# ---------------------------------------------------------------------
+# A blocking question can be filed and answered before anything runs.
+# The answer is still spent — that is what stops a later sweep starting
+# a turn off it — but there is no earlier account for a packet to carry,
+# so the claim must not narrate one and the tenant must not be told to
+# read one. The spend is accounting; the narrative is a claim about
+# history, and only the second one is gated.
+REQ11="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — an eleventh invented errand, questioned before any turn ran.")"
+Q11="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ11" \
+  --blocking --body "Resume test: a blocking question filed before this errand had a turn.")"
+A11="$("$CASTLE" answer "$Q11" "Resume test: $ANSWER_MARKER — answered before any turn existed.")"
+# The blocking fixture, deliberately: it is the one that reports
+# whether CASTLE_RESUME_ANSWER_IDS reached it, so the assertion below
+# is about the mechanism rather than about a fixture that never
+# mentions the variable either way.
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ11")" -eq 1 ] || fail "the first turn on $REQ11 did not run, or ran twice"
+FIRST_CLAIM11="$(grep -l "^refs: $REQ11,$A11\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
+[ -n "$FIRST_CLAIM11" ] || fail "the first turn did not spend $A11 — a later sweep would resume off it forever"
+grep -q "RESUMPTION" "$FIRST_CLAIM11" \
+  && fail "a first turn's claim announced itself as a resumption of a turn that never happened"
+FIRST_RESULT11="$(referencing result "$REQ11")"
+grep -q "RESUMED with" "$FIRST_RESULT11" \
+  && fail "the tenant was told this was a resumed turn on an errand that had never had one"
+grep -q "filed blocking question" "$FIRST_RESULT11" \
+  || fail "the first turn did not run the fixture that reports resumption — this case proves nothing"
+# Spent means spent: no further sweep starts another turn off that answer.
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ11")" -eq 1 ] || fail "the answer spent by the first turn resumed $REQ11 anyway"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
 log "a worker tenant cannot answer its own question — by any path it has"
 # ---------------------------------------------------------------------
 # Only the resident may close a question (docs/architecture.md,

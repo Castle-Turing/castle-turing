@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -70,17 +71,33 @@ def main() -> int:
 
     print(f"scripted-worker-blocking-alt: RESUMED with {resuming}")
 
-    # Same check the bash twin makes, for the same reason: bodies are
-    # emitted byte-for-byte, so a heading sitting on a line of its own
-    # is proof the separator came from the renderer rather than from
+    # Same checks the bash twin makes, for the same reasons: read the
+    # boundary token out of the packet's own preamble (it is generated
+    # per turn, so nothing can hardcode it — which is exactly what makes
+    # a quoted body unable to forge a boundary), then require the
+    # section boundary to be a whole line of its own, which is only true
+    # if the newline before it came from the renderer rather than from
     # whatever the previous body happened to end with.
-    if "## A question this errand raised (blocking, answered below)" not in packet.splitlines():
+    match = re.search(r"CASTLE-PACKET-[0-9a-f]{16}", packet)
+    if match is None:
         print(
-            "scripted-worker-blocking-alt: the packet's question heading is not on a "
+            "scripted-worker-blocking-alt: the packet declared no section-boundary token",
+            file=sys.stderr,
+        )
+        return 8
+    nonce = match.group(0)
+    lines = packet.splitlines()
+    if f"{nonce} BEGIN a question this errand raised (blocking, answered below)" not in lines:
+        print(
+            "scripted-worker-blocking-alt: the packet's question boundary is not on a "
             "line of its own",
             file=sys.stderr,
         )
         return 8
+    real_answers = lines.count(
+        f"{nonce} BEGIN the resident's answer to that question, verbatim"
+    )
+    print(f"scripted-worker-blocking-alt: real resident-answer sections: {real_answers}")
     for label, needle in (
         ("request", "RESUME-FIXTURE-REQUEST-MARKER"),
         ("question", "the errand cannot continue until this is answered"),

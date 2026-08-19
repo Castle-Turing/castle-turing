@@ -172,7 +172,14 @@ castle show ID
   given — and a turn resuming an answered blocking question also
   carries `$CASTLE_RESUME_ANSWER_IDS`. Both are assembled here rather
   than in `castle dispatch`, so a hand-run turn and a dispatched one
-  are handed identical context by construction.
+  are handed identical context by construction. That variable means
+  "there is an earlier turn of yours in the packet, and these are the
+  answers you are continuing from" — so a *first* turn that happens to
+  spend an answer (a blocking question filed and answered before
+  anything ran) leaves it absent, and its claim narrates no resumption,
+  while still naming the answers it spent. The spend is accounting; the
+  narrative is a claim about history, and only the second one needs a
+  history to be true.
 - **`dispatch`** — one sweep of the journal, and the only subcommand
   a machine runs unprompted (`docs/tasks/0021-auto-dispatch.md`). In
   order: take a global sweep lock (one sweep at a time, machine-wide);
@@ -389,9 +396,16 @@ Sway, zero foot, and zero display server involved.
 
 A plain bash script, the reference implementation of
 `castle.agent.worker.command`'s contract (see `castle work` above):
-reads the request body on stdin, builds a prompt that states the
-errand, the repo location, and — unmissably — that this seat must not
-deploy anything, then execs `claude -p` with it. Read the script itself
+reads the errand's continuation packet on stdin — the request, and on
+an errand that has already had a turn, every prior result, question and
+answer, each quoted inside boundaries carrying a token generated for
+that turn — builds a prompt that states the errand, the repo location,
+that only those boundaries say who wrote what, and — unmissably — that
+this seat must not deploy anything, then execs `claude -p` with it. The
+script names its own variable `errand_records` for that reason: a
+tenant that treats the first line of stdin as the resident's text is
+reading the packet's preamble, and on a resumed turn would read an
+earlier turn's output and the resident's answer as the request. Read the script itself
 for the exact prompt; it is short and meant to be audited, not
 summarized. `test/agent-loop/scripted-worker.sh` is the model-free
 stand-in CI actually runs — nothing in CI executes a real model.
@@ -676,6 +690,19 @@ every turn, with no branch for "is this a first turn" — a first turn
 degenerates to the request body under a heading, which is exactly what a
 tenant received before. Nothing is truncated and nothing is capped.
 
+**Section boundaries are unforgeable, and nothing else in the packet
+is structure.** Each section is delimited by lines carrying a token
+generated for that turn alone — `CASTLE-PACKET-<16 hex chars>` — stated
+in the packet's own opening paragraph and stored nowhere. A record
+cannot contain it, because no record was written after it existed, so a
+`result` body (model-authored, quoted byte-for-byte into the next
+turn's packet) cannot spell a boundary claiming the resident said
+something. Only the boundary line above a section says what that
+section is or who wrote it; a heading-shaped line inside one is that
+record's own text. A conforming tenant reads the token from the
+preamble and trusts nothing else — `agent/castle-worker-claude` says so
+in its prompt, and both blocking fixtures in `test/agent-loop/` do it.
+
 **Verbatim there means byte-for-byte.** No body is stripped, rstripped
 or reflowed on its way to a tenant: `parse_record` removes only the
 single blank line after a record's closing fence, precisely so a body
@@ -686,7 +713,9 @@ spaces are its content, and a resumed tenant reads that diff to work out
 what an earlier turn already did. What separates one section from the
 next is the renderer's own blank line, never the body's trailing
 whitespace, so a body that ends mid-line still leaves the following
-heading on a line of its own.
+boundary on a line of its own. The single newline before each `END`
+line is the renderer's, which the preamble says out loud so a consumer
+extracting a section knows whose byte it is.
 
 Three things are deliberately kept out of it. `correction` records: a
 correction is the resident judging the *system*, and feeding a verdict
