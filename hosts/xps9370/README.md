@@ -22,12 +22,19 @@ three-layer `castle.display.*` slot (`modules/desktop`,
 docs/tasks/0009-ambient-intake.md item 1): this chassis's touchscreen
 option is the 3840x2160 (4K UHD) panel at 13.3" — about 331 PPI — so
 `castle.display.scale` defaults to `2.0` and `castle.display.cursorSize`
-to `48` (double the nominal 24px), via `lib.mkDefault`, with
+to `18`, via `lib.mkDefault`, with
 `castle.display.cursorTheme` defaulting to `"Bibata-Modern-Classic"`
 (from `pkgs.bibata-cursors`, shipped by `modules/desktop`) so the size
 setting has an actual pointer-cursor slot to attach to — see that
 option's description in `modules/desktop` for why an unset theme name
-leaves cursor size inert. All three are machine facts about this panel,
+leaves cursor size inert. `18` is below the nominal 24px on purpose and
+is not a typo: this file used to say `48` "(double the nominal 24px)",
+which is the exact double-compensation
+`docs/tasks/0013-first-deploy-findings.md` found and fixed once already
+— Sway scales the cursor itself, so doubling on top of a 2.0 output
+scale rendered it at roughly 96 physical pixels. `default.nix`'s own
+long comment on `cursorSize` argues the corrected value in full; read
+it there rather than re-deriving it here. All three are machine facts about this panel,
 not personal data, and any of them can still be overridden from a
 private layer for taste (docs/private-layer.md).
 

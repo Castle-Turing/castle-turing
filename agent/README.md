@@ -119,6 +119,16 @@ castle show ID
   `--outcome failed` when an errand failed**, because no surface may
   read failure out of prose: a result with no `outcome` field reads as
   done, forever (see "The claim record, and the `outcome` field").
+  `--target` is convention-only in the same way `--outcome` is, and
+  names which checkout a result's diff is against (`private` or
+  `mechanism`) — the automatic path fills it in from what the tenant
+  wrote to `$CASTLE_TARGET_FILE`, and this flag is the same lever for a
+  human holding the seat by hand or a fixture building a result
+  directly. Deliberately not hard-refused elsewhere the way
+  `--blocking` is: it carries none of `--blocking`'s hazard, since no
+  fold silently mis-attributes a stray `target` the way an
+  unattributable question dead-ends an errand
+  (`docs/tasks/0024-config-target.md`).
   `--blocking` is **not** convention-only like those two — it is
   enforced at write time, and the refusals are listed below — and it
   says that this question stopped the errand — the one thing no later
@@ -170,9 +180,25 @@ castle show ID
   `request` record, runs `CASTLE_WORKER_COMMAND` (default: a headless
   `claude -p` via `agent/castle-worker-claude`) with the request body
   on its stdin and `$CASTLE_REQUEST_ID`/`$CASTLE_DIFF_FILE`/
-  `$CASTLE_PRIVATE_ROOT` in its environment, and folds the command's
-  stdout (reasoning) and `$CASTLE_DIFF_FILE` (a diff, or nothing) into
-  a `result` record. The contract sits at the errand boundary
+  `$CASTLE_TARGET_FILE` in its environment, and folds the command's
+  stdout (reasoning), `$CASTLE_DIFF_FILE` (a diff, or nothing) and
+  `$CASTLE_TARGET_FILE` (one word, or nothing) into a `result` record.
+  **Which repository the tenant works in is configuration, not a
+  guess** (`docs/tasks/0024-config-target.md`). Two roots, either of
+  which may be absent: `$CASTLE_PRIVATE_ROOT` is the resident's own
+  configuration checkout and `$CASTLE_MECHANISM_ROOT` a checkout of
+  this framework. A turn with no usable private root refuses before it
+  runs anything, writing a `failed` result that names the option
+  (`castle.agent.repo.private`) rather than falling back to the
+  working directory — which under the dispatch unit is the resident's
+  home folder, and used to be exactly what an unconfigured worker was
+  told its repository was. A mechanism root that is configured but is
+  not a usable git working tree does *not* refuse the turn: it is
+  reported to the tenant in a third variable,
+  `$CASTLE_MECHANISM_ROOT_INVALID`, and named in one sentence appended
+  to every result the turn writes — see "The claim record" below for
+  why that sentence is written by the harness and not left to the
+  tenant's own prose. The contract sits at the errand boundary
   (Proposal 03): what runs inside the command is free, but a result
   record with the diff embedded is the only thing that gets to matter
   to the rest of the system. **The worker proposes; it never deploys**
@@ -262,8 +288,9 @@ castle show ID
   `decision` record's `evidence` field non-empty, every `refs` entry
   pointing at a record that actually exists, and — when present, not
   required — `propensity` parsing as a float in `[0,1]`, `considered`
-  as a non-empty flat list, and (when both `channel` and `considered`
-  are present) `channel` actually being a member of `considered` — a
+  as a non-empty flat list, `target` being non-blank and on a `result`
+  record, and (when both `channel` and `considered` are present)
+  `channel` actually being a member of `considered` — a
   general invariant ("you can't choose what you didn't consider") kept
   in the permanent schema gate rather than only in the test harness,
   since it holds for any future router policy, not just today's
@@ -418,7 +445,9 @@ A plain bash script, the reference implementation of
 reads the errand's continuation packet on stdin — the request, and on
 an errand that has already had a turn, every prior result, question and
 answer, each quoted inside boundaries carrying a token generated for
-that turn — builds a prompt that states the errand, the repo location,
+that turn — builds a prompt that states the errand, the two
+checkouts it was given (and which of the mechanism checkout's three
+states this host is in),
 that only those boundaries say who wrote what, and — unmissably — that
 this seat must not deploy anything, then execs `claude -p` with the
 prompt **on stdin**. The script names its own variable `errand_records`
@@ -448,7 +477,13 @@ which is prose, and two unmarked copies of it would make the prompt's
 own rule discount them both. The packet ends at an explicit
 `<token> END OF PACKET` line.
 
-Read the script itself
+Since `docs/tasks/0024-config-target.md` the prompt's contract list is
+where the layer-decision rule lives: an ordered four-step test with one
+override, written to be checked against the repository rather than
+merely agreed with, plus the read-only command list, the two coupling
+rules that make a configuration diff silently inert, and the
+ask-first-diff-on-resumption policy described under "Resuming an
+errand" below. Read the script itself
 for the exact prompt; it is short and meant to be audited, not
 summarized. `test/agent-loop/scripted-worker.sh` is the model-free
 stand-in CI actually runs — nothing in CI executes a real model.
@@ -666,6 +701,48 @@ entire pre-existing journal retroactively. A result with no `outcome`
 therefore keeps reading as "done" on every surface, forever, on
 purpose.
 
+A **`target`** field on `result` records, from
+`docs/tasks/0024-config-target.md`, saying which checkout the diff
+embedded in that result is meant to be applied to. Two values today,
+`private` and `mechanism`, written from whatever the tenant put in
+`$CASTLE_TARGET_FILE`.
+
+It exists because nothing else in a result record names a repository,
+and a unified diff cannot supply the answer: its `a/`/`b/` paths are
+relative and can be identical in both checkouts — a private layer
+legitimately carries its own `flake.nix` and its own `hosts/`
+directory. So which repo a proposal is against is a judgment made once,
+at write time, by the only party that knows, and 0025's approval
+binding and 0026's applier will both need it against that exact
+proposal.
+
+The field carries a **role**, not a path. A role reads correctly to a
+human or a cold tenant years later; an absolute path reads correctly
+today and is a lie the first time the checkout moves or the machine is
+reinstalled. The resolved path is stated in the body prose beside the
+diff, where nothing keys on it and its staleness is obvious.
+
+Validated **when present**, like `outcome`, for the identical
+append-only reason, and scoped to `result` records the way `blocking`
+is scoped to questions. But **not** a closed vocabulary, and that
+difference from `outcome` is deliberate rather than an inconsistency:
+`outcome`'s four values are a named cross-task contract several
+surfaces branch on, while `target` has two values today and obvious
+room for a third checkout role, so a membership check would turn adding
+one into a schema migration in exchange for safety nobody needs. The
+validator asks only "non-blank, and on a result." The known values are
+documented here, not enforced in code.
+
+One sentence a *turn* may add to a result body regardless of what its
+tenant said: when `castle.agent.repo.mechanism` is configured but does
+not name a usable git working tree, every result that turn writes says
+so. That is harness-level on purpose. A tenant working a private-layer
+errand has no occasion to mention a mechanism-root typo it never
+touched, so leaving the disclosure to the model would make the
+misconfiguration silent on every errand except the rare one that needed
+it — while the errands that *did* need it are refused nothing: the
+mechanism checkout degrades, the turn does not.
+
 Fields considered for this record and deliberately dropped, each
 failing the "needed now" test: `attempts` (the retry bound is
 structural — any result at all makes a request ineligible — so nothing
@@ -872,6 +949,47 @@ than an interrupted one. And it is not authority: the resumed tenant
 arrives holding an explicit resident answer, which closes a question and
 grants nothing else. The worker proposes and never deploys, on a resumed
 turn exactly as on a first.
+
+**Ask first, diff second — resumption doing something concrete.**
+Everything above describes the machinery; this is the first errand
+shape built on it, and it is a policy stated in the worker prompt
+rather than any new code (`docs/tasks/0024-config-target.md`).
+
+A resident says a pointer is hard to see. The layer rule answers the
+structural half deterministically — which option, and which of the
+private checkout, the host module or the framework it belongs in — and
+then stops at the half nothing on disk can answer: how big it should
+actually be. That is a perceptual judgment. A tenant that guesses a
+number produces a proposal nothing stands behind, and a resident cannot
+tell a guess from a derived value by reading it.
+
+So turn one diagnoses, names the option and the layer, says plainly why
+the value cannot be derived, files a `--blocking` question pointing at
+the sweep tool that exists for exactly this, and **writes no diff and
+no target**. The resident runs the sweep, answers with a number, and
+one further turn — a fresh tenant handed that account and that answer —
+writes the diff around their number and stamps its target.
+
+This costs two model calls where one would have done, and an errand
+nobody answers yields no proposal at all, ever. Both are accepted: the
+alternative is a system that proposes values it does not stand behind.
+
+**An empty diff means two different things, and the journal already
+tells them apart.** Ordinarily an empty `$CASTLE_DIFF_FILE` means "no
+change was warranted" — a considered conclusion. Turn one above also
+produces one, meaning something else entirely: the worker asked instead
+of concluding. No new field distinguishes them, deliberately, because
+the existing pendingness fold already does: an errand whose latest
+result carries an empty diff **and** an open, unanswered blocking
+question is waiting on the resident, and `castle-modal --mode status`
+says so. One with an empty diff and no open question is a considered
+no-change.
+
+Anything reading these records to decide whether an errand produced
+something to approve **must check for an open blocking question before
+concluding it produced nothing** — `docs/tasks/0025` in particular. A
+consumer that skips that check silently discards exactly the errands
+this shape exists to turn into real proposals later.
 
 ### Corrections and filing-time context
 
