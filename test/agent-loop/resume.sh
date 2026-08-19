@@ -961,6 +961,83 @@ TURNS_B=$(( $(count_referencing claim "$REQ15B") - CLAIMS15B_BEFORE ))
   || fail "one answer bought $(( TURNS_A + TURNS_B )) turns ($TURNS_A on A, $TURNS_B on B) — the stated bound is one per answer, ever"
 "$CASTLE" validate >/dev/null
 
+log "  -- and the spend is serialised globally, not per request (Codex, cross-model pass)"
+# The race Codex found: two `castle work` calls on two different
+# requests take two DIFFERENT leases, so they do not exclude each
+# other, and can both read the journal before either writes its claim —
+# both then see the shared answer unspent and both spend it. The bound
+# is a property of the answer, so the mutual exclusion has to be global.
+#
+# The interleaving itself cannot be forced from outside the process:
+# the window between the recomputation and the claim write is
+# microseconds, with no hook in it, so a wall-clock race would pass
+# whether or not the lock exists — a test that cannot fail when the bug
+# is present. What IS deterministic is the serialisation: hold the
+# global spend lock from here, and a `castle work` must not get as far
+# as writing its claim until it is released.
+SPEND_LOCK="$XDG_RUNTIME_DIR/castle/spend.lock"
+CLAIMS15A_BEFORE_LOCK="$(count_referencing claim "$REQ15A")"
+python3 - "$SPEND_LOCK" "$WORKDIR/holder-ready" "$WORKDIR/holder-release" <<'HOLD_PY' &
+import fcntl, pathlib, sys, time
+
+lock_path, ready, release = (pathlib.Path(a) for a in sys.argv[1:4])
+lock_path.parent.mkdir(parents=True, exist_ok=True)
+handle = lock_path.open("a+")
+fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+ready.write_text("held")
+# Held until the harness says otherwise, or 30s as a backstop so a
+# failing run cannot hang CI.
+deadline = time.monotonic() + 30
+while not release.exists() and time.monotonic() < deadline:
+    time.sleep(0.05)
+handle.close()
+HOLD_PY
+HOLDER_PID=$!
+for _ in $(seq 1 100); do [ -f "$WORKDIR/holder-ready" ] && break; sleep 0.05; done
+[ -f "$WORKDIR/holder-ready" ] || fail "the spend-lock holder never acquired the lock"
+
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" work "$REQ15A" >"$WORKDIR/blocked-work.out" 2>&1 &
+BLOCKED_PID=$!
+sleep 2
+[ "$(count_referencing claim "$REQ15A")" -eq "$CLAIMS15A_BEFORE_LOCK" ] \
+  || fail "castle work wrote its claim while another process held the spend lock — the critical section is not serialised"
+kill -0 "$BLOCKED_PID" 2>/dev/null || fail "castle work exited instead of waiting for the spend lock: $(cat "$WORKDIR/blocked-work.out")"
+
+touch "$WORKDIR/holder-release"
+wait "$HOLDER_PID" 2>/dev/null || true
+wait "$BLOCKED_PID" 2>/dev/null || true
+[ "$(count_referencing claim "$REQ15A")" -eq $(( CLAIMS15A_BEFORE_LOCK + 1 )) ] \
+  || fail "castle work never wrote its claim after the spend lock was released: $(cat "$WORKDIR/blocked-work.out")"
+"$CASTLE" validate >/dev/null
+
+log "  -- and the lock spans the claim write, not merely the fold (checked in the source)"
+# The behavioural test above proves the lock is TAKEN before the
+# recomputation: a holder blocks `castle work` short of its claim.
+# It cannot prove the lock is still HELD when the claim is written,
+# because the window between those two points is microseconds inside
+# one process with no hook in it — releasing early passes that test
+# while reopening exactly the race Codex found. Rather than ship a
+# test that cannot fail on the defect, or add a test-only hook to
+# production code, this asserts the span where it is actually decided:
+# the source. Written to survive an honest refactor — a `with` block
+# holding the same range removes the explicit close and still passes —
+# and to fail the one thing that matters, a release placed before the
+# claim.
+python3 - "$REPO_ROOT/agent/castle" <<'SPAN_PY' || fail "the spend lock does not span the claim write"
+import sys
+
+src = open(sys.argv[1]).read()
+acquire = src.index("spend_lock = acquire_lock_blocking(spend_lock_path())")
+claim = src.index("claim_id = write_record(", acquire)
+between = src[acquire:claim]
+if "spend_lock.close()" in between:
+    print("the spend lock is released before the claim is written — the fold and the "
+          "write must be one critical section, or two turns can spend one answer",
+          file=sys.stderr)
+    raise SystemExit(1)
+print("the spend lock is acquired before the fold and not released before the claim write")
+SPAN_PY
+
 log "  -- and neither errand's fold reaches into the other through that shared answer"
 # The same fixture, read from the surfaces. `_collect_downstream` was
 # transitive over every ref, so from A it reached the shared answer,

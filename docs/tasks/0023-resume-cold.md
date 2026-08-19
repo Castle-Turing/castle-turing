@@ -1782,6 +1782,59 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **One answer could still buy two turns, and it took the cross-model
+  pass to see it.** Ten review passes of the same family cleared the
+  spend bound repeatedly — including a pass that specifically probed
+  for a constructible unbounded loop and found none. Codex, run once on
+  the finished tree, found the hole: the bound is global (an answer,
+  not an errand) but the mutual exclusion around it was per-request.
+  Two `castle work` invocations on two different requests take two
+  different leases, exclude each other not at all, and can both read
+  the journal before either writes its claim — so with one answer
+  naming blocking questions on both errands, both see it unspent and
+  both spend it. That is the exact shape `resume.sh` already builds for
+  the sequential case, which passed because dispatch works one errand
+  at a time.
+
+  **Worth a sentence about why the family missed it**, in a repo that
+  pays for a second reviewer precisely to catch what the first cannot:
+  the comment directly above that recomputation already reasons about a
+  race — dispatch's fold against a hand-run turn — and closes it with
+  `require_resumable`. But that guard fires when the recomputation
+  comes back *empty*, and this race is the opposite shape, where both
+  racers see it *non-empty* and both act. A guard written for one
+  direction of a race reads, to a reviewer working down the same file,
+  as though the race is handled. That is not a failure of care; it is
+  what a second, differently-trained reader is for.
+
+  Fixed with the idiom already here: a blocking global lock
+  (`spend_lock_path`, beside `route_lock_path` and
+  `dispatch_lock_path`), held across the recomputation and the claim
+  write and released the moment the claim exists. Deliberately not held
+  across the tenant call, which can run 900 seconds — that would turn
+  "one turn at a time per errand" into "one at a time per machine", a
+  behavioural change rather than a fix. Blocking rather than
+  try-and-skip, for the reason routing already gives: a lease conflict
+  means there is nothing left to do, while a spend-lock conflict means
+  another turn is microseconds from finishing its accounting, after
+  which this one has a correct answer to compute from. The lock
+  ordering — sweep lock → per-request lease → spend lock — is written
+  where the lock is defined, because the next person adding one is who
+  could break it. `require_resumable` stays: it covers the other
+  direction and is still needed.
+
+  **Tested in two parts, because the interleaving cannot be forced.**
+  The window between the fold and the claim write is microseconds
+  inside one process with no hook in it, so a wall-clock race would
+  pass with or without the lock — a test that cannot fail on the
+  defect. Instead: a holder process takes the spend lock and asserts
+  `castle work` does not reach its claim until the lock is released
+  (deterministic, and it fails when the lock is removed); and a
+  source-level check that no release sits between the acquisition and
+  the claim write, which is the half the behavioural test cannot see —
+  releasing early passes the first test while reopening the race.
+  The source check is written to survive an honest `with`-block
+  refactor and was verified not to fire on one.
 - **The narrowed walk left two surfaces contradicting each other, and
   three documentation lines still described the old rules** — the tenth
   review pass, which found no correctness defect in the resumption

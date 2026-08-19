@@ -717,7 +717,18 @@ of the errand reading it: an answer naming blocking questions on two
 errands would otherwise look unspent to each of them in turn and buy a
 turn on both, which is not "exactly one, per answer, ever". A
 normally-written answer refs one question and cannot tell the two rules
-apart. That has to be the claim, because
+apart.
+
+Because that bound is global, the check that reads it and the write that
+spends it are taken under a **global lock** (`spend.lock` in the runtime
+directory), held from the recomputation through the claim write and
+released immediately after — never across the tenant call. A per-request
+lease cannot do this job: two `castle work` invocations on two different
+requests take two different leases, so with one answer naming questions
+on both they can each read the journal before either writes its claim,
+each see the answer unspent, and each spend it. The lock ordering, for
+anyone adding another: sweep lock → per-request lease → spend lock, in
+that order, always. That has to be the claim, because
 `castle work` writes it before the tenant command is even resolved, so
 every turn that starts leaves one however it ends — while the two paths
 that write results for turns nobody survived (the tenant-fault branches
