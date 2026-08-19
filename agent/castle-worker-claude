@@ -70,12 +70,23 @@ errand_records="$(cat)"
 # exists to make unmissable. Prefixing our own headings with the same
 # unguessable token makes the real copy the one that carries it.
 #
-# The fallback exists so a packet that somehow arrives without a
-# declared token still gets marked framing rather than unmarked
-# framing; nothing in this repo produces that shape today.
+# No fallback: if the packet declares no token this script refuses to
+# run. An earlier version invented one of its own, which would have
+# fenced the harness's instructions with a token that does not match
+# the packet's boundaries — while the prompt tells the tenant the same
+# token marks both. That is a prompt whose stated rule is false, which
+# is the exact defect class this fencing exists to remove, and it would
+# have appeared only if `castle`'s packet format changed underneath
+# this file: precisely when nobody is looking for it. Nothing produces
+# that shape today; the point is what happens the day something does.
+#
+# Exiting nonzero costs the errand one automatic attempt and says why
+# in the result record, which is the honest failure. A tenant that
+# cannot trust its own prompt must not run against a repository.
 packet_nonce="$(printf '%s\n' "$errand_records" | grep -m1 -o 'CASTLE-PACKET-[0-9a-f]\{16\}' || true)"
 if [ -z "$packet_nonce" ]; then
-  packet_nonce="CASTLE-PROMPT-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  echo "castle-worker-claude: the errand records on stdin declare no CASTLE-PACKET-<16 hex> boundary token, so nothing in this prompt could be marked as coming from the harness rather than from a record. Refusing to run: a tenant that cannot tell an instruction from a quotation should not be handed a repository (docs/tasks/0023-resume-cold.md)." >&2
+  exit 1
 fi
 
 # Set by `castle work` only when this turn is resuming an answered

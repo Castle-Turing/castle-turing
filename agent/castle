@@ -1227,6 +1227,51 @@ def cmd_record(args: argparse.Namespace) -> int:
     # to write, reached by exactly the mistake it predicts. A guard that
     # applies a different rule from the thing it guards is not a guard.
     if getattr(args, "blocking", False):
+        # A `--blocking` question says an errand has stopped and needs
+        # the resident. The spool is explicitly ephemeral — machine-local
+        # and deletable at any moment without loss
+        # (docs/architecture.md) — and neither `_resumable_answers` nor
+        # `render_continuation_packet` reads it, so a blocking question
+        # written there is not merely unread, it is a durable claim
+        # filed in a store that promises to forget. Refused rather than
+        # resolved against the spool: the combination is incoherent, and
+        # the guard below would otherwise pass it happily (the ref
+        # really does reach a request; it is the *question* that lands
+        # somewhere no fold will ever look).
+        if getattr(args, "spool", False):
+            print(
+                "castle record: refusing to write a --blocking question to the spool. "
+                "A blocking question says this errand has stopped until the resident "
+                "answers, and the spool is ephemeral by design — wiped at logout, read "
+                "by no fold, and never the place a durable claim about an errand "
+                "belongs (docs/architecture.md). Drop --spool, or drop --blocking.",
+                file=sys.stderr,
+            )
+            return 1
+
+        # And the flag is question-only with teeth, unlike `--fact` and
+        # `--outcome`, which document their record type by convention
+        # and enforce nothing. That precedent was the right one to
+        # follow while `--blocking` was equally unenforced; it stopped
+        # applying the moment this flag acquired write-time guards of
+        # its own (empty refs, then reachability). Refusing an
+        # unattributable question while accepting a `blocking: true`
+        # result — a record that validates, reads as meaningful, and
+        # does nothing whatsoever — is not a line anyone could defend.
+        # Both are a writer believing it has stopped an errand when it
+        # has not (docs/tasks/0023, pass-7 review; the brief's
+        # considered-and-rejected list records the reversal).
+        if args.type != "question":
+            print(
+                f"castle record: --blocking is only meaningful on a question record, "
+                f"not on --type {args.type}. Resumption reads it on questions and "
+                "nowhere else, so it would be written, validate cleanly, and do "
+                "nothing — which is worse than being refused "
+                "(docs/tasks/0023-resume-cold.md §9).",
+                file=sys.stderr,
+            )
+            return 1
+
         journal = load_all(journal_dir())
         lineage = refs[0] if refs else ""
         reachable = (
@@ -3101,12 +3146,13 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
                         "",
                         "This turn is not retried automatically: one automatic "
                         "attempt per turn, always, by construction of the "
-                        "eligibility rule (docs/tasks/0021-auto-dispatch.md). If "
-                        "this errand raised a blocking question, the resident's "
-                        "answer to it starts one further turn on its own "
-                        "(docs/tasks/0023-resume-cold.md). Otherwise re-run it by "
-                        f"hand with `castle work {request_id}` if it is still "
-                        "worth doing.",
+                        "eligibility rule (docs/tasks/0021-auto-dispatch.md). An "
+                        "answer to a blocking question this errand has not already "
+                        "resumed on makes it eligible for one further turn "
+                        "(docs/tasks/0023-resume-cold.md) — so if the turn recorded "
+                        "here was that resumption, its answer is already spent and "
+                        "nothing starts on its own. Re-run it by hand with `castle "
+                        f"work {request_id}` if it is still worth doing.",
                     ]
                 ),
                 extra={"outcome": "interrupted"},
@@ -3274,12 +3320,6 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
         rec
         for rec in records.values()
         if rec.type == "request"
-        # Absent `blocking` means not blocking, so `_resumable_answers`
-        # is empty for every question written before that field
-        # existed: no pre-0023 errand, however old and however many
-        # answered questions it carries, is ever spontaneously resumed
-        # the first time this code runs against a resident's journal.
-        and (rec.id not in answered or _resumable_answers(records, rec.id))
         # Excluded by name, from the watermark record's own refs — not
         # by comparing timestamps. See `_write_watermark` for the hole
         # that closes: with whole-second `created` granularity, the
@@ -3293,6 +3333,19 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
         # the status surface, runnable with `castle work <id>`, and
         # never quietly deleted or downgraded.
         and not rec.fields.get(FILED_DURING_TURN_FIELD, "").strip()
+        # Ordered deliberately after the two dict lookups above and
+        # before the syscall below. `_resumable_answers` walks the whole
+        # journal, and the case that makes that expensive is exactly the
+        # case the watermark already excludes: a restored pre-dispatch
+        # history, where every request carries a result and every one of
+        # them is named in the watermark's refs. Folding all of them and
+        # discarding the answer, once a minute, forever, was work with a
+        # guaranteed-empty result. Absent `blocking` means not blocking,
+        # so this returns nothing for every question written before that
+        # field existed — no pre-0023 errand is ever spontaneously
+        # resumed the first time this code runs against a resident's
+        # journal.
+        and (rec.id not in answered or _resumable_answers(records, rec.id))
         # Checked last, because it is the only condition that costs a
         # syscall — and it subsumes §2.4(c)'s "no claim currently holds
         # a live lease": the lease is taken before the claim is

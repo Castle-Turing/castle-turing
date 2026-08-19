@@ -438,6 +438,34 @@ Q_TRAILING="$("$CASTLE" record --type question --provenance requested --seat wor
   || fail "the guard refused a question whose FIRST ref reaches its request — it is stricter than the fold, which never looks past refs[0]"
 [ -n "$Q_TRAILING" ] || fail "the guard wrote nothing for a question whose first ref reaches its request"
 
+# --spool is refused outright rather than resolved against the spool
+# directory. The ref here reaches a real request, so the reachability
+# test above passes it — what is wrong is the destination: a claim that
+# an errand has stopped, filed in a store that is wiped at logout and
+# read by no fold.
+if "$CASTLE" record --spool --type question --provenance requested --seat worker \
+  --refs "$REQ1" --blocking \
+  --body "Resume test: a blocking question aimed at the ephemeral spool." \
+  >"$WORKDIR/blocking-spool.out" 2>&1; then
+  fail "castle record wrote a --blocking question to the spool, where no fold will ever read it"
+fi
+grep -q "refusing to write a --blocking question to the spool" "$WORKDIR/blocking-spool.out" \
+  || fail "the spool refusal did not explain itself: $(cat "$WORKDIR/blocking-spool.out")"
+[ -z "$(find "$XDG_RUNTIME_DIR" -name '*-question-*.md' 2>/dev/null)" ] \
+  || fail "a blocking question reached the spool despite the refusal"
+
+# And the flag is refused on any type but a question. It reads it
+# nowhere else, so writing it elsewhere produces a record that
+# validates, looks meaningful, and does nothing.
+if "$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$REQ1" --blocking --outcome completed \
+  --body "Resume test: a result pretending it blocks something." \
+  >"$WORKDIR/blocking-result.out" 2>&1; then
+  fail "castle record wrote blocking: true onto a result record"
+fi
+grep -q "only meaningful on a question record" "$WORKDIR/blocking-result.out" \
+  || fail "the type refusal did not explain itself: $(cat "$WORKDIR/blocking-result.out")"
+
 # And the canonical shape still writes, or this guard would have eaten
 # the mechanism it protects.
 Q_OK="$("$CASTLE" record --type question --provenance requested --seat worker \
@@ -858,6 +886,29 @@ if failed:
     raise SystemExit(1)
 FENCE_PY
 "$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "the reference tenant refuses a prompt it could not authenticate"
+# ---------------------------------------------------------------------
+# The fallback that used to sit here invented a token of its own when
+# the packet declared none — fencing the harness's instructions with
+# something that does not match the packet's boundaries, while the
+# prompt tells the tenant one token marks both. Nothing produces that
+# shape today; what matters is the day `castle`'s packet format changes
+# under this file, which is exactly when nobody is looking. A prompt
+# whose stated rule is false is the defect this whole fencing exists to
+# remove, so the tenant refuses to run instead.
+printf 'a bare request body with no packet structure at all\n' > "$WORKDIR/tokenless-packet.txt"
+if PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$WORKDIR/tokenless-prompt.txt" \
+  CASTLE_REQUEST_ID="$REQ1" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_REPO_ROOT="$CASTLE_REPO_ROOT" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$WORKDIR/tokenless-packet.txt" \
+  >"$WORKDIR/tokenless-out.txt" 2>&1; then
+  fail "castle-worker-claude ran against a packet with no boundary token, so its own stated rule was false"
+fi
+grep -q "declare no CASTLE-PACKET" "$WORKDIR/tokenless-out.txt" \
+  || fail "the tenant's refusal did not name the missing token: $(cat "$WORKDIR/tokenless-out.txt")"
+[ ! -s "$WORKDIR/tokenless-prompt.txt" ] \
+  || fail "the tenant handed a prompt to the model despite refusing"
 
 # ---------------------------------------------------------------------
 log "final sweep, then independent structural assertions over the whole journal"
