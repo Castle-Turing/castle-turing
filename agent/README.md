@@ -197,7 +197,16 @@ castle show ID
   this framework. A turn with no usable private root refuses before it
   runs anything, writing a `failed` result that names the option
   (`castle.agent.repo.private`) rather than falling back to the
-  working directory — which under the dispatch unit is the resident's
+  working directory. "Usable" is checked in layers: absolute, exists,
+  is a directory — then, when `git` is on `$PATH`, `git rev-parse
+  --show-toplevel`, which catches both a directory git cannot use at
+  all (an empty `.git`, a dangling worktree link) and a path that is a
+  *subdirectory* of a checkout rather than its root, where a diff
+  would carry paths relative to the wrong root. Where `git` is not
+  reachable — it arrives only via `modules/dev`, which is optional —
+  the check degrades to testing that `.git` exists and says so rather
+  than claiming more than it verified, because a tenant can still
+  write a diff by hand on such a host — which under the dispatch unit is the resident's
   home folder, and used to be exactly what an unconfigured worker was
   told its repository was. A mechanism root that is configured but is
   not a usable git working tree does *not* refuse the turn: it is

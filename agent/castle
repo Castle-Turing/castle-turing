@@ -53,6 +53,7 @@ import fcntl
 import os
 import pathlib
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -1905,6 +1906,13 @@ WORKER_PROPOSES_NOTE = (
 # it. Small on purpose: a sweep holding the global dispatch lock while
 # it waits on a process nobody is going to kill is worse than a result
 # record missing the last words of a tenant that had already timed out.
+# How long the checkout pre-flight waits on its one `git rev-parse`
+# (docs/tasks/0024 §16). Generous for a command that answers instantly
+# on any local checkout, and bounded because the pre-flight runs before
+# every turn: a stalled network filesystem must degrade this check, not
+# wedge the sweep that is holding the dispatch lock.
+CHECKOUT_PROBE_SECONDS = 10
+
 TENANT_DRAIN_SECONDS = 5
 
 # How often, while waiting on a tenant, to stop waiting on its *pipes*
@@ -2402,14 +2410,49 @@ def _checkout_fault(root: str) -> str | None:
     """Why `root` is not usable as a checkout to work in, or None if it
     is (docs/tasks/0024-config-target.md §16).
 
-    A plain filesystem test and not a `git` subprocess, deliberately.
-    This runs on every turn, before any tenant exists, to answer a
-    question `.git`'s presence already answers; shelling out would add
-    a process, a $PATH dependency and an error mode to a check whose
-    whole job is to fail cleanly. `.exists()` rather than `.is_dir()`
-    on the `.git` entry itself, because a linked worktree and a
-    submodule both carry a `.git` *file* pointing elsewhere, and both
-    are perfectly ordinary things for a resident's checkout to be.
+    **Layered on purpose: three free filesystem stages, then git
+    itself when git is reachable.** An earlier version of this
+    function stopped after testing that `.git` exists, and argued for
+    that as a virtue — no subprocess, no $PATH dependency, no extra
+    error mode in a check whose job is to fail cleanly. Half of that
+    argument survives and half of it did not: `.git` existing does not
+    establish that git can *use* the directory, while this function's
+    own refusal message claimed exactly that. An empty `.git`
+    directory and a linked-worktree `.git` file whose target has been
+    removed both pass an existence test and both leave git unable to
+    do anything at all. A pre-flight that exists to fail before a
+    model call is spent, and then lets a broken checkout through to
+    spend one, has not done its job (Codex review, P2).
+
+    The filesystem stages stay first and unchanged, because they are
+    free and they give the clearest messages for the mistakes people
+    actually make — a typo'd path, a file where a directory was meant,
+    a relative path. Only after they pass does git get asked, and it
+    is asked the question that actually matters: `rev-parse
+    --show-toplevel`, whose exit status says whether git can use the
+    directory and whose output says which working tree it landed in.
+
+    **A toplevel that differs from the configured root is a fault, and
+    it is one nobody had considered.** It means the resident pointed
+    at a *subdirectory* of a checkout. Nothing about that is obviously
+    wrong until a tenant produces a diff there, whose paths are then
+    relative to a root the applier will not be using — an unapplyable
+    proposal that no downstream step could detect, since the diff
+    itself looks perfectly well formed. Compared through
+    `os.path.realpath` on both sides, because git resolves symlinks in
+    what it reports and the configured value may not be resolved (or
+    may carry a trailing slash).
+
+    **When git is not on $PATH, this does not refuse.** `git` reaches
+    a dispatched worker only through `modules/dev`, which is optional,
+    and the dispatch unit pins `PATH` — so a host running the agent
+    layer without that module genuinely has no git, and refusing there
+    would break work that can still succeed: a tenant can write a
+    unified diff by hand without git existing anywhere. The fallback
+    is the old existence test, and the wording says which check
+    actually ran rather than asserting a git-verified fact no git ever
+    verified. Same blast-radius reasoning that makes a broken
+    mechanism root degrade rather than refuse (§16).
 
     **Absoluteness is checked here and not only in `modules/agent`,
     and the duplication is the point.** That module asserts it at
@@ -2433,8 +2476,49 @@ def _checkout_fault(root: str) -> str | None:
         return "the path does not exist"
     if not path.is_dir():
         return "the path is not a directory"
-    if not (path / ".git").exists():
-        return "the path is not the root of a git working tree (it has no .git)"
+
+    git = shutil.which("git")
+    if git is None:
+        # No git to ask, so claim only what was actually tested.
+        if not (path / ".git").exists():
+            return (
+                "it has no `.git` entry (and `git` is not on this turn's PATH, so "
+                "nothing stronger than that was checked)"
+            )
+        return None
+
+    try:
+        probe = subprocess.run(
+            [git, "-C", root, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=CHECKOUT_PROBE_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # git resolved but would not run, or hung — a stalled network
+        # filesystem is the realistic case. Degrade to the filesystem
+        # test rather than refusing on the strength of a probe that
+        # never produced an answer either way.
+        if not (path / ".git").exists():
+            return (
+                "it has no `.git` entry (and `git` could not be run to check "
+                "anything stronger)"
+            )
+        return None
+
+    if probe.returncode != 0:
+        detail = (probe.stderr or "").strip().splitlines()
+        reason = detail[0] if detail else f"git exited {probe.returncode}"
+        return f"git cannot use it as a working tree ({reason})"
+
+    toplevel = probe.stdout.strip()
+    if toplevel and os.path.realpath(toplevel) != os.path.realpath(root):
+        return (
+            f"it is inside the working tree rooted at `{toplevel}`, not the root of "
+            "one — a diff produced here would carry paths relative to the wrong "
+            "root, and nothing downstream could tell"
+        )
     return None
 
 

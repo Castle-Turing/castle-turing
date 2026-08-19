@@ -259,10 +259,101 @@ fi
 R_NOTREPO="$(newest_result_for "$REQ_NOTREPO")"
 grep -q '^outcome: failed$' "$R_NOTREPO" || fail "the unusable-root turn did not record outcome: failed"
 grep -qF "$NOT_A_CHECKOUT" "$R_NOTREPO" || fail "the unusable-root turn's result does not name the path it was given"
-grep -q 'not the root of a git working tree' "$R_NOTREPO" \
-  || fail "the unusable-root turn's result does not say what was wrong with the path"
+# Either wording is correct and which one appears is a property of the
+# host, not of the code under test: with git reachable the pre-flight
+# asks git and quotes it, and without git it falls back to the `.git`
+# existence test and says so. Asserting one spelling would make this
+# harness pass or fail on whether modules/dev happened to be installed.
+# The git-reachable wording, asserted directly rather than as one arm
+# of an alternation. This harness builds its fixtures with `git init`
+# and `git archive` before it does anything else, so git is a hard
+# prerequisite of running it at all and the pre-flight is always in
+# its git-reachable mode here — an assertion tolerating the no-git
+# wording would be a branch that can never execute.
+#
+# Worth recording that the tolerant version was tried first and had a
+# real bug in exactly that unreachable arm: `has no .git. entry`, one
+# wildcard short of the backtick-dot pair the message contains. It
+# could never have matched, and nothing noticed, because it never ran.
+# The no-git fallback is verified directly against `_checkout_fault`
+# instead, where it can actually be reached.
+grep -q 'cannot use it as a working tree' "$R_NOTREPO" \
+  || fail "the unusable-root turn's result does not say what was wrong with the path: $(grep -n 'could not start' "$R_NOTREPO")"
 "$CASTLE" validate >/dev/null
 assert_checkouts_untouched "after the two refusals"
+
+# ---------------------------------------------------------------------
+log "a checkout git cannot actually use is refused, not merely one with no .git"
+# ---------------------------------------------------------------------
+# The `.git` existence test this pre-flight used to stop at answers a
+# weaker question than the refusal message claimed: an empty `.git`
+# directory and a linked-worktree `.git` file whose target is gone
+# both satisfy it, and git can do nothing with either. A pre-flight
+# that exists to fail before a model call is spent must not pass those
+# through to spend one (Codex review, P2).
+#
+# Not guarded on git being present, because this harness cannot run
+# without it: the fixtures at the top are built with `git init` and
+# `git archive`. On a host with no git the pre-flight degrades to the
+# old existence test and these three cases legitimately pass — that is
+# the documented fallback, and refusing there would break work that
+# can still succeed. It is verified directly against
+# `_checkout_fault`, since it is unreachable from here.
+EMPTY_GIT="$WORKDIR/empty-git"
+mkdir -p "$EMPTY_GIT/.git"
+REQ_EMPTYGIT="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint against a directory with an empty .git.")"
+if CASTLE_PRIVATE_ROOT="$EMPTY_GIT" "$CASTLE" work "$REQ_EMPTYGIT" >/dev/null 2>&1; then
+  fail "castle work accepted a private root whose .git is an empty directory — git cannot use it, and a model call was spent finding that out"
+fi
+R_EMPTYGIT="$(newest_result_for "$REQ_EMPTYGIT")"
+grep -q '^outcome: failed$' "$R_EMPTYGIT" || fail "the empty-.git turn did not record outcome: failed"
+grep -q 'cannot use it as a working tree' "$R_EMPTYGIT" \
+  || fail "the empty-.git refusal does not say git is what could not use the path"
+
+BROKEN_LINK="$WORKDIR/broken-worktree-link"
+mkdir -p "$BROKEN_LINK"
+# The shape a linked worktree or a submodule really has — a `.git`
+# FILE pointing elsewhere — with its target removed. `.exists()` on
+# `.git` is true here, which is exactly why that test was too weak.
+printf 'gitdir: %s/nowhere-at-all\n' "$WORKDIR" > "$BROKEN_LINK/.git"
+REQ_BROKENLINK="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint against a dangling worktree link.")"
+if CASTLE_PRIVATE_ROOT="$BROKEN_LINK" "$CASTLE" work "$REQ_BROKENLINK" >/dev/null 2>&1; then
+  fail "castle work accepted a private root whose .git file points nowhere"
+fi
+R_BROKENLINK="$(newest_result_for "$REQ_BROKENLINK")"
+grep -q 'cannot use it as a working tree' "$R_BROKENLINK" \
+  || fail "the dangling-worktree-link refusal does not say git is what could not use the path"
+
+log "  -- and a SUBDIRECTORY of a real checkout is refused, naming the root it found"
+# Nobody asked for this one, and it is the quietest of the four. A
+# subdirectory passes every filesystem test and passes git's own
+# exit status too; only the toplevel it reports gives it away. A
+# diff produced there carries paths relative to a root the applier
+# will not use — a well-formed, unapplyable proposal that nothing
+# downstream could detect.
+REQ_SUBDIR="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint against a subdirectory of a checkout.")"
+mkdir -p "$PRIVATE/state/journal"
+if CASTLE_PRIVATE_ROOT="$PRIVATE/state" "$CASTLE" work "$REQ_SUBDIR" >/dev/null 2>&1; then
+  fail "castle work accepted a subdirectory of a checkout as the private root — a diff written there would be relative to the wrong root"
+fi
+R_SUBDIR="$(newest_result_for "$REQ_SUBDIR")"
+grep -q '^outcome: failed$' "$R_SUBDIR" || fail "the subdirectory turn did not record outcome: failed"
+grep -qF "it is inside the working tree rooted at \`$PRIVATE\`" "$R_SUBDIR" \
+  || fail "the subdirectory refusal does not name the working tree it actually found: $(grep -n 'could not start' "$R_SUBDIR")"
+grep -q 'relative to the wrong root' "$R_SUBDIR" \
+  || fail "the subdirectory refusal does not say what would go wrong"
+
+log "  -- while the real checkout, the root of a working tree, still passes"
+# The control. Without it the three refusals above are satisfied by a
+# pre-flight that refuses everything.
+REQ_STILLOK="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint against the real checkout, which must still work.")"
+"$CASTLE" work "$REQ_STILLOK" >/dev/null
+R_STILLOK="$(newest_result_for "$REQ_STILLOK")"
+grep -q '^outcome: completed$' "$R_STILLOK" \
+  || fail "the stronger checkout probe now refuses a perfectly good checkout"
+grep -q '^target: private$' "$R_STILLOK" || fail "the control turn produced no target"
+"$CASTLE" validate >/dev/null
+assert_checkouts_untouched "after the checkout-probe cases"
 
 # ---------------------------------------------------------------------
 log "a RELATIVE private root refuses too, and never resolves against the caller's cwd"

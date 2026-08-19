@@ -1081,6 +1081,46 @@ refusal fires when, and only when:
   exist, or exists but is not the root of a git working tree (checked
   as a plain filesystem test — `(pathlib.Path(root) / ".git").exists()`
   — no `git` subprocess needed for this check).
+- **Corrected during implementation: the filesystem test this brief
+  specified is weaker than the sentence it was asked to justify.**
+  `.git` existing does not establish that git can *use* the
+  directory, and the refusal message says "not the root of a git
+  working tree", which is a claim about git. An empty `.git`
+  directory, and a linked-worktree or submodule `.git` *file* whose
+  target has been removed, both satisfy the test and both leave git
+  unable to do anything at all — so the pre-flight would pass them
+  through and spend the model call it exists to save (Codex review,
+  P2). The check is now layered: the three free filesystem stages
+  first (absolute, exists, is a directory), unchanged, because they
+  are free and give the clearest messages for the mistakes people
+  actually make; then, **when `git` is resolvable**, one
+  `git -C <root> rev-parse --show-toplevel`, whose exit status says
+  whether git can use the directory at all.
+
+  **A toplevel that differs from the configured root is also a fault,
+  and it is a case this brief never considered.** It means the
+  resident pointed at a *subdirectory* of a checkout, which passes
+  every other test including git's own exit status. A diff produced
+  there carries paths relative to a root the applier will not be
+  using — a well-formed proposal that is unapplyable in a way nothing
+  downstream could detect, which is the same class of silent wrongness
+  §6 gives the `target` field to prevent. Compared through
+  `os.path.realpath` on both sides, since git resolves symlinks in
+  what it reports.
+
+  **When `git` is not resolvable this does not refuse.** `git`
+  reaches a dispatched worker only through `modules/dev`, which is
+  optional, and the dispatch unit pins `PATH` — so a host running the
+  agent layer without that module genuinely has none, and a tenant
+  there can still write a unified diff by hand. Refusing would break
+  work that can succeed, which is the identical blast-radius argument
+  that makes a broken `repo.mechanism` degrade rather than refuse. The
+  fallback is the original existence test, and its wording says which
+  check actually ran rather than asserting a git-verified fact no git
+  ever verified. The probe is bounded (`CHECKOUT_PROBE_SECONDS`)
+  because it runs before every turn and a stalled network filesystem
+  must degrade this check rather than wedge a sweep holding the
+  dispatch lock.
 - **Added during implementation: or is not absolute.** §1 puts an
   absolute-path assertion on the Nix options, which covers a value
   arriving through Nix and nothing else — while §4 of this brief
