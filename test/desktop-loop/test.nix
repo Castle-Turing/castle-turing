@@ -406,10 +406,27 @@ in
     # Deliberately not scoped to this repo's own snippet: any failed
     # snippet, from any module, is a broken activation and worth
     # failing on. Anchored on the exact sentence
-    # nixos/modules/system/activation/activation-script.nix prints.
+    # nixos/modules/system/activation/activation-script.nix prints:
+    #
+    #   printf "Activation script snippet '%s' failed (%s)\n" ...
+    #
+    # One regex matching that whole shape, rather than two loose
+    # substring greps chained together. The loose form worked, and was
+    # one journald configuration away from matching its own command
+    # line: its text contained both substrings, so anything that
+    # logged the backdoor shell's commands would have made the guard
+    # fail permanently against itself. This pattern cannot match its
+    # own command line — the literal `[^']*` in it does not satisfy
+    # `'[^']*'` followed by ` failed [(]`, which was checked rather
+    # than assumed.
+    #
+    # `[(]` rather than a backslash-escaped paren on purpose: this
+    # string crosses Nix, then Python, then the shell, and each of the
+    # three has its own opinion about backslashes. A bracket
+    # expression needs none of them.
     activation_failures = machine.succeed(
-        "journalctl -b --no-pager | grep -F 'Activation script snippet' "
-        "| grep -F 'failed' || true"
+        "journalctl -b --no-pager | "
+        "grep -E \"Activation script snippet '[^']*' failed [(]\" || true"
     ).strip()
     assert not activation_failures, (
         "an activation script snippet failed during boot:\n" + activation_failures
