@@ -22,6 +22,7 @@ CHECK="$REPO_ROOT/test/agent-loop/check_assertions.py"
 WORKER_BLOCKING="$REPO_ROOT/test/agent-loop/scripted-worker-blocking.sh"
 WORKER_BLOCKING_ALT="$REPO_ROOT/test/agent-loop/scripted-worker-blocking-alt.py"
 WORKER_OK="$REPO_ROOT/test/agent-loop/contract-worker.sh"
+WORKER_SELF_ANSWER="$REPO_ROOT/test/agent-loop/scripted-worker-self-answer.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-resume-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -298,6 +299,93 @@ A7B="$("$CASTLE" answer "$Q7B" "Resume test: $ANSWER_MARKER — the resident's w
 "$CASTLE" dispatch >/dev/null
 [ "$(count_referencing claim "$REQ7")" -eq "$CLAIMS_PARENT_BEFORE" ] || fail "answering the follow-up's blocking question resumed its PARENT $REQ7 as well"
 [ "$(count_referencing claim "$REQ7B")" -eq 2 ] || fail "the follow-up $REQ7B was not resumed by its own answer"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a worker tenant cannot answer its own question — by any path it has"
+# ---------------------------------------------------------------------
+# Only the resident may close a question (docs/architecture.md,
+# Proposal 05). Before this refusal existed a tenant could file a
+# blocking question and its own answer on the same turn, and the errand
+# was eligible again on the very next sweep — five turns off one
+# request, unattended. The refusal lives in `write_record`, so every
+# path a tenant has reaches the same wall; the fixture below tries the
+# two CLI ones and reports what happened on stdout, where the result
+# record captures it.
+REQ9="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a ninth invented errand, whose tenant tries to answer itself.")"
+CASTLE_WORKER_COMMAND="$WORKER_SELF_ANSWER" "$CASTLE" dispatch >/dev/null
+SELF_RESULT_FILE="$(referencing result "$REQ9")"
+[ -n "$SELF_RESULT_FILE" ] || fail "the self-answering tenant's turn produced no result at all"
+grep -q "self-answer: castle answer was REFUSED" "$SELF_RESULT_FILE" \
+  || fail "a tenant answered its own question through castle answer: $(cat "$SELF_RESULT_FILE")"
+grep -q "self-answer: castle record --type answer was REFUSED" "$SELF_RESULT_FILE" \
+  || fail "a tenant answered its own question through castle record: $(cat "$SELF_RESULT_FILE")"
+grep -q "Proposal 05" "$SELF_RESULT_FILE" \
+  || fail "the refusal did not say why in Proposal 05's terms: $(cat "$SELF_RESULT_FILE")"
+# No answer record naming the tenant's own question exists, so nothing
+# is resumable and no further turn runs however many sweeps happen.
+Q9="$(blocking_question_for "$REQ9")"
+[ -n "$Q9" ] || fail "the self-answering tenant filed no blocking question"
+[ -z "$(referencing answer "$Q9")" ] || fail "an answer record naming $Q9 exists — the refusal did not hold"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ9")" -eq 1 ] || fail "a self-answering tenant granted itself $(count_referencing claim "$REQ9") turns on $REQ9"
+[ "$(count_referencing result "$REQ9")" -eq 1 ] || fail "a self-answering tenant produced more than one result on $REQ9"
+"$CASTLE" validate >/dev/null
+
+log "  -- and the resident answering that same question still resumes it, exactly once"
+A9="$("$CASTLE" answer "$Q9" "Resume test: $ANSWER_MARKER — the resident closes the question the tenant could not.")"
+CASTLE_WORKER_COMMAND="$WORKER_BLOCKING" "$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ9")" -eq 2 ] || fail "the resident's own answer did not resume $REQ9 — the refusal caught more than it should"
+grep -q "^refs: $REQ9,$A9\$" "$JOURNAL"/*-claim-*.md || fail "the resumption of $REQ9 did not spend $A9"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "an automatic turn whose answer was spent between the fold and the lease writes NOTHING"
+# ---------------------------------------------------------------------
+# The interleaving itself cannot be produced from outside the process —
+# the window is between dispatch's fold and `acquire_lock`, with no
+# hook in between — so this drives the guard directly, in the state the
+# race leaves behind: a resulted request, its answer already spent by
+# somebody else's claim, and a turn that dispatch authorised on the
+# strength of that answer. `require_resumable` is the flag dispatch
+# passes for exactly that shape. What must happen is nothing: no claim,
+# no result, no spend, and the exception dispatch treats as a skip.
+#
+# The hand path is asserted in the same breath, because the constraint
+# is symmetric: `castle work <id>` on the same request, with the same
+# nothing to resume, is the deliberate unbounded retry path and must
+# still run a full turn.
+CLAIMS_BEFORE_RACE="$(count_referencing claim "$REQ1")"
+RESULTS_BEFORE_RACE="$(count_referencing result "$REQ1")"
+python3 - "$CASTLE" "$REQ1" <<'RACE_PY' || fail "the lost-resumption guard did not behave as specified"
+import importlib.machinery, importlib.util, sys
+
+castle_path, request_id = sys.argv[1], sys.argv[2]
+loader = importlib.machinery.SourceFileLoader("castle_under_test", castle_path)
+spec = importlib.util.spec_from_loader("castle_under_test", loader)
+castle = importlib.util.module_from_spec(spec)
+loader.exec_module(castle)
+
+records = castle.load_all(castle.journal_dir())
+request = records[request_id]
+if castle._resumable_answers(records, request_id):
+    print("fixture is wrong: this request still has something to resume", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    castle.run_worker_turn(request, require_resumable=True)
+except castle.ResumptionLost:
+    print("guard: an automatic turn with nothing left to resume was refused")
+else:
+    print("guard: the turn ran anyway — the bound is open", file=sys.stderr)
+    raise SystemExit(1)
+RACE_PY
+[ "$(count_referencing claim "$REQ1")" -eq "$CLAIMS_BEFORE_RACE" ] || fail "the refused turn wrote a claim anyway"
+[ "$(count_referencing result "$REQ1")" -eq "$RESULTS_BEFORE_RACE" ] || fail "the refused turn wrote a result anyway"
+
+log "  -- while a hand-run castle work on the same request still runs a full turn (the retry path is unchanged)"
+CASTLE_WORKER_COMMAND="$WORKER_OK" "$CASTLE" work "$REQ1" >/dev/null 2>&1 || true
+[ "$(count_referencing claim "$REQ1")" -eq $(( CLAIMS_BEFORE_RACE + 1 )) ] || fail "castle work refused a hand retry — the unbounded escape hatch must not change"
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------

@@ -425,6 +425,16 @@ def _run_answer_scripted(castle, question_id: str | None, out=sys.stdout) -> int
     except castle.AnswerRefused as exc:
         print(_answer_refusal(exc), file=sys.stderr)
         return 1
+    except castle.RecordError as exc:
+        # The write-time refusals `write_record` itself owns — today,
+        # an answer attempted from inside a worker turn (Proposal 05,
+        # docs/tasks/0023 §5). Not a policy check duplicated here: the
+        # policy lives in the one choke point every writer passes
+        # through, and this is only the surface that reports it, so a
+        # tenant that reached for this window instead of the CLI meets
+        # a sentence rather than a traceback.
+        print(str(exc), file=sys.stderr)
+        return 1
     print(answer_id, file=out)
     return 0
 
@@ -493,6 +503,12 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
         # state machine this surface does not need and a hang risk on a
         # pty-driven program; the chord is one keypress away.
         print(_answer_refusal(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
+    except castle.RecordError as exc:
+        # See the piped path above: `write_record`'s own refusals,
+        # reported rather than re-implemented.
+        print(str(exc), file=sys.stderr)
         _pause_for_dismissal(out)
         return 1
 

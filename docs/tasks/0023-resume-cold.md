@@ -501,24 +501,27 @@ private journal, accumulated over months, suddenly producing worker
 turns on errands the resident had long since considered finished, the
 first time this task's code runs against it.
 
-**A stated limit, not an oversight: a watermarked errand can never
-resume, even after a hand-run turn raises a blocking question on it.**
-Resumption is ANDed with every other condition, the watermark exclusion
-included, so this sequence ends in silence: a request predating
-dispatch is excluded by name; the resident runs it by hand with `castle
-work <id>`; that turn files a `--blocking` question and stops; the
-resident answers it — and nothing happens. `_resumable_answers` finds
+**A stated limit, not an oversight: an errand excluded by any other
+condition can never resume, even after a hand-run turn raises a
+blocking question on it.** Two shapes are excluded — a request the
+watermark names as predating dispatch, and a request carrying
+`filed-during-turn`, which a tenant wrote mid-errand — and resumption
+is ANDed with both, so this sequence ends in silence either way: the
+request is excluded; the resident runs it by hand with `castle work
+<id>`; that turn files a `--blocking` question and stops; the resident
+answers it — and nothing happens. `_resumable_answers` finds
 the unspent answer, and the watermark clause rejects the request
 anyway. The modal says only "Filed.", so there is no surface saying
 why.
 
-Kept deliberately, for the reason the watermark exists at all: its
-promise is specifically that errands predating dispatch do not start
-themselves, and letting one begin producing automatic turns because a
-resident hand-ran it once would erode exactly that promise — a
-restored journal's history would gain a second route into automatic
-work, which is the failure `docs/tasks/0021` §2.2 built the watermark
-to close. The conservative direction is also the safe one: the cost of
+Kept deliberately, for the reason those exclusions exist at all. Each
+is a promise about what will not start itself — errands predating
+dispatch (`docs/tasks/0021` §2.2), and work a tenant generated rather
+than a resident (§2.4(e)) — and letting either begin producing
+automatic turns because a resident hand-ran it once would turn a single
+manual start into a standing permission. A restored journal's history,
+or a tenant's own follow-up queue, would gain a second route into
+unattended work, which is precisely what both exclusions close. The conservative direction is also the safe one: the cost of
 this limit is a turn that has to be started by hand, and the cost of
 the alternative is unattended spend on errands a resident considered
 finished months ago.
@@ -601,6 +604,45 @@ endorsement of the back door itself. `castle record --refs`'s failure
 to resolve its refs before writing (unlike `castle ask`/`castle
 answer`/`castle correct`, which all validate first) is a separate,
 real gap, filed as its own backlog entry in §10.
+
+**Corrected during implementation: this section asked the wrong
+question about "who else writes an answer," and the omission was a
+high-severity defect.** Everything above reasons about a *hand-planted*
+duplicate — a resident or a script writing a second answer to one
+question — and concludes the fold should tolerate it. It never asks
+who else has hands on `castle` at all, and the answer is: a worker
+tenant, on every turn, through the same CLI, with `CASTLE_WORKER_CLAIM`
+in its environment. `write_record` stamped `filed-during-turn` only on
+`type == "request"`; nothing on the answer path read the claim at all;
+`cmd_record` refuses only `correction`; and `file_answer` never
+consulted it either. So a tenant could file a fresh blocking question
+**and its own answer** on the same turn — its own claim spends only
+what existed when the turn began, so the new answer was unspent, and
+the errand was eligible on the very next sweep. Reproduced at five
+claims and five results on one request, across five sweeps, through
+both `castle answer` and `castle record --type answer`.
+
+`docs/tasks/0021` §2.4(e) severed exactly this chain for requests; this
+task opened a second way for a journal write to authorise an unattended
+turn and did not sever it.
+
+**The fix is a refusal, not a narrower fold, and the reason matters
+more than the loop does.** Making a tenant-written answer merely
+non-resuming is the smaller change and it is wrong: the answer would
+still land in the journal, still satisfy the "is this question
+answered" fold every surface uses, and so still retire a question the
+resident was supposed to see — the system closing its own question,
+which Proposal 05 forbids outright and which this brief's own stop
+conditions name as the erosion edge. So `write_record` refuses
+`type == "answer"` outright whenever a claim id is present in the
+environment: one choke point, covering `castle answer`, `castle record
+--type answer`, the modal, and any writer added later, exactly where
+the request stamp already lives rather than per-subcommand. It is safe
+for every legitimate writer because `run_worker_turn` sets
+`WORKER_CLAIM_ENV` on the child's env dict and never on `os.environ` —
+so the dispatching process's own claim, result and decision writes
+never see it. The refusal says why in Proposal 05's terms, because a
+tenant that meets it should be told what it just tried to do.
 
 ### 6. Exactly-once is resident-facing, and there is no undo
 
@@ -1674,6 +1716,41 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **A worker tenant could answer its own blocking question, and so
+  grant itself unbounded automatic turns.** The most serious defect
+  found in this task, caught by a second review pass over the tree.
+  §5's own analysis is what missed it — it reasoned about a
+  hand-planted duplicate answer and never about a tenant-authored one —
+  so the correction is written into §5 itself rather than only here.
+  Fixed by refusing `type == "answer"` in `write_record` whenever a
+  claim id is in the environment, not by making tenant answers
+  non-resuming: an answer that lands and merely fails to resume still
+  retires a question the resident never saw, which is the Proposal 05
+  violation and is worse than the spend loop. `castle-modal` learned to
+  report `RecordError` on both of its answer paths, so a tenant that
+  reached for that window meets the same sentence rather than a
+  traceback — the policy stays in the one choke point; only the
+  reporting is local. Covered in `resume.sh` by a tenant that tries
+  both CLI doors and is refused at both, with the errand still at one
+  turn after further sweeps, and then the resident's own answer
+  resuming it normally.
+- **An automatic turn that lost the fold-to-lease race would have run
+  anyway.** §7 called that window "the same probe-then-act shape
+  `lock_is_held` documents and accepts," which understated it: if a
+  hand-run `castle work` took the lease and spent the answer in
+  between, dispatch's recomputation came back empty and the turn
+  proceeded as an ordinary non-resuming one — a real model call, a
+  claim naming no answer, a packet resuming nothing, and a second
+  automatic attempt on an errand whose single authorisation somebody
+  else had already used. `run_worker_turn` now takes
+  `require_resumable`, which `castle dispatch` passes for the one shape
+  where resumption is the *only* thing that made the request eligible
+  (it already carries a result), and raises `ResumptionLost` before
+  writing anything if the answer is gone. Dispatch treats it as a skip,
+  exactly like `LeaseHeld`. Hand-run behaviour is untouched by
+  construction — `cmd_work` never passes the flag, so retrying a
+  resulted errand with nothing to resume remains the deliberate
+  unbounded escape hatch.
 - **The packet emits every body byte-for-byte; the first
   implementation stripped them.** §7 says each record is rendered
   "verbatim — nothing paraphrased or summarised," and the first version
@@ -1705,14 +1782,37 @@ shaped than the text specifies, each with the reason.
   from the renderer rather than from whatever the body happened to end
   with. Both were mutation-tested — restoring the strip fails the
   first, removing the separator fails the second.
-- **A stated limit was added to §4 and to `agent/README.md`: a
-  watermarked errand can never resume.** Behaviour unchanged and
+- **The answer heading is attributed off the record too, not only the
+  request's.** The same function that took trouble to stop calling a
+  system-initiated request the resident's words was still labelling
+  every answer "The resident's answer, verbatim" with no check on who
+  wrote it. Narrowed to near-nothing by the refusal above, but the
+  asymmetry would have been wrong to leave in place: an answer carrying
+  `provenance: requested` and `seat: intake` — what `file_answer`
+  always writes, and the only path a resident's answer takes — keeps
+  that heading; anything else gets one that names what the record
+  actually says and claims nothing about its author.
+- **Three comments describing behaviour this branch changed were
+  corrected**, each of which also cited the backlog file this branch
+  deletes: `file_answer`'s note that resumption "still defers" to it,
+  `modules/agent`'s path-unit comment predicting that dispatch would
+  one day need to notice an `answer` record (it does now, and the unit
+  needed no change to allow it — worth saying, since that was the
+  comment's own argument), and `dispatch-test.sh`'s section header for
+  the non-behavior test, which is now the *narrowed* non-behavior. The
+  0021 and 0022 briefs' references to the same file are historical and
+  were left alone.
+- **A stated limit was added to §4 and to `agent/README.md`, and it
+  covers two shapes rather than one: neither a watermarked errand nor a
+  tenant-filed one can resume.** Behaviour unchanged and
   deliberately so (the reasoning is in §4). Verified empirically rather
   than reasoned about: a pre-watermark request, hand-run until its
   tenant filed a blocking question, then answered, is untouched by two
   further sweeps — and a second `castle work <id>` resumes it, spends
   the answer in its claim, and delivers the packet, which is why the
-  documented remedy is that command.
+  documented remedy is that command. The same sequence was then run
+  against a `filed-during-turn` request, with the same result, before
+  the second shape was documented alongside the first.
 - **One cost this task adds is deferred rather than paid, and is filed
   rather than left in a review thread:
   `docs/backlog/eligibility-fold-rescans-per-request.md`.** §4's

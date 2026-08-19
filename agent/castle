@@ -621,6 +621,51 @@ def write_record(
     claim_id = os.environ.get(WORKER_CLAIM_ENV, "").strip()
     if type == "request" and claim_id and FILED_DURING_TURN_FIELD not in fields:
         fields[FILED_DURING_TURN_FIELD] = claim_id
+
+    # And the same choke point refuses an `answer` written from inside
+    # a worker turn outright (docs/tasks/0023 §5). Not a stamp — a
+    # refusal — because there is no shape of this write that is
+    # acceptable.
+    #
+    # Proposal 05 (docs/architecture.md): inference may *open* a
+    # question; only the resident may close one. A seat that answers
+    # its own question retires it before the resident ever sees it —
+    # the answer satisfies the "waiting on you" fold on every surface,
+    # so the question stops being pending and nothing anywhere reports
+    # that the system, not the person, decided. That alone is the
+    # violation, independent of anything resumption does.
+    #
+    # Resumption then makes it a spend loop as well. Since 0023 an
+    # answered blocking question buys the errand one further automatic
+    # turn, and the turn's own claim spends only the answers that
+    # already existed when it started — so a tenant that files a fresh
+    # blocking question plus its own answer each turn is eligible again
+    # on the very next sweep, forever, at one model call per turn.
+    # Reproduced at five turns on one request before this refusal
+    # existed, through both `castle answer` and
+    # `castle record --type answer`. 0021 §2.4(e) severed exactly this
+    # chain for requests; this is the second door 0023 opened, closed
+    # the same way and in the same place, so no future write path can
+    # route around it by choosing a different subcommand.
+    #
+    # Safe for every legitimate writer because of one property, checked
+    # rather than assumed: `run_worker_turn` sets WORKER_CLAIM_ENV on
+    # the *child's* env dict and never on `os.environ`, so the
+    # dispatching process's own claim, result and decision writes never
+    # see it — only a process descended from a tenant does.
+    if type == "answer" and claim_id:
+        raise RecordError(
+            "refusing to write an answer record from inside a worker turn "
+            f"(a tenant's environment carries {WORKER_CLAIM_ENV}={claim_id}). Only "
+            "the resident may close a question (docs/architecture.md, Proposal 05): "
+            "a seat that answers its own question retires it before the resident "
+            "ever sees it, and — since docs/tasks/0023-resume-cold.md — an answered "
+            "blocking question grants the errand another automatic turn, so a seat "
+            "that could answer itself could grant itself unbounded unattended work. "
+            "File the question and end the turn; the resident's answer is what "
+            "resumes the errand."
+        )
+
     _reject_newline_fields(fields, what="record")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{record_id}.md"
@@ -819,9 +864,11 @@ def file_answer(
     # picker and the status surface's "waiting on you" overlay use: a
     # question is answered iff some `answer` record names it in `refs`.
     # Two answers on one question make "pending" ambiguous for every
-    # later reader — including the errand resumption
-    # docs/backlog/errand-resume-after-answer.md still defers, which will
-    # need to ask "is this question still open" and get one answer. The
+    # later reader — including errand resumption, which asks exactly
+    # this question and has since docs/tasks/0023-resume-cold.md
+    # shipped: `_resumable_answers` folds an answer into one further
+    # worker turn, so "is this question still open" now has spend
+    # attached to it rather than only display. The
     # check lives here rather than in the modal so the CLI and the modal
     # can never disagree about what pending means (docs/tasks/0015 scope
     # 3 names two surfaces disagreeing as worse than either being wrong
@@ -1704,6 +1751,29 @@ class TenantNotRunnable(Exception):
         self.result_id = result_id
 
 
+class ResumptionLost(Exception):
+    """The answer that authorised this automatic turn was spent by
+    somebody else before the turn could take the lease
+    (docs/tasks/0023 §7).
+
+    Raised by `run_worker_turn` before anything at all is written, the
+    same contract `LeaseHeld` has: nothing began, so nothing should
+    look like it did — no claim, no result, no spend.
+
+    Only ever raised for a turn `castle dispatch` started, which is the
+    whole point of the flag that enables it. A request already carrying
+    a result is eligible *only* through resumption, so if the answer is
+    gone by the time the lease is in hand, an automatic turn has no
+    authorisation left: running it anyway would be a full model call,
+    with a claim naming no answer and a packet resuming nothing,
+    outside the "one automatic attempt, plus one per resident answer"
+    bound the whole design rests on. A hand-run `castle work <id>`
+    never raises this: re-running a resulted errand with nothing to
+    resume is the deliberate, unbounded retry path
+    (docs/tasks/0021), and it must behave exactly as it always has.
+    """
+
+
 class LeaseHeld(Exception):
     """Another live process already holds this request's worker lease.
 
@@ -1916,7 +1986,36 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
         answered = "answered below" if answers else "not answered yet"
         section(f"## A question this errand raised ({blocking}, {answered})", question.body)
         for answer in answers:
-            section("### The resident's answer, verbatim", answer.body)
+            # Attributed off the record, exactly as the request heading
+            # above is, and for the same reason: this function must
+            # never tell a model that machine-authored text is the
+            # resident speaking. `file_answer` — the one path a
+            # resident's answer takes, from the CLI or the modal —
+            # always writes `provenance: requested` and `seat: intake`.
+            # Anything carrying some other pair reached the journal by
+            # a route that is not the resident answering, so it gets a
+            # heading that claims nothing.
+            #
+            # Since docs/tasks/0023's §5 fix `write_record` refuses an
+            # answer written from inside a worker turn outright, which
+            # narrows what can land here to near nothing — but the
+            # asymmetry would still have been wrong to leave: a
+            # hand-planted record, or a future writer, must not inherit
+            # a claim about its author that this function never
+            # checked.
+            if (
+                answer.fields.get("provenance") == "requested"
+                and answer.fields.get("seat") == "intake"
+            ):
+                heading = "### The resident's answer, verbatim"
+            else:
+                heading = (
+                    "### An answer to that question, verbatim — NOT filed through the "
+                    "resident's own intake path (seat: "
+                    f"{answer.fields.get('seat', 'unrecorded')}, provenance: "
+                    f"{answer.fields.get('provenance', 'unrecorded')})"
+                )
+            section(heading, answer.body)
 
     return "".join(parts)
 
@@ -1954,7 +2053,7 @@ def _write_worker_result(
     )
 
 
-def run_worker_turn(request: Record) -> tuple[str, str]:
+def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tuple[str, str]:
     """One worker turn: take the lease, record the claim, run the
     tenant, write the result. Returns `(result_record_id, outcome)`.
 
@@ -2008,11 +2107,34 @@ def run_worker_turn(request: Record) -> tuple[str, str]:
         # turn resumes — so `castle work <id>` by hand, which never
         # consults eligibility at all, resumes exactly what a
         # dispatched turn would, with no second code path to keep in
-        # sync. The narrow race left (an answer becoming spent between
-        # dispatch's check and this one) is the same probe-then-act
-        # shape `lock_is_held` already documents and accepts.
+        # sync.
+        #
+        # The race this leaves is real and costs more than a stale
+        # read, so it is closed rather than accepted. Between
+        # dispatch's fold and this line, a hand-run `castle work <id>`
+        # can take the lease first, spend the answer in its own claim,
+        # and finish — leaving this recomputation empty. Without the
+        # check below, a turn authorised purely by resumption would
+        # then proceed as an ordinary non-resuming turn: a real model
+        # call, a claim naming no answer, a packet resuming nothing,
+        # and a second automatic attempt on an errand whose one
+        # authorisation somebody else already used. That is outside the
+        # bound this whole design rests on, not merely untidy.
         turn_records = load_all(journal_dir())
         resuming = _resumable_answers(turn_records, request.id)
+
+        # `require_resumable` is passed only by `castle dispatch`, and
+        # only for a request that was eligible *because* of an unspent
+        # answer (it already carried a result, so nothing else could
+        # have let it through the fold). Raised before the claim is
+        # written — before anything is written — so a turn that lost
+        # this race leaves the journal exactly as it found it and the
+        # next sweep re-decides from scratch. `castle work <id>` never
+        # sets it: a hand retry of a resulted errand with nothing to
+        # resume is the unbounded escape hatch, unchanged.
+        if require_resumable and not resuming:
+            raise ResumptionLost(request.id)
+
         continuation = render_continuation_packet(turn_records, request)
 
         # The lease file's contents are informational only — a human
@@ -3172,8 +3294,35 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             if not eligible:
                 break
             request = eligible[0]
+            # Why this request got through the fold, which decides what
+            # happens if the answer is gone by the time the turn holds
+            # the lease. A request already carrying a result is
+            # eligible only through `_resumable_answers` (docs/tasks/
+            # 0023 §4) — every other condition would have excluded it —
+            # so for that one shape the turn is authorised by an unspent
+            # answer and by nothing else, and must not run if the
+            # authorisation has been used in the meantime. A request
+            # with no result yet is an ordinary first turn and carries
+            # no such precondition.
+            via_resumption = request.id in _requests_with_results(records)
             try:
-                record_id, outcome = run_worker_turn(request)
+                record_id, outcome = run_worker_turn(
+                    request, require_resumable=via_resumption
+                )
+            except ResumptionLost:
+                # Somebody else — a hand-run `castle work` is the only
+                # realistic somebody — took the lease first and spent
+                # the answer. Nothing was written by the attempt, so
+                # there is nothing to account for: the other turn's own
+                # claim and result are the account of what happened to
+                # this answer. A skip, not an error, exactly as
+                # `LeaseHeld` is.
+                print(
+                    f"dispatch: {request.id}'s resumption was already spent by another "
+                    "turn; nothing written"
+                )
+                skip.add(request.id)
+                continue
             except TenantNotRunnable as exc:
                 # The errand's own `outcome: failed` result is already
                 # written, so this request is accounted for and bounded

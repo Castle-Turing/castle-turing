@@ -599,11 +599,14 @@ grep -q "^refs: $REQ1,$(basename "$(referencing claim "$REQ1")" .md)\$" "$JOURNA
   || fail "$RESULT1 does not reference the claim of the turn that produced it: $(grep '^refs:' "$JOURNAL/$RESULT1.md")"
 
 # ---------------------------------------------------------------------
-log "NON-behavior (task 0023's territory): answering a question on an already-worked errand does not make it eligible again"
+log "NON-behavior: answering a NON-blocking question on an already-worked errand does not make it eligible again"
 # ---------------------------------------------------------------------
-# Asserted explicitly rather than left implicit: errand resumption is
-# docs/backlog/errand-resume-after-answer.md's problem, and a
-# regression here would silently widen this task's scope into 0023's.
+# Narrowed, not removed, by docs/tasks/0023-resume-cold.md: an answered
+# *blocking* question now does resume its errand, and its twin directly
+# below asserts that. This case — the common one, a question filed
+# alongside a result the worker already produced — still changes
+# nothing, and the pair is what proves resumption is opt-in rather than
+# firing on any answered question.
 QUESTION="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ1" \
   --body "Dispatch test: a mid-errand question on an already-worked errand.")"
 "$CASTLE" dispatch >/dev/null

@@ -410,13 +410,16 @@ in
       unitConfig.ConditionUser = "!@system";
       pathConfig = {
         # The whole journal directory, not `*-request-*.md`
-        # specifically. A request-shaped watcher would satisfy this
-        # task completely while foreclosing the next one:
-        # docs/backlog/errand-resume-after-answer.md needs dispatch to
-        # notice an `answer` record too, and a watcher keyed to a
-        # filename shape is structurally unable to fire on anything
-        # else — broadening it later means touching this unit on every
-        # host that has it deployed. Watching the directory and
+        # specifically. A request-shaped watcher would have satisfied
+        # docs/tasks/0021 completely while foreclosing the next task,
+        # and that is no longer hypothetical:
+        # docs/tasks/0023-resume-cold.md needs dispatch to notice an
+        # `answer` record too — an answered blocking question makes its
+        # errand eligible for one further turn — and a watcher keyed to
+        # a filename shape is structurally unable to fire on anything
+        # else. Broadening it later would have meant touching this unit
+        # on every host that had it deployed; because it was written
+        # this way, 0023 shipped without changing a line here. Watching the directory and
         # deciding eligibility in code means the *predicate* (a pure
         # function over the journal) can grow without this file
         # changing at all. The wakeup is a hint; the fold is the
