@@ -1216,7 +1216,7 @@ plan for how that first entry gets written on the reference host.
 
 ## Testing
 
-Five harnesses, all plain bash and stdlib Python — no Nix involved,
+Six harnesses, all plain bash and stdlib Python — no Nix involved,
 unlike `test/vm-install/`'s harness — runnable locally with nothing
 beyond `bash` and `python3` on `$PATH`:
 
@@ -1226,6 +1226,7 @@ test/agent-loop/tenant-swap.sh           # runs run.sh twice with two differentl
 test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin, zero compositor
 test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: watermark, lease, claim, reaper, outcomes
 test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
+test/agent-loop/config-target.sh         # two real checkouts: which one a diff targets, and what happens when one is missing or broken
 ```
 
 On a dev host importing `modules/dev`, python3 is on `$PATH`. Without
@@ -1381,3 +1382,38 @@ interpreter as the deployed CLI.
   a single errand rather than across whole runs; and the resumed
   result is routed like any other, with `castle validate` and
   `check_assertions.py` passing throughout.
+- **`config-target.sh`** (also in the `dispatch-test` CI job,
+  `docs/tasks/0024-config-target.md`) is the first harness here to
+  build the worker two *real* checkouts rather than one bare `mkdir`:
+  a mechanism one exported from this repository's own tracked content
+  at `HEAD` with `git archive` (committed content only, so no
+  untracked file from a developer's worktree can leak into a fixture,
+  and the module surface a tenant reads is the current one), and a
+  synthetic private one whose every literal is a placeholder this repo
+  already publishes. `CASTLE_STATE_DIR` points inside the private
+  checkout, making the documented state-dir-inside-the-private-repo
+  relationship real rather than asserted in prose.
+
+  It proves: a private-layer errand's diff lands in the result body
+  with `target: private` in the frontmatter and the resolved path in
+  the prose beside it; a turn with no private root configured, and one
+  whose private root exists but is not a git working tree, both refuse
+  with an `outcome: failed` result that names the option and leaves a
+  claim the result closes; a configured-but-unusable *mechanism* root
+  does **not** refuse — the turn completes, targets private, and
+  carries the harness-level mechanism-unusable note anyway — while a
+  mechanism-shaped errand under the same configuration proves the
+  tenant received `$CASTLE_MECHANISM_ROOT_INVALID` and described a
+  misconfiguration as one rather than as an absence; a mechanism
+  errand with a usable root stamps `target: mechanism`; the
+  sibling-coupling rule, checked against a second private checkout
+  with no `cursorTheme`, where a `cursorSize`-only diff would be a
+  silent no-op; the ask-first-diff-on-resumption path end to end, with
+  turn one writing no diff and no target and the resumed turn's diff
+  built around the resident's own number; that turn one's empty diff
+  reads as "waiting on you" through `castle-modal`'s own status fold
+  while a completed errand in the same listing does not, which is the
+  concrete proof that no new field was needed to tell the two meanings
+  of an empty diff apart; and, after every turn, that both checkouts'
+  working trees and both `HEAD`s are unchanged — the worker's
+  no-deploy boundary as a check rather than a comment.

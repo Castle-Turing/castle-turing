@@ -1278,6 +1278,20 @@ keeps the `agent-loop-test` CI job free of a Nix install.
   changing anything else about them in the same commit would make it
   hard to tell a rename-only diff from a behavior change.
 
+  **Corrected during implementation: three unavoidable exceptions,
+  each forced by something else this brief asks for.**
+  `contract-worker.sh` gains one line stamping `private` into
+  `$CASTLE_TARGET_FILE`, because the `target: private` assertion this
+  section adds to `test/desktop-loop/test.nix` reads exactly that
+  fixture's output back — the assertion cannot pass without it.
+  `dispatch-test.sh` and `resume.sh` gain a `git init` on their
+  private root, because §16's pre-flight refuses a root that is not a
+  git working tree and both harnesses previously used a bare `mkdir`.
+  And `resume.sh`'s three direct `castle-worker-claude` invocations
+  gain `CASTLE_TARGET_FILE`, since §18 makes the tenant require it.
+  All four are one-line, mechanical, and land in the commits that
+  made them necessary.
+
 **Assertions, in the order they should be written, mirroring
 `docs/tasks/0023 §11`'s own enumerated-coverage style:**
 
@@ -1289,6 +1303,15 @@ keeps the `agent-loop-test` CI job free of a Nix install.
    after the run, and both `git rev-parse HEAD` are unchanged — the
    no-mutation proof, and the acceptance condition's real teeth (S3,
    restated below).
+
+   **Corrected during implementation:** the private half needs one
+   exclusion, `:(exclude)state`, because this same section puts
+   `CASTLE_STATE_DIR` *inside* that checkout. The journal growing
+   there is the documented shape working, not a worker mutating a
+   working tree, so a literal reading of this assertion fails on the
+   first errand every time. Everything else under that root is still
+   in scope, and the mechanism half takes no exclusion at all —
+   nothing legitimately writes anything there.
 4. `castle validate` passes over the resulting journal.
 5. With `CASTLE_PRIVATE_ROOT` unset entirely, the run produces a
    `failed` result naming the missing configuration, and a non-zero
@@ -1345,11 +1368,20 @@ keeps the `agent-loop-test` CI job free of a Nix install.
     string permitted in a committed file is the already-published
     `/home/resident/...` placeholder this repo uses elsewhere.
 
-**Where it runs.** A new step in the existing `agent-loop-test` CI job
-(`.github/workflows/check.yml`), not a new job — that job already runs
-several scripts on the stock runner with no Nix, and one more script
-costs nothing while keeping the job count flat, the same reasoning
-`docs/tasks/0023 §11` already gives for `resume.sh`'s own placement.
+**Where it runs.** A new step in an existing CI job
+(`.github/workflows/check.yml`), not a new job — the stock runner
+needs no Nix for this, and one more script costs nothing while keeping
+the job count flat, the same reasoning `docs/tasks/0023 §11` already
+gives for `resume.sh`'s own placement.
+
+**Corrected during implementation: the job is `dispatch-test`, not
+`agent-loop-test`.** This brief named the latter while citing
+`resume.sh`'s placement as the precedent, and `resume.sh` is in fact a
+step of `dispatch-test` — the reasoning pointed at one job and the
+sentence named the other. `dispatch-test` is where the cited reasoning
+actually leads: it is the job that drives `castle dispatch` and
+`castle work` against the real worker contract, which is exactly what
+this harness does, and the two share every helper and convention.
 
 **The `test/desktop-loop/test.nix` extension is minimal and mostly a
 rename, not new coverage.** Per the exhaustion pass's own recommendation,
