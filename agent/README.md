@@ -99,7 +99,15 @@ castle show ID
   verbatim, no seat paraphrasing a word of it. `--refs` here is the
   record's one causal claim ("this correction is about that record")
   and only the resident may make it — nothing populates it
-  automatically. `castle-modal`'s compose mode reaches the same write
+  automatically. Refused outright when invoked from inside a worker
+  turn, at the same choke point that refuses an answer there
+  (`write_record`, keyed on `CASTLE_WORKER_CLAIM`): `castle record
+  --type correction` has been refused since
+  `docs/tasks/0010-correction-record.md` so that no seat can fabricate
+  verbatim resident speech, and this is the same prohibition applied to
+  the other door — a tenant filing one would not merely speak for the
+  resident once, it would install an opinion they never held where the
+  router reads it (`docs/tasks/0023-resume-cold.md`). `castle-modal`'s compose mode reaches the same write
   path (`file_correction()` in `agent/castle`) after asking, in plain
   language, whether what was just typed is something to fix or
   feedback about how the system is doing — see "`castle-modal`" below.
@@ -801,7 +809,8 @@ renderer agreeing about what an answer is. It is a filter rather than a
 boundary: a writer that passes those two fields satisfies it, and the
 guard that actually forbids a tenant answering — `write_record`'s
 refusal — rests on an environment variable a tenant could unset
-(`docs/backlog/env-stripping-defeats-write-guards.md`). One consequence
+(`docs/backlog/env-stripping-defeats-write-guards.md`; that refusal
+covers `correction` as well as `answer`). One consequence
 is filed rather than fixed here: a mislabelled answer still makes its
 question look closed to `castle answer` and to the picker, so the
 question ends up neither closable nor resumable

@@ -1000,6 +1000,23 @@ produces" (in practice: present at all, from `write_record`'s literal
 `"true"`, versus absent). Do not invent a broader boolean-parsing rule
 here than the one writer this task adds actually needs.
 
+**Amended during implementation (pass 8): the validator also scopes
+`blocking` to question records, reversing this section's own
+instruction to leave the field unscoped so a future seat might find a
+use for it.** That instruction was written when nothing enforced the
+field's record type anywhere, and it was reasonable then: an inert
+field on an unrelated record cost nothing, and refusing it would have
+been rigor this repo's own `--fact`/`--outcome` precedent did not ask
+for. It stopped being reasonable when pass 7 added the write-time
+refusal of `--blocking` on any type but `question`. From that point the
+validator was laxer than the writer — `castle record` refused to write
+`blocking: true` on a result while `castle validate` called the same
+hand-written record clean — and the backstop must not be weaker than
+the door, precisely because the records it exists for are the ones the
+CLI never touched: hand-written, restored from a backup, or produced by
+some later tool. The original reasoning stays above rather than being
+edited away; what changed is the world it described.
+
 **No turn cap.** Every additional resumption requires a fresh resident
 answer to a fresh blocking question — the resident is the rate limiter
 on this loop by construction, the same way `docs/tasks/0021-auto-
@@ -1743,6 +1760,50 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **The choke point was closing the narrower of two doors** — the
+  eighth review pass, and the finding that mattered most in it. With
+  `CASTLE_WORKER_CLAIM` set, `castle answer` was refused and `castle
+  correct` succeeded: a tenant could file a `correction` carrying
+  `seat: intake, provenance: requested`, plus the
+  `provenance: volunteered` resident-model entry `file_correction`
+  writes alongside it. An answer closes a question the resident never
+  saw; a correction invents an opinion the resident never held and
+  files it where the router reads it afterward. The larger harm was the
+  unguarded one.
+
+  Fixing it decided no policy: `cmd_record` has refused `--type
+  correction` since `docs/tasks/0010-correction-record.md`, with a
+  comment giving exactly this reason, so the prohibition already
+  existed and `cmd_correct` was simply a second door onto it. The
+  refusal now covers both types at the one point every writer passes,
+  with a message that distinguishes the two harms rather than
+  flattening them. Confirmed a sweep cannot trip it, the same two ways
+  the answer refusal was confirmed: nothing in `agent/castle` or
+  `agent/castle-modal` ever assigns into `os.environ` (there is no
+  `os.environ[...] =` in either file), so the variable is present only
+  in a process descended from a tenant; and the records a sweep writes
+  for itself are `claim`, `result` and `decision` — `file_answer` and
+  `file_correction` are reached from the CLI and the modal only.
+  `castle-modal`'s compose path learned to report the refusal, as its
+  answer paths already did.
+
+  Three smaller gaps came with it. **The validator called clean the
+  exact record the writer refuses** (`blocking: true` on a result) —
+  scoped to questions now, which reverses this brief's own §9
+  instruction; that section records the reversal and keeps the original
+  reasoning. **`--blocking`'s `--help` contradicted the code in three
+  places**, still describing the flag as convention-only, requiring
+  merely that `--refs` be present, and saying nothing about `--spool`;
+  it is the only place besides the worker prompt where a tenant can
+  learn the rule, so it now states all three refusals. **And one answer
+  could buy two turns**: `spent` was drawn from claims whose
+  `refs[0]` matched this request, so an answer naming blocking
+  questions on two errands was unspent from each errand's point of view
+  and both resumed — while `agent/README.md` states the bound as
+  "exactly one, per answer, ever". The spend set is global now, because
+  the bound is a property of the answer rather than of the errand
+  reading it; a normally-written answer refs one question and cannot
+  tell the difference.
 - **Three more ways `--blocking` could mean nothing, one false sentence
   in a routed record, and one ordering fix** — the seventh review pass,
   recorded together because four of the five are the same question:

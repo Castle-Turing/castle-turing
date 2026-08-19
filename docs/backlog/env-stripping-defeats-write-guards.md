@@ -27,6 +27,15 @@ The design's own answer to that shape of problem elsewhere (the packet's
 nonce boundaries, task 0023) was to make the guarantee hold by
 construction rather than by the tenant's cooperation.
 
+Since that entry was written the refusal has widened: `write_record`
+now refuses `correction` as well as `answer` from inside a turn
+(docs/tasks/0023, pass-8 review), closing a door the variable had never
+locked — `castle correct` was reachable by a tenant even with the
+variable intact. That widens what a stripped variable costs rather than
+narrowing it: the same `env -u` now also buys the ability to fabricate
+verbatim resident speech and a volunteered resident-model entry the
+router reads, which is a larger prize than a self-answered question.
+
 **What we already know.** The guards are correctly placed for what they
 can do: `write_record` is the one function every writer reaches, which is
 why 0021 put the stamp there rather than in `cmd_ask`, and 0023 put the
