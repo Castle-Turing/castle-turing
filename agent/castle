@@ -2265,14 +2265,30 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             f"Tenant command: `{command}`",
             "",
         ]
+        # Two sentences, gated differently, because they say different
+        # kinds of thing. The first explains this record's own `refs`
+        # and is owed whenever there is an extra ref to explain — the
+        # narrative gate above is about history, and a first turn that
+        # spends an answer has no history but does have the second ref.
+        # Leaving it unexplained there would be the exact defect the
+        # paragraph exists to prevent, reopened in the one case the
+        # gate closes.
+        if resuming:
+            claim_body_lines += [
+                "This turn was given "
+                + ", ".join(f"`{answer.id}`" for answer in resuming)
+                + " — the answer id(s) after the request id in this record's own "
+                "refs. Naming them here is what spends them, so no later sweep "
+                "starts another turn off the same answer, however this turn ends "
+                "(docs/tasks/0023-resume-cold.md §3).",
+                "",
+            ]
+        # The second is a claim about history, so it waits for one.
         if continuing:
             claim_body_lines += [
-                "This turn is a RESUMPTION: the resident answered a blocking "
-                "question this errand raised, and the answer ids after the "
-                "request id in this record's own refs are what that turn was "
-                "given. Naming them here is what spends them, so no later "
-                "sweep resumes the same answer twice — however this turn ends "
-                "(docs/tasks/0023-resume-cold.md §3).",
+                "It is a RESUMPTION: the resident answered a blocking question an "
+                "earlier turn on this errand raised, and that earlier turn's own "
+                "account is among the records this turn was handed.",
                 "",
             ]
         claim_id = write_record(

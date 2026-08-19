@@ -74,7 +74,14 @@ printf 'contract-worker: handled %s in %s\n' "$CASTLE_REQUEST_ID" "$CASTLE_REPO_
 # can give of a document whose shape is the mechanism's business, and
 # the boundary token proves the preamble arrived — which is the part a
 # conforming tenant has to read before it can trust anything else.
-printf 'contract-worker: received %s lines of errand records\n' \
-  "$(printf '%s\n' "$errand_records" | grep -c '' || true)"
+# Counted off a file, not a pipe. `grep -m1` against a piped-in packet
+# exits at the first match while printf is still writing, and under
+# `set -o pipefail` that SIGPIPE becomes the pipeline's status — a
+# failure that only appears once the packet outgrows the pipe buffer,
+# which is the worst size for a bug to wait at.
+records_file="$(mktemp)"
+trap 'rm -f "$records_file"' EXIT
+printf '%s\n' "$errand_records" > "$records_file"
+printf 'contract-worker: received %s lines of errand records\n' "$(grep -c '' "$records_file" || true)"
 printf 'contract-worker: boundary token present: %s\n' \
-  "$(printf '%s\n' "$errand_records" | grep -c -m1 -o 'CASTLE-PACKET-[0-9a-f]\{16\}' || true)"
+  "$(grep -c -m1 -o 'CASTLE-PACKET-[0-9a-f]\{16\}' "$records_file" || true)"

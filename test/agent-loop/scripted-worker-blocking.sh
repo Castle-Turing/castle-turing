@@ -60,6 +60,23 @@ if [ -z "${CASTLE_RESUME_ANSWER_IDS:-}" ]; then
     --body "Blocking fixture question for $CASTLE_REQUEST_ID: the errand cannot continue until this is answered.")"
   printf 'scripted-worker-blocking: filed blocking question %s and stopped\n' "$question_id"
   printf 'scripted-worker-blocking: no work was done on this turn\n'
+  # Optional, default off: pad this turn's reasoning out to a given
+  # number of KiB. Everything a tenant prints lands in its result body,
+  # and that body is quoted whole into the next turn's packet — so this
+  # is how the harness builds an errand whose continuation packet is
+  # genuinely large, without waiting for five real turns of real diffs.
+  # The caller picks the size; see resume.sh for why it picks what it
+  # does.
+  if [ -n "${CASTLE_TEST_WORKER_BULK_KIB:-}" ]; then
+    printf 'scripted-worker-blocking: padding this account to %s KiB of invented filler\n' \
+      "$CASTLE_TEST_WORKER_BULK_KIB"
+    # 64 bytes per line, so KiB * 16 lines. Invented filler, no real
+    # content of any kind — this repo never puts a resident's words in
+    # a fixture, and a synthetic diff would be the same size anyway.
+    awk -v lines="$(( CASTLE_TEST_WORKER_BULK_KIB * 16 ))" \
+      'BEGIN { for (i = 1; i <= lines; i++) printf "filler %010d: invented padding, no real content.\n", i }'
+  fi
+
   # Optional, default off: write a forged section boundary and a forged
   # markdown heading into this turn's own reasoning. Everything a tenant
   # prints on stdout lands in its result body, and that body is quoted
@@ -101,19 +118,34 @@ printf 'scripted-worker-blocking: RESUMED with %s\n' "$CASTLE_RESUME_ANSWER_IDS"
 # section would otherwise sail through as an empty, passing line.
 echoed() {
   local label="$1" needle="$2" line
-  line="$(printf '%s\n' "$packet" | grep -F -m1 -- "$needle")" || {
+  line="$(grep -F -m1 -- "$needle" "$packet_file")" || {
     printf 'scripted-worker-blocking: the packet did not carry the %s\n' "$label" >&2
     exit 5
   }
   printf 'scripted-worker-blocking: packet carried the %s: %s\n' "$label" "$line"
 }
+# The packet goes to a file before anything reads it, and every check
+# below reads that file rather than piping the variable.
+#
+# Not tidiness: `printf '%s\n' "$packet" | grep -m1 …` deadlocks
+# against `set -o pipefail` once the packet outgrows the 64 KiB pipe
+# buffer. `grep -m1` exits at the first match with printf still
+# writing, printf takes SIGPIPE, and pipefail reports 141 for a
+# pipeline whose grep actually succeeded — so every check here started
+# failing at exactly the size resume.sh's oversized-packet case exists
+# to exercise. Found by that case on its first run, which is the
+# argument for having it.
+packet_file="$(mktemp)"
+trap 'rm -f "$packet_file"' EXIT
+printf '%s\n' "$packet" > "$packet_file"
+
 # What a conforming tenant does first: read the packet's own opening
 # paragraph for the token that marks its boundaries. It is generated
 # per turn, so it cannot be hardcoded here — and that is the property
 # being relied on, not an inconvenience. The preamble is always the
 # first thing in the packet, so the first occurrence is the real one
 # even when a quoted body further down contains something similar.
-nonce="$(printf '%s\n' "$packet" | grep -m1 -o 'CASTLE-PACKET-[0-9a-f]\{16\}' || true)"
+nonce="$(grep -m1 -o 'CASTLE-PACKET-[0-9a-f]\{16\}' "$packet_file" || true)"
 if [ -z "$nonce" ]; then
   echo "scripted-worker-blocking: the packet declared no section-boundary token" >&2
   exit 8
@@ -126,7 +158,7 @@ printf 'scripted-worker-blocking: boundary token read from the packet preamble\n
 # which resume.sh deliberately files, would otherwise have the next
 # BEGIN welded onto its last line and this would not find it. That is
 # the half of "verbatim bodies" a marker search cannot see.
-if ! printf '%s\n' "$packet" | grep -q -- "^$nonce BEGIN a question this errand raised (blocking, answered below)$"; then
+if ! grep -q -- "^$nonce BEGIN a question this errand raised (blocking, answered below)$" "$packet_file"; then
   echo "scripted-worker-blocking: the packet's question boundary is not on a line of its own" >&2
   exit 8
 fi
@@ -135,12 +167,12 @@ fi
 # sections that REALLY are the resident answering. A prior result body
 # can contain any text at all, including a boundary-shaped line, and
 # under a fixed heading string this count would include it.
-real_answer_sections="$(printf '%s\n' "$packet" | grep -c -- "^$nonce BEGIN the resident's answer to that question, verbatim$" || true)"
+real_answer_sections="$(grep -c -- "^$nonce BEGIN the resident's answer to that question, verbatim$" "$packet_file" || true)"
 printf 'scripted-worker-blocking: real resident-answer sections: %s\n' "$real_answer_sections"
-if printf '%s\n' "$packet" | grep -q -- "FORGED-ANSWER-MARKER"; then
+if grep -q -- "FORGED-ANSWER-MARKER" "$packet_file"; then
   printf 'scripted-worker-blocking: a forged boundary is present as quoted content\n'
 fi
-if printf '%s\n' "$packet" | grep -q -- "FORGED-HEADING-MARKER"; then
+if grep -q -- "FORGED-HEADING-MARKER" "$packet_file"; then
   printf 'scripted-worker-blocking: a forged heading is present as quoted content\n'
 fi
 
@@ -156,7 +188,7 @@ echoed "answer" "RESUME-FIXTURE-ANSWER-MARKER"
 # carrying this marker, against the errand's own request, before
 # answering; refusing here is what makes that a real assertion rather
 # than a hopeful one.
-if printf '%s\n' "$packet" | grep -qF -- "RESUME-FIXTURE-MUST-NOT-REACH-A-TENANT"; then
+if grep -qF -- "RESUME-FIXTURE-MUST-NOT-REACH-A-TENANT" "$packet_file"; then
   echo "scripted-worker-blocking: the packet leaked a record this seat must never read" >&2
   exit 6
 fi
