@@ -450,13 +450,32 @@ values are documented in `agent/README.md`, not enforced in code.
 **`--target` on `castle record`,** for the same reason `--outcome` and
 `--blocking` exist there: a human holding the worker seat by hand, or
 a test fixture constructing a `result` record directly, needs the same
-lever the automatic path has. Modeled on `--outcome`'s
-convention-only style (documented as result-records-only, not hard-
-refused elsewhere) rather than `--blocking`'s hard-refusal style — this
-field carries none of `--blocking`'s dangling-reference hazard (there
-is no downstream fold that silently mis-attributes a `target` the way
-an unresumable blocking question would), so the stricter treatment
-would be rigor this field's own risk profile does not call for.
+lever the automatic path has.
+
+**Corrected during implementation: it takes `--blocking`'s
+hard-refusal treatment, not `--outcome`'s convention-only one.** This
+paragraph originally specified the looser posture, reasoning that
+`target` carries none of `--blocking`'s dangling-reference hazard.
+That is true and turned out to be the wrong test. The paragraph above
+this one specifies a `cmd_validate` check that *rejects* `target` on a
+non-result record and rejects a blank value — so the loose writer and
+the strict validator, both specified here, contradict each other, and
+`/code-review` reproduced both halves: `castle record --type decision
+--target private` and `--type result --target "   "` were each written
+successfully and then failed `castle validate`. In an append-only
+journal that is unfixable without editing history the whole design
+says is never edited, and `castle validate` is advisory and invoked
+automatically by nothing, so the writer is the only place the refusal
+does any good. This is exactly the defect §6's own model, the
+`--blocking` guard, was reversed into place over in `docs/tasks/0023`
+— "a validator laxer than the writer makes the backstop weaker than
+the door" — met from the other direction. `--target` is therefore
+refused at write time on any type but `result`, and refused blank.
+The *vocabulary* stays unenforced, exactly as argued above: a third
+checkout role must not need a schema migration. No `--spool` refusal,
+unlike `--blocking`, whose spool refusal exists because a durable
+claim that an errand stopped is incoherent in an ephemeral store; a
+target on a spooled scratch record makes no such claim.
 
 **`FIELD_ORDER`** gains `target`, placed immediately after `outcome`
 (`agent/castle:210`, before `filed-during-turn`) — the same
@@ -466,6 +485,23 @@ the comment at that location, extended by one more result-only field.
 Presentation-only, exactly as that comment already says for
 `blocking`: `render_record` skips any key a given record does not
 carry, and parsing never consults field order.
+
+**Written only when there is a diff, and this is a correction made
+during implementation.** Nothing in this brief originally gated the
+field, so `target_text` being non-empty was the whole condition — and
+a tenant that stamped `$CASTLE_TARGET_FILE` while leaving
+`$CASTLE_DIFF_FILE` empty produced a body reading "(no diff produced
+...)" immediately followed by "This diff targets the **private**
+checkout", with `target: private` in the frontmatter. Since this same
+section names `docs/tasks/0025` and `0026` as keying on this field to
+decide where a proposal goes, that record reads to both as an
+applicable proposal with nothing to apply. A target with no diff is
+not a weaker claim than a target with one; it is an incoherent claim,
+because the field's whole meaning is "the checkout this diff applies
+to." Both the field and the body sentence are therefore gated on a
+non-empty diff, and the stamp is discarded with one visible sentence
+saying so — the same reasoning as §16's mechanism note, which exists
+so a fault cannot go quiet just because nothing downstream needed it.
 
 **The body prose, next to the diff, is where the resolved path
 lives.** When `target_text` is exactly `private` or `mechanism`,
@@ -751,6 +787,25 @@ that follows from a stated fact — the exact line
    `tools/console-font-sweep.sh` for `consoleFont`, the one surface
    here that cannot be previewed from inside a running Wayland session
    at all).
+
+   **Corrected during implementation: "where one exists" has to be
+   checked, not assumed.** Those scripts live in the *public* repo
+   under `tools/`, and `tools/README.md` says plainly they are
+   "developer tooling for working on this repo ... not anything a
+   deployed system runs" — nothing packages them into a system
+   profile. On a host with `repo.mechanism = null`, which §3 of this
+   brief calls the normal case, they exist nowhere the resident could
+   run them. Naming one there is the worst possible failure of this
+   whole section: the errand stops, and the single instruction the
+   resident is given points at a path that is not on their machine.
+   The prompt therefore makes the pointer conditional on
+   `CASTLE_MECHANISM_ROOT` being set, naming the real absolute path
+   when there is one and otherwise describing what would settle the
+   value — comparing candidates side by side — without naming a
+   command. Packaging the sweep tools for a deployed host would also
+   answer this and is deliberately **not** done here: it is a separate
+   decision about what a deployed system installs, and this task has
+   no standing to take it.
 3. **Produces no diff.** `$CASTLE_DIFF_FILE` stays empty, and
    `$CASTLE_TARGET_FILE` stays empty too — there is nothing to target
    yet.
@@ -989,6 +1044,21 @@ refusal fires when, and only when:
   exist, or exists but is not the root of a git working tree (checked
   as a plain filesystem test — `(pathlib.Path(root) / ".git").exists()`
   — no `git` subprocess needed for this check).
+- **Added during implementation: or is not absolute.** §1 puts an
+  absolute-path assertion on the Nix options, which covers a value
+  arriving through Nix and nothing else — while §4 of this brief
+  establishes the environment variable as the other, equally
+  documented route, and it is the route every harness in
+  `test/agent-loop/` uses. §1's own justification ("a relative path
+  names a different place depending on who invoked the turn") applies
+  with more force on the route where there is no evaluation to fail:
+  a relative root would simply resolve against whatever directory the
+  sweep happened to start in, which is a rediscovery of the very
+  `cwd()` guess §2 deleted. Checked before the existence test, since a
+  relative path that happens to resolve against the caller's cwd is
+  the failure and not an escape from it. It applies to `repo.mechanism`
+  by the same code path, where — per this section's asymmetry — it
+  degrades that checkout rather than refusing the turn.
 
 `repo.mechanism` never trips this check, in either of its two failure
 shapes (unset, or set-but-unusable) — see the next paragraph for how

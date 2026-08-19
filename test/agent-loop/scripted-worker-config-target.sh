@@ -72,9 +72,21 @@ if packet_has "CONFIG-TARGET-FIXTURE-PERCEPTUAL"; then
   if [ -z "${CASTLE_RESUME_ANSWER_IDS:-}" ]; then
     say "the option and the layer are decidable; the VALUE is not"
     say "filing a blocking question and writing no diff and no target"
+    # The sweep tools live in the public repo under tools/, which is
+    # developer tooling no deployed system installs — so naming one is
+    # only honest when a mechanism checkout is configured to hold it.
+    # This fixture mirrors the real tenant's own conditional
+    # (agent/castle-worker-claude, docs/tasks/0024 §12) rather than
+    # hard-coding a path, because a fixture that always named one
+    # would assert the very behaviour that was wrong.
+    if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
+      sweep_line="Run ${CASTLE_MECHANISM_ROOT}/tools/font-sweep.sh and tell me the number you settled on."
+    else
+      sweep_line="No sweep tool is installed on this host, so compare a few candidate sizes side by side and tell me which one reads best."
+    fi
     "$CASTLE_BIN" record --type question --provenance requested --seat worker \
       --refs "$CASTLE_REQUEST_ID" --blocking \
-      --body "CONFIG-TARGET-FIXTURE-QUESTION: castle.display.terminalFontSize in resident.nix is the layer, but the size itself is a judgment about how this reads to you. Run tools/font-sweep.sh and tell me the number you settled on." \
+      --body "CONFIG-TARGET-FIXTURE-QUESTION: castle.display.terminalFontSize in resident.nix is the layer, but the size itself is a judgment about how this reads to you. $sweep_line" \
       >/dev/null
     # Both files stay empty. This empty diff does NOT mean "no change
     # was warranted" — it means the worker asked instead of

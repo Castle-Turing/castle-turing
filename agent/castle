@@ -1375,6 +1375,51 @@ def cmd_record(args: argparse.Namespace) -> int:
     # answered, and never attributable — the exact dead end this refuses
     # to write, reached by exactly the mistake it predicts. A guard that
     # applies a different rule from the thing it guards is not a guard.
+    # `--target` gets write-time refusals too, and this is a reversal
+    # of what an earlier pass of this task decided (docs/tasks/0024 §6).
+    # That pass modelled the flag on `--outcome`'s convention-only
+    # posture, on the grounds that `target` carries none of
+    # `--blocking`'s dangling-reference hazard. True, and beside the
+    # point: `cmd_validate` was written in the same pass to *reject*
+    # `target` on a non-result record and to reject a blank value, so
+    # the door ended up laxer than the backstop — the exact defect the
+    # `--blocking` comment below names, running the other way.
+    #
+    # That asymmetry is worse here than the abstract argument suggests,
+    # because this journal is append-only. `castle record` would write
+    # the record, print its id, exit 0, and only `castle validate` —
+    # advisory, and invoked by nothing automatically — would later say
+    # it was malformed, by which point the only remedy is hand-editing
+    # history the whole design says is never edited. A writer must not
+    # be able to produce a record its own validator condemns.
+    #
+    # No `--spool` refusal, unlike `--blocking`: that one exists
+    # because a durable claim that an errand stopped is incoherent in a
+    # store that promises to forget, and a target stamped on a spooled
+    # scratch record makes no such claim about anything.
+    target_arg = getattr(args, "target", None)
+    if target_arg is not None:
+        if args.type != "result":
+            print(
+                f"castle record: --target is only meaningful on a result record, not "
+                f"on --type {args.type}. It names which checkout that turn's diff is "
+                "against, nothing reads it on any other type, and `castle validate` "
+                "rejects it there — so this would be written, print an id, and fail "
+                "the validator afterwards, in an append-only journal "
+                "(docs/tasks/0024-config-target.md).",
+                file=sys.stderr,
+            )
+            return 1
+        if not target_arg.strip():
+            print(
+                "castle record: --target is present but blank. It names which checkout "
+                "this turn's diff is against; absent means no target was stamped, and "
+                "there is no empty spelling of one. `castle validate` rejects a blank "
+                "value, so writing it would produce a permanently invalid record.",
+                file=sys.stderr,
+            )
+            return 1
+
     if getattr(args, "blocking", False):
         # A `--blocking` question says an errand has stopped and needs
         # the resident. The spool is explicitly ephemeral — machine-local
@@ -1451,11 +1496,15 @@ def cmd_record(args: argparse.Namespace) -> int:
         extra["fact"] = args.fact
     if getattr(args, "outcome", None):
         extra["outcome"] = args.outcome
-    # `args.target`, spelled out rather than shadowed: the local
-    # `target` a few lines above is the *directory* this record is
-    # being written into, and the two are unrelated.
-    if getattr(args, "target", None):
-        extra[TARGET_FIELD] = args.target
+    # From the local checked above, not re-read from `args`, and
+    # stripped — the guard rejected a blank value, so what survives
+    # here is a real word, and storing it with stray whitespace would
+    # write something the validator's own non-blank test only barely
+    # tolerates. Spelled `target_arg` rather than `target` because the
+    # local `target` a few lines above is the *directory* this record
+    # is being written into; the two are unrelated.
+    if target_arg:
+        extra[TARGET_FIELD] = target_arg.strip()
     if getattr(args, "blocking", False):
         # The literal the validator checks for, and the only spelling
         # any writer in this repo produces.
@@ -2361,7 +2410,24 @@ def _checkout_fault(root: str) -> str | None:
     on the `.git` entry itself, because a linked worktree and a
     submodule both carry a `.git` *file* pointing elsewhere, and both
     are perfectly ordinary things for a resident's checkout to be.
+
+    **Absoluteness is checked here and not only in `modules/agent`,
+    and the duplication is the point.** That module asserts it at
+    evaluation time, which covers a value arriving through Nix and
+    nothing else — while the documented way to set these roots outside
+    Nix is the environment variable directly, which is how every
+    harness in `test/agent-loop/` sets them and how any other
+    non-NixOS caller would. The module's own justification ("a
+    relative path names a different place depending on who invoked the
+    turn") applies with more force on this route, not less: here there
+    is no evaluation to fail, only a turn that would quietly resolve
+    the path against whatever directory the sweep happened to start
+    in. Checked before `exists()` deliberately — a relative path that
+    happens to resolve against the caller's cwd is the failure, not an
+    escape from it.
     """
+    if not root.startswith("/"):
+        return "the path is not absolute"
     path = pathlib.Path(root)
     if not path.exists():
         return "the path does not exist"
@@ -2724,7 +2790,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # and the tenant call certainly must not hold it.
         spend_lock.close()
 
-        # What the three branches below owe a resident whose answer this
+        # What the four branches below owe a resident whose answer this
         # turn already spent. The claim naming that answer is what stops
         # a misconfigured tenant being retried once a minute forever
         # (docs/tasks/0021 §3.4, reached from a new direction by
@@ -2826,15 +2892,22 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 message = (
                     f"private checkout {private_root!r} is not usable: {private_fault}"
                 )
+                # Worded to stay true across all three faults this
+                # can carry. An earlier version ended "so there is no
+                # working tree to diagnose in", which is a non-sequitur
+                # for a relative path — the tree may exist perfectly
+                # well; what is missing is any guarantee that it is the
+                # same tree from one caller to the next.
                 diagnosis = [
                     f"Errand `{request.id}` could not start: "
                     f"`castle.agent.repo.private` names `{private_root}`, but "
-                    f"{private_fault} — so there is no working tree for a worker "
-                    "tenant to diagnose in or propose a change against.",
+                    f"{private_fault} — so this turn has no checkout it can trust "
+                    "it is working in.",
                     "",
-                    "Nothing ran. Point `castle.agent.repo.private` (modules/agent) "
-                    "at the checkout you actually want worked on, or clone it into "
-                    f"place, then re-run `castle work {request.id}`.",
+                    "Nothing ran. Give `castle.agent.repo.private` (modules/agent) "
+                    "the absolute path of a git working tree you want worked on — "
+                    "cloning it into place first if it is not there yet — then "
+                    f"re-run `castle work {request.id}`.",
                 ]
             print(f"castle work: {message}", file=sys.stderr)
             raise TenantNotRunnable(
@@ -3253,22 +3326,49 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # no path resolution attempted, rather than guessed at. There is
         # no variable to look a third role up against, and naming the
         # wrong directory would be worse than naming none.
-        if target_text:
+        # **A target is only meaningful alongside a diff, so both the
+        # sentence and the field are gated on one.** `target` means
+        # "the checkout this diff applies to"; with no diff there is
+        # nothing for it to be about, and the record would read as an
+        # applicable proposal with nothing to apply — precisely the
+        # wrong thing to hand docs/tasks/0025's approval binding and
+        # docs/tasks/0026's applier, both of which are documented as
+        # keying on this field to decide where a proposal goes. It is
+        # also self-contradictory on its face: the body would say "(no
+        # diff produced)" and then, one line later, "this diff targets
+        # the private checkout."
+        #
+        # Discarded rather than silently swallowed. A tenant that
+        # stamped a target and wrote no diff has misunderstood the
+        # contract, and that is worth one visible sentence — the same
+        # reasoning as the mechanism-unusable note above, which exists
+        # so a fault cannot go quiet just because nothing downstream
+        # happened to need it.
+        stamped_target = target_text if diff_text else ""
+        if target_text and not diff_text:
+            body_lines.append("")
+            body_lines.append(
+                f"The worker tenant wrote `{target_text}` to $CASTLE_TARGET_FILE but "
+                "produced no diff. A target names the checkout a diff applies to, so "
+                "with no diff there is nothing for it to name: it has been discarded "
+                "rather than recorded, and this result carries no `target` field."
+            )
+        if stamped_target:
             resolved = {
                 "private": env.get(PRIVATE_ROOT_ENV),
                 "mechanism": env.get(MECHANISM_ROOT_ENV),
-            }.get(target_text)
+            }.get(stamped_target)
             body_lines.append("")
             if resolved:
                 body_lines.append(
-                    f"This diff targets the **{target_text}** checkout, which on this "
-                    f"host resolved to `{resolved}`."
+                    f"This diff targets the **{stamped_target}** checkout, which on "
+                    f"this host resolved to `{resolved}`."
                 )
             else:
                 body_lines.append(
-                    f"This diff targets `{target_text}`, which is not a checkout role "
-                    "this turn had a configured path for, so no path is resolved for "
-                    "it here."
+                    f"This diff targets `{stamped_target}`, which is not a checkout "
+                    "role this turn had a configured path for, so no path is resolved "
+                    "for it here."
                 )
         if timed_out:
             body_lines.append("")
@@ -3294,7 +3394,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 outcome=outcome,
                 body_lines=body_lines,
                 claim_id=claim_id,
-                target=target_text,
+                target=stamped_target,
             ),
             outcome,
         )
@@ -4747,15 +4847,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "which checkout this turn's diff is against — `private` or "
-            "`mechanism` (result records only, by convention, the same way "
-            "--outcome is). The automatic path fills this in from whatever the "
+            "`mechanism`. The automatic path fills this in from whatever the "
             "tenant wrote to $CASTLE_TARGET_FILE; this flag is the same lever "
             "for a human holding the worker seat by hand, or a fixture building "
-            "a result record directly. Deliberately not restricted to those two "
-            "words, and deliberately not hard-refused on other record types the "
-            "way --blocking is: it carries none of --blocking's hazard, since no "
-            "fold silently mis-attributes a stray target the way an unresumable "
-            "question dead-ends an errand (docs/tasks/0024-config-target.md)."
+            "a result record directly. Enforced at write time, like --blocking "
+            "and unlike --fact/--outcome: refused on any --type but result, and "
+            "refused blank, because `castle validate` rejects both and a writer "
+            "must not be able to produce a record its own validator condemns in "
+            "an append-only journal. NOT restricted to those two words, though "
+            "— a third checkout role should not need a schema migration "
+            "(docs/tasks/0024-config-target.md)."
         ),
     )
     p_record.add_argument(

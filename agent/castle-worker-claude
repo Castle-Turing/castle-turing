@@ -168,6 +168,42 @@ describes a deliberate choice, and reporting the first as the second hides a
 typo behind a design decision."
 fi
 
+# The sweep tools ship in the PUBLIC repo, under tools/, which
+# tools/README.md is explicit about being "developer tooling for
+# working on this repo ... not anything a deployed system runs."
+# Nothing packages them into a system profile, so on a host with no
+# mechanism checkout — the normal case, per
+# docs/tasks/0024-config-target.md §3 — they exist nowhere the
+# resident could run them. Telling them to run one anyway makes a
+# blocking question unanswerable in the most demoralising way: the
+# errand stops, and the one instruction offered points at a path that
+# is not there.
+#
+# So the pointer is conditional. Where a mechanism checkout exists the
+# tenant names the real absolute path; where it does not, the question
+# has to describe what would settle the value instead — the tools are
+# not packaged for a deployed host, and deciding to package them is a
+# separate call this prompt has no standing to make.
+if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
+  sweep_note="Point them at the sweep tool, which exists on this host because a
+       mechanism checkout is configured: ${CASTLE_MECHANISM_ROOT}/tools/font-sweep.sh
+       for terminal and UI faces and sizes, and
+       ${CASTLE_MECHANISM_ROOT}/tools/console-font-sweep.sh for consoleFont,
+       the one surface here that cannot be previewed from inside a
+       running Wayland session at all. Naming the tool is cheaper for
+       them than eyeballing a value against nothing."
+else
+  sweep_note="DO NOT name a sweep script. Those live in the public framework
+       repo under tools/, which is developer tooling rather than
+       anything a deployed system installs, and no mechanism checkout
+       is configured here — so no such path exists on this machine and
+       pointing at one would leave your question unanswerable. Instead
+       describe what would settle it: comparing a few candidate values
+       side by side and saying which reads best. For a console font,
+       say plainly that it can only be judged from a text console, not
+       from inside this session."
+fi
+
 # The heredoc below is redirected straight to a file rather than
 # captured via `prompt="$(cat <<PROMPT ... PROMPT)"` — bash's parser
 # tracks quote pairing (both ' and ") across an entire $(...) nesting
@@ -395,12 +431,8 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
      * diagnose the symptom, name the option and the layer (1 already
        answers that deterministically), and state plainly why the
        value itself cannot be derived from anything you can read;
-     * file a --blocking question naming the option, the layer, and —
-       where one exists — the sweep tool to run: tools/font-sweep.sh
-       for terminal and UI faces and sizes,
-       tools/console-font-sweep.sh for consoleFont, the one surface
-       here that cannot be previewed from inside a running Wayland
-       session at all;
+     * file a --blocking question naming the option and the layer.
+       ${sweep_note}
      * write NO diff and NO target. Leave both files empty.
 
    A later turn — a fresh tenant handed this turn's account and the
@@ -412,10 +444,10 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    The answer surface is free text with no multiple choice anywhere in
    it: your resident picks which question to answer, never which value
    from a set, so a question written as though a candidate list were
-   in front of them is unanswerable. Where a sweep tool exists, point
-   at the tool rather than asking them to eyeball a value cold — that
-   is what those tools are for, and it is cheaper for you to name one
-   than for them to guess against nothing.
+   in front of them is unanswerable. And never name a file or command
+   without having established it exists on THIS machine — a question
+   whose only instruction points at something absent is worse than a
+   question with no instruction at all.
 7. AN ERRAND IS IN SCOPE for a configuration proposal exactly when the
    symptom maps to one or more options under castle.display.*,
    castle.input.*, castle.power.*, or castle.hardware.*. Read those

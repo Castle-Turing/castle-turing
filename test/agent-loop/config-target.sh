@@ -261,6 +261,69 @@ grep -q 'not the root of a git working tree' "$R_NOTREPO" \
 assert_checkouts_untouched "after the two refusals"
 
 # ---------------------------------------------------------------------
+log "a RELATIVE private root refuses too, and never resolves against the caller's cwd"
+# ---------------------------------------------------------------------
+# modules/agent asserts absoluteness at evaluation time, which covers a
+# value arriving through Nix and nothing else — while the documented
+# non-Nix route is this variable, set directly, which is how every
+# harness in this directory does it. Run from inside $WORKDIR, where
+# `private` really would resolve to the valid checkout, so this fails
+# if the check ever weakens to "does it exist."
+REQ_REL="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint filed against a relative path.")"
+if (cd "$WORKDIR" && CASTLE_PRIVATE_ROOT="private" "$CASTLE" work "$REQ_REL" >/dev/null 2>&1); then
+  fail "castle work accepted a relative private root, resolving it against its own working directory"
+fi
+R_REL="$(newest_result_for "$REQ_REL")"
+grep -q '^outcome: failed$' "$R_REL" || fail "the relative-root turn did not record outcome: failed"
+grep -q 'the path is not absolute' "$R_REL" \
+  || fail "the relative-root turn's result does not say what was wrong with the path"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "a target stamped with no diff is discarded, not recorded"
+# ---------------------------------------------------------------------
+# `target` means "the checkout this diff applies to". With no diff
+# there is nothing for it to be about, and a record carrying one reads
+# to docs/tasks/0025 and 0026 as an applicable proposal with nothing to
+# apply. Discarded visibly rather than silently, so a tenant that
+# misunderstood the contract leaves a trace.
+STAMP_ONLY="$WORKDIR/stamp-only-tenant.sh"
+cat > "$STAMP_ONLY" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'stamp-only tenant: a target with nothing to target\n'
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+TENANT
+chmod +x "$STAMP_ONLY"
+REQ_STAMP="$("$CASTLE" ask "An invented errand whose tenant stamps a target and writes no diff.")"
+CASTLE_WORKER_COMMAND="$STAMP_ONLY" "$CASTLE" work "$REQ_STAMP" >/dev/null
+R_STAMP="$(newest_result_for "$REQ_STAMP")"
+grep -q '^outcome: completed$' "$R_STAMP" || fail "the stamp-only turn did not complete"
+grep -q '^target:' "$R_STAMP" \
+  && fail "a result with no diff carries a target field — that reads as a proposal with nothing to apply"
+grep -q 'it has been discarded rather than recorded' "$R_STAMP" \
+  || fail "the discarded target was swallowed silently instead of being named in the body"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "castle record refuses a --target it would then fail to validate"
+# ---------------------------------------------------------------------
+# The door must not be laxer than the backstop. In an append-only
+# journal a record written and only later condemned by `castle
+# validate` cannot be withdrawn — the remedy would be editing history
+# the whole design says is never edited.
+if "$CASTLE" record --type decision --provenance requested --seat worker \
+  --refs "$REQ1" --evidence "an invented decision" --target private --body "placeholder" >/dev/null 2>&1; then
+  fail "castle record wrote --target on a decision record, which castle validate then rejects"
+fi
+if "$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$REQ1" --outcome completed --target "   " --body "placeholder" >/dev/null 2>&1; then
+  fail "castle record wrote a blank --target, which castle validate then rejects"
+fi
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
 log "assertion 9a: a broken mechanism root does NOT refuse a turn that never needed it"
 # ---------------------------------------------------------------------
 REQ_BROKEN="$("$CASTLE" ask "CONFIG-TARGET-FIXTURE-CURSOR: an invented complaint on a host whose mechanism path is a typo.")"
@@ -331,7 +394,20 @@ grep -q '^target:' "$RP1" && fail "the ask-first turn stamped a target with noth
 grep -q 'no diff produced' "$RP1" || fail "the ask-first turn produced a diff it should not have"
 QP="$(blocking_question_for "$REQP")"
 [ -n "$QP" ] || fail "the ask-first turn filed no blocking question"
-grep -q 'tools/font-sweep.sh' "$JOURNAL/$QP.md" || fail "the question does not point at the sweep tool"
+
+log "  -- and with no mechanism checkout, it names no tool path the resident could not run"
+# The sweep scripts live in the public repo under tools/, which
+# tools/README.md calls developer tooling rather than anything a
+# deployed system installs. On a host with no mechanism checkout —
+# the normal case — a question whose one instruction is "run
+# tools/font-sweep.sh" stops the errand and then points the resident
+# at a path that is not on their machine. Asserted from both sides so
+# neither half can rot: no script path when there is nowhere for one
+# to live, and something actionable in its place.
+grep -q 'font-sweep.sh' "$JOURNAL/$QP.md" \
+  && fail "the question names a sweep script on a host with no mechanism checkout to hold one"
+grep -q 'compare a few candidate sizes side by side' "$JOURNAL/$QP.md" \
+  || fail "the question offers the resident no way to settle the value: $(sed -n '/^$/,$p' "$JOURNAL/$QP.md")"
 
 # ---------------------------------------------------------------------
 log "assertion 10: this empty diff is legible as 'waiting on you', not as 'no change warranted'"

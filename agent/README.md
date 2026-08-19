@@ -119,16 +119,23 @@ castle show ID
   `--outcome failed` when an errand failed**, because no surface may
   read failure out of prose: a result with no `outcome` field reads as
   done, forever (see "The claim record, and the `outcome` field").
-  `--target` is convention-only in the same way `--outcome` is, and
-  names which checkout a result's diff is against (`private` or
-  `mechanism`) — the automatic path fills it in from what the tenant
-  wrote to `$CASTLE_TARGET_FILE`, and this flag is the same lever for a
-  human holding the seat by hand or a fixture building a result
-  directly. Deliberately not hard-refused elsewhere the way
-  `--blocking` is: it carries none of `--blocking`'s hazard, since no
-  fold silently mis-attributes a stray `target` the way an
-  unattributable question dead-ends an errand
-  (`docs/tasks/0024-config-target.md`).
+  `--target` names which checkout a result's diff is against
+  (`private` or `mechanism`) — the automatic path fills it in from what
+  the tenant wrote to `$CASTLE_TARGET_FILE`, and this flag is the same
+  lever for a human holding the seat by hand or a fixture building a
+  result directly. It is **enforced at write time**, like `--blocking`
+  and unlike `--fact`/`--outcome`: refused on any `--type` but
+  `result`, and refused blank. Not because it carries `--blocking`'s
+  dangling-reference hazard — it does not — but for the reason stated
+  just below about that flag, running the other way. `cmd_validate`
+  rejects `target` on a non-result record and rejects a blank one, so
+  a writer permitted to produce either would be a door laxer than its
+  own backstop, and in an append-only journal the record it wrote
+  could never be withdrawn: `castle record` would print an id and exit
+  0, and only `castle validate` — advisory, invoked automatically by
+  nothing — would later call it malformed. What is deliberately *not*
+  enforced is the vocabulary: a third checkout role should not need a
+  schema migration (`docs/tasks/0024-config-target.md`).
   `--blocking` is **not** convention-only like those two — it is
   enforced at write time, and the refusals are listed below — and it
   says that this question stopped the errand — the one thing no later
@@ -722,6 +729,13 @@ today and is a lie the first time the checkout moves or the machine is
 reinstalled. The resolved path is stated in the body prose beside the
 diff, where nothing keys on it and its staleness is obvious.
 
+**Written only alongside a diff.** A target means "the checkout this
+diff applies to," so a result with no diff carries no `target` — a
+tenant that stamps one anyway has the field discarded, with a sentence
+in the body saying so rather than a silent swallow. Recording it would
+make the result read, to anything keying on this field to decide where
+to apply a proposal, as an applicable proposal with nothing to apply.
+
 Validated **when present**, like `outcome`, for the identical
 append-only reason, and scoped to `result` records the way `blocking`
 is scoped to questions. But **not** a closed vocabulary, and that
@@ -964,9 +978,21 @@ number produces a proposal nothing stands behind, and a resident cannot
 tell a guess from a derived value by reading it.
 
 So turn one diagnoses, names the option and the layer, says plainly why
-the value cannot be derived, files a `--blocking` question pointing at
-the sweep tool that exists for exactly this, and **writes no diff and
-no target**. The resident runs the sweep, answers with a number, and
+the value cannot be derived, files a `--blocking` question, and
+**writes no diff and no target**.
+
+What that question may point *at* depends on the host, and the prompt
+makes it conditional rather than assuming. The sweep tools
+(`tools/font-sweep.sh`, `tools/console-font-sweep.sh`) live in the
+public framework repo, which `tools/README.md` is explicit is
+developer tooling rather than anything a deployed system installs — so
+on a host with no mechanism checkout they exist nowhere the resident
+could run them, and that is the normal host. Naming one there would
+stop the errand and then hand the resident a path that is not on their
+machine. Where a mechanism checkout is configured the tenant names the
+real absolute path; where it is not, the question describes what would
+settle the value instead. Packaging those tools for a deployed host is
+a separate decision this task does not take. The resident runs the sweep, answers with a number, and
 one further turn — a fresh tenant handed that account and that answer —
 writes the diff around their number and stamps its target.
 
