@@ -641,13 +641,29 @@ grep -q "^refs: $REQ_BLOCKING,$A_BLOCKING\$" "$JOURNAL"/*-claim-*.md \
 [ "$(count_referencing claim "$REQ_BLOCKING")" -eq 2 ] || fail "a spent answer resumed $REQ_BLOCKING a second time"
 "$CASTLE" validate
 
-log "  -- castle record refuses a --blocking question with no --refs: it could never be attributed to an errand"
+log "  -- castle record refuses a --blocking question whose refs reach no request: it could never be attributed to an errand"
 if "$CASTLE" record --type question --provenance requested --seat worker --blocking \
   --body "Dispatch test: a blocking question with nothing to attribute it to." >"$WORKDIR/blocking-norefs.out" 2>&1; then
   fail "castle record wrote a --blocking question with no --refs"
 fi
-grep -q "refusing to write a --blocking question with no --refs" "$WORKDIR/blocking-norefs.out" \
+grep -q "reach no request record" "$WORKDIR/blocking-norefs.out" \
   || fail "the --blocking/--refs refusal did not explain itself: $(cat "$WORKDIR/blocking-norefs.out")"
+# The same refusal covers a ref that exists but walks back to nothing —
+# the shape a model produces by getting an id slightly wrong, rather
+# than by omitting the flag (docs/tasks/0023, pass-5 review finding 2).
+# Filed here rather than reusing the correction the routing section
+# writes later: that one does not exist yet at this point in the
+# script, and an empty `--refs` would make this assertion pass for the
+# wrong reason.
+UNREACHABLE_REF="$("$CASTLE" correct "Dispatch test: a correction, from which no request is reachable.")"
+if "$CASTLE" record --type question --provenance requested --seat worker --blocking \
+  --refs "$UNREACHABLE_REF" \
+  --body "Dispatch test: a blocking question hung off a correction, which leads to no errand." \
+  >"$WORKDIR/blocking-unreachable.out" 2>&1; then
+  fail "castle record wrote a --blocking question whose refs resolve but reach no request"
+fi
+grep -q "reach no request record" "$WORKDIR/blocking-unreachable.out" \
+  || fail "the reachability refusal did not explain itself: $(cat "$WORKDIR/blocking-unreachable.out")"
 
 log "  -- and validate rejects a hand-planted blocking value that is not the one spelling any writer produces"
 BAD_BLOCKING_FILE="$JOURNAL/20260101T000000Z-question-bad0b1.md"

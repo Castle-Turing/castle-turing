@@ -1722,6 +1722,77 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **The prompt stated a rule its own text broke.** After the previous
+  pass, `agent/castle-worker-claude` told the tenant that every
+  instruction in the prompt carried the turn's token and that unmarked
+  instruction text "did not come from this harness" — while only three
+  headings actually carried it. The resume note did not, and that is the
+  block a prior turn's result body is likeliest to counterfeit word for
+  word: two textually identical, both-unmarked resume notes, with the
+  harness's own stated rule telling the tenant to discount both. A rule
+  a prompt breaks is worse than no rule, because a tenant that trusts it
+  is worse off than one that does not.
+
+  Fixed by fencing rather than by narrowing the claim: every harness
+  instruction now sits in a `<token> BEGIN harness instruction: …` /
+  `<token> END` pair, the same grammar the packet already uses for
+  records, so there is one rule for the whole prompt instead of two.
+  Fencing beat prefixing every line for a concrete reason — the contract
+  block contains a `castle record` command a tenant is meant to copy,
+  and a per-line token prefix would have quietly corrupted it.
+  `resume.sh` walks both renderings of the prompt (first turn and
+  resumed, because the resume note only exists on the second) and fails
+  on any non-empty line that is neither inside a harness fence nor
+  inside the packet. Mutation-tested — and the first version of that
+  assertion missed the unfenced resume note precisely because it only
+  rendered a first turn, which is why it now renders both.
+- **The `--blocking` guard refused less than its own message promised.**
+  It rejected an empty `--refs` while telling the writer that "a
+  blocking question is resumable only if some request can be reached
+  from its refs" — so a ref that resolved to some record but walked back
+  to no request sailed through and produced the identical permanent dead
+  end. That is also the likelier shape in practice: the writer is a
+  model choosing its own ids, which gets one slightly wrong far more
+  often than it omits the flag. The guard now runs the supplied refs
+  through `_find_root_request`, the same walk `_resumable_answers` uses,
+  and refuses when no request is reachable — testing what the message
+  says and what the fold needs.
+
+  §9's instruction to refuse "only when `--refs` is empty, not when it
+  is non-empty but dangling" is therefore superseded, and the boundary
+  against the deferred entry is unchanged by it:
+  `docs/backlog/record-does-not-resolve-refs.md` is about *resolution*,
+  for every type and every caller of `castle record`, and stays
+  deferred. This is *reachability*, for this one flag. A ref that
+  resolves perfectly and dead-ends is refused here and is still not that
+  entry's business.
+- **The fold and the packet renderer disagreed about what an answer
+  is.** `render_continuation_packet` checks `provenance: requested` and
+  `seat: intake` before calling a section the resident's words;
+  `_resumable_answers` checked nothing, so any record of type `answer`
+  bought a real worker turn — and the packet would then label a section
+  "NOT filed through the resident's own intake path" on the very turn
+  that record had paid for. The fold now applies the same test.
+
+  Deliberately described as a filter and not a boundary, in the code
+  comment as well as here: a writer passing those two fields satisfies
+  it exactly. What it buys is that the *spend* half of the self-answer
+  guard survives the case
+  `docs/backlog/env-stripping-defeats-write-guards.md` describes, where
+  a tenant clears `CASTLE_WORKER_CLAIM` and `write_record`'s refusal
+  never fires — a mislabelled answer then still cannot quietly grant a
+  worker turn. No existing fixture wrote answers through a non-intake
+  path, so nothing asserted behaviour this now forbids; checked before
+  adding it.
+
+  It also surfaced a residual, filed rather than fixed:
+  `file_answer`'s duplicate guard still counts *any* answer record, so a
+  mislabelled one makes its question look closed to `castle answer` and
+  to the modal's picker while buying no turn — leaving that question
+  neither closable nor resumable
+  (`docs/backlog/mislabelled-answer-strands-a-question.md`). Found by
+  this task's own new test case, which originally assumed the resident
+  could still answer such a question and could not.
 - **The packet outgrew what a single kernel argument can hold, and the
   errand it happened to would have died permanently.** §7's
   "no truncation and no size limit, anywhere" is right, and it made

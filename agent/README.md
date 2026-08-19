@@ -419,12 +419,15 @@ auto-resume, so it would die permanently for having gone on too long.
 The script opens the prompt file, unlinks it, and execs with stdin on
 the surviving descriptor: the file is gone before the handoff, `exec`
 keeps the tenant in the process group `castle work` captured at spawn,
-and the exit code stays the tenant's own. **And the harness's own
-instructions carry the packet's boundary token**, the deploy
-prohibition included — otherwise a prior result body, quoted verbatim,
-could reproduce that prohibition with its verdict reversed, and a
-tenant reading linearly would meet two contradictory copies of it. The
-packet ends at an explicit `<token> END OF PACKET` line.
+and the exit code stays the tenant's own. **And the harness's own instructions are
+fenced with the packet's boundary token**, every one of them — the
+`BEGIN harness instruction:` / `END` pair is the same grammar the packet
+uses for records, so a tenant learns one rule and applies it to the
+whole prompt. Marking only the headings was not enough: the block a
+prior result body is likeliest to counterfeit is the resumed-turn note,
+which is prose, and two unmarked copies of it would make the prompt's
+own rule discount them both. The packet ends at an explicit
+`<token> END OF PACKET` line.
 
 Read the script itself
 for the exact prompt; it is short and meant to be audited, not
@@ -777,6 +780,22 @@ is unspent on the errand — it goes through the same `run_worker_turn`
 and the same fold as a dispatched one, and never consults the watermark
 — so the answer is picked up, spent by that turn's claim, and delivered
 in its continuation packet exactly as an automatic resumption would.
+
+**Only an answer that came through the resident's own intake path buys
+a turn.** `_resumable_answers` requires `provenance: requested` and
+`seat: intake` — the pair `file_answer` always writes, from the CLI and
+the modal alike — so a record of type `answer` that reached the journal
+some other way is rendered in the packet (honestly labelled as not
+resident-filed) but pays for nothing. That keeps the fold and the
+renderer agreeing about what an answer is. It is a filter rather than a
+boundary: a writer that passes those two fields satisfies it, and the
+guard that actually forbids a tenant answering — `write_record`'s
+refusal — rests on an environment variable a tenant could unset
+(`docs/backlog/env-stripping-defeats-write-guards.md`). One consequence
+is filed rather than fixed here: a mislabelled answer still makes its
+question look closed to `castle answer` and to the picker, so the
+question ends up neither closable nor resumable
+(`docs/backlog/mislabelled-answer-strands-a-question.md`).
 
 **What resumption is not.** It is not retry — a resumed turn that fails
 writes an ordinary `outcome: failed` result and is not attempted again,
