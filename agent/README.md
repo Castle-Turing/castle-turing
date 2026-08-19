@@ -401,11 +401,32 @@ an errand that has already had a turn, every prior result, question and
 answer, each quoted inside boundaries carrying a token generated for
 that turn — builds a prompt that states the errand, the repo location,
 that only those boundaries say who wrote what, and — unmissably — that
-this seat must not deploy anything, then execs `claude -p` with it. The
-script names its own variable `errand_records` for that reason: a
-tenant that treats the first line of stdin as the resident's text is
-reading the packet's preamble, and on a resumed turn would read an
-earlier turn's output and the resident's answer as the request. Read the script itself
+this seat must not deploy anything, then execs `claude -p` with the
+prompt **on stdin**. The script names its own variable `errand_records`
+for that reason: a tenant that treats the first line of stdin as the
+resident's text is reading the packet's preamble, and on a resumed turn
+would read an earlier turn's output and the resident's answer as the
+request.
+
+Two details of that handoff are load-bearing rather than incidental, and
+a conforming tenant of your own should copy both. **The prompt goes on
+stdin, never in an argument.** Linux caps a single `argv` entry at
+`MAX_ARG_STRLEN` — 32 pages, 131072 bytes on a 4 KiB-page machine — and
+a packet carrying several turns' worth of diffs passes that. Past it
+`exec` fails `E2BIG` and the turn records `outcome: failed`; since that
+turn's claim has already spent the answer, the errand can never
+auto-resume, so it would die permanently for having gone on too long.
+The script opens the prompt file, unlinks it, and execs with stdin on
+the surviving descriptor: the file is gone before the handoff, `exec`
+keeps the tenant in the process group `castle work` captured at spawn,
+and the exit code stays the tenant's own. **And the harness's own
+instructions carry the packet's boundary token**, the deploy
+prohibition included — otherwise a prior result body, quoted verbatim,
+could reproduce that prohibition with its verdict reversed, and a
+tenant reading linearly would meet two contradictory copies of it. The
+packet ends at an explicit `<token> END OF PACKET` line.
+
+Read the script itself
 for the exact prompt; it is short and meant to be audited, not
 summarized. `test/agent-loop/scripted-worker.sh` is the model-free
 stand-in CI actually runs — nothing in CI executes a real model.

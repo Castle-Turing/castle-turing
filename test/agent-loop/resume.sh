@@ -136,6 +136,10 @@ log "  -- the resuming claim names the answer it spent, after the request id"
 RESUME_CLAIM_FILE="$(grep -l "^refs: $REQ1,$A1\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
 [ -n "$RESUME_CLAIM_FILE" ] || fail "no claim record carries 'refs: $REQ1,$A1' — the answer was never spent, which is the unbounded-retry loop"
 RESUME_CLAIM="$(basename "$RESUME_CLAIM_FILE" .md)"
+grep -q "This turn was given .*$A1" "$RESUME_CLAIM_FILE" \
+  || fail "the resuming claim does not say which answer it spent"
+grep -q "It is a RESUMPTION" "$RESUME_CLAIM_FILE" \
+  || fail "the resuming claim does not say it is continuing an earlier turn"
 # The FIRST turn's claim must be untouched: byte-for-byte the shape it
 # always had, request id and nothing else.
 FIRST_CLAIM_FILE="$(grep -l "^refs: $REQ1\$" "$JOURNAL"/*-claim-*.md 2>/dev/null || true)"
@@ -360,6 +364,12 @@ FIRST_CLAIM11="$(grep -l "^refs: $REQ11,$A11\$" "$JOURNAL"/*-claim-*.md 2>/dev/n
 [ -n "$FIRST_CLAIM11" ] || fail "the first turn did not spend $A11 — a later sweep would resume off it forever"
 grep -q "RESUMPTION" "$FIRST_CLAIM11" \
   && fail "a first turn's claim announced itself as a resumption of a turn that never happened"
+# But the second ref still has to be accounted for in prose. An
+# unexplained extra id in an append-only record is the defect the
+# paragraph exists to prevent, and gating the explanation on history
+# rather than on the spend would reopen it in exactly this case.
+grep -q "This turn was given .*$A11" "$FIRST_CLAIM11" \
+  || fail "the first turn's claim names $A11 in its refs and never says why: $(sed -n '/^---$/,$p' "$FIRST_CLAIM11" | head -20)"
 FIRST_RESULT11="$(referencing result "$REQ11")"
 grep -q "RESUMED with" "$FIRST_RESULT11" \
   && fail "the tenant was told this was a resumed turn on an errand that had never had one"

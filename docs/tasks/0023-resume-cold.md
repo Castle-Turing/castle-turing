@@ -1722,6 +1722,64 @@ shaped than the text specifies, each with the reason.
   everything else in this task insists an answer grants no authority;
   attributing machine-authored text to the resident pushes precisely
   the other way.
+- **The packet outgrew what a single kernel argument can hold, and the
+  errand it happened to would have died permanently.** §7's
+  "no truncation and no size limit, anywhere" is right, and it made
+  `agent/castle-worker-claude`'s `exec claude -p "$prompt"` a time
+  bomb: Linux caps one `argv` entry at `MAX_ARG_STRLEN` (32 pages,
+  131072 bytes on a 4 KiB-page machine), which a human-typed request
+  never approached and four or five turns of model-authored diffs do.
+  Past the cap `exec` fails `E2BIG`, bash exits 126 printing only
+  "Argument list too long", and the turn is recorded `outcome: failed`
+  — with the answer already spent by that turn's claim, so §4's fold
+  finds nothing to resume and the errand is finished for good, its
+  journal blaming the tenant for a limit nobody wrote down.
+
+  Fixed by opening the prompt file, unlinking it, and exec'ing with
+  stdin on the surviving descriptor. `exec` is kept deliberately rather
+  than replaced with a pipeline: it is what makes the tenant the same
+  pid, in the same process group, that `run_worker_turn` captured at
+  spawn — 0021's timeout kill and straggler sweep both depend on that —
+  and it keeps the exit code the tenant's own with no `PIPESTATUS`
+  handling. The privacy property the old comment protected comes out
+  stronger, not weaker: the file is unlinked before the handoff as
+  before, and the resident's verbatim words no longer sit in
+  `/proc/<pid>/cmdline` for the length of the turn. `resume.sh` covers
+  both halves — an errand whose first turn pads its account past the
+  cap still resumes, and the shipped tenant itself is driven with a
+  stub `claude` on `$PATH` and an oversized packet, which is the half
+  that would actually have caught this, since nothing in `castle` ever
+  used argv.
+- **The harness's own instructions were unauthenticated by the rule the
+  tenant is told to apply.** The nonce marked the packet's sections but
+  not the prompt wrapped around them, and nothing marked where the
+  packet ended — so a prior result body, quoted byte-for-byte, could
+  reproduce `THE ONE RULE THAT OVERRIDES EVERYTHING ELSE` with MUST
+  changed to MAY. A tenant tracking BEGIN/END state would be fine; a
+  tenant reading linearly, which is a fair description of a model,
+  meets two contradictory copies of the one rule that file exists to
+  make unmissable. The script now reads the token out of the packet's
+  preamble and prefixes its own headings with it, and closes the packet
+  with `<token> END OF PACKET`. Asserted with both copies present in
+  one rendered prompt: exactly one carries the token, and it is the
+  harness's.
+- **The claim's extra refs were explained only when there was history
+  to narrate.** Gating the RESUMPTION paragraph on `continuing` — the
+  previous pass's fix — left a first turn that spends an answer writing
+  `refs: <request>,<answer>` under a body mentioning only a turn
+  beginning: the unexplained-ref defect that paragraph exists to
+  prevent, reopened in precisely the case the gate closes. Two
+  sentences now, one gated on the spend (which answers this turn was
+  given, and that naming them is what spends them) and one on history
+  (that it is a resumption). Mutation-tested in both directions.
+- **Two fixture bugs of a single shape, found by the oversized-packet
+  case on its first run and recorded because the shape recurs**:
+  `grep -m1` reading a piped-in packet exits at the first match while
+  `printf` is still writing, `printf` takes SIGPIPE, and `set -o
+  pipefail` reports 141 for a pipeline whose `grep` succeeded.
+  Invisible below the 64 KiB pipe buffer and certain above it, which is
+  the worst place for a bug to wait. Both fixtures now write the packet
+  to a file and read that.
 - **A prior turn's own body could forge the packet's section
   boundaries.** §7 specifies headings and says nothing about who may
   write something heading-shaped; the third review pass found that a
