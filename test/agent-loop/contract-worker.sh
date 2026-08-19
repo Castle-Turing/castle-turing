@@ -27,7 +27,16 @@ set -euo pipefail
 : "${CASTLE_DIFF_FILE:?contract-worker.sh: CASTLE_DIFF_FILE must be set}"
 : "${CASTLE_REPO_ROOT:?contract-worker.sh: CASTLE_REPO_ROOT must be set}"
 
-request_body="$(cat)"
+# Named for what `castle work` actually pipes here. Since
+# docs/tasks/0023-resume-cold.md that is the errand's whole
+# continuation packet — a preamble naming this turn's section-boundary
+# token, then the request, then every prior turn's account, question
+# and answer — not the bare request body it was called before. This
+# fixture is the reference implementation of the tenant contract, so a
+# stranger reading it to build their own must not be told the first
+# line of stdin is the resident's text: it is the packet's own opening
+# line.
+errand_records="$(cat)"
 
 # Optional, default 0: widens the window in which this tenant is
 # running, which is how dispatch-test.sh's concurrency assertion gets a
@@ -60,4 +69,19 @@ if [ -n "${CASTLE_TEST_WORKER_BINARY:-}" ]; then
 fi
 
 printf 'contract-worker: handled %s in %s\n' "$CASTLE_REQUEST_ID" "$CASTLE_REPO_ROOT"
-printf 'contract-worker: the request said: %s\n' "${request_body%%$'\n'*}"
+# Reports something true of the packet rather than mislabelling its
+# first line. The line count is the honest one-line summary a fixture
+# can give of a document whose shape is the mechanism's business, and
+# the boundary token proves the preamble arrived — which is the part a
+# conforming tenant has to read before it can trust anything else.
+# Counted off a file, not a pipe. `grep -m1` against a piped-in packet
+# exits at the first match while printf is still writing, and under
+# `set -o pipefail` that SIGPIPE becomes the pipeline's status — a
+# failure that only appears once the packet outgrows the pipe buffer,
+# which is the worst size for a bug to wait at.
+records_file="$(mktemp)"
+trap 'rm -f "$records_file"' EXIT
+printf '%s\n' "$errand_records" > "$records_file"
+printf 'contract-worker: received %s lines of errand records\n' "$(grep -c '' "$records_file" || true)"
+printf 'contract-worker: boundary token present: %s\n' \
+  "$(grep -c -m1 -o 'CASTLE-PACKET-[0-9a-f]\{16\}' "$records_file" || true)"

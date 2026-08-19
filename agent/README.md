@@ -41,7 +41,7 @@ file, `agent/castle`, meant to be read top to bottom.
 castle ask [--provenance requested|initiated] [--refs id,id] TEXT...
 castle answer QUESTION_ID [--fact NAME] TEXT...
 castle correct [--refs id,id] TEXT...
-castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--outcome VALUE] [--body TEXT | --body-file PATH] [--spool]
+castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--outcome VALUE] [--blocking] [--body TEXT | --body-file PATH] [--spool]
 castle route
 castle work REQUEST_ID
 castle dispatch
@@ -73,12 +73,21 @@ castle show ID
   than silently gaining a second `answer` record naming it. Two answers
   on one question make "is this still open" unanswerable for every
   later reader, and the refusal names the existing answer's id so the
-  first one is easy to find. The cost, stated plainly: an answer cannot
-  currently be revised or superseded — a resident who answered wrongly
-  can file a `correction` referencing it, which preserves the account,
-  but nothing reopens the question and the resident-model entry it
-  elicited stands as written; amendment semantics on an append-only log
-  are deliberately left to a future task rather than improvised here.
+  first one is easy to find. Answering a question the worker marked
+  **blocking** also resumes its errand: the next `castle dispatch`
+  sweep gives that request one more worker turn, automatically, exactly
+  once (`docs/tasks/0023-resume-cold.md`, and "Resuming an errand"
+  below). An answered *non*-blocking question resumes nothing, which is
+  the common shape. The cost, stated plainly: an answer cannot be
+  revised or superseded — a resident who answered wrongly can file a
+  `correction` referencing it, which preserves the account, but nothing
+  reopens the question and the resident-model entry it elicited stands
+  as written; amendment semantics on an append-only log are
+  deliberately left to a future task rather than improvised here
+  (`docs/backlog/answer-amendment-semantics.md`). Since a blocking
+  answer starts real work within seconds of landing, there is no window
+  in which a wrong one could be taken back: the remedy is a new
+  request, not an undo.
 - **`correct`** — also intake, and a second, different kind of speech:
   the resident volunteering how the system is doing, unbidden, rather
   than asking for anything or answering a question it posed
@@ -90,7 +99,15 @@ castle show ID
   verbatim, no seat paraphrasing a word of it. `--refs` here is the
   record's one causal claim ("this correction is about that record")
   and only the resident may make it — nothing populates it
-  automatically. `castle-modal`'s compose mode reaches the same write
+  automatically. Refused outright when invoked from inside a worker
+  turn, at the same choke point that refuses an answer there
+  (`write_record`, keyed on `CASTLE_WORKER_CLAIM`): `castle record
+  --type correction` has been refused since
+  `docs/tasks/0010-correction-record.md` so that no seat can fabricate
+  verbatim resident speech, and this is the same prohibition applied to
+  the other door — a tenant filing one would not merely speak for the
+  resident once, it would install an opinion they never held where the
+  router reads it (`docs/tasks/0023-resume-cold.md`). `castle-modal`'s compose mode reaches the same write
   path (`file_correction()` in `agent/castle`) after asking, in plain
   language, whether what was just typed is something to fix or
   feedback about how the system is doing — see "`castle-modal`" below.
@@ -102,6 +119,25 @@ castle show ID
   `--outcome failed` when an errand failed**, because no surface may
   read failure out of prose: a result with no `outcome` field reads as
   done, forever (see "The claim record, and the `outcome` field").
+  `--blocking` is **not** convention-only like those two — it is
+  enforced at write time, and the refusals are listed below — and it
+  says that this question stopped the errand — the one thing no later
+  reader could reconstruct, since a question filed *alongside* a result
+  and one filed *instead of* one are indistinguishable afterward. It is
+  the only one of the three with a hard refusal attached: a `--blocking`
+  question whose **first** `--refs` entry does not walk back to a
+  `request` record is rejected outright, because a blocking question no
+  fold can attribute to an errand is unresumable forever and looks
+  exactly like a working one. The first ref is the test because it is
+  the only one resumption reads — `_find_root_request` follows `refs[0]`
+  and ignores the rest, so a correct id in second place buys nothing.
+  Two further combinations are refused for the same reason, that a
+  record which looks meaningful and does nothing is worse than one that
+  was never written: `--blocking` with `--spool` (the spool is
+  ephemeral by design and no fold reads it, so a durable claim that an
+  errand has stopped does not belong there) and `--blocking` on any
+  `--type` but `question` (nothing reads the field anywhere else)
+  (`docs/tasks/0023-resume-cold.md`).
 - **`route`** — the router. Reads every `result` and `question` record
   not yet referenced by a `decision` record **written by the router
   seat itself** — filtering on `seat: router`, not just record type, is
@@ -148,7 +184,21 @@ castle show ID
   already working is refused outright, with nothing written. Re-running
   it on an errand that already has a result is *not* refused — that is
   the retry path, and it stays exactly that
-  (`docs/tasks/0021-auto-dispatch.md`).
+  (`docs/tasks/0021-auto-dispatch.md`). An errand can take more than
+  one turn: what goes on the tenant's stdin is the errand's whole
+  continuation packet — the request verbatim under a heading, then
+  every prior turn's account, every question raised, and every answer
+  given — and a turn resuming an answered blocking question also
+  carries `$CASTLE_RESUME_ANSWER_IDS`. Both are assembled here rather
+  than in `castle dispatch`, so a hand-run turn and a dispatched one
+  are handed identical context by construction. That variable means
+  "there is an earlier turn of yours in the packet, and these are the
+  answers you are continuing from" — so a *first* turn that happens to
+  spend an answer (a blocking question filed and answered before
+  anything ran) leaves it absent, and its claim narrates no resumption,
+  while still naming the answers it spent. The spend is accounting; the
+  narrative is a claim about history, and only the second one needs a
+  history to be true.
 - **`dispatch`** — one sweep of the journal, and the only subcommand
   a machine runs unprompted (`docs/tasks/0021-auto-dispatch.md`). In
   order: take a global sweep lock (one sweep at a time, machine-wide);
@@ -161,11 +211,15 @@ castle show ID
   is eligible iff nothing has produced a `result` for it, nothing is
   running on it, it is not named in the watermark record's own `refs`,
   and it carries no `filed-during-turn` stamp — a fold over the
-  journal, nothing else. Provenance is deliberately *not* an
-  eligibility condition (it decides the channel, never whether the
-  errand runs), and neither is an unanswered question (errand
-  resumption is `docs/backlog/errand-resume-after-answer.md`'s
-  problem). Exit code 0 whenever the sweep ran, *including* when an
+  journal, nothing else — **or** it has an answered, unspent blocking
+  question, which is the one exception to the first clause and buys
+  exactly one further turn (see "Resuming an errand" below).
+  Provenance is deliberately *not* an eligibility condition (it decides
+  the channel, never whether the errand runs), and neither is an
+  *unanswered* question, nor an answered **non**-blocking one: only an
+  answered question whose writer marked it blocking affects
+  eligibility, and nothing anywhere resumes an unanswered one — no
+  default, no timeout, nothing but the resident closes a question. Exit code 0 whenever the sweep ran, *including* when an
   errand it attempted failed: failure is visible in `outcome`, and a
   nonzero exit here means dispatch itself broke. On a host that opts
   into `castle.agent.dispatch.enable` (`modules/agent`), a systemd
@@ -318,11 +372,13 @@ castle-modal --mode answer  [--question ID]
   `channel`, `evidence`, and no fact names.** That binds the text the
   tool adds — question and request bodies are shown exactly as their
   authors wrote them. So the confirmation carries no id, and says only
-  what is true: `"Filed. Nothing picks this errand back up
-  automatically yet."` (answering resumes nothing until
-  `docs/backlog/errand-resume-after-answer.md` is built — a
-  confirmation implying otherwise would be `docs/tasks/0015`'s defect
-  one level up), plus `"Noted — I'll remember that."` if and only if an
+  what is true: a bare `"Filed."` — and nothing more, in either
+  direction. It no longer says nothing resumes the errand, because
+  since `docs/tasks/0023-resume-cold.md` an answered blocking question
+  does; and it does not claim a resumption either, because this process
+  cannot see whether dispatch is enabled or running on this host and
+  never triggers one itself. Both would be `docs/tasks/0015`'s defect,
+  from opposite sides. Plus `"Noted — I'll remember that."` if and only if an
   entry really was written to the resident model. A write into the
   resident's own model that the resident is never told about is
   authority exercised invisibly; the CLI's `recorded resident-model
@@ -359,9 +415,40 @@ Sway, zero foot, and zero display server involved.
 
 A plain bash script, the reference implementation of
 `castle.agent.worker.command`'s contract (see `castle work` above):
-reads the request body on stdin, builds a prompt that states the
-errand, the repo location, and — unmissably — that this seat must not
-deploy anything, then execs `claude -p` with it. Read the script itself
+reads the errand's continuation packet on stdin — the request, and on
+an errand that has already had a turn, every prior result, question and
+answer, each quoted inside boundaries carrying a token generated for
+that turn — builds a prompt that states the errand, the repo location,
+that only those boundaries say who wrote what, and — unmissably — that
+this seat must not deploy anything, then execs `claude -p` with the
+prompt **on stdin**. The script names its own variable `errand_records`
+for that reason: a tenant that treats the first line of stdin as the
+resident's text is reading the packet's preamble, and on a resumed turn
+would read an earlier turn's output and the resident's answer as the
+request.
+
+Two details of that handoff are load-bearing rather than incidental, and
+a conforming tenant of your own should copy both. **The prompt goes on
+stdin, never in an argument.** Linux caps a single `argv` entry at
+`MAX_ARG_STRLEN` — 32 pages, 131072 bytes on a 4 KiB-page machine — and
+a packet carrying several turns' worth of diffs passes that. Past it
+`exec` fails `E2BIG` and the turn records `outcome: failed`; since that
+turn's claim has already spent the answer, the errand can never
+auto-resume, so it would die permanently for having gone on too long.
+The script opens the prompt file, unlinks it, and execs with stdin on
+the surviving descriptor: the file is gone before the handoff, `exec`
+keeps the tenant in the process group `castle work` captured at spawn,
+and the exit code stays the tenant's own. **And the harness's own instructions are
+fenced with the packet's boundary token**, every one of them — the
+`BEGIN harness instruction:` / `END` pair is the same grammar the packet
+uses for records, so a tenant learns one rule and applies it to the
+whole prompt. Marking only the headings was not enough: the block a
+prior result body is likeliest to counterfeit is the resumed-turn note,
+which is prose, and two unmarked copies of it would make the prompt's
+own rule discount them both. The packet ends at an explicit
+`<token> END OF PACKET` line.
+
+Read the script itself
 for the exact prompt; it is short and meant to be audited, not
 summarized. `test/agent-loop/scripted-worker.sh` is the model-free
 stand-in CI actually runs — nothing in CI executes a real model.
@@ -585,6 +672,206 @@ structural — any result at all makes a request ineligible — so nothing
 would read a counter), `duration` (nothing renders a timing view yet),
 and `exit-code` (the four-value enum already carries every distinction
 a caller makes today).
+
+### Resuming an errand, and the `blocking` field
+
+From `docs/tasks/0023-resume-cold.md`. A worker that needs the
+resident's judgment mid-errand usually files its question *alongside* a
+result it has already produced — that is what the worker prompt asks
+for, and answering such a question changes nothing. Sometimes it
+genuinely cannot proceed, and files a question *instead of* a result.
+Nothing downstream can tell those two apart afterward: ids carry
+one-second resolution and a random suffix, so a question and a result
+written in the same final second of a turn have no reliable order. Only
+the writer knows, at write time, which shape it wrote.
+
+A **`blocking`** field on `question` records says so. Written once, by
+that writer, with the literal value `true`, and never mutated; absent
+means false, which is what keeps every question written before this
+field existed permanently non-resuming. It is not a status field —
+whether a question is *answered* stays the fold it always was (does any
+`answer` record name it) — and it is not a judgment about the question's
+importance. It is an observation about the writer's own turn, the same
+epistemic shape `outcome` has. Like `outcome`, `castle validate` checks
+it when present and never requires it; unlike `outcome` there is no
+vocabulary to test membership against, so the check is that the value is
+the one spelling any writer produces — the literal `true`. The validator
+also refuses the field on any record that is not a `question`, which
+matters to anyone hand-editing or restoring a journal: `castle record`
+will not write `blocking: true` onto a result, and `castle validate`
+will not accept one either. The two were briefly out of step, with the
+writer refusing what the validator called clean; the backstop must not
+be laxer than the door, since the records it exists for are precisely
+the ones the CLI never touched.
+
+**What resumption does.** When the resident answers a blocking question,
+the next `castle dispatch` sweep finds that request eligible again —
+the one exception to "any result at all bars an automatic attempt" — and
+runs one more worker turn. Exactly one, per answer, ever. **The spend
+token is the `claim` record, not the result**: a resuming turn's claim
+names every answer it was given, after the request id
+(`refs: <request-id>,<answer-id>`), and an answer named by **any claim
+anywhere in the journal** is spent forever — not merely by this
+request's own claims. The bound is a property of the answer rather than
+of the errand reading it: an answer naming blocking questions on two
+errands would otherwise look unspent to each of them in turn and buy a
+turn on both, which is not "exactly one, per answer, ever". A
+normally-written answer refs one question and cannot tell the two rules
+apart.
+
+Because that bound is global, the check that reads it and the write that
+spends it are taken under a **global lock** (`spend.lock` in the runtime
+directory), held from the recomputation through the claim write and
+released immediately after — never across the tenant call. A per-request
+lease cannot do this job: two `castle work` invocations on two different
+requests take two different leases, so with one answer naming questions
+on both they can each read the journal before either writes its claim,
+each see the answer unspent, and each spend it. The lock ordering, for
+anyone adding another: sweep lock → per-request lease → spend lock, in
+that order, always. That has to be the claim, because
+`castle work` writes it before the tenant command is even resolved, so
+every turn that starts leaves one however it ends — while the two paths
+that write results for turns nobody survived (the tenant-fault branches
+and the reaper) hardcode `refs: <request-id>,<claim-id>` and cannot name
+an answer at all. Spending on the result would leave every crashed
+resumed turn eligible forever: one model call per timer tick. Result
+`refs` are unchanged by this, and every existing reader of a claim keys
+it by `refs[0]`, so the extra ids are invisible to all of them.
+
+Which questions belong to a request is resolved by walking `refs[0]`
+back to the first `request` record reached — the same lineage edge
+claims and results are keyed by, through as many hops as the chain has.
+A question filed against its own result therefore lands on the same
+errand a directly refs'd one does, which matters because the tenant that
+runs in production is a model deciding its own `--refs`. A question on a
+follow-up request resolves to the follow-up and never contaminates its
+parent.
+
+**The continuation packet.** A resumed tenant is a fresh process that
+remembers nothing, so `castle work` renders the errand's own records
+onto its stdin, in this order and each verbatim: the request body under
+a heading; every prior result body, in id order; every question the
+errand raised, in id order, flagged blocking or not and answered or not;
+and each answer immediately under the question it answers. Rendered on
+every turn, with no branch for "is this a first turn" — the fold simply
+finds whatever the errand has. On the ordinary first turn that is the
+request alone, which is what a tenant received before this task; but a
+first turn is not *defined* by carrying only the request, and a
+blocking question filed and answered before any turn ran (possible, and
+tested) gives one a question section and a resident-answer section with
+no prior result between them. What distinguishes a first turn is the
+absence of an earlier turn's account, not the absence of everything
+else. Nothing is truncated and nothing is capped.
+
+**Section boundaries are unforgeable, and nothing else in the packet
+is structure.** Each section is delimited by lines carrying a token
+generated for that turn alone — `CASTLE-PACKET-<16 hex chars>` — stated
+in the packet's own opening paragraph and stored nowhere. A record
+cannot contain it, because no record was written after it existed, so a
+`result` body (model-authored, quoted byte-for-byte into the next
+turn's packet) cannot spell a boundary claiming the resident said
+something. Only the boundary line above a section says what that
+section is or who wrote it; a heading-shaped line inside one is that
+record's own text. A conforming tenant reads the token from the
+preamble and trusts nothing else — `agent/castle-worker-claude` says so
+in its prompt, and both blocking fixtures in `test/agent-loop/` do it.
+
+**Verbatim there means byte-for-byte.** No body is stripped, rstripped
+or reflowed on its way to a tenant: `parse_record` removes only the
+single blank line after a record's closing fence, precisely so a body
+that begins with whitespace-sensitive markdown survives, and this
+renderer keeps what the parser kept. It matters most on exactly this
+path — a result body carries an embedded unified diff, whose leading
+spaces are its content, and a resumed tenant reads that diff to work out
+what an earlier turn already did. What separates one section from the
+next is the renderer's own blank line, never the body's trailing
+whitespace, so a body that ends mid-line still leaves the following
+boundary on a line of its own. The single newline before each `END`
+line is the renderer's, which the preamble says out loud so a consumer
+extracting a section knows whose byte it is.
+
+Three things are deliberately kept out of it. `correction` records: a
+correction is the resident judging the *system*, and feeding a verdict
+about the system into the work being judged is backwards (`castle
+digest` filters them out of its errand fold for the same reason).
+`decision` records: the router's reasoning about when to interrupt the
+resident is not something an errand's work needs. And anything outside
+the errand, which is impossible by construction rather than by
+filtering — the fold can only reach records linked to this request.
+Resident-model entries are absent too, but that is a gap rather than a
+decision about this packet: no worker reads the resident model on any
+turn (`docs/backlog/workers-do-not-read-the-resident-model.md`).
+
+**An answer can be spent by a turn that never ran, and the remedy is the
+same command.** The claim naming an answer is written before the tenant
+command is checked for runnability, so a host with an empty or
+unrunnable `castle.agent.worker.command` spends the answer on a turn in
+which no process started. That ordering is deliberate and is what bounds
+the failure: with the answer left unspent, the request would carry a
+`failed` result *and* an unspent blocking answer, so the fold would find
+it eligible again on the next timer tick against the same broken tenant,
+forever — 0021's unbounded silent retry, reached from a new direction.
+The `failed` result says so, and says what to do: fix the tenant and run
+`castle work <id>` by hand. A hand-run turn re-renders that answer into
+the packet exactly as an automatic resumption would (the errand's
+records are rendered on every turn, spent or not), so nothing about the
+resident's answer is lost — only the automatic attempt is.
+
+**Two kinds of errand can never resume, and the remedy for both is a
+command.** Every other eligibility condition still applies alongside
+resumption, so a request excluded by one of them stays excluded however
+many blocking questions on it get answered. Two shapes are excluded:
+a request filed *before* dispatch existed on this journal, which the
+watermark names in its own `refs`, and a request carrying
+`filed-during-turn` — one a worker tenant filed mid-errand, which
+dispatch never starts on its own account (see above).
+
+Both produce the same reachable dead end. A resident hand-runs such an
+errand with `castle work <id>`, its tenant marks a question blocking and
+stops, the resident answers — and no sweep will ever pick it up, because
+the watermark or the stamp rejects the request whatever
+`_resumable_answers` found. The modal says only "Filed.", so nothing on
+screen explains the silence.
+
+That is deliberate rather than an oversight, and for one reason in both
+cases: each exclusion is a promise about what will not start itself —
+errands predating dispatch, and work a tenant generated rather than a
+resident — and letting either begin producing automatic turns because it
+was hand-run once would turn a single manual start into a standing
+permission. **The remedy is the same command that started it: `castle
+work <id>` again.** A hand-run turn resumes whatever
+is unspent on the errand — it goes through the same `run_worker_turn`
+and the same fold as a dispatched one, and never consults the watermark
+— so the answer is picked up, spent by that turn's claim, and delivered
+in its continuation packet exactly as an automatic resumption would.
+
+**Only an answer that came through the resident's own intake path buys
+a turn.** `_resumable_answers` requires `provenance: requested` and
+`seat: intake` — the pair `file_answer` always writes, from the CLI and
+the modal alike — so a record of type `answer` that reached the journal
+some other way is rendered in the packet (honestly labelled as not
+resident-filed) but pays for nothing. That keeps the fold and the
+renderer agreeing about what an answer is. It is a filter rather than a
+boundary: a writer that passes those two fields satisfies it, and the
+guard that actually forbids a tenant answering — `write_record`'s
+refusal — rests on an environment variable a tenant could unset
+(`docs/backlog/env-stripping-defeats-write-guards.md`; that refusal
+covers `correction` as well as `answer`). One consequence
+is filed rather than fixed here: a mislabelled answer still makes its
+question look closed to `castle answer` and to the picker, so the
+question ends up neither closable nor resumable
+(`docs/backlog/mislabelled-answer-strands-a-question.md`).
+
+**What resumption is not.** It is not retry — a resumed turn that fails
+writes an ordinary `outcome: failed` result and is not attempted again,
+because its claim spent the answer the moment the turn started. It is
+not a second way to close a question: nothing but the resident's answer
+ever closes one, and no timeout or staleness clock resumes an
+*unanswered* blocking question, which is a turn correctly waiting rather
+than an interrupted one. And it is not authority: the resumed tenant
+arrives holding an explicit resident answer, which closes a question and
+grants nothing else. The worker proposes and never deploys, on a resumed
+turn exactly as on a first.
 
 ### Corrections and filing-time context
 
@@ -811,7 +1098,7 @@ plan for how that first entry gets written on the reference host.
 
 ## Testing
 
-Four harnesses, all plain bash and stdlib Python — no Nix involved,
+Five harnesses, all plain bash and stdlib Python — no Nix involved,
 unlike `test/vm-install/`'s harness — runnable locally with nothing
 beyond `bash` and `python3` on `$PATH`:
 
@@ -820,6 +1107,7 @@ test/agent-loop/run.sh                   # the full loop, both channels, the rou
 test/agent-loop/tenant-swap.sh           # runs run.sh twice with two differently-shaped workers, diffs the outcome
 test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin, zero compositor
 test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: watermark, lease, claim, reaper, outcomes
+test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
 ```
 
 - **`run.sh`** (the `agent-loop-test` CI job) runs the whole loop —
@@ -932,10 +1220,12 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   `outcome: interrupted` result that then gets routed; a request a
   tenant filed mid-turn is stamped, never auto-started, and still
   runnable by hand; an `answer`
-  filed against a question on an already-worked errand does **not**
-  make it eligible again (an explicit non-behavior — task 0023's
-  territory, and a regression here would silently widen 0021's scope
-  into it); corrections stay unrouted even when dispatch is what
+  filed against a **non-blocking** question on an already-worked errand
+  does **not** make it eligible again, while the same shape marked
+  `--blocking` **does** — the two sit side by side in the file
+  deliberately, since the contrast is the whole proof that resumption is
+  opt-in rather than firing on any answered question
+  (`docs/tasks/0023-resume-cold.md`); corrections stay unrouted even when dispatch is what
   triggers the router; and `castle validate` passes throughout, not
   just at the end. Its `contract-worker*.sh` fixtures are also the
   only place the *real* `castle.agent.worker.command` contract — body
@@ -943,3 +1233,27 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
   exercised: `run.sh`'s scripted workers are invoked positionally and
   bypass `cmd_work` entirely, and they stay that way so
   `tenant-swap.sh`'s comparison keeps meaning what it means.
+- **`resume.sh`** (also in the `dispatch-test` CI job,
+  `docs/tasks/0023-resume-cold.md`) drives errand resumption end to end
+  through `castle dispatch`, never by hand-building the journal with
+  `castle record` — the continuation packet, `CASTLE_RESUME_ANSWER_IDS`
+  and the claim's widened `refs` all live inside `run_worker_turn`, and
+  only a real turn reaches them. Its tenant,
+  `scripted-worker-blocking.sh`, files a `--blocking` question and
+  produces nothing else on its first invocation, and on a resumed one
+  echoes back what it found on stdin — the original request's text, the
+  question's text and the resident's answer, each as its own greppable
+  line, so an empty or malformed packet fails the run instead of passing
+  it on the strength of a second claim existing. It proves: an answered
+  blocking question produces exactly one new claim and one new result,
+  with the answer named in that claim's `refs`; an *unanswered* one
+  produces nothing, however many sweeps run; two sweeps back to back,
+  and two racing under `CASTLE_TEST_WORKER_SLEEP`, produce one
+  resumption between them rather than one each; an answered
+  **non-blocking** question resumes nothing; a resumed turn that fails
+  is not retried automatically, and its answer stays spent; the tenant
+  can be swapped between the first turn and the resumed one without
+  breaking resumption, which is Proposal 03's re-tenanting claim inside
+  a single errand rather than across whole runs; and the resumed
+  result is routed like any other, with `castle validate` and
+  `check_assertions.py` passing throughout.

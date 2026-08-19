@@ -115,7 +115,16 @@ in
         piped to the command's stdin; `$CASTLE_REQUEST_ID`,
         `$CASTLE_DIFF_FILE`, and
         `$CASTLE_REPO_ROOT` are set in its environment; reasoning goes
-        to stdout, a diff (or nothing) goes to `$CASTLE_DIFF_FILE`. See
+        to stdout, a diff (or nothing) goes to `$CASTLE_DIFF_FILE`.
+        Since docs/tasks/0023-resume-cold.md the request body arrives
+        under a heading, and on an errand this seat has already worked
+        it is followed by that errand's own prior results, the
+        questions it raised, and the resident's answers to them —
+        everything a fresh tenant needs to continue cold, since no
+        tenant remembers an earlier turn. A turn resuming an answered
+        blocking question also carries `$CASTLE_RESUME_ANSWER_IDS` in
+        its environment; the variable is absent on every other turn.
+        See
         agent/castle-worker-claude for the reference implementation of
         that contract and test/agent-loop/contract-worker.sh for a
         model-free stand-in that satisfies it. *Not*
@@ -401,13 +410,16 @@ in
       unitConfig.ConditionUser = "!@system";
       pathConfig = {
         # The whole journal directory, not `*-request-*.md`
-        # specifically. A request-shaped watcher would satisfy this
-        # task completely while foreclosing the next one:
-        # docs/backlog/errand-resume-after-answer.md needs dispatch to
-        # notice an `answer` record too, and a watcher keyed to a
-        # filename shape is structurally unable to fire on anything
-        # else — broadening it later means touching this unit on every
-        # host that has it deployed. Watching the directory and
+        # specifically. A request-shaped watcher would have satisfied
+        # docs/tasks/0021 completely while foreclosing the next task,
+        # and that is no longer hypothetical:
+        # docs/tasks/0023-resume-cold.md needs dispatch to notice an
+        # `answer` record too — an answered blocking question makes its
+        # errand eligible for one further turn — and a watcher keyed to
+        # a filename shape is structurally unable to fire on anything
+        # else. Broadening it later would have meant touching this unit
+        # on every host that had it deployed; because it was written
+        # this way, 0023 shipped without changing a line here. Watching the directory and
         # deciding eligibility in code means the *predicate* (a pure
         # function over the journal) can grow without this file
         # changing at all. The wakeup is a hint; the fold is the

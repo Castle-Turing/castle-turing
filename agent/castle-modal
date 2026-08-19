@@ -195,22 +195,34 @@ def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
     if interactive:
         kind = _classify_interactively(out)
 
-    if kind == "correction":
-        record_id = castle.file_correction(body=body, refs=[], surface="modal")
-        print(record_id, file=out)
-        if interactive:
-            print(f"Filed as {record_id}. Thanks — noted.", file=out)
-    else:
-        record_id = castle.write_record(
-            castle.journal_dir(),
-            type="request",
-            provenance="requested",
-            seat="intake",
-            body=body,
-        )
-        print(record_id, file=out)
-        if interactive:
-            print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    # `write_record`'s own write-time refusals surface here as a
+    # sentence, for the same reason answer mode reports them rather
+    # than tracebacking: a compose window reached from inside a worker
+    # turn is refused (Proposal 05 — only the resident may speak as the
+    # resident), and a tenant that opened this window instead of the
+    # CLI should meet the same explanation. The policy stays in the one
+    # choke point; this is only the surface reporting it.
+    try:
+        if kind == "correction":
+            record_id = castle.file_correction(body=body, refs=[], surface="modal")
+            print(record_id, file=out)
+            if interactive:
+                print(f"Filed as {record_id}. Thanks — noted.", file=out)
+        else:
+            record_id = castle.write_record(
+                castle.journal_dir(),
+                type="request",
+                provenance="requested",
+                seat="intake",
+                body=body,
+            )
+            print(record_id, file=out)
+            if interactive:
+                print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    except castle.RecordError as exc:
+        print(str(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
     _pause_for_dismissal(out)
     return 0
 
@@ -425,6 +437,16 @@ def _run_answer_scripted(castle, question_id: str | None, out=sys.stdout) -> int
     except castle.AnswerRefused as exc:
         print(_answer_refusal(exc), file=sys.stderr)
         return 1
+    except castle.RecordError as exc:
+        # The write-time refusals `write_record` itself owns — today,
+        # an answer attempted from inside a worker turn (Proposal 05,
+        # docs/tasks/0023 §5). Not a policy check duplicated here: the
+        # policy lives in the one choke point every writer passes
+        # through, and this is only the surface that reports it, so a
+        # tenant that reached for this window instead of the CLI meets
+        # a sentence rather than a traceback.
+        print(str(exc), file=sys.stderr)
+        return 1
     print(answer_id, file=out)
     return 0
 
@@ -495,16 +517,30 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
         print(_answer_refusal(exc), file=sys.stderr)
         _pause_for_dismissal(out)
         return 1
+    except castle.RecordError as exc:
+        # See the piped path above: `write_record`'s own refusals,
+        # reported rather than re-implemented.
+        print(str(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
 
     print(file=out)
     # No record id (compose mode's "Filed as {id}." is the pattern being
-    # deliberately broken here, not copied) and no promise of
-    # resumption: until something picks an answered errand back up,
-    # saying otherwise would be docs/tasks/0015's defect committed one
-    # level up — a label causing the inaction it describes. When
-    # docs/backlog/errand-resume-after-answer.md is finally built, the
-    # second sentence below is the line that gets deleted.
-    print("Filed. Nothing picks this errand back up automatically yet.", file=out)
+    # deliberately broken here, not copied). The second sentence that
+    # used to follow — "Nothing picks this errand back up automatically
+    # yet." — is deleted by docs/tasks/0023-resume-cold.md, exactly as
+    # the comment that stood here anticipated: an answered *blocking*
+    # question now does resume its errand.
+    #
+    # Nothing replaces it. "This errand will continue" would be true
+    # only for a blocking question, and only on a host where dispatch
+    # is enabled and running — this process knows the first from the
+    # question record but never the second, and it does not itself
+    # trigger anything. Promising a continuation this surface cannot
+    # observe would be docs/tasks/0015's defect the other way up: a
+    # label asserting an action nobody here can see happen. A bare
+    # "Filed." is true on every path.
+    print("Filed.", file=out)
     if recorded_fact is not None:
         # A write into the resident's own model that the resident is
         # never told about is authority exercised invisibly. One plain
@@ -569,7 +605,7 @@ def _outcome_label(outcome: str, request_id: str) -> str:
     return "done"
 
 
-def _errand_state(castle, request, downstream: list) -> str:
+def _errand_state(castle, request, downstream: list, records: dict) -> str:
     """`result` was checked before question/answer, so 'done' won any
     errand that also had an unanswered question — but the worker prompt
     (agent/castle-worker-claude) explicitly tells tenants to "file the
@@ -627,7 +663,27 @@ def _errand_state(castle, request, downstream: list) -> str:
     # walk (a follow-up request's question is still this errand chain
     # waiting on the resident), so unlike the turn state below they are
     # deliberately NOT keyed to this request id.
-    answered = {ref for rec in downstream if rec.type == "answer" for ref in rec.refs}
+    #
+    # **`answered` comes from a flat pass over the whole journal, not
+    # from `downstream`, so that three surfaces cannot disagree about
+    # one question.** `file_answer`'s duplicate guard scans every
+    # answer file in the journal, and `_pending_questions` folds every
+    # answer record — both treat a question as closed if *any* answer
+    # names it. Taking this one from the errand walk made it the odd
+    # one out the moment docs/tasks/0023 narrowed that walk to the
+    # lineage edge: an answer written through the generic door as
+    # `--refs Q_A,Q_B` sits in A's fold and not in B's, so B's overlay
+    # would say "waiting on you — press Mod4+Shift+a to answer" forever
+    # while the picker, folding flat, correctly refused to offer Q_B
+    # because it is answered. Telling a resident to answer something
+    # the answer surface will not show them is docs/tasks/0015 scope 3
+    # exactly, and it would have been this branch's own doing. Which
+    # questions belong to this errand still comes from `downstream` —
+    # that is an errand question — but whether one is answered is a
+    # property of the question, and every surface now reads it alike.
+    answered = {
+        ref for rec in records.values() if rec.type == "answer" for ref in rec.refs
+    }
     waiting = any(
         rec.type == "question" and rec.id not in answered for rec in downstream
     )
@@ -749,7 +805,7 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
 
     for req in requests:
         downstream = castle._collect_downstream(records, req.id)
-        state = _errand_state(castle, req, downstream)
+        state = _errand_state(castle, req, downstream, records)
         first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
         print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
         print(f"    asked: {first_line}", file=out)

@@ -558,20 +558,29 @@ log "status mode: a request the watermark excluded says so, instead of waiting f
 # "awaiting a worker" on an errand automatic dispatch has permanently
 # declined to touch is 0015's failure exactly.
 REQ_PREDATES="$("$CASTLE" ask "Filed before dispatch existed on this journal.")"
+# A SECOND outstanding request, named after the first in the same
+# watermark. A real watermark names every request outstanding when
+# dispatch began, so all but one of them sit past `refs[0]` — and the
+# errand fold that finds this record has to reach it from each of them,
+# not only from the first. With one excluded request the two cases are
+# indistinguishable, which is how this stayed untested until
+# docs/tasks/0023 keyed that fold to the lineage edge and had to carve
+# out "or names this errand directly" to keep it working.
+REQ_PREDATES_2="$("$CASTLE" ask "Also filed before dispatch existed, and named second.")"
 WATERMARK_FIXTURE="$CASTLE_STATE_DIR/journal/20260101T000600Z-decision-0f0001.md"
 cat > "$WATERMARK_FIXTURE" <<EOF
 ---
 id: 20260101T000600Z-decision-0f0001
 type: decision
 provenance: initiated
-refs: $REQ_PREDATES
+refs: $REQ_PREDATES,$REQ_PREDATES_2
 seat: dispatch
 created: 2026-01-01T00:06:00Z
 evidence: planted watermark fixture: dispatch began after this request was filed
 watermark: 2026-01-01T00:06:00Z
 ---
 
-Planted fixture: the dispatch watermark, naming $REQ_PREDATES as excluded.
+Planted fixture: the dispatch watermark, naming $REQ_PREDATES and $REQ_PREDATES_2 as excluded.
 EOF
 "$CASTLE" validate || fail "the planted watermark fixture does not validate"
 STATUS_PREDATES="$("$MODAL" --mode status --limit 40)"
@@ -583,6 +592,12 @@ echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES\] requested — awaiting a w
 # as a note rather than inventing a routing that never happened.
 echo "$STATUS_PREDATES" | grep -A2 "^\[$REQ_PREDATES\]" | grep -q "noted: planted watermark fixture" \
   || fail "the channel-less watermark decision did not render as a note under the errand it excluded"
+# And the same for the request named SECOND in that watermark's refs,
+# which is the case a lineage-edge-only fold would lose.
+echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES_2\] requested — not started automatically (predates dispatch) — castle work $REQ_PREDATES_2 to run it$" \
+  || fail "the request named second in the watermark's refs did not say it predates dispatch: $(echo "$STATUS_PREDATES" | grep "$REQ_PREDATES_2" || true)"
+echo "$STATUS_PREDATES" | grep -q "^\[$REQ_PREDATES_2\] requested — awaiting a worker$" \
+  && fail "the second watermark-excluded request claims to be awaiting a worker — nothing will ever start it"
 
 log "status mode: a request a tenant filed during its own turn says so, instead of promising a worker that is never coming"
 # docs/tasks/0021 §2.4(e): dispatch deliberately never starts these, so
@@ -833,6 +848,39 @@ refute() {
   fi
 }
 
+log "status and the picker agree about one answered question, even when the answer names two errands"
+# docs/tasks/0015 scope 3, in the shape docs/tasks/0023's narrowed
+# errand walk could have produced: an answer written through the
+# generic door as `--refs Q_A,Q_B` belongs to A's fold and not B's, so
+# a "waiting on you" overlay derived from that walk would nag about
+# Q_B forever while the picker — which folds every answer record flat
+# — correctly declines to offer it. Telling the resident to answer
+# something the answer surface will not show them is worse than either
+# surface being wrong alone, so all three folds (this overlay,
+# `_pending_questions`, and `file_answer`'s duplicate guard) read
+# answeredness the same way.
+REQ_SHARED_A="$("$CASTLE" ask "Shared-answer errand A: an invented request.")"
+REQ_SHARED_B="$("$CASTLE" ask "Shared-answer errand B: another invented request.")"
+Q_SHARED_A="$(plant_question "$REQ_SHARED_A" 20260201T000010Z "Errand A's question, answered jointly.")"
+Q_SHARED_B="$(plant_question "$REQ_SHARED_B" 20260201T000011Z "Errand B's question, answered jointly.")"
+"$CASTLE" record --type answer --provenance requested --seat intake \
+  --refs "$Q_SHARED_A,$Q_SHARED_B" \
+  --body "One answer closing both errands' questions." >/dev/null
+"$CASTLE" validate >/dev/null || fail "the shared-answer fixture does not validate"
+
+STATUS_SHARED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_B\]" | grep -q "waiting on you" \
+  && fail "errand B says 'waiting on you' for a question that IS answered: $(echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_B\]")"
+echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_A\]" | grep -q "waiting on you" \
+  && fail "errand A says 'waiting on you' for a question that IS answered: $(echo "$STATUS_SHARED" | grep "^\[$REQ_SHARED_A\]")"
+# And the picker agrees: neither question is offered, which is the half
+# that was already right and that the overlay now matches.
+PICKER_SHARED="$("$MODAL" --mode answer </dev/null)"
+echo "$PICKER_SHARED" | grep -q "$Q_SHARED_B" \
+  && fail "the picker offered an answered question"
+echo "$PICKER_SHARED" | grep -q "Errand B's question" \
+  && fail "the picker offered an answered question by its text"
+
 log "answer mode: nothing pending prints a friendly line and exits 0 (test 1)"
 ANSWER_NONE_OUT="$("$MODAL" --mode answer </dev/null)" || fail "answer mode with nothing pending should exit 0"
 echo "$ANSWER_NONE_OUT" | grep -q "Nothing is waiting on you." \
@@ -856,8 +904,20 @@ echo "$ANSWER_1_OUT" | grep -q "about: Answer-mode errand one: the pointer is ha
   || fail "the picker did not show an 'about:' line sourced from the root request"
 echo "$ANSWER_1_OUT" | grep -q "Second line of the question" \
   || fail "the selected question's body was truncated — the full text must be shown before answering"
-echo "$ANSWER_1_OUT" | grep -q "Filed. Nothing picks this errand back up automatically yet." \
-  || fail "the confirmation did not say plainly that nothing resumes the errand"
+# A bare "Filed.", with no second sentence: docs/tasks/0023 deleted the
+# "Nothing picks this errand back up automatically yet." half, because an
+# answered *blocking* question now resumes its errand. Asserted as a whole
+# line (grep -x on the stripped output would need the trailing prompt text
+# too, so this checks the sentence and then that nothing follows it) —
+# the point is that no replacement promise crept in: the modal cannot know
+# whether dispatch is running, so it must not claim a continuation.
+# `tr -d '\r'` because this transcript came off a pty, which translates
+# every newline to CRLF — without it an anchored whole-line match can
+# never succeed here, for a reason that has nothing to do with the text.
+printf '%s\n' "$ANSWER_1_OUT" | tr -d '\r' | grep -qx "Filed." \
+  || fail "the confirmation is not a bare 'Filed.': $ANSWER_1_OUT"
+echo "$ANSWER_1_OUT" | grep -q "picks this errand back up" \
+  && fail "the confirmation still claims nothing resumes the errand — 0023 made that false"
 echo "$ANSWER_1_OUT" | grep -q "Press Enter to close" \
   || fail "answer mode did not hold the window open until dismissed"
 ANSWER_1_FILE="$(answers_naming "$Q_ANS_1" | head -1)"
@@ -1166,7 +1226,7 @@ timeout 40 python3 "$WORKDIR/pty-stdin-pipe-stdout.py" "$MODAL" answer "1" "Answ
   > "$WORKDIR/answer-piped-stdout.txt" 2>&1 \
   || fail "answer mode with a tty stdin and a piped stdout did not exit promptly"
 [ "$(transcript_rc "$WORKDIR/answer-piped-stdout.txt")" = "0" ] || fail "the piped-stdout answer run did not exit 0"
-grep -q "Filed. Nothing picks this errand back up automatically yet." "$WORKDIR/answer-piped-stdout.txt" \
+tr -d '\r' < "$WORKDIR/answer-piped-stdout.txt" | grep -qx "Filed." \
   || fail "the piped-stdout answer run did not file anything: $(cat "$WORKDIR/answer-piped-stdout.txt")"
 grep -q "Press Enter to close" "$WORKDIR/answer-piped-stdout.txt" \
   && fail "answer mode asked a captured run to press Enter"

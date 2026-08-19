@@ -589,6 +589,17 @@ RESULTS_BEFORE_RETRY_REAP="$(count_referencing result "$REQ_FAIL")"
 RETRY_RESULT_FILE="$(grep -l "^refs: .*$RETRY_CLAIM" "$JOURNAL"/*-result-*.md 2>/dev/null || true)"
 [ -n "$RETRY_RESULT_FILE" ] || fail "no result record references the retry's claim $RETRY_CLAIM"
 grep -q '^outcome: interrupted$' "$RETRY_RESULT_FILE" || fail "$RETRY_RESULT_FILE does not carry outcome: interrupted"
+# The account a reaper writes is permanent and routed to the resident,
+# so it may not promise something it cannot know (docs/tasks/0023,
+# pass-7 finding 3). The crashed turn may itself have been a resumption,
+# in which case its answer is already spent and nothing further runs —
+# so the sentence has to be true in both cases without consulting a fold
+# at write time, which would be right at the instant it ran and wrong by
+# the time anyone read it.
+grep -q "has not already resumed on" "$RETRY_RESULT_FILE" \
+  || fail "the interrupted account does not carry the conditional that makes it true for a crashed resumption: $(sed -n '/^---$/,$p' "$RETRY_RESULT_FILE" | head -20)"
+grep -q "the resident's answer to it starts one further turn" "$RETRY_RESULT_FILE" \
+  && fail "the interrupted account still promises a further turn unconditionally — false when the crashed turn was itself the resumption"
 # And it is still not re-dispatched: eligibility is per request, and
 # this request has results. Only the reaping is per turn.
 [ "$(count_referencing claim "$REQ_FAIL")" -eq 2 ] || fail "a further automatic turn was started on the failed errand"
@@ -599,11 +610,14 @@ grep -q "^refs: $REQ1,$(basename "$(referencing claim "$REQ1")" .md)\$" "$JOURNA
   || fail "$RESULT1 does not reference the claim of the turn that produced it: $(grep '^refs:' "$JOURNAL/$RESULT1.md")"
 
 # ---------------------------------------------------------------------
-log "NON-behavior (task 0023's territory): answering a question on an already-worked errand does not make it eligible again"
+log "NON-behavior: answering a NON-blocking question on an already-worked errand does not make it eligible again"
 # ---------------------------------------------------------------------
-# Asserted explicitly rather than left implicit: errand resumption is
-# docs/backlog/errand-resume-after-answer.md's problem, and a
-# regression here would silently widen this task's scope into 0023's.
+# Narrowed, not removed, by docs/tasks/0023-resume-cold.md: an answered
+# *blocking* question now does resume its errand, and its twin directly
+# below asserts that. This case — the common one, a question filed
+# alongside a result the worker already produced — still changes
+# nothing, and the pair is what proves resumption is opt-in rather than
+# firing on any answered question.
 QUESTION="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ1" \
   --body "Dispatch test: a mid-errand question on an already-worked errand.")"
 "$CASTLE" dispatch >/dev/null
@@ -612,6 +626,77 @@ log "  -> answered $QUESTION with $ANSWER"
 "$CASTLE" dispatch >/dev/null
 [ "$(count_referencing result "$REQ1")" -eq 1 ] || fail "an answer re-opened an already-worked errand: $REQ1 now has $(count_referencing result "$REQ1") results"
 [ "$(count_referencing claim "$REQ1")" -eq 1 ] || fail "an answer caused a second worker turn on $REQ1"
+
+# ---------------------------------------------------------------------
+log "  -- and its BLOCKING twin, the same shape with one flag added, DOES resume the errand exactly once (docs/tasks/0023)"
+# ---------------------------------------------------------------------
+# Deliberately beside the non-behavior test above rather than in
+# resume.sh: the pair is the proof that resumption is opt-in. The two
+# fixtures differ in exactly one argument, and go opposite ways.
+REQ_BLOCKING="$("$CASTLE" ask "Dispatch test: an errand whose question will stop it.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 1 ] || fail "the blocking-twin errand was never worked"
+Q_BLOCKING="$("$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_BLOCKING" \
+  --blocking --body "Dispatch test: a question its writer says the errand cannot proceed without.")"
+grep -q '^blocking: true$' "$JOURNAL/$Q_BLOCKING.md" || fail "$Q_BLOCKING does not carry blocking: true"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 1 ] || fail "an UNANSWERED blocking question resumed $REQ_BLOCKING — only the resident may close a question"
+A_BLOCKING="$("$CASTLE" answer "$Q_BLOCKING" "Dispatch test: the resident closes the blocking question.")"
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 2 ] || fail "answering a BLOCKING question did not resume $REQ_BLOCKING"
+[ "$(count_referencing result "$REQ_BLOCKING")" -eq 2 ] || fail "the resumed turn on $REQ_BLOCKING wrote no result"
+grep -q "^refs: $REQ_BLOCKING,$A_BLOCKING\$" "$JOURNAL"/*-claim-*.md \
+  || fail "the resuming claim does not name the answer it spent — nothing bounds the resumption"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+[ "$(count_referencing claim "$REQ_BLOCKING")" -eq 2 ] || fail "a spent answer resumed $REQ_BLOCKING a second time"
+"$CASTLE" validate
+
+log "  -- castle record refuses a --blocking question whose refs reach no request: it could never be attributed to an errand"
+if "$CASTLE" record --type question --provenance requested --seat worker --blocking \
+  --body "Dispatch test: a blocking question with nothing to attribute it to." >"$WORKDIR/blocking-norefs.out" 2>&1; then
+  fail "castle record wrote a --blocking question with no --refs"
+fi
+grep -q "reaches no request record" "$WORKDIR/blocking-norefs.out" \
+  || fail "the --blocking/--refs refusal did not explain itself: $(cat "$WORKDIR/blocking-norefs.out")"
+# The same refusal covers a ref that exists but walks back to nothing —
+# the shape a model produces by getting an id slightly wrong, rather
+# than by omitting the flag (docs/tasks/0023, pass-5 review finding 2).
+# Filed here rather than reusing the correction the routing section
+# writes later: that one does not exist yet at this point in the
+# script, and an empty `--refs` would make this assertion pass for the
+# wrong reason.
+UNREACHABLE_REF="$("$CASTLE" correct "Dispatch test: a correction, from which no request is reachable.")"
+if "$CASTLE" record --type question --provenance requested --seat worker --blocking \
+  --refs "$UNREACHABLE_REF" \
+  --body "Dispatch test: a blocking question hung off a correction, which leads to no errand." \
+  >"$WORKDIR/blocking-unreachable.out" 2>&1; then
+  fail "castle record wrote a --blocking question whose refs resolve but reach no request"
+fi
+grep -q "reaches no request record" "$WORKDIR/blocking-unreachable.out" \
+  || fail "the reachability refusal did not explain itself: $(cat "$WORKDIR/blocking-unreachable.out")"
+
+log "  -- and validate rejects a hand-planted blocking value that is not the one spelling any writer produces"
+BAD_BLOCKING_FILE="$JOURNAL/20260101T000000Z-question-bad0b1.md"
+cat > "$BAD_BLOCKING_FILE" <<EOF
+---
+id: 20260101T000000Z-question-bad0b1
+type: question
+provenance: requested
+refs: $REQ1
+seat: worker
+created: 2026-01-01T00:00:00Z
+blocking: false
+---
+
+Malformed blocking fixture: 'false' would read as truthy to the fold that resumes errands.
+EOF
+if "$CASTLE" validate >"$WORKDIR/bad-blocking.out" 2>"$WORKDIR/bad-blocking.err"; then
+  fail "castle validate accepted a question record with blocking: false"
+fi
+grep -q "blocking" "$WORKDIR/bad-blocking.err" || fail "castle validate's blocking rejection message changed unexpectedly"
+rm -f "$BAD_BLOCKING_FILE"
+"$CASTLE" validate || fail "the journal did not validate clean once the malformed blocking fixture was removed"
 
 # ---------------------------------------------------------------------
 log "an empty CASTLE_WORKER_COMMAND yields outcome: failed on the very first sweep, not a silent unbounded retry loop"
