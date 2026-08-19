@@ -63,5 +63,19 @@ else
   printf 'self-answer: castle record --type answer was REFUSED\n'
 fi
 
-rm -f "$CASTLE_DIFF_FILE.answer-err" "$CASTLE_DIFF_FILE.record-err"
+# Door three, and the widest of them: `castle correct`. A correction is
+# not an answer to anything the system asked — it is the resident's own
+# verdict, filed unbidden, quoted verbatim wherever it is read, and it
+# writes a `provenance: volunteered` entry into the resident model that
+# the router consults afterward. A tenant filing one does not speak for
+# the resident once; it installs an opinion they never held.
+if "$CASTLE_TEST_CASTLE_BIN" correct \
+  "The tenant invents an opinion and files it as the resident's." \
+  >/dev/null 2>"$CASTLE_DIFF_FILE.correct-err"; then
+  printf 'self-answer: castle correct SUCCEEDED — a seat spoke as the resident\n'
+else
+  printf 'self-answer: castle correct was REFUSED\n'
+fi
+
+rm -f "$CASTLE_DIFF_FILE.answer-err" "$CASTLE_DIFF_FILE.record-err" "$CASTLE_DIFF_FILE.correct-err"
 printf 'self-answer: ending the turn with the question open, which is the only correct move\n'

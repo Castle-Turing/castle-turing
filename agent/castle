@@ -661,17 +661,57 @@ def write_record(
     # the *child's* env dict and never on `os.environ`, so the
     # dispatching process's own claim, result and decision writes never
     # see it — only a process descended from a tenant does.
-    if type == "answer" and claim_id:
-        raise RecordError(
-            "refusing to write an answer record from inside a worker turn "
-            f"(a tenant's environment carries {WORKER_CLAIM_ENV}={claim_id}). Only "
-            "the resident may close a question (docs/architecture.md, Proposal 05): "
+    # `correction` is refused here for the same reason and by the same
+    # test, and adding it decides no new policy: `cmd_record` has
+    # refused `--type correction` since docs/tasks/0010, with a comment
+    # giving exactly this reason — the generic writer would let a
+    # worker fabricate what looks like verbatim resident speech. So the
+    # repo already ruled that a tenant may not write corrections;
+    # `cmd_correct` was simply an unguarded second door onto a thing
+    # already prohibited, and this closes it where every writer passes
+    # rather than in one more subcommand.
+    #
+    # The two harms are different and the message says which is which.
+    # An answer closes a question the resident never saw. A correction
+    # invents an opinion the resident never held — and unlike an
+    # answer it also writes a `provenance: volunteered` resident-model
+    # entry, so the fabrication becomes durable stated preference that
+    # the router reads on every later decision. That is the larger of
+    # the two doors, and it was the open one.
+    #
+    # Confirmed the dispatcher's own writes cannot trip either refusal,
+    # the same way it was confirmed for `answer` and by the same two
+    # facts: nothing in `agent/castle` or `agent/castle-modal` ever
+    # assigns into `os.environ` (checked — there is no `os.environ[...]
+    # =` anywhere in either file), so the variable can only be present
+    # in a process descended from a tenant; and the record types a
+    # sweep writes for itself are `claim`, `result` and `decision`,
+    # never `answer` or `correction` — `file_answer` and
+    # `file_correction` are resident paths, reached from the CLI and
+    # the modal.
+    if type in ("answer", "correction") and claim_id:
+        harm = (
             "a seat that answers its own question retires it before the resident "
-            "ever sees it, and — since docs/tasks/0023-resume-cold.md — an answered "
-            "blocking question grants the errand another automatic turn, so a seat "
-            "that could answer itself could grant itself unbounded unattended work. "
-            "File the question and end the turn; the resident's answer is what "
-            "resumes the errand."
+            "ever sees it, and — since docs/tasks/0023-resume-cold.md — an "
+            "answered blocking question grants the errand another automatic turn, "
+            "so a seat that could answer itself could grant itself unbounded "
+            "unattended work. File the question and end the turn; the resident's "
+            "answer is what resumes the errand."
+            if type == "answer"
+            else "a correction is the resident's own verdict on how this system is "
+            "doing, filed unbidden and quoted verbatim wherever it is read — and "
+            "filing one also writes a `provenance: volunteered` entry into the "
+            "resident model, which the router consults afterward. A seat writing "
+            "its own correction does not merely speak for the resident once; it "
+            "installs an opinion they never held. `castle record --type "
+            "correction` has been refused since docs/tasks/0010 for this reason; "
+            "this is the same refusal, applied to the other door."
+        )
+        raise RecordError(
+            f"refusing to write a {type} record from inside a worker turn "
+            f"(a tenant's environment carries {WORKER_CLAIM_ENV}={claim_id}). Only "
+            "the resident may speak as the resident (docs/architecture.md, "
+            f"Proposal 05): {harm}"
         )
 
     _reject_newline_fields(fields, what="record")
@@ -3239,13 +3279,30 @@ def _resumable_answers(records: dict[str, Record], request_id: str) -> list[Reco
     if not question_ids:
         return []
 
-    # Every answer id any of this request's own claims already names.
-    # Keyed on `refs[0]`, the same lineage edge the reaper and
-    # `closing_result` key claims by, so a claim written for some other
-    # errand can never spend this one's answers.
+    # Every answer id named by ANY claim in the journal, not only by
+    # this request's own.
+    #
+    # **The bound is a property of the answer, not of the errand reading
+    # it**, and keying this per-request quietly made the documented
+    # guarantee — one further turn per answer, ever — false. An answer
+    # whose `refs` name blocking questions on two different errands is
+    # unspent from each errand's point of view until that errand's own
+    # claim names it, so both resume, and one answer buys two turns.
+    # `file_answer` cannot write that shape (it refs exactly one
+    # question), so it takes the generic writer to produce — which is
+    # precisely the population this fold already stopped trusting
+    # elsewhere.
+    #
+    # Global is strictly tighter and costs a normally-written answer
+    # nothing: with one ref it can only belong to one errand, so only
+    # that errand's claims could ever have named it, and the two forms
+    # agree. Keeping the per-request form to preserve a symmetry with
+    # how claims are *attributed* would be reading the wrong invariant:
+    # attribution asks which errand a claim belongs to, and spend asks
+    # whether this answer has already been paid out anywhere.
     spent: set[str] = set()
     for rec in records.values():
-        if rec.type == "claim" and rec.refs and rec.refs[0] == request_id:
+        if rec.type == "claim":
             spent.update(rec.refs)
 
     # Every answer naming one of those questions — not "the" answer.
@@ -3862,8 +3919,25 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # leave a real host acting on the value it was meant to catch.
         # It costs nothing retroactively either: the field is new, so
         # nothing already written can carry it.
+        # Scoped to questions, and that scoping is a reversal: an
+        # earlier pass deliberately left the check type-agnostic on the
+        # grounds that a future seat might find a use for the field
+        # elsewhere. That reasoning died when `cmd_record` began
+        # refusing `--blocking` on any type but `question`. A validator
+        # laxer than the writer makes the backstop weaker than the
+        # door, and it is the backstop that matters here: the CLI can
+        # only refuse what the CLI writes, while these files can be
+        # hand-written, restored, or produced by some later tool. The
+        # record `cmd_record` now refuses to write must not be the
+        # record `castle validate` calls clean.
         blocking_raw = rec.fields.get(BLOCKING_FIELD)
-        if blocking_raw is not None and blocking_raw != "true":
+        if blocking_raw is not None and rtype != "question":
+            errors.append(
+                f"{path.name}: '{BLOCKING_FIELD}' is a question-record field and this "
+                f"is a {rtype!r} record. Nothing reads it here, so it would validate, "
+                "read as meaningful, and do nothing (docs/tasks/0023-resume-cold.md)."
+            )
+        elif blocking_raw is not None and blocking_raw != "true":
             errors.append(
                 f"{path.name}: '{BLOCKING_FIELD}' ({blocking_raw!r}) is present but "
                 "is not the literal 'true' — the only spelling `castle record "
@@ -4018,12 +4092,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--blocking",
         action="store_true",
         help=(
-            "this question stopped the errand (question records only, by "
-            "convention — the same way --fact and --outcome are). An answered "
-            "blocking question makes its errand eligible for one more worker "
-            "turn, exactly once (docs/tasks/0023-resume-cold.md). Requires "
-            "--refs: a blocking question no fold can attribute to a request is "
-            "unresumable forever."
+            "this question stopped the errand: an answered blocking question "
+            "makes its errand eligible for one more worker turn, exactly once "
+            "(docs/tasks/0023-resume-cold.md). Unlike --fact and --outcome, "
+            "which name their record type by convention, this flag is enforced "
+            "at write time and refuses three things outright: any --type but "
+            "question, --spool (the spool is ephemeral and no fold reads it), "
+            "and a --refs whose FIRST entry does not walk back to a request "
+            "record. The first ref is the whole test — resumption follows "
+            "refs[0] and ignores the rest — so a correct id in second place is "
+            "refused exactly like no id at all."
         ),
     )
     p_record.add_argument("--body", default=None, help="record body text")

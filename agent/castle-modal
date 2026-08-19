@@ -195,22 +195,34 @@ def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
     if interactive:
         kind = _classify_interactively(out)
 
-    if kind == "correction":
-        record_id = castle.file_correction(body=body, refs=[], surface="modal")
-        print(record_id, file=out)
-        if interactive:
-            print(f"Filed as {record_id}. Thanks — noted.", file=out)
-    else:
-        record_id = castle.write_record(
-            castle.journal_dir(),
-            type="request",
-            provenance="requested",
-            seat="intake",
-            body=body,
-        )
-        print(record_id, file=out)
-        if interactive:
-            print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    # `write_record`'s own write-time refusals surface here as a
+    # sentence, for the same reason answer mode reports them rather
+    # than tracebacking: a compose window reached from inside a worker
+    # turn is refused (Proposal 05 — only the resident may speak as the
+    # resident), and a tenant that opened this window instead of the
+    # CLI should meet the same explanation. The policy stays in the one
+    # choke point; this is only the surface reporting it.
+    try:
+        if kind == "correction":
+            record_id = castle.file_correction(body=body, refs=[], surface="modal")
+            print(record_id, file=out)
+            if interactive:
+                print(f"Filed as {record_id}. Thanks — noted.", file=out)
+        else:
+            record_id = castle.write_record(
+                castle.journal_dir(),
+                type="request",
+                provenance="requested",
+                seat="intake",
+                body=body,
+            )
+            print(record_id, file=out)
+            if interactive:
+                print(f"Filed as {record_id}. Check back with castle-modal --mode status.", file=out)
+    except castle.RecordError as exc:
+        print(str(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
     _pause_for_dismissal(out)
     return 0
 

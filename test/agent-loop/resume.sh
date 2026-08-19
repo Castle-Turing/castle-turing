@@ -568,6 +568,12 @@ log "a worker tenant cannot answer its own question — by any path it has"
 # path a tenant has reaches the same wall; the fixture below tries the
 # two CLI ones and reports what happened on stdout, where the result
 # record captures it.
+# Baselines captured rather than assumed: this harness has already filed
+# corrections of its own by now (one planted for the packet-leak case,
+# one for the reachability case), so the assertion is that the tenant
+# added nothing, not that the journal holds some fixed number.
+CORRECTIONS_BEFORE_SELF="$(count_of_type correction)"
+MODEL_ENTRIES_BEFORE_SELF="$(grep -c '^provenance: volunteered' "$CASTLE_STATE_DIR/resident-model.md" 2>/dev/null || true)"
 REQ9="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — a ninth invented errand, whose tenant tries to answer itself.")"
 CASTLE_WORKER_COMMAND="$WORKER_SELF_ANSWER" "$CASTLE" dispatch >/dev/null
 SELF_RESULT_FILE="$(referencing result "$REQ9")"
@@ -576,8 +582,16 @@ grep -q "self-answer: castle answer was REFUSED" "$SELF_RESULT_FILE" \
   || fail "a tenant answered its own question through castle answer: $(cat "$SELF_RESULT_FILE")"
 grep -q "self-answer: castle record --type answer was REFUSED" "$SELF_RESULT_FILE" \
   || fail "a tenant answered its own question through castle record: $(cat "$SELF_RESULT_FILE")"
+grep -q "self-answer: castle correct was REFUSED" "$SELF_RESULT_FILE" \
+  || fail "a tenant filed a correction — inventing resident speech and a volunteered resident-model entry with it: $(cat "$SELF_RESULT_FILE")"
 grep -q "Proposal 05" "$SELF_RESULT_FILE" \
   || fail "the refusal did not say why in Proposal 05's terms: $(cat "$SELF_RESULT_FILE")"
+# Nothing reached the journal or the model from any of the three doors.
+[ "$(count_of_type correction)" -eq "$CORRECTIONS_BEFORE_SELF" ] \
+  || fail "a tenant's correction landed in the journal: $(count_of_type correction) corrections, was $CORRECTIONS_BEFORE_SELF"
+MODEL_ENTRIES_AFTER_SELF="$(grep -c '^provenance: volunteered' "$CASTLE_STATE_DIR/resident-model.md" 2>/dev/null || true)"
+[ "$MODEL_ENTRIES_AFTER_SELF" -eq "$MODEL_ENTRIES_BEFORE_SELF" ] \
+  || fail "a tenant's correction wrote a volunteered resident-model entry — an opinion the resident never held, where the router will read it"
 # No answer record naming the tenant's own question exists, so nothing
 # is resumable and no further turn runs however many sweeps happen.
 Q9="$(blocking_question_for "$REQ9")"
@@ -885,6 +899,66 @@ for path in sys.argv[1:]:
 if failed:
     raise SystemExit(1)
 FENCE_PY
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "castle validate refuses the very record castle record refuses to write"
+# ---------------------------------------------------------------------
+# The writer can only refuse what goes through it; these files can be
+# hand-written, restored from a backup, or produced by a later tool. A
+# validator laxer than the writer makes the backstop weaker than the
+# door, which is the wrong way round.
+BLOCKING_RESULT_FILE="$JOURNAL/20260101T000000Z-result-b10ck0.md"
+cat > "$BLOCKING_RESULT_FILE" <<EOF
+---
+id: 20260101T000000Z-result-b10ck0
+type: result
+provenance: requested
+refs: $REQ1
+seat: worker
+created: 2026-01-01T00:00:00Z
+blocking: true
+---
+
+A hand-written result claiming to block something, which nothing reads.
+EOF
+if "$CASTLE" validate >"$WORKDIR/blocking-result-validate.out" 2>&1; then
+  fail "castle validate accepted blocking: true on a result — the record the writer refuses"
+fi
+grep -q "question-record field" "$WORKDIR/blocking-result-validate.out" \
+  || fail "the validator's rejection did not say what is wrong: $(cat "$WORKDIR/blocking-result-validate.out")"
+rm -f "$BLOCKING_RESULT_FILE"
+"$CASTLE" validate >/dev/null || fail "the journal did not validate clean once the fixture was withdrawn"
+
+# ---------------------------------------------------------------------
+log "one answer buys one turn TOTAL, not one per errand that can see it"
+# ---------------------------------------------------------------------
+# `file_answer` refs exactly one question, so this shape needs the
+# generic writer — but the bound README states is "exactly one, per
+# answer, ever", and a spend set keyed per-request made that false: an
+# answer naming blocking questions on two errands is unspent from each
+# errand's point of view until that errand's own claim names it, so both
+# resume off one answer.
+REQ15A="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — errand A of a shared answer.")"
+REQ15B="$("$CASTLE" ask "Resume test: $REQUEST_MARKER — errand B of a shared answer.")"
+"$CASTLE" dispatch >/dev/null
+Q15A="$(blocking_question_for "$REQ15A")"
+Q15B="$(blocking_question_for "$REQ15B")"
+[ -n "$Q15A" ] && [ -n "$Q15B" ] || fail "both errands should have raised a blocking question"
+CLAIMS15A_BEFORE="$(count_referencing claim "$REQ15A")"
+CLAIMS15B_BEFORE="$(count_referencing claim "$REQ15B")"
+# One answer, naming both questions. Written the way a resident's answer
+# looks, so the intake filter cannot be what stops it.
+A15="$("$CASTLE" record --type answer --provenance requested --seat intake \
+  --refs "$Q15A,$Q15B" --body "Resume test: $ANSWER_MARKER — one answer naming two errands' questions.")"
+log "  -> $A15 names both $Q15A and $Q15B"
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+"$CASTLE" dispatch >/dev/null
+TURNS_A=$(( $(count_referencing claim "$REQ15A") - CLAIMS15A_BEFORE ))
+TURNS_B=$(( $(count_referencing claim "$REQ15B") - CLAIMS15B_BEFORE ))
+[ $(( TURNS_A + TURNS_B )) -eq 1 ] \
+  || fail "one answer bought $(( TURNS_A + TURNS_B )) turns ($TURNS_A on A, $TURNS_B on B) — the stated bound is one per answer, ever"
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
