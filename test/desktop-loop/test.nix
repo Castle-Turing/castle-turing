@@ -170,14 +170,17 @@ let
   # a synthetic one.
   testStateDir = "/home/resident/private/state";
 
-  # Non-default for the same reason testStateDir is: `castle work`
-  # falls back to its working directory when CASTLE_REPO_ROOT is
-  # unset, and the dispatch unit's working directory is `%h` — so a
-  # test that left this alone could not tell a working
-  # castle.agent.worker.repoRoot handoff from a silent fallback to the
-  # resident's home directory. Nothing is checked out here; the path
-  # exists only to be carried through the unit's environment into the
-  # tenant's, where the scripted worker prints it back.
+  # Non-default for the same reason testStateDir is. `castle work`
+  # used to fall back to its working directory when no repo root was
+  # configured, and the dispatch unit's working directory is `%h` — so
+  # a test that left this alone could not tell a working
+  # castle.agent.repo.private handoff from a silent fallback to the
+  # resident's home directory. docs/tasks/0024-config-target.md
+  # removed that fallback, but the blindness argument is unchanged:
+  # a default-valued fixture proves nothing about the handoff. Nothing
+  # is checked out here; the path exists only to be carried through the
+  # unit's environment into the tenant's, where the scripted worker
+  # prints it back.
   testRepoRoot = "/home/resident/private/checkout";
 
   # Plain, hardware-neutral fixture text — not personal data, never
@@ -288,9 +291,9 @@ in
       # one request through the modal and a routed outcome appears with
       # no subsequent resident CLI action at all. It also proves the
       # systemd user unit really saw the configured CASTLE_STATE_DIR
-      # and CASTLE_REPO_ROOT (bug 2b's shape, now proven for the
+      # and CASTLE_PRIVATE_ROOT (bug 2b's shape, now proven for the
       # dispatch unit specifically rather than only for the modal): the
-      # scripted tenant prints its $CASTLE_REPO_ROOT, and the test
+      # scripted tenant prints its $CASTLE_PRIVATE_ROOT, and the test
       # asserts that string lands in the result record.
       # An existing state directory IS the documented resident
       # contract: castle.agent.stateDir points into a private repo
@@ -312,7 +315,7 @@ in
 
       castle.agent.dispatch.enable = true;
       castle.agent.worker.command = "${dispatchWorker}";
-      castle.agent.worker.repoRoot = testRepoRoot;
+      castle.agent.repo.private = testRepoRoot;
 
       # Not a departure from the mechanism under test: a bare NixOS
       # system has no `python3` on $PATH by default (modules/agent's
@@ -467,7 +470,7 @@ in
     assert "outcome: completed" in result_record, result_record
     assert f"refs: {request_id}" in result_record, result_record
     assert "provenance: requested" in result_record, result_record
-    # The tenant printed its own $CASTLE_REPO_ROOT: this string can
+    # The tenant printed its own $CASTLE_PRIVATE_ROOT: this string can
     # only be here if the unit's Environment= reached the worker
     # process, which is bug 2b's shape proven for the dispatch unit.
     assert "${testRepoRoot}" in result_record, result_record
