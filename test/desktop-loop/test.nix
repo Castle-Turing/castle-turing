@@ -474,6 +474,13 @@ in
     # only be here if the unit's Environment= reached the worker
     # process, which is bug 2b's shape proven for the dispatch unit.
     assert "${testRepoRoot}" in result_record, result_record
+    # docs/tasks/0024-config-target.md, the same handoff one layer on:
+    # contract-worker.sh stamps $CASTLE_TARGET_FILE with `private` and
+    # `castle work` folds that into the result's own frontmatter. This
+    # is the cheapest available proof that the target channel survives
+    # the real dispatch unit's environment, not only the plain-bash
+    # harness's.
+    assert "target: private" in result_record, result_record
     print("OK: a worker turn ran and wrote a completed result, with no resident CLI action")
 
     # The routing decision, produced by the same sweep's tail step.
