@@ -1192,22 +1192,46 @@ def cmd_record(args: argparse.Namespace) -> int:
     # moment a tenant reached for the one flag that exists to make
     # resumption happen (docs/tasks/0023 §9).
     #
-    # Deliberately narrower than what `cmd_ask`/`file_answer`/
-    # `cmd_correct` do — they resolve every ref against the journal
-    # before writing. This refuses only the empty case, the one trap
-    # the new flag itself introduces. `castle record`'s general failure
-    # to resolve its refs at all, for any type and any caller, is a
-    # real and separate gap: docs/backlog/record-does-not-resolve-refs.md.
-    if getattr(args, "blocking", False) and not refs:
-        print(
-            "castle record: refusing to write a --blocking question with no --refs. "
-            "A blocking question is resumable only if some request can be reached "
-            "from its refs; with none, answering it would unblock nothing, silently "
-            "and permanently (docs/tasks/0023-resume-cold.md §9). Pass "
-            "--refs \"$CASTLE_REQUEST_ID\".",
-            file=sys.stderr,
+    # The test is **reachability**, not mere presence and not mere
+    # resolution: does `_find_root_request` — the same walk
+    # `_resumable_answers` uses — get from these refs to an actual
+    # `request` record? That is exactly what resumption requires, so it
+    # is exactly what this refuses to write without. An earlier version
+    # refused only an empty `--refs`, which left the trap open in the
+    # likelier shape: the writer here is a model choosing its own refs,
+    # and a model gets an id slightly wrong far more often than it
+    # omits the flag. A ref that resolves to some record but walks
+    # nowhere produces the identical dead end — the resident answers, and
+    # no fold can ever find the errand.
+    #
+    # **Not the same gap as the deferred backlog entry, and the boundary
+    # is worth keeping exact.**
+    # `docs/backlog/record-does-not-resolve-refs.md` is about
+    # *resolution*: `castle record` writes any ref for any type without
+    # checking that it names an existing record at all, for every caller.
+    # That stays deferred and stays true. This is *reachability*, for
+    # this one flag: a ref can resolve perfectly and still dead-end
+    # before any request, and this refuses that too, because the flag
+    # this task added is what makes it a permanent silent failure rather
+    # than a cosmetic one.
+    if getattr(args, "blocking", False):
+        journal = load_all(journal_dir())
+        reachable = any(
+            ref in journal and _find_root_request(journal, journal[ref]) is not None
+            for ref in refs
         )
-        return 1
+        if not reachable:
+            print(
+                "castle record: refusing to write a --blocking question whose --refs "
+                f"({', '.join(refs) if refs else 'empty'}) reach no request record. "
+                "A blocking question is resumable only if some request can be reached "
+                "from its refs, so this one could never unblock anything: the resident "
+                "would answer it and no fold would ever find the errand "
+                "(docs/tasks/0023-resume-cold.md §9). Pass "
+                "--refs \"$CASTLE_REQUEST_ID\".",
+                file=sys.stderr,
+            )
+            return 1
 
     body = args.body
     if args.body_file:
@@ -3159,11 +3183,33 @@ def _resumable_answers(records: dict[str, Record], request_id: str) -> list[Reco
     # rather than assuming a guarantee one writer enforces holds for
     # every writer. Each is spent independently: an earlier answer
     # already consumed by a claim does not make a later one consumed.
+    #
+    # **Only an answer that looks like the resident's own buys a turn.**
+    # `file_answer` — the single path a resident's answer takes, from
+    # the CLI or the modal — always writes `provenance: requested` and
+    # `seat: intake`. Anything else reached the journal some other way,
+    # and `render_continuation_packet` already refuses to call such a
+    # record the resident's words. Without the same test here the two
+    # would contradict each other on the same record: the packet
+    # honestly labelling a section "NOT filed through the resident's own
+    # intake path" on a turn that very answer had just paid for.
+    #
+    # **This is a filter, not a boundary, and overselling it would be
+    # the mistake.** A tenant that passes `--provenance requested --seat
+    # intake` satisfies it exactly, and the write guard that actually
+    # forbids a tenant answering at all — `write_record`'s refusal — is
+    # itself only as strong as an environment variable the tenant could
+    # unset (docs/backlog/env-stripping-defeats-write-guards.md). What
+    # this buys is that when that guard is defeated, the *spend* half
+    # stays closed unless the record also impersonates intake: a
+    # mislabelled answer still cannot quietly grant a worker turn.
     resumable = {
         rec.id: rec
         for rec in records.values()
         if rec.type == "answer"
         and rec.id not in spent
+        and rec.fields.get("provenance") == "requested"
+        and rec.fields.get("seat") == "intake"
         and any(ref in question_ids for ref in rec.refs)
     }
     return [resumable[rec_id] for rec_id in sorted(resumable)]
