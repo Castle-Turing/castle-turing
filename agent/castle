@@ -2197,8 +2197,27 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
         )
     section(f"the original request, {origin}", request.body)
 
+    # Results by the lineage edge, `refs[0]` — the last surface in this
+    # task still matching on any ref, and the one where a stray mention
+    # costs most. `castle record --type result --refs <B>,<A>` is
+    # permitted (the generic writer resolves nothing), and under a broad
+    # test errand B's output would be rendered into A's packet as "an
+    # earlier turn on this errand": another errand's work quoted to a
+    # tenant as its own history, on the path this whole task exists to
+    # make trustworthy. Invisible to every result this repo writes —
+    # `_write_worker_result` writes `[request.id, claim_id]` and the
+    # reaper `[request_id, claim.id]`, request first in both, checked
+    # rather than assumed.
+    #
+    # Deliberately NOT the same test `_requests_with_results` uses for
+    # eligibility, which stays broad; see its docstring for why the two
+    # folds read the same records by different rules on purpose.
     results = sorted(
-        (rec for rec in records.values() if rec.type == "result" and request.id in rec.refs),
+        (
+            rec
+            for rec in records.values()
+            if rec.type == "result" and rec.refs and rec.refs[0] == request.id
+        ),
         key=lambda rec: rec.id,
     )
     for index, result in enumerate(results, start=1):
@@ -2435,8 +2454,15 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # crashed turn becomes a result the moment any sweep reaps it,
         # and until then the only case excluded is the one where the
         # account genuinely does not exist yet.
+        # Keyed to `refs[0]`, exactly as the packet keys the results it
+        # renders — these two must agree by construction, because this
+        # decides whether the tenant is told "read the earlier account"
+        # and that decides what the packet has to contain. A broad test
+        # here would let another errand's result, naming this request in
+        # a trailing ref, both set CASTLE_RESUME_ANSWER_IDS and narrate
+        # a resumption whose account is not in the packet at all.
         had_prior_turn = any(
-            rec.type == "result" and request.id in rec.refs
+            rec.type == "result" and rec.refs and rec.refs[0] == request.id
             for rec in turn_records.values()
         )
         continuing = bool(resuming) and had_prior_turn
@@ -3107,6 +3133,42 @@ def _requests_with_results(records: dict[str, Record]) -> set[str]:
     answer to a fresh question can buy another. A future reader
     deciding whether resumption is safe to widen should start there,
     not here: this function still means what it says.
+
+    **This fold matches a result naming the request ANYWHERE in its
+    refs, and `render_continuation_packet` / `had_prior_turn`
+    deliberately do not — they key on `refs[0]`. The inconsistency is
+    the decision, not an oversight.** Same records, same ambiguous input
+    (`castle record --type result --refs <other>,<this>`, which the
+    generic writer permits), opposite risk if you guess wrong:
+
+      * Here, a broad match errs toward treating a request as already
+        accounted for, so the errand does not start automatically. The
+        cost of being wrong is an errand that waits for a resident to
+        type `castle work <id>`. That is the direction 0021 §2.4(b)
+        chose deliberately — any result at all bars an automatic
+        attempt — and keeping the *bound* intact is worth more than
+        recovering an attempt, because the failure it prevents is
+        unattended spend a resident never asked for. A narrow match
+        here would also mean a resident who hand-closed an errand as
+        `--refs <claim>,<request>` had it silently reopened for an
+        automatic turn, which is precisely the surprise the bound
+        exists to remove.
+      * There, a broad match errs toward handing a tenant another
+        errand's output as this errand's own history — and, through
+        `had_prior_turn`, telling it to go read an account the packet
+        does not contain. There is no benign side to being wrong about
+        that; it is the failure the whole packet design is for.
+
+    So: bounds fail toward not spending, and context fails toward not
+    fabricating. One honest residual, named rather than left to be
+    discovered — a stray secondary ref written *before* dispatch ever
+    ran on a journal keeps that request off the watermark's exclusion
+    list (`_outstanding_requests` reads this fold), so a blocking
+    question answered on it later could resume an errand that predates
+    dispatch. It needs all four of those things to line up, and the
+    alternative — a narrow test here — trades it for the reopened
+    hand-closure above, which needs only a resident typing two refs in
+    the order that reads more naturally to them.
     """
     answered: set[str] = set()
     for rec in records.values():
