@@ -605,8 +605,11 @@ does not need.
    including pure private-layer work. The whole feature failing
    closed on the common configuration. Only the mechanism-fix branch
    needs the checkout; the question "is there an option covering this
-   symptom" is answerable without one, through the flake input, which
-   is what §8's own `.files`/`nix eval` approach already does.
+   symptom" is answerable without one, by reading the option's
+   declaration — which is what §8, as superseded, now describes. (This
+   paragraph originally said "through the flake input, which is what
+   §8's own `.files`/`nix eval` approach already does." The conclusion
+   held; the instrument named did not survive §8's rewrite.)
 
    **The same audit found a second, quieter instance in step 2**, and
    it is recorded here because the shape is what matters rather than
@@ -618,10 +621,11 @@ does not need.
    stopping — the likely outcome being a tenant that writes the change
    into `resident.nix` instead, which is a different fix with a
    different meaning (that is step 3) rather than a workaround for an
-   unreachable checkout. §8's `.files` is exactly the instrument for
-   this and the prompt now says to use it here too, ending at the same
-   honest refusal as step 1's mechanism branch when the module lives
-   somewhere this host cannot reach. Steps 3 and 4, and the override,
+   unreachable checkout. Following the private flake's imports (§8, as
+   superseded — this originally read "§8's `.files`") is exactly how
+   the prompt now answers it, ending at the same honest refusal as
+   step 1's mechanism branch when the module lives somewhere this host
+   cannot reach. Steps 3 and 4, and the override,
    were re-read against the same test and are clean: `resident.nix`
    and filing a question are always reachable, and the override routes
    *toward* private rather than away from it. Grounded in Principle 01
@@ -719,16 +723,25 @@ worker is confused.
 > The rest of this section is left standing as written, because it is
 > the argument that produced the design and the reasoning about
 > `.files` versus static reading is still the reasoning that matters —
-> only the instrument changed.
+> only the instrument changed. **Everything below this line is the
+> superseded text**, kept for its argument and not as instruction; it
+> is marked again at the command block and at the end so a reader who
+> lands mid-section still meets the warning.
 
 **How the worker learns which layer currently defines an option: ask
 Nix, never infer from reading module source and guessing priority.**
+*(Superseded — the worker asks nothing of Nix now; see the header
+above. The rest of this paragraph describes what was built and then
+removed.)*
 Verified present in this era's pinned nixpkgs (`lib/modules.nix`):
 every option carries `.files` (the files that actually defined it)
 and `.definitionsWithLocations`/`.highestPrio` (what won, and from
-where). The prompt tells the tenant to run:
+where). The prompt told the tenant to run:
 
 ```
+# SUPERSEDED — DO NOT USE. See this section's header: evaluating the
+# private flake copies the resident's journal into the world-readable
+# store. The prompt instructs no nix eval at all; it reads the files.
 nix eval --json <mechanism-or-private-flake>#nixosConfigurations.<attr>.options.castle.display.<opt>.files
 nix eval --json <mechanism-or-private-flake>#nixosConfigurations.<attr>.options.castle.display.<opt>.definitionsWithLocations
 ```
@@ -750,18 +763,57 @@ that *reads* the priority with `.files`/`.highestPrio` instead of
 guessing at it structurally cannot make that mistake — it is asking
 Nix the question, not reasoning about Nix's behavior from memory.
 
-### 9. Which `nixosConfigurations` attribute the worker evaluates
+*And this is the one place where the supersession genuinely costs
+something rather than merely changing instruments.* Reading the files
+does not have this property: a worker inferring priority from text can
+make exactly the 0017 mistake, which is why the prompt now tells it to
+stop and ask whenever the text does not settle which layer wins.
+Asking is a weaker guarantee than asking Nix was, and it is the one
+this task can afford.
+
+*(End of §8's superseded text. What the worker actually does is in
+this section's header: it reads `resident.nix`, the host module the
+private flake imports, and — where a mechanism checkout exists — the
+option's declaration under its `modules/`.)*
+
+### 9. Which `nixosConfigurations` attribute names this machine
+
+> **Rewritten during implementation, after §8's mechanism was
+> removed.** This section was titled "which attribute the worker
+> *evaluates*" and described finding it in "the evaluated flake",
+> composing its refusal from `builtins.attrNames`. There is no
+> evaluated flake any more, and `builtins.attrNames` over the private
+> flake is a Nix evaluation of exactly the kind §8 now forbids and the
+> prompt's forbidden list names. Left as written, this section would
+> have instructed a cold reader — landing here first, since it is
+> titled after the question they are asking — to do the precise thing
+> the branch removed, with no signal it was superseded.
+>
+> **The conclusion survives; only the instrument changed.** The
+> hostname still selects which configuration is this machine's. What
+> follows is the corrected text, not the original.
 
 **Derive it from the running host's own hostname; never declare a
 third Nix option for it, and never enumerate and pick.**
-`/proc/sys/kernel/hostname` names the attribute to try:
-`nixosConfigurations.<hostname>`. If that attribute does not exist in
-the evaluated flake, the worker refuses and files a question naming
-exactly what it tried and what it found instead (a list of the
-attribute names that *do* exist, read via a single, cheap
-`builtins.attrNames` — enumeration for the sole purpose of composing an
-honest refusal message is fine; enumeration to *pick* one silently is
-not).
+`/proc/sys/kernel/hostname` names the attribute to look for:
+`nixosConfigurations.<hostname>`. The worker then **reads**
+`$CASTLE_PRIVATE_ROOT/flake.nix` and follows that attribute's imports
+to the host module — no evaluation at any point.
+
+**If no attribute matches, the worker refuses and files a question**,
+naming what it looked for and what it found instead. Composing that
+refusal previously meant a `builtins.attrNames` call; it now means
+reading the flake's own `nixosConfigurations` block as text and
+quoting the attribute names that appear there. **Decided rather than
+left open:** text is the right instrument here even though it is the
+weaker one, for two reasons that both point the same way. The refusal
+is a message for a human, so an approximate list is useful even if a
+generated attribute set would make it incomplete — and a resident
+whose attribute names are computed rather than written down is
+exactly the resident for whom §7 step 4's "do not pick, ask" already
+applies. A refusal that names two of three attributes and says so is
+honest; an evaluation that publishes the journal to compose a
+complete one is not.
 
 **Why derive rather than declare a third option.**
 `docs/private-layer.md`'s own template is
@@ -787,17 +839,35 @@ building an ISO configuration's evaluation graph to answer a cursor
 question, which is disproportionate cost for a check that a direct
 attribute-name lookup avoids entirely.
 
+*The cost argument above is now moot and the conclusion is
+overdetermined:* since §8, evaluating any attribute of the private
+flake is forbidden outright, so the question is no longer whether
+enumeration is too expensive but that it is not available at all.
+Recorded rather than deleted because the cost reasoning was sound and
+would apply again to anything that ever does evaluate a resident's
+configuration.
+
 **This convention is currently incidental documentation and this task
-makes it load-bearing**, so `docs/private-layer.md` gains one sentence
-saying so explicitly (§18) — a resident whose `nixosConfigurations`
-attribute genuinely does not match their `networking.hostName` will
-meet the worker's refusal, and the fix at that point is either to
-rename the attribute or, if that is never going to hold for a good
+leans on it**, so `docs/private-layer.md` gains one sentence saying so
+explicitly (§18) — a resident whose `nixosConfigurations` attribute
+genuinely does not match their `networking.hostName` will meet the
+worker's refusal, and the fix at that point is either to rename the
+attribute or, if that is never going to hold for a good
 reason, to add `castle.agent.repo.configurationName` as a real Nix
 option at that point. **Do not pre-build that option now** — nothing
 in this task's own testing needs it, and the exhaustion pass's
 "changed by" note applies verbatim: build it the day it actually bites
 a real resident, not speculatively today.
+
+**"Load-bearing" was the original wording here and it is downgraded on
+purpose.** It was chosen when a mismatch would have broken the
+worker's only means of reading the option layering — an evaluation
+keyed on that exact attribute name. What now rests on the convention
+is smaller: it is how the worker guesses which host module to open
+first. A mismatch costs a question rather than the errand, and a
+resident who never adopts the convention loses the automatic first
+guess, not the feature. Still worth documenting as an interface
+promise, no longer worth calling load-bearing.
 
 ### 10. Reading the running value: the allowed-command list
 
@@ -1595,10 +1665,16 @@ result body rather than discover it by re-reading `docs/tasks/0021`.
   mentions, including the "Left unset, a dispatched worker is told its
   repo is your home directory" sentence this Why section quotes — it
   still applies to `repo.private` specifically and should say so.
-  §9's hostname-attribute convention gains its one load-bearing
-  sentence, stated as a real interface promise rather than incidental
-  documentation. Disclose, in one sentence, that these values land in
-  `/etc/pam/environment`, which is world-readable — `stateDir` already
+  §9's hostname-attribute convention gains its one sentence, stated as
+  a real interface promise rather than incidental documentation. *(As
+  written this said "one load-bearing sentence", and the shipped text
+  is deliberately weaker: since §8's supersession a mismatch costs a
+  question rather than the feature — see §9's own downgrade. The same
+  passage also gained a paragraph saying the worker never evaluates
+  the flake and why, since that is the property an adopter most needs
+  to know and least expects.)* Disclose, in one sentence, that these
+  values land in `/etc/pam/environment`, which is world-readable —
+  `stateDir` already
   has this property undocumented; this task's two new values inherit
   it and this is the moment to write it down for all three at once,
   not a blocker on a single-user laptop but something a stranger
@@ -1881,7 +1957,8 @@ in full at the section cited, this is the index, not the argument:
   documents everywhere else. **Enumerating and matching by
   `networking.hostName` instead of a direct attribute lookup.**
   Rejected — forces evaluating an installer ISO configuration to answer
-  a cursor question. See §9.
+  a cursor question, and since §8's supersession is not available at
+  all: no attribute of the private flake may be evaluated. See §9.
 - **Enforcing the allowed/forbidden command list in the harness rather
   than only in the prompt.** Rejected — that is the "generalized
   tool-execution platform" this project's contract deliberately keeps
@@ -1971,11 +2048,13 @@ in full at the section cited, this is the index, not the argument:
   where a stranger's host module lives.** §7's layer rule needs a
   *destination repo* for a host-layer change, and it is tempting to
   resolve `docs/backlog/where-do-host-modules-live.md`'s open question
-  in passing while writing that rule. Do not. §8's `.files`-based
-  observation is written specifically so the rule **observes** where a
-  host module currently is — including a resident's own, inside their
-  private repo — rather than **deciding** where one belongs. That
-  backlog entry stays open, untouched, for the human.
+  in passing while writing that rule. Do not. §8's approach — first
+  `.files`, and after its supersession, following the private flake's
+  imports and reading them — is written specifically so the rule
+  **observes** where a host module currently is, including a
+  resident's own inside their private repo, rather than **deciding**
+  where one belongs. The instrument changed and that property did not.
+  That backlog entry stays open, untouched, for the human.
 - **S2: never edit `CLAUDE.md`.** No exception, autonomy grant or not.
 - **S3: not one inch of relaxation on the worker's no-deploy
   boundary.** Not `git add -N` to make a diff cleaner, not `nix build`

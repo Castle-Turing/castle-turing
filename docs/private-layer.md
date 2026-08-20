@@ -572,15 +572,28 @@ still runs them.
 
 **Your `nixosConfigurations` attribute should match your
 `networking.hostName`.** This has always been the shape every template
-here uses; since `docs/tasks/0024-config-target.md` a worker relies on
-it. To read what a running option actually resolves to, the tenant
-evaluates `nixosConfigurations.<this machine's hostname>` — read
-straight from `/proc/sys/kernel/hostname` rather than declared as a
-third option that could silently drift from the truth. If your
-attribute is named something else, the worker refuses and files a
-question naming what it tried; the fix is to rename the attribute, or,
-if it genuinely never can match, to ask for a real option at that
-point rather than before.
+here uses, and since `docs/tasks/0024-config-target.md` a worker
+follows it: to find which host module applies to the machine it is
+running on, it reads `/proc/sys/kernel/hostname` and looks for the
+`nixosConfigurations` entry of that name in your `flake.nix`, then
+follows its imports. Read from the running kernel rather than declared
+as a third option that could silently drift from the truth. If your
+attribute is named something else the worker says what it looked for
+and asks you, rather than guessing at a near match — so a mismatch
+costs you a question, not the errand.
+
+**The worker never evaluates your flake, and this is deliberate.** It
+reads the files. Evaluating a local flake copies its whole tracked
+tree into `/nix/store`, which is world-readable — and your journal and
+resident model live in that tree. Reading a file copies nothing. The
+cost of that choice is that the worker learns what each file *says*
+rather than which definition Nix would actually pick, so where the two
+could differ — an `mkForce`, a numbered `mkOverride`, a computed value
+— it asks you instead of guessing. (Your `nixos-rebuild` still
+evaluates the flake, and still publishes that tree; that is a
+pre-existing property of flakes rather than anything the agent layer
+does, and it is filed at
+`docs/backlog/private-layer-lands-in-the-world-readable-store.md`.)
 
 **One host per journal.** If you sync this private repo between
 machines, turn dispatch on for only one of them. The lease that keeps
