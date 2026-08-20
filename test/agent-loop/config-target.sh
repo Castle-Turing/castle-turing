@@ -60,10 +60,10 @@ git -C "$MECHANISM" commit -q -m "fixture: this framework at HEAD"
 # The private checkout is synthetic, and every literal in it is one
 # this repo already publishes: nixosConfigurations.example's "resident"
 # admin username and its placeholder key string, and the
-# /home/resident/private/state path shape test/desktop-loop/test.nix
+# /home/resident/private-state path shape test/desktop-loop/test.nix
 # already uses. Nothing here resembles a real resident.
 PRIVATE="$WORKDIR/private"
-mkdir -p "$PRIVATE/state/journal"
+mkdir -p "$PRIVATE"
 cat > "$PRIVATE/flake.nix" <<'EOF'
 # Synthetic private flake, harness fixture only.
 {
@@ -86,7 +86,7 @@ cat > "$PRIVATE/resident.nix" <<'EOF'
   castle.admin.sshKeys = [
     "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key"
   ];
-  castle.agent.stateDir = "/home/resident/private/state";
+  castle.agent.stateDir = "/home/resident/private-state";
   castle.display = {
     cursorTheme = "Example-Cursors";
   };
@@ -102,7 +102,7 @@ git -C "$PRIVATE" commit -q -m "fixture: a synthetic private layer"
 # first one mid-run would dirty the working tree the no-mutation proof
 # depends on.
 PRIVATE_NOTHEME="$WORKDIR/private-notheme"
-mkdir -p "$PRIVATE_NOTHEME/state/journal"
+mkdir -p "$PRIVATE_NOTHEME"
 cp "$PRIVATE/flake.nix" "$PRIVATE_NOTHEME/flake.nix"
 cat > "$PRIVATE_NOTHEME/resident.nix" <<'EOF'
 # Synthetic private layer with no cursor theme, harness fixture only.
@@ -125,8 +125,19 @@ PRIVATE_HEAD="$(git -C "$PRIVATE" rev-parse HEAD)"
 MECHANISM_HEAD="$(git -C "$MECHANISM" rev-parse HEAD)"
 
 # The documented relationship made real rather than merely asserted in
-# prose: the journal lives inside the private repo's own checkout.
-export CASTLE_STATE_DIR="$PRIVATE/state"
+# prose (docs/private-layer.md's "The agent's state"): the journal is
+# git-tracked and durable, and it lives in a repository *beside* the
+# private flake checkout rather than inside it. That sibling placement
+# is not decoration here — a state directory inside $PRIVATE would sit
+# in the tracked tree of a repo carrying a flake.nix, which is exactly
+# what `castle validate` and `castle digest` now warn about
+# (docs/tasks/0030-state-outside-the-flake.md), and this fixture would
+# then spend its CI run demonstrating the layout the docs tell a
+# resident not to use.
+STATE_REPO="$WORKDIR/private-state"
+mkdir -p "$STATE_REPO"
+git -C "$STATE_REPO" init -q
+export CASTLE_STATE_DIR="$STATE_REPO"
 export XDG_RUNTIME_DIR="$WORKDIR/runtime"
 mkdir -p "$XDG_RUNTIME_DIR"
 JOURNAL="$CASTLE_STATE_DIR/journal"
@@ -180,18 +191,18 @@ blocking_question_for() {
 # Both checkouts, every time. This is S3's teeth: the worker proposes
 # and never deploys, and the only way a harness can say that about a
 # fixture rather than about a comment is to check that nothing moved.
-# `state/` is excluded from the private checkout's half, and the
-# exclusion is the honest one rather than a convenience. The journal
-# lives inside the private repository — that is the documented shape
-# this fixture exists partly to make real — so `castle` writing a
-# record there is the system working, not a worker mutating a
-# checkout. Everything else under that root is in scope, and the
-# mechanism checkout is checked with no exclusion at all, because
-# nothing legitimately writes anything there.
+# Neither half carries an exclusion. An earlier version of this
+# function excluded `state/` from the private checkout, because the
+# journal lived inside it and `castle` writing a record there was the
+# system working rather than a worker mutating a checkout. Moving the
+# journal to a sibling repository (see CASTLE_STATE_DIR above) retires
+# that exclusion and strengthens the assertion: nothing whatsoever
+# legitimately writes inside either checkout now, so any change at all
+# is a failure.
 assert_checkouts_untouched() {
   local where="$1"
-  [ -z "$(git -C "$PRIVATE" status --porcelain -- ':(exclude)state')" ] \
-    || fail "$where: the private checkout was MUTATED — $(git -C "$PRIVATE" status --porcelain -- ':(exclude)state')"
+  [ -z "$(git -C "$PRIVATE" status --porcelain)" ] \
+    || fail "$where: the private checkout was MUTATED — $(git -C "$PRIVATE" status --porcelain)"
   [ -z "$(git -C "$MECHANISM" status --porcelain)" ] \
     || fail "$where: the mechanism checkout was MUTATED — $(git -C "$MECHANISM" status --porcelain)"
   [ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$PRIVATE_HEAD" ] \
