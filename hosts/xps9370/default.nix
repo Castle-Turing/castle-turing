@@ -45,10 +45,17 @@
   zramSwap.enable = true;
 
   # Wi-Fi is this chassis's network path; NetworkManager belongs here, not
-  # in modules/base, since a headless/wired host wouldn't want it. Wi-Fi
-  # credentials are entered on the machine and live in
-  # /etc/NetworkManager/system-connections — private state that never
-  # enters this repo. Secrets tooling may take this over later.
+  # in modules/base, since a headless/wired host wouldn't want it.
+  #
+  # No network is named here, and none will be: running the daemon is a
+  # machine fact, an SSID and a PSK are the resident's (Principle 01).
+  # Joined by hand, those credentials live in
+  # /etc/NetworkManager/system-connections and never enter any repo.
+  # Declared instead — which is what secrets tooling made possible, via
+  # networking.networkmanager.ensureProfiles fed from an encrypted
+  # secret (docs/tasks/0031-secrets-tooling.md; worked example in
+  # docs/private-layer.md's "Secrets" section) — they live in the
+  # private layer. Either way, not in this file.
   networking.networkmanager.enable = true;
 
   # First installed from nixos-unstable ahead of the 26.11 release.

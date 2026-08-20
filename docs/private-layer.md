@@ -43,6 +43,7 @@ its exported modules:
           castle-turing.nixosModules.desktop # optional: Sway desktop session
           castle-turing.nixosModules.dev # optional: Emacs, git, gh, ripgrep, fd, claude-code, python3
           castle-turing.nixosModules.agent # optional: the agent-layer CLI + state dir
+          castle-turing.nixosModules.secrets # optional: encrypted secrets, via sops-nix
           ./resident.nix
         ];
       };
@@ -112,6 +113,17 @@ The exported modules:
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
   image" below.
+- `nixosModules.secrets` — encrypted secrets. Two options,
+  `castle.secrets.sopsFile` (which encrypted file of yours holds them)
+  and `castle.secrets.ageKeyFile` (where on the machine the key that
+  opens it lives), plus the whole of sops-nix's own module bound in
+  behind them — `sops.secrets.*`, `sops.templates.*`, and the
+  activation-time decryption that writes plaintext to `/run` and
+  nowhere else. Optional and inert until you declare something: a
+  configuration that imports it and sets neither option evaluates and
+  boots exactly as before. See "Secrets" below, which is worth reading
+  end to end before you generate your first key, because the order of
+  the steps is what makes a reinstall survivable.
 
 `nixpkgs.follows = "castle-turing/nixpkgs"` keeps your system on exactly
 the package set the framework is tested against. Omit it only if you know
@@ -167,6 +179,15 @@ The values this repo may never contain:
   # means repo.private, with a deprecation warning.
   # castle.agent.repo.private = "/home/<your-login>/private";
   # castle.agent.repo.mechanism = "/home/<your-login>/src/castle-turing";
+
+  # Optional — only meaningful if you use nixosModules.secrets. Names
+  # the *encrypted* file in this repo that holds your credentials; the
+  # key that decrypts it never lives in any repo, and is planted on the
+  # machine at install time instead. Read "Secrets" below before you
+  # create either. castle.secrets.ageKeyFile has a working default
+  # (/var/lib/sops-nix/key.txt) that the documented install step plants
+  # to, so most residents set only this one line.
+  # castle.secrets.sopsFile = ./secrets.yaml;
 
   # Optional, and the one authority decision in this file: let filed
   # errands start themselves, with no `castle work` typed by hand.
@@ -296,6 +317,17 @@ The values this repo may never contain:
   on `$PATH`, which is real once `nixosModules.desktop` is imported
   (it installs mako + libnotify); set to `""` on a headless host to
   no-op the attempt outright.
+- `castle.secrets.sopsFile` — the encrypted file in this repo that
+  holds your credentials, as a Nix path (`./secrets.yaml`). Only
+  meaningful with `nixosModules.secrets`, and only *needed* once you
+  declare a `sops.secrets.<name>`. Unset, nothing about the mechanism
+  fails: it stays a declared slot with nothing in it.
+- `castle.secrets.ageKeyFile` — where on this machine the age private
+  key that decrypts that file lives. Defaults to
+  `/var/lib/sops-nix/key.txt`, which is exactly where the install step
+  in "Secrets" below plants it; change it only if you have a reason,
+  and change the install step to match, or the first activation fails
+  saying it cannot read the key.
 - `castle.display.{scale,cursorTheme,cursorSize,terminalFont,
   terminalFontSize,uiFont,uiFontSize,consoleFont,wallpaper}` — taste, only
   meaningful with `nixosModules.desktop`. They do not all resolve the
@@ -714,9 +746,13 @@ repository ends up holding `state/`:
 
 - Committing to it is a standing, made-then-reported authority — the
   diff is the audit trail, not a thing to approve in advance.
-- **Pushing stays manual** until secrets tooling gives this project a
-  credential story for doing it unattended. Don't wire a cron job or a
-  service to `git push` your state repository until that lands.
+- **Pushing stays manual.** Encrypted secrets exist now
+  (`docs/tasks/0031-secrets-tooling.md`, and "Secrets" below), so the
+  *mechanism* a push credential would live in is no longer missing —
+  but nothing has designed what that credential is, what it may push
+  to, or what an unattended push is allowed to do without you. Until
+  something does, don't wire a cron job or a service to `git push` your
+  state repository.
 
 ## Migrating state out of the flake
 
@@ -1028,14 +1064,257 @@ deliberate design choice, not a gap: a Wi-Fi PSK is private-layer data,
 and baking one into a NetworkManager connection profile at ISO-build
 time would mean writing it in plaintext into a private-layer Nix file —
 exactly the "private repo is access control, not encryption" problem
-the Secrets slot below exists to eventually close. Rather than invent a
-way around that, this mechanism accepts one guided, one-time Wi-Fi join
-at the console as a better trade than a plaintext credential anywhere —
-and makes sure that step is unmissable (a persistent on-console prompt,
-not a manual `nmtui` ritual you have to already know) rather than
-apologizing for it. Once sops-nix (or equivalent) lands, a private layer
-will be able to supply a real declarative Wi-Fi profile and skip even
-that; until then, this is the honest unattended-by-default story.
+the Secrets section below closes for the *installed* system. Rather than
+invent a way around that, this mechanism accepts one guided, one-time
+Wi-Fi join at the console as a better trade than a plaintext credential
+anywhere — and makes sure that step is unmissable (a persistent
+on-console prompt, not a manual `nmtui` ritual you have to already know)
+rather than apologizing for it.
+
+**This did not change when sops-nix landed, and the distinction is
+worth being precise about.** `docs/tasks/0031-secrets-tooling.md` gives
+the *installed* system a declarative Wi-Fi profile — see "Secrets"
+below — so its own first boot needs nobody at the keyboard. The
+installer *image* is a different machine at a different moment: there
+is no disk to have planted a key onto yet, because `nixos-anywhere`
+has not partitioned one. So the image still joins Wi-Fi the way it
+always has, one guided console join per installer boot, and that is
+where it stays until something changes about how the image itself
+carries an identity.
+
+## Secrets
+
+`castle-turing.nixosModules.secrets` (`docs/tasks/0031-secrets-tooling.md`)
+is how a credential gets onto your machine without ever being committed
+anywhere in plaintext. It binds [sops-nix](https://github.com/Mic92/sops-nix)
+and adds the two-option slot this framework owes you: which encrypted
+file is yours, and where the key that opens it lives.
+
+Three artifacts, and the whole design is in which repo each one is
+allowed to touch:
+
+| Artifact | Lives in | Why there |
+|---|---|---|
+| `secrets.yaml` — your credentials, **encrypted** | your private repo, committed | it travels with a `git clone`, survives a wipe, and shows up in diffs per changed key rather than as one opaque blob |
+| `.sops.yaml` — which recipients may decrypt it | your private repo, committed | it is a list of public keys; publishing it costs nothing and losing it costs a re-derivation |
+| `key.txt` — the age private key | **neither repo**, ever | it is the one thing that turns ciphertext back into a credential; it lives on the machine and in your password manager, and nowhere else |
+
+The encrypted file *is* copied into the world-readable Nix store every
+time your flake is evaluated, and that is intended rather than a leak —
+it is ciphertext, and putting ciphertext where the activation can read
+it is how sops-nix works. Contrast "The agent's state" above, where the
+same store copy is a real hazard: a journal is plaintext. The rule was
+never "keep your files out of the store" — it is "keep *plaintext* out
+of the store," and everything below is how you get a credential onto
+the machine without breaking it.
+
+You will want `age` and `sops` for the steps below. If they are not on
+your workstation already, `nix shell nixpkgs#age nixpkgs#sops` is
+enough — nothing here needs them installed permanently.
+
+### Enrolling a machine (once per machine)
+
+Do this **before** you install, in this order. Step 2 is the one people
+skip and regret.
+
+1. **Generate the machine's age key.**
+
+   ```console
+   $ age-keygen -o key.txt
+   Public key: age1...
+   ```
+
+   That file is the entire re-enrollment artifact for this machine.
+   **Put its contents in your password manager now**, labeled with the
+   machine's hostname, before you do anything else with it. It is not
+   in any repo and it never will be, so a copy you did not make is a
+   copy that does not exist.
+
+2. **Record two recipients, not one.** `age-keygen -y key.txt` prints
+   the machine key's public recipient. Put it, *and a personal age key
+   of your own that lives somewhere else entirely*, in a `.sops.yaml`
+   in your private repo:
+
+   ```yaml
+   creation_rules:
+     - path_regex: secrets\.yaml$
+       key_groups:
+         - age:
+             - age1...   # this machine
+             - age1...   # you, from your password manager / another machine
+   ```
+
+   A file encrypted to two independent recipients survives the loss of
+   either one. This is what makes every recovery story below finite:
+   lose the machine and its key together, and your own key still opens
+   the file; lose your own key, and the machine's copy still does.
+   Encrypt to one recipient and you have built a single point of
+   failure whose failure mode is "the credential is gone."
+
+3. **Create the encrypted file.** `sops secrets.yaml` opens your editor
+   and applies `.sops.yaml`'s recipients when you save. Put the secret
+   under a plain key name:
+
+   ```yaml
+   wifi-psk: "<your-network-password>"
+   ```
+
+   What lands on disk is ciphertext with a readable key name beside it
+   — the reason this project chose sops over agenix. `sops secrets.yaml`
+   again is how you edit it later; never edit the ciphertext by hand.
+
+4. **Commit `secrets.yaml` and `.sops.yaml`.** Never `key.txt`. Add it
+   to your `.gitignore` while you are thinking about it.
+
+5. **Point the slot at it**, in `resident.nix`:
+
+   ```nix
+   castle.secrets.sopsFile = ./secrets.yaml;
+   ```
+
+6. **Stage the key for the install.** `nixos-anywhere --extra-files
+   <dir>` copies `<dir>`'s contents onto the target's root after the
+   disk is partitioned and mounted and before `nixos-install` runs, so
+   the key is in place before the machine's very first activation. It
+   arrives owned by `root`, carrying whatever permissions it had here —
+   which is why the modes below are load-bearing rather than tidy:
+
+   ```sh
+   root=$(mktemp -d)
+   install -d -m 755 "$root/var" "$root/var/lib"
+   install -d -m 700 "$root/var/lib/sops-nix"
+   install -m 600 key.txt "$root/var/lib/sops-nix/key.txt"
+   ```
+
+   `/var/lib/sops-nix/key.txt` is `castle.secrets.ageKeyFile`'s default.
+   If you changed that option, change this path with it — they have to
+   agree or activation fails with a missing-key error.
+
+Then add `--extra-files "$root"` to the `nixos-anywhere` invocation in
+`hosts/xps9370/README.md`'s install step, and delete `$root` afterwards.
+
+### Using the secret: a declarative Wi-Fi profile
+
+This is the payoff, and the reason the Wi-Fi PSK was the first
+credential this project put behind the mechanism: with it declared,
+a freshly installed machine joins your network on its own first boot,
+with nobody at the keyboard.
+
+It is entirely your configuration — no Castle Turing option wraps it.
+Two upstream mechanisms meet: sops-nix renders the secret into a file
+under `/run`, and nixpkgs's own
+`networking.networkmanager.ensureProfiles` reads that file when it
+writes the connection profile. The same reason `modules/home` expects
+you to reach for `wayland.windowManager.sway.config.keybindings`
+directly: where a real upstream option already exists, a wrapper would
+only add a name to learn.
+
+```nix
+{ config, ... }:
+{
+  castle.secrets.sopsFile = ./secrets.yaml;
+
+  # The key "wifi-psk" out of that file. Decrypted at activation to
+  # /run/secrets/wifi-psk, root-owned, mode 0400.
+  sops.secrets."wifi-psk" = { };
+
+  # ensureProfiles.environmentFiles wants KEY=value shape, and the bare
+  # secret above is just the value. A template composes the two without
+  # the plaintext ever existing anywhere in between:
+  # config.sops.placeholder.* is a build-time stand-in that
+  # sops-install-secrets substitutes at activation, so what is in the
+  # Nix store is the placeholder, not your PSK.
+  sops.templates."wifi.env".content = ''
+    HOME_WIFI_PASSWORD=${config.sops.placeholder."wifi-psk"}
+  '';
+
+  networking.networkmanager.ensureProfiles = {
+    environmentFiles = [ config.sops.templates."wifi.env".path ];
+    profiles.home-wifi = {
+      connection = {
+        id = "home-wifi";
+        type = "wifi";
+      };
+      wifi = {
+        mode = "infrastructure";
+        ssid = "<your-network-name>";
+      };
+      wifi-security = {
+        key-mgmt = "wpa-psk";
+        # Literally this string, not an interpolation: NetworkManager's
+        # generated profile is run through envsubst at activation, with
+        # the environment file above supplying the value.
+        psk = "$HOME_WIFI_PASSWORD";
+      };
+      ipv4.method = "auto";
+      ipv6.method = "auto";
+    };
+  };
+}
+```
+
+The rendered profile is written to
+`/run/NetworkManager/system-connections/` — a tmpfs, gone at every
+reboot and never on disk. Your SSID *is* in your private repo in
+plaintext here, which is a deliberate line: a network name is not a
+credential, and the framework repo never sees either one.
+
+### When the key is missing or wrong
+
+Both failures are loud, which is exactly why a Wi-Fi PSK went first
+rather than a password hash. The symptom is **no network** — obvious
+within seconds, and recoverable by plugging in Ethernet or joining by
+hand with `nmtui`, the way you did before any of this existed.
+
+- **Key file absent.** `sops-install-secrets` fails at activation,
+  naming the path it could not read. That is on the console during
+  `nixos-install` or `nixos-rebuild`, and in `journalctl -b` afterwards.
+  Nothing downstream runs: no template is rendered, and
+  `NetworkManager-ensure-profiles.service` then fails too (its
+  `EnvironmentFile` points at a file that does not exist), which
+  `systemctl --failed` shows you.
+- **Key present but wrong** — not one of the recipients the file was
+  actually encrypted for. The same downstream silence, but the
+  activation log names a decryption failure rather than a missing file.
+  That difference is the whole diagnostic: it tells you whether you
+  planted no key or the wrong one.
+
+There is no dedicated Castle Turing check for this, deliberately. The
+platform already reports it in two places a resident will be looking
+anyway, and a bespoke surface for a loud failure is mechanism nobody
+asked for.
+
+### Re-enrollment: what a wipe costs you
+
+Three cases, in increasing order of annoyance.
+
+- **Reinstalling the same machine.** Nothing to re-encrypt. You still
+  have `key.txt` in your password manager; stage it exactly as in step
+  6 above and the new install reads the same `secrets.yaml` your
+  private repo already carries. This is the ordinary case, and the
+  reason this design plants a key file rather than deriving one from
+  the machine's SSH host key — a wipe gives the machine a new host key,
+  which would leave every existing secret unreadable.
+- **Losing the machine's key** (a dead disk, a password-manager entry
+  never saved). Decrypt `secrets.yaml` with your *personal* key from
+  step 2, generate a fresh machine key, swap the recipient in
+  `.sops.yaml`, and `sops updatekeys secrets.yaml` re-encrypts to it.
+  Annoying, entirely survivable, and only because you recorded two
+  recipients.
+- **Losing both.** The credentials are gone; rotate them at their
+  sources. Nothing in any repo can help, by construction — that is the
+  same property that makes committing the ciphertext safe.
+
+### The honest limitation
+
+The age key sits in plaintext at `/var/lib/sops-nix/key.txt`, on a disk
+this project does not yet encrypt (`docs/backlog/disk-encryption.md`).
+This mechanism protects against disclosure of your private repo and
+against store exposure — both are ciphertext. It protects against
+**nothing** if someone has the laptop and can read its disk. That is
+not a new weakness introduced here; it is the one that backlog entry
+already describes, now true of one more file. Closing it is that
+entry's job.
 
 ## `flake.lock`
 
@@ -1054,14 +1333,16 @@ the space, do not invent formats yet:
   `docs/vision.md`). Format not yet specified.
 - **Authority taxonomy** — which decision categories are silent,
   made-then-reported, or queued for approval. Format not yet specified.
-- **Secrets** — encrypted via sops-nix, once that tooling enters the
-  public flake. Until then: **no plaintext credentials anywhere**, the
-  private repo included. A private repo is access control, not
-  encryption.
 
-The agent's model of you is no longer on this list — its shape landed
-with `docs/tasks/0008-agent-layer-skeleton.md`. See "The agent's
-state" above.
+Two entries are no longer on this list. The agent's model of you left
+it with `docs/tasks/0008-agent-layer-skeleton.md` — see "The agent's
+state" above. **Secrets** left it with
+`docs/tasks/0031-secrets-tooling.md`: sops-nix is in the flake,
+`castle.secrets.*` is a real slot, and "Secrets" above is the whole
+interface. The rule that entry carried still holds and always will —
+**no plaintext credentials anywhere**, the private repo included, since
+a private repo is access control and not encryption. What changed is
+that there is now somewhere else for them to go.
 
 ## Test
 
