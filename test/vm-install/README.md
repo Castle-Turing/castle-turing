@@ -62,6 +62,24 @@ Run in order, against one QEMU/OVMF VM:
    layers a test-only auto-login on top (never present in the real
    module — see that file's header comment) so Sway starts with, again,
    zero console interaction.
+3c. Still that same boot (`docs/tasks/0031-secrets-tooling.md`): the age
+   key `run.sh` generated *before* the install is on the installed disk
+   at `/var/lib/sops-nix/key.txt`, mode `600`, owned by `root`; and a
+   secret encrypted to that key before the machine existed has
+   decrypted itself into `/run/secrets/harness-fixture`, byte-for-byte
+   equal to the value `run.sh` encrypted. That is the whole secrets
+   pipeline with nobody at a keyboard: encrypt, plant the key with
+   `nixos-anywhere --extra-files`, decrypt at the installed system's
+   own first activation. The key, the ciphertext and the marker value
+   inside it are generated per run and never committed — the same
+   convention as the throwaway admin SSH keypair, for the same reason.
+   What this deliberately does **not** cover is the Wi-Fi half of that
+   task: QEMU's `-nic user` is wired-Ethernet-equivalent, so there is
+   no radio here to join a network with, and
+   `networking.networkmanager.ensureProfiles` (nixpkgs's own module,
+   not code this project wrote) goes untested. The half this project
+   *did* write — getting a real decrypted file onto a real disk
+   unattended — is the half asserted here.
 4. The VM survives a power-cycle: a hard stop (`kill -9` the QEMU
    process — no clean shutdown) followed by a restart with its NVRAM
    intact.
@@ -118,10 +136,12 @@ letting `run.sh` quietly take the slow path.
 test/vm-install/run.sh
 ```
 
-It builds its own tooling (qemu, OVMF, nixos-anywhere, openssh) from
-this flake's pinned nixpkgs — nothing needs to be preinstalled beyond
-Nix itself. A throwaway admin SSH keypair is generated fresh per run in
-a temp directory and never touches this repo.
+It builds its own tooling (qemu, OVMF, nixos-anywhere, openssh, age,
+sops) from this flake's pinned nixpkgs — nothing needs to be
+preinstalled beyond Nix itself. A throwaway admin SSH keypair, a
+throwaway age keypair, and a sops-encrypted fixture file are all
+generated fresh per run in a temp directory, and none of them ever
+touches this repo.
 
 Useful environment variables:
 
@@ -175,6 +195,19 @@ image):
   something changed in how `modules/desktop` or the test-only auto-login
   override (`vm-test-system.nix`) starts the session, not a real display
   problem.
+- `phase2c` (no separate boot either, same VM as phase 2) — the secrets
+  pipeline. Three distinguishable failures, in the order the script
+  checks them: the age key isn't on the disk at all (`--extra-files`
+  didn't copy it, or copied it somewhere else — check
+  `phase1-nixos-anywhere.log` for its "Copying extra files" step); the
+  key is there with the wrong mode or owner (the staging in `run.sh`,
+  or `--extra-files`'s own permission handling, changed); or the key is
+  fine but `/run/secrets/harness-fixture` is missing or holds something
+  else. That last one is a decryption failure — look in
+  `phase2-first-boot.serial.log` for `sops-install-secrets` (it runs
+  from an activation script on this nixpkgs pin, so its error lands in
+  the boot's console output), and at `phase2c-secret-actual.od` for the
+  byte dump if a file did appear with the wrong contents.
 - `phase3-power-cycle` — the system didn't come back cleanly after a
   hard stop (a filesystem that won't mount without an interactive fsck
   prompt is the classic cause — check the serial log for an `fsck`
@@ -196,8 +229,20 @@ image):
   boots as its QEMU "target" is the same artifact a real install would
   use, not a parallel stand-in.
 - `vm-test-system.nix` — the real `hosts/vm-test` `nixosConfiguration`
-  under test (`modules/base` + `modules/desktop`), with the run's
-  throwaway admin key and a test-only Sway auto-login override.
+  under test (`modules/base` + `modules/desktop` + `modules/secrets.nix`),
+  with the run's throwaway admin key, the run's throwaway encrypted
+  secrets file, one fixture secret declared against it, and a test-only
+  Sway auto-login override.
 - `pkgs.nix` — this flake's own pinned nixpkgs, so harness tooling
-  (qemu, OVMF, nixos-anywhere) stays on the revision the mechanism is
-  tested against.
+  (qemu, OVMF, nixos-anywhere, age, sops) stays on the revision the
+  mechanism is tested against.
+
+The fixture-generation logic itself lives in `run.sh`, near the
+throwaway-admin-key block it deliberately mirrors: `age-keygen` writes a
+keypair into the run's temp directory, `sops --encrypt --age <that key's
+recipient>` encrypts one known marker value into
+`harness-secrets.yaml`, and the private key is staged into an
+`--extra-files` directory as `var/lib/sops-nix/key.txt` (mode 600).
+The plaintext is never written to disk at all — it goes to `sops` on a
+pipe — and the key and ciphertext are deleted with the workdir when the
+run succeeds.
