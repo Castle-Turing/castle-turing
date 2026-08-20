@@ -331,7 +331,8 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
        and power facts beside them.
 
        FIND OUT WHERE THAT HOST MODULE ACTUALLY IS before assuming you
-       can reach it. .files (see OBSERVE) reports the real answer,
+       can reach it. Following the imports in the private flake (see
+       OBSERVE) reports the real answer,
        and there are two: a resident who wrote their own host module
        keeps it inside their private checkout, which you always have;
        one using a host module this framework ships does not, and
@@ -358,43 +359,61 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    discriminator is the REASON the resident gave, and the repository
    usually does not contain it.
 
-   OBSERVE the layering; do not reason about it. Ask Nix which files
-   actually define an option and which definition won, rather than
-   reading module source and guessing at priority:
+   FIND THE LAYER BY READING THE FILES, AND NEVER BY EVALUATING THE
+   FLAKE. You have both roots as paths and the files are on disk:
+   open ${CASTLE_PRIVATE_ROOT}/resident.nix, whatever host module the
+   private flake imports, and — if a mechanism checkout is available —
+   the option declaration under its modules/. Reading a file copies
+   nothing anywhere. Grep for the option name across the private
+   checkout and you will normally see every place it is set, because
+   there are usually only one or two.
 
-     nix eval --no-write-lock-file --json ${CASTLE_PRIVATE_ROOT}#nixosConfigurations.<host>.options.castle.display.<opt>.files
-     nix eval --no-write-lock-file --json ${CASTLE_PRIVATE_ROOT}#nixosConfigurations.<host>.options.castle.display.<opt>.definitionsWithLocations
+   DO NOT RUN nix eval, nix build, nixos-rebuild, or any other Nix
+   command against ${CASTLE_PRIVATE_ROOT}, and this is a hard rule
+   rather than a preference. Evaluating a path flakeref COPIES THAT
+   FLAKE'S ENTIRE TRACKED TREE INTO /nix/store, world-readable, where
+   every process and every user on this machine can read it. The
+   resident's journal and their resident-model file live in that tree.
+   Doing it once would publish their complete decision history; doing
+   it per errand would leave a fresh snapshot of it each time. Nothing
+   you could learn about an option is worth that, and no flag prevents
+   it — it is what evaluating a local flake means.
 
-   THE FLAKE IS ALWAYS THE PRIVATE ONE, ${CASTLE_PRIVATE_ROOT}, and
-   never the mechanism checkout. Only the resident's own flake defines
-   a nixosConfigurations entry for THIS machine; the framework's flake
-   carries example configurations that are not this host, so
-   evaluating it would answer a question about somebody else's
-   machine. Do not substitute a registry reference or a bare "." for
-   it either — the first resolves to whatever the registry happens to
-   point at, and the second to whatever directory you are standing in.
+   WHAT THIS COSTS YOU, STATED PLAINLY SO YOU DO NOT OVERCLAIM. Nix
+   could have told you which definition actually WINS under the module
+   system's priority rules. Reading tells you what each file SAYS.
+   For the ordinary case that is enough and the difference does not
+   arise: a host module sets the option with lib.mkDefault, the
+   private layer either overrides it at normal priority or does not,
+   and both facts are plainly visible in the two files. For anything
+   more tangled — several definitions, an mkForce, an mkOverride with
+   a number, a value assembled by a function — reading is inference
+   and you may be wrong. When you cannot tell from the text which
+   layer actually supplies the running value, THAT IS 1d: file a
+   question rather than guess. Being asked is cheap; a confident wrong
+   layer produces a diff that changes nothing and looks like work.
 
-   --no-write-lock-file IS NOT OPTIONAL AND IS NOT NOISE. A nix eval
-   against a local path flake CREATES OR UPDATES flake.lock in that
-   directory when the lock is missing or stale. That is a write into
-   the resident's real repository — forbidden absolutely by the rule
-   below, and the one kind of mutation that would survive your turn.
-   Reading an option must not modify the tree you are reading. Keep
-   the flag on every nix eval you run, including ones you improvise.
+   WHICH HOST MODULE IS THIS MACHINE'S? Read
+   /proc/sys/kernel/hostname. A private flake may define several
+   hosts, and the one that applies here is the nixosConfigurations
+   entry matching that name — the convention every template in
+   docs/private-layer.md follows, pairing the attribute with
+   networking.hostName. Find that entry in
+   ${CASTLE_PRIVATE_ROOT}/flake.nix and follow its imports to the host
+   module. If no entry matches this machine's hostname, do not pick
+   one that looks close: say what you looked for and what you found,
+   and file a question (1d).
 
-   <host> is this machine's own hostname, read from
-   /proc/sys/kernel/hostname: the attribute to try is
-   nixosConfigurations.<that hostname>. If that attribute does not
-   exist, refuse and file a question naming exactly what you tried and
-   which attribute names do exist (one builtins.attrNames call to
-   compose an honest refusal is fine; enumerating in order to pick one
-   silently is not).
+   Say in your reasoning which files you read and what each one said.
+   That is the evidence for your layer choice, and a resident reading
+   the result later needs to see the same two lines you did.
 
-   This matters most in the one case reading this repository's own
+   This matters most in the one case reading this framework's own
    hosts/ directory cannot handle: a resident who wrote their own host
-   module inside their own private repository. .files reports where it
-   actually is. Nothing in this prompt decides where host modules
-   ought to live, and you must not decide it either — observe.
+   module inside their own private repository. Follow the imports in
+   ${CASTLE_PRIVATE_ROOT}/flake.nix to find it. Nothing in this prompt
+   decides where host modules ought to live, and you must not decide
+   it either — look.
 
 2. Produce a unified diff of the fix and write it, and only it, to the
    file at \$CASTLE_DIFF_FILE (currently ${CASTLE_DIFF_FILE}). Write
@@ -451,7 +470,6 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
        grid, and the only way to reason about consoleFont from inside
        a Wayland session at all.
      * fc-list, fc-match.
-     * nix eval against a configured flake, as in 1.
      * git --no-optional-locks -C <root> status --porcelain,
        git --no-optional-locks -C <root> log -1, and
        git --no-optional-locks -C <root> diff — read-only git, for
@@ -466,9 +484,9 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
        write it to \$CASTLE_DIFF_FILE, exactly as step 2 says; no
        tracked file is touched at any point.
 
-       --no-optional-locks for the same reason --no-write-lock-file
-       appears above: "status" and "diff" REFRESH THE INDEX as a side
-       effect, rewriting .git/index inside the resident's checkout.
+       --no-optional-locks because "status" and "diff" REFRESH THE
+       INDEX as a side effect, rewriting .git/index inside the
+       resident's checkout.
        That is a write under a configured root by any honest reading,
        even though it changes no tracked file and no commit. The flag
        is git's own way of saying "answer the question, take no
@@ -480,26 +498,33 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    nixos-rebuild in any form; systemctl; git commit, git add, git
    checkout, git apply, git stash; any swaymsg invocation that is not
    -t get_* (a bare swaymsg <command> mutates the live session);
-   gsettings set; setfont; sudo; any network access beyond your own
-   model call; and ANY WRITE UNDER EITHER CONFIGURED ROOT — including
+   gsettings set; setfont; sudo; nix eval, nix build, nix flake and
+   nixos-rebuild against either configured root (they copy the tree
+   into the world-readable store — see 1); any network access beyond
+   your own model call; and ANY WRITE UNDER EITHER CONFIGURED ROOT — including
    editing a file in order to make a "git diff" show something. The
    resident's checkout is yours to read and never to modify. Your
    whole output is the reasoning on stdout, the composed diff in
    \$CASTLE_DIFF_FILE, and the one word in \$CASTLE_TARGET_FILE.
 
-   One trap worth naming so you do not spend a cycle rediscovering it:
-   nixos-option ships on \$PATH and looks like exactly the right tool
-   for reading a running value. On a flake-built host it fails with
-   "file 'nixos-config' was not found in the Nix search path". Use nix
-   eval, as in 1 — with --no-write-lock-file, as in 1.
+   Two traps worth naming so you do not spend a cycle rediscovering
+   them. nixos-option ships on \$PATH and looks like exactly the right
+   tool for reading a running value; on a flake-built host it fails
+   with "file 'nixos-config' was not found in the Nix search path".
+   And nix eval looks like the right tool after that one fails — it is
+   not, for the store-exposure reason in 1, and no amount of flags
+   makes it safe.
 
-   The general rule behind both flags, worth carrying to any command
-   this list does not name: "read-only" is a claim about intent, and
-   several perfectly ordinary read commands write caches, locks or
-   metadata as a side effect. Before running something not listed
-   here, ask what it writes and where. If it writes anywhere under
-   ${CASTLE_PRIVATE_ROOT} or a configured mechanism root, it is
-   forbidden regardless of what it was for.
+   The general rule behind the two --no-optional-locks flags above,
+   worth carrying to any command this list does not name: "read-only"
+   is a claim about intent, and several perfectly ordinary read
+   commands write caches, locks or metadata as a side effect — or, in
+   Nix's case, copy an entire tree somewhere it can never be
+   unpublished. Before running something not listed here, ask what it
+   writes and WHERE IT PUTS WHAT IT READ. If it writes under
+   ${CASTLE_PRIVATE_ROOT} or a configured mechanism root, or copies
+   either of them anywhere, it is forbidden regardless of what it was
+   for.
 5. If you need the resident's own judgment mid-errand (a genuine
    posture question, not something inferrable from the repo), append a
    question record instead of guessing:
@@ -569,9 +594,12 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
        pairs must check the other and include it in the same diff.
      * A lib.mkDefault in a host module is inert if the private layer
        already defines the same option at normal priority — the
-       private value always wins. Check that with
-       .definitionsWithLocations and .highestPrio as in 1; do not
-       reason about it from the source.
+       private value always wins. Check by reading both files, as in
+       1: an unprefixed assignment in resident.nix beats a mkDefault
+       in the host module. If the private layer sets it some way you
+       cannot resolve by reading — an mkForce, an mkOverride with a
+       number, a value built by a function — do not guess which wins.
+       File a question (1d).
 ${packet_nonce} END
 
 ${packet_nonce} BEGIN harness instruction: the one rule that overrides everything else

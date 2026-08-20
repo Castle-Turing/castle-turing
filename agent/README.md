@@ -500,7 +500,15 @@ own rule discount them both. The packet ends at an explicit
 Since `docs/tasks/0024-config-target.md` the prompt's contract list is
 where the layer-decision rule lives: an ordered four-step test with one
 override, written to be checked against the repository rather than
-merely agreed with, plus the read-only command list, the two coupling
+merely agreed with. The tenant answers it by **reading** the candidate
+files — `resident.nix`, the host module the private flake imports, the
+option's declaration under a mechanism checkout — and never by
+evaluating the resident's flake: a path flakeref copies the whole
+tracked tree into the world-readable store, and that tree holds the
+journal and the resident model. Reading is textual inference where
+evaluation would have been authoritative, so where the winning layer
+is not clear from the text the prompt sends the tenant to a question
+rather than a guess. Plus the read-only command list, the two coupling
 rules that make a configuration diff silently inert, and the
 ask-first-diff-on-resumption policy described under "Resuming an
 errand" below. Read the script itself

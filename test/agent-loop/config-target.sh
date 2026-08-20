@@ -528,6 +528,77 @@ grep -q 'cannot be routed to a checkout' "$R_DIFFONLY" \
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
+log "a target is recorded only on a turn that finished, with a resolvable role"
+# ---------------------------------------------------------------------
+# `target` is what 0025 and 0026 route on, so it must mean "this
+# result carries a proposal, and here is the checkout it applies to."
+# Three ways that could be false while the field said otherwise, all
+# checked here: no diff (covered above), a turn that did not end in
+# `completed`, and a role this turn could not resolve to a path.
+
+log "  -- a turn killed at the timeout stamps nothing, and is not accused of anything"
+SLOW_STAMPER="$WORKDIR/slow-stamper.sh"
+cat > "$SLOW_STAMPER" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'slow-stamper: both files written, then killed mid-turn
+'
+printf -- '--- a/resident.nix
++++ b/resident.nix
+@@ -1 +1 @@
+-before
++after
+' > "$CASTLE_DIFF_FILE"
+printf 'private
+' > "$CASTLE_TARGET_FILE"
+sleep 30
+TENANT
+chmod +x "$SLOW_STAMPER"
+REQ_TIMEOUT="$("$CASTLE" ask "An invented errand whose tenant writes both files and is then killed.")"
+CASTLE_WORKER_TIMEOUT=2 CASTLE_WORKER_COMMAND="$SLOW_STAMPER" "$CASTLE" work "$REQ_TIMEOUT" >/dev/null 2>&1 || true
+R_TIMEOUT="$(newest_result_for "$REQ_TIMEOUT")"
+grep -q '^outcome: timeout$' "$R_TIMEOUT" || fail "the slow stamper did not time out: $(grep '^outcome:' "$R_TIMEOUT")"
+grep -q '^target:' "$R_TIMEOUT" \
+  && fail "a timed-out turn stamped a target — the field says routable while outcome says the tenant was killed, which is failure readable only from prose"
+grep -q 'did not end in .completed.' "$R_TIMEOUT" \
+  || fail "the unfinished result does not say why it carries no target"
+grep -q 'declared no target' "$R_TIMEOUT" \
+  && fail "a tenant killed by this invoker is accused of not declaring a target"
+"$CASTLE" validate >/dev/null
+
+log "  -- and an unresolvable role is diagnosed, not recorded"
+BAD_ROLE="$WORKDIR/bad-role.sh"
+cat > "$BAD_ROLE" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'bad-role: a one-character slip in the role name
+'
+printf -- '--- a/resident.nix
++++ b/resident.nix
+@@ -1 +1 @@
+-before
++after
+' > "$CASTLE_DIFF_FILE"
+printf 'Private
+' > "$CASTLE_TARGET_FILE"
+TENANT
+chmod +x "$BAD_ROLE"
+REQ_BADROLE="$("$CASTLE" ask "An invented errand whose tenant names a checkout role that does not exist.")"
+CASTLE_WORKER_COMMAND="$BAD_ROLE" "$CASTLE" work "$REQ_BADROLE" >/dev/null
+R_BADROLE="$(newest_result_for "$REQ_BADROLE")"
+grep -q '^outcome: completed$' "$R_BADROLE" || fail "the bad-role turn did not complete"
+grep -q '^target:' "$R_BADROLE" \
+  && fail "a role this turn could not resolve was written into the frontmatter anyway — castle validate accepts it and an applier reads it as routable while it points nowhere"
+grep -qF 'named `Private` as this diff' "$R_BADROLE" \
+  || fail "the unresolvable role is not named in the body"
+grep -q 'has not been recorded' "$R_BADROLE" \
+  || fail "the body does not say the role was dropped rather than recorded"
+"$CASTLE" validate >/dev/null
+assert_checkouts_untouched "after the target-gating cases"
+
+# ---------------------------------------------------------------------
 log "castle record refuses a --target it would then fail to validate"
 # ---------------------------------------------------------------------
 # The door must not be laxer than the backstop. In an append-only

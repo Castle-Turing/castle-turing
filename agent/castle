@@ -3524,7 +3524,30 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # reasoning as the mechanism-unusable note above, which exists
         # so a fault cannot go quiet just because nothing downstream
         # happened to need it.
-        stamped_target = target_text if diff_text else ""
+        # **Three conditions, not one, before a `target` is recorded.**
+        # The field is what docs/tasks/0025 and 0026 route on, so it
+        # has to mean "this result carries a proposal, and here is the
+        # checkout it applies to." Each condition removes a way that
+        # sentence could be false while the field said otherwise.
+        #
+        # A non-empty diff (§6): a target naming nothing is
+        # incoherent.
+        #
+        # `outcome == "completed"`: any other outcome means the tenant
+        # did not finish. A tenant killed at the timeout that had
+        # already written both files yields `timeout` *and* a partial
+        # diff *and* a target that all look complete to anything
+        # reading fields — with the truth only in prose, which is
+        # exactly the "no surface may read failure out of prose"
+        # hazard the closed `outcome` vocabulary exists to prevent.
+        # `completed` is the only outcome where the tenant exited 0
+        # and its two output files are its finished work; `failed`,
+        # `timeout` and `interrupted` are all accounts of a turn that
+        # stopped early.
+        #
+        # A role this turn can actually resolve: see below.
+        finished_cleanly = outcome == "completed"
+        stamped_target = target_text if (diff_text and finished_cleanly) else ""
         if target_text and not diff_text:
             body_lines.append("")
             body_lines.append(
@@ -3555,7 +3578,15 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # exists to produce. What is missing is routing information a
         # later task needs, which is worth saying plainly and is not
         # worth discarding a proposal over.
-        elif diff_text and not target_text:
+        elif diff_text and not target_text and finished_cleanly:
+            # Gated on `finished_cleanly`, because on any other outcome
+            # this sentence would charge a contract violation that may
+            # never have happened: a tenant killed by the timeout or a
+            # signal between writing the diff and writing the target
+            # did not "declare no target", it was stopped mid-work.
+            # Saying otherwise blames the tenant for the invoker's own
+            # kill — and it printed *above* the "may be partial"
+            # caveat, so the resident met the accusation first.
             body_lines.append("")
             body_lines.append(
                 "The worker tenant produced a diff but declared no target: nothing "
@@ -3564,23 +3595,54 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "with no target cannot be routed to a checkout — whatever applies it "
                 "has no way to know which repository its paths are relative to."
             )
-        if stamped_target:
-            resolved = {
-                "private": env.get(PRIVATE_ROOT_ENV),
-                "mechanism": env.get(MECHANISM_ROOT_ENV),
-            }.get(stamped_target)
+        elif diff_text and not stamped_target:
+            # The unfinished cases, described rather than blamed. This
+            # is about what the record can be used for, not about what
+            # the tenant did or failed to do.
             body_lines.append("")
-            if resolved:
-                body_lines.append(
-                    f"This diff targets the **{stamped_target}** checkout, which on "
-                    f"this host resolved to `{resolved}`."
-                )
-            else:
-                body_lines.append(
-                    f"This diff targets `{stamped_target}`, which is not a checkout "
-                    "role this turn had a configured path for, so no path is resolved "
-                    "for it here."
-                )
+            body_lines.append(
+                "This result carries no `target` field: the turn did not end in "
+                "`completed`, so whatever is in the diff above is the state of an "
+                "unfinished attempt rather than a proposal this seat stands behind. "
+                "Nothing downstream should route it to a checkout."
+            )
+        resolved = {
+            "private": env.get(PRIVATE_ROOT_ENV),
+            "mechanism": env.get(MECHANISM_ROOT_ENV),
+        }.get(stamped_target) if stamped_target else None
+        if stamped_target and not resolved:
+            # **Diagnosed as unusable, so not recorded.** An earlier
+            # version printed exactly this sentence and then wrote the
+            # value into the frontmatter anyway, which is the code
+            # contradicting itself in the same breath: a one-character
+            # slip (`Private`, `mechanism.`) produced a record
+            # `cmd_validate` accepts — its check is deliberately open,
+            # for a future third role — and an applier reads as
+            # routable while it points nowhere.
+            #
+            # The open vocabulary is right for `castle record
+            # --target`, where a human may legitimately know about a
+            # role this code does not. It is wrong here, where this
+            # turn has just failed to resolve the value against any
+            # root it was given. Recording what you have this instant
+            # established you cannot use is the same class of mistake
+            # as a refusal message claiming a check that never ran.
+            stamped_target = ""
+            body_lines.append("")
+            body_lines.append(
+                f"The worker tenant named `{target_text}` as this diff's target, "
+                "which is not a checkout role this turn had a configured path for. "
+                "It has not been recorded as the result's `target`: a field naming a "
+                "checkout nothing can resolve would read as routable to whatever "
+                "applies these proposals, while pointing nowhere. The two roles this "
+                "turn could have resolved are `private` and `mechanism`."
+            )
+        elif stamped_target:
+            body_lines.append("")
+            body_lines.append(
+                f"This diff targets the **{stamped_target}** checkout, which on "
+                f"this host resolved to `{resolved}`."
+            )
         if timed_out:
             body_lines.append("")
             body_lines.append(

@@ -659,6 +659,68 @@ worker is confused.
 
 ### 8. Observe the layering; do not reason about it
 
+> **Superseded during implementation, and the title with it.** This
+> section's whole mechanism — `nix eval` against the resident's flake
+> — was removed before merge, because evaluating a path flakeref
+> **copies that flake's entire tracked tree into the world-readable
+> `/nix/store`**. Reproduced: a marker planted at
+> `state/journal/rec.md` in a fixture repo appeared at
+> `/nix/store/<hash>-source/state/journal/rec.md`, mode `r--r--r--`,
+> after a single `nix eval`. `docs/private-layer.md` puts the journal
+> and `resident-model.md` in exactly that tracked tree, so this
+> section as written would have published the resident's complete
+> decision history — and a fresh snapshot per errand, since each
+> distinct content is a distinct store path, accumulating until the
+> next garbage collection.
+>
+> That is the same exposure `modules/agent/default.nix` already argues
+> at length as the reason `repo.private` is typed `str` and never
+> `path`. §1 of this brief closed the door; this section reopened it
+> by another route, and neither noticed the other.
+>
+> **The human's reasoning for removing rather than mitigating it.**
+> This is a framework for strangers. The threat model is not the
+> single-user reference host; it is an adopter on a work machine or a
+> shared VPS with hostile neighbours. And it is sharper here than in
+> most projects, because the machine's whole purpose is running AI
+> agents with shell access — `docs/tasks/0023` and this task spend
+> real effort curating exactly what a tenant may see, per-turn nonce
+> boundaries and all, and a tenant that can read the journal straight
+> off the store makes that machinery decorative.
+>
+> **What replaced it.** The worker reads the candidate files directly:
+> `resident.nix`, the host module the private flake imports, and the
+> option's declaration under a mechanism checkout when one exists. It
+> has the paths, the files are on disk, and reading copies nothing.
+> `/proc/sys/kernel/hostname` still selects which host the private
+> flake's `nixosConfigurations` entry refers to (§9 is unchanged),
+> but it is followed by reading imports rather than by evaluating.
+>
+> **What that costs, stated rather than glossed.** This section's
+> title is no longer wholly achievable. Nix could report which
+> definition actually *wins* under the module system's priority rules;
+> reading reports what each file *says*. For the ordinary case they
+> agree and the difference never arises — a `lib.mkDefault` in a host
+> module, optionally overridden at normal priority in `resident.nix`,
+> and both facts plainly visible in the two files. For an exotic
+> interaction — several definitions, an `mkForce`, an `mkOverride`
+> with a number, a value assembled by a function — reading is
+> inference and can be wrong. The correct behaviour there is step 4 of
+> §7: file a question rather than be confidently wrong. That is
+> already this brief's chosen default for anything the worker cannot
+> determine, so the fallback needed no new machinery — only an honest
+> statement, in the prompt, of when to reach for it.
+>
+> The pre-existing half of this exposure — that every `nixos-rebuild`
+> from a flake-based private layer already publishes the same tree,
+> password hash included — is **not** this task's to fix and is filed
+> as `docs/backlog/private-layer-lands-in-the-world-readable-store.md`.
+>
+> The rest of this section is left standing as written, because it is
+> the argument that produced the design and the reasoning about
+> `.files` versus static reading is still the reasoning that matters —
+> only the instrument changed.
+
 **How the worker learns which layer currently defines an option: ask
 Nix, never infer from reading module source and guessing priority.**
 Verified present in this era's pinned nixpkgs (`lib/modules.nix`):
@@ -767,8 +829,14 @@ pass unless noted otherwise below:
   the only way to reason about `consoleFont` from inside a Wayland
   session.
 - `fc-list`, `fc-match`.
-- `nix eval` against the configured private and/or mechanism flake
-  (§8/§9).
+- ~~`nix eval` against the configured private and/or mechanism flake
+  (§8/§9).~~ **Removed before merge — see §8.** Evaluating a path
+  flakeref copies the whole tracked tree into the world-readable
+  store, journal included, so this is now in the *forbidden* list
+  instead. The corrections below are kept because they record two real
+  defects found in it, and because the second one (naming which flake)
+  would apply again to anything that ever does evaluate a resident's
+  configuration.
 
   **Corrected during implementation, twice over.** First: `nix eval`
   against a local path flake **creates or updates `flake.lock` in that
@@ -1109,8 +1177,13 @@ this task's tenant is told to read:
    necessary, include it in the same diff.
 2. **Priority collisions.** Editing a `lib.mkDefault` in a host module
    is inert if the private layer already defines the same option at
-   normal priority — the private value always wins. `.definitionsWithLocations`/
-   `.highestPrio` (§8) answer this observationally; guessing does not.
+   normal priority — the private value always wins. Read both files
+   (§8, as superseded): an unprefixed assignment in `resident.nix`
+   beats a `mkDefault` in the host module, and that is visible in the
+   text. Where it is not — `mkForce`, a numbered `mkOverride`, a
+   computed value — the worker files a question rather than guessing,
+   since the `nix eval` that would once have answered this is
+   forbidden for the store-exposure reason §8 now records.
 
 **Note for whoever writes the test fixture (§19): an acceptance case
 built on `cursorSize` needs its fixture's `resident.nix` to set
@@ -1960,9 +2033,10 @@ in full at the section cited, this is the index, not the argument:
   directory — the worker proposes, and this task adds no path by which
   anything it produces is ever applied automatically. See S3.
 - **A sandbox, timeout, or cost cap on the worker's own `nix eval`
-  calls (§8/§9).** Real eval cost exists and is not measured by this
-  task; if it turns out to matter in practice, that is its own,
-  separately-specced follow-up.
+  calls (§8/§9).** Moot before merge: the worker runs no `nix eval` at
+  all, for the store-exposure reason §8 records. Kept in this list
+  rather than deleted, because the *shape* returns the moment anything
+  in this system evaluates a resident's configuration on their behalf.
 
 ## Implementation prompt
 
