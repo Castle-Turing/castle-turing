@@ -164,10 +164,16 @@ let
   # CASTLE_STATE_DIR handoff from a silently-fallen-back one — that's
   # exactly the shape of bug 2 itself, and exactly what made the
   # original version of this test blind to it. Modeled on the private
-  # layer's own real shape (modules/agent's stateDir option doc example,
-  # "/home/<you>/private/state") rather than an arbitrary path, so this
-  # test exercises the configuration a real resident actually runs, not
-  # a synthetic one.
+  # layer's own real shape rather than an arbitrary path, so this test
+  # exercises the configuration a real resident actually runs, not a
+  # synthetic one.
+  #
+  # Note what it is *not*: a subdirectory of the flake checkout. The
+  # checkout is `testRepoRoot` below, `/home/resident/private/checkout`,
+  # and this directory sits beside it — which is the layout
+  # docs/private-layer.md recommends and the reason `castle validate`
+  # and `castle digest` stay quiet in this VM rather than warning on
+  # every invocation (docs/tasks/0030-state-outside-the-flake.md).
   testStateDir = "/home/resident/private/state";
 
   # Non-default for the same reason testStateDir is. `castle work`
@@ -298,8 +304,10 @@ in
       # scripted tenant prints its $CASTLE_PRIVATE_ROOT, and the test
       # asserts that string lands in the result record.
       # An existing state directory IS the documented resident
-      # contract: castle.agent.stateDir points into a private repo
-      # checkout that has already been cloned onto the machine
+      # contract: castle.agent.stateDir points into a git checkout that
+      # has already been cloned onto the machine — since
+      # docs/tasks/0030-state-outside-the-flake.md, one that is
+      # deliberately not inside the config flake's own tree
       # (docs/private-layer.md). `castle dispatch` refuses to create it
       # — a sweep that mkdir'd the resident's state directory before
       # their journal was restored into it would break the restore and

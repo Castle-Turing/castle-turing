@@ -82,6 +82,18 @@ jobs:
       # a normalized summary of the outcomes. Same runner, no Nix,
       # same reason as the job above.
       - run: test/agent-loop/tenant-swap.sh
+      # Where the journal is allowed to live
+      # (docs/tasks/0030-state-outside-the-flake.md): the seven layouts
+      # `castle validate` and `castle digest` have to tell apart, two
+      # of which — a `state/` committed inside the flake repo, and a
+      # half-finished migration out of one — put the resident's whole
+      # decision history in the world-readable Nix store on every
+      # rebuild. Also runs the set with no `git` on PATH, and against a
+      # deliberately broken copy of the rule. In this job rather than the
+      # dispatch one because it drives no worker and no sweep; it needs
+      # nothing but `castle`, `git` and stdlib python3, all of which
+      # the stock runner already has, for the same reason given above.
+      - run: test/agent-loop/state-layout.sh
 
   # Automatic dispatch (docs/tasks/0021-auto-dispatch.md): the sweep a
   # systemd path unit and timer trigger on a real host, driven directly

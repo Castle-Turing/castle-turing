@@ -719,6 +719,10 @@ worker is confused.
 > from a flake-based private layer already publishes the same tree,
 > password hash included — is **not** this task's to fix and is filed
 > as `docs/backlog/private-layer-lands-in-the-world-readable-store.md`.
+> (That entry has since been promoted to
+> `docs/tasks/0030-state-outside-the-flake.md` and deleted, per the
+> backlog lifecycle — the path above is left as written because this
+> brief is a historical record, but it no longer resolves.)
 >
 > The rest of this section is left standing as written, because it is
 > the argument that produced the design and the reasoning about

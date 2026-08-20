@@ -192,7 +192,10 @@ JOURNAL="$MAIN_JOURNAL"
 log "a state dir that does not exist yet is not a mechanism fault: the sweep says so, creates nothing, and exits 0"
 # ---------------------------------------------------------------------
 # The restore-order hazard: dispatch enabled and rebuilt before the
-# private repo holding the journal has been cloned. A sweep that
+# repository holding the journal has been cloned. (Which repository
+# that is stopped being the config repo in
+# docs/tasks/0030-state-outside-the-flake.md; the hazard is the same
+# whichever clone the resident is waiting on.) A sweep that
 # created the directory would break that clone AND write a watermark
 # with empty refs, so the history restored ten minutes later would
 # arrive with nothing marked as predating dispatch — every request in
@@ -208,7 +211,7 @@ case "$GUARD_OUT" in
   *"does not exist yet"*) ;;
   *) fail "the sweep did not explain that the state dir is missing: $GUARD_OUT" ;;
 esac
-[ ! -e "$MISSING_STATE" ] || fail "the sweep created $MISSING_STATE — it must wait for the private repo, not conjure a state directory"
+[ ! -e "$MISSING_STATE" ] || fail "the sweep created $MISSING_STATE — it must wait for the resident's clone, not conjure a state directory"
 
 # ---------------------------------------------------------------------
 log "an unattended sweep refuses to make liveness decisions on world-writable locks"

@@ -62,7 +62,7 @@ castle show ID
   a request does. Also the resident model's only *elicited* write path
   (Proposal 05, `docs/tasks/0009`): if the question record carries a
   `fact` field (or one is passed with `--fact`), answering it appends
-  an entry to `state/resident-model.md` alongside the journal `answer`
+  an entry to `resident-model.md` alongside the journal `answer`
   record — see "The resident model" below. Both the record and that
   entry are written by `file_answer()` in `agent/castle`, which this
   subcommand and `castle-modal`'s answer mode both call rather than
@@ -1150,7 +1150,7 @@ has to hold forever, not just today.
   with no live lease and no result is what `castle dispatch` reaps.
   The lease is **machine-local by design**, which carries one honest
   limit: enable dispatch on at most one host per journal. Two
-  dispatch-enabled machines sharing a synced private repo would work
+  dispatch-enabled machines sharing a synced state directory would work
   the same request twice and write false `interrupted` results at each
   other, because nothing reconciles two dispatchers over one journal —
   that belongs to whatever task designs journal sync, and nothing here
@@ -1164,15 +1164,17 @@ has to hold forever, not just today.
   a greetd-launched Sway session, and `castle-modal` spawned from it,
   never sourced the login-shell-only variant). See
   `docs/private-layer.md` for what a resident actually points that at
-  (the private repo's own `state/` directory, so the journal survives a
-  reinstall).
+  (a durable, git-tracked directory, so the journal survives a
+  reinstall — deliberately *not* a subdirectory of the flake repo,
+  whose tracked tree is copied into the world-readable Nix store on
+  every rebuild; docs/tasks/0030-state-outside-the-flake.md).
 - `CASTLE_STATE_DIR` is also what makes `test/agent-loop/run.sh`
   possible without touching a real resident's journal: it points every
   `castle` invocation in that harness at a throwaway temp directory.
 
 ## The resident model
 
-Living at `state/resident-model.md` in the private repo
+Living at `resident-model.md` in the state directory
 (`docs/private-layer.md`) as a sequence of entries in the same flat
 frontmatter style as records above (though the file itself is not a
 `castle`-managed record: no `id`/`type`/`refs`), one entry per fact,
@@ -1268,7 +1270,7 @@ shape, `fact` is nothing more than the correction's own first line,
 mechanically sliced to 80 characters — not a generated label, not a
 classification, just less of the same verbatim text.
 
-A private layer's `state/resident-model.md` ships as an empty file (or
+A private layer's `resident-model.md` ships as an empty file (or
 absent entirely) until the first elicited answer or volunteered
 correction gives it a first entry — see
 `docs/tasks/0008-agent-layer-skeleton.md`'s real-errand verification
@@ -1312,7 +1314,7 @@ interpreter as the deployed CLI.
   mid-errand `question` before their `result` (docs/tasks/0009 item 7's
   third gap: nothing previously produced one in CI); the requested
   errand's question is answered for real via `castle answer`, and the
-  script asserts the resulting `state/resident-model.md` entry cites
+  script asserts the resulting `resident-model.md` entry cites
   the right question/answer ids — Proposal 05's write path, exercised
   end to end rather than just documented. It also plants a decision
   record from a non-router seat referencing an unrouted result and

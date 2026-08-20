@@ -471,6 +471,260 @@ def journal_dir() -> pathlib.Path:
     return d
 
 
+# `git ls-files -s` prints this mode for a **gitlink** — the single
+# index entry a submodule contributes, naming a commit in another
+# repository rather than any content in this one. Every real blob is
+# 100644 or 100755, and a symlink 120000. This one number is what lets
+# `_state_tracked_in` tell "the flake repo references a submodule here"
+# (safe: a path flakeref does not fetch submodule content) from "the
+# flake repo tracks files here" (unsafe: they are copied to the store).
+GITLINK_MODE = "160000"
+
+
+def _state_tracked_in(root: pathlib.Path, path: pathlib.Path) -> tuple[bool | None, str]:
+    """Does `root`'s index hold real content under `path`? `None` when
+    that could not be established, with a phrase saying why.
+
+    `git ls-files -s` and not plain `ls-files`, because the **mode** is
+    half the answer. A submodule at `state/` appears in the outer index
+    as exactly one entry, a gitlink, and a plain listing shows it as an
+    ordinary tracked path — indistinguishable from a committed journal.
+    Filtering `GITLINK_MODE` out and asking whether anything else
+    remains is what separates the two, and it is the whole reason this
+    function can be asked about the outer repository at all.
+
+    `git` and not a `.gitignore` reader: the index is the exact
+    question. What Nix copies into the store for a path flakeref is the
+    tracked tree, so "is it in the index" and "would it be published"
+    are the same question asked twice, and no reimplementation of
+    git's ignore precedence can be as right about it as git is.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+
+    rel = os.path.relpath(path, root)
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        # Cannot happen through `_state_layout_finding`, which only
+        # ever passes an ancestor as `root`. Refusing to guess beats
+        # handing git a pathspec that escapes the repository.
+        return None, "the state directory is not inside that repository"
+
+    # Every GIT_* variable stripped, for the reason
+    # docs/tasks/0024-config-target.md gives at `_checkout_fault`'s own
+    # probe and does not need restating in full here: git reads that
+    # environment to decide what a repository even is, so an inherited
+    # GIT_DIR or GIT_WORK_TREE would make this answer a property of
+    # whoever happened to export something. An enumeration was tried
+    # there and proved unsafe; the blanket is deliberate.
+    probe_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        probe = subprocess.run(
+            [git, "-C", str(root), "ls-files", "-s", "--", rel],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=probe_env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None, "`git` resolved but could not be run there"
+    if probe.returncode != 0:
+        return None, "`git` could not read that repository"
+
+    for line in probe.stdout.splitlines():
+        fields = line.split(maxsplit=1)
+        if not fields:
+            continue
+        mode = fields[0]
+        if mode != GITLINK_MODE:
+            return True, ""
+    return False, ""
+
+
+def _state_layout_finding(path: pathlib.Path) -> str | None:
+    """Why `path` is a dangerous place to keep a journal, or None if it
+    is not (docs/tasks/0030-state-outside-the-flake.md).
+
+    **The hazard.** `/nix/store` is one global directory, root-owned,
+    every file mode `r--r--r--`, with no per-path permissions and no
+    way to add any. Evaluating a path flakeref — `nixos-rebuild --flake
+    /path/to/private#host`, the documented way to use this framework —
+    copies that flake's entire tracked git tree into it. So a journal
+    committed inside a flake repository's tracked tree publishes every
+    request, decision, question, answer and correction the resident has
+    ever filed to every account and every process on the machine, on
+    every rebuild, immutably until garbage collection. Nothing about
+    running `nixos-rebuild` looks like it does that, which is exactly
+    why it needs saying out loud.
+
+    **The rule, in two stages.** A free filesystem walk, then one
+    question put to git — the layering `_checkout_fault` already
+    establishes on this branch, for a version of the same reason.
+
+    1. Walk upward from `path` looking for the **nearest ancestor that
+       is both a git repository and a flake** — a directory carrying
+       both a `.git` entry and a `flake.nix`. Inner repository roots
+       are walked *past*, not stopped at. No such ancestor means
+       nothing evaluates this directory and nothing copies it: safe,
+       and it costs no subprocess to say so.
+    2. Ask that repository whether its index holds real content under
+       `path` — anything whose mode is not `GITLINK_MODE`. Tracked
+       content is copied to the store: unsafe. A lone gitlink, or
+       nothing at all, is not: safe.
+
+    **Stage 1 walks past inner repositories, and an earlier version of
+    this rule stopped at them.** That earlier rule — stop at the first
+    `.git` above the state directory, and ask only whether *that*
+    directory is a flake — existed to keep a `state/` wired in as a
+    submodule from being reported unsafe, which it genuinely is not: a
+    plain path flakeref does not fetch submodule content, so the outer
+    flake's store copy contains no `state/` at all. It bought that
+    correctly and paid for it with a **silent miss on a
+    half-finished migration**, which is the likeliest wrong state a
+    resident can be in while following this project's own migration
+    instructions. Reproduced: a repository with `flake.nix` and
+    `state/journal/.gitkeep` committed warns; run `git init` inside
+    `state/` — the first half of "give it its own repository", without
+    the `git rm` — and the old rule stops at that brand-new inner
+    `.git`, finds no `flake.nix` beside it, and falls silent. The
+    outer index still contains `state/journal/.gitkeep`, so the next
+    rebuild still publishes it. The tool went quiet at the exact
+    moment the resident most needed telling.
+
+    Stage 2's mode test is what makes walking past the inner root safe
+    to do. When the old rule was written there was no stage 2 to lean
+    on, so stopping early was the only way to avoid the submodule
+    false positive; now the two cases are distinguishable by what the
+    outer index actually holds — one gitlink, or real blobs — and the
+    stopping rule is no longer paying for anything.
+
+    **Stage 2 also prevents a false positive on the default
+    configuration.** A resident whose home directory is itself a git
+    repository with a `flake.nix` in it (a dotfiles flake: common, and
+    nothing to do with this project) who leaves `castle.agent.stateDir`
+    unset gets `~/.local/state/castle`, which stage 1 resolves to that
+    very repository. Their layout is safe — that path is not in the
+    index, so no evaluation copies it — and telling them to "move it
+    out of the tracked tree" is advice about a tree it was never in. A
+    warning that fires on the shipped default is a warning residents
+    learn to skip, which costs exactly the resident this check exists
+    for. Note that this case does reach the subprocess on every
+    `validate` and `digest`: stage 1 cannot clear it, only stage 2 can,
+    so "the common case pays nothing" is true of a resident whose state
+    directory has no flake above it at all and false of this one.
+
+    **When git cannot answer, this degrades in two different
+    directions, on purpose.** `git` reaches a session only through the
+    optional `modules/dev`, so a host can genuinely have none. With no
+    stage 2:
+
+    - If an inner repository root sits between `path` and the flake
+      root, this stays **silent**. That shape is a submodule or a
+      separate repository — the layouts this project recommends — and
+      warning on them with no way to check would nag exactly the
+      residents who did the right thing. The cost is stated rather
+      than hidden: a half-finished migration on a host with no git is
+      missed, because the outer index is the only evidence and nothing
+      here can read it.
+    - Otherwise it **warns**, and the message claims only what was
+      checked — that the directory sits inside a flake repository, not
+      that anything in it is committed — naming untracked content as
+      the case it could not rule out. A false positive costs a
+      paragraph of reading; a silent miss costs a published journal.
+
+    **A documented limitation: `?dir=` flakes are not detected.** A
+    repository whose `flake.nix` sits in a subdirectory
+    (`repo/nix/flake.nix`, evaluated as `git+file:///repo?dir=nix`)
+    publishes the whole tracked tree, journal included, while stage 1
+    finds no `flake.nix` at any ancestor and calls it safe. Confirmed,
+    not theorised. Closing it would mean scanning ancestors for a
+    `flake.nix` at any depth, which is expensive on every `validate`
+    and would fire on the recommended sibling layout the moment a
+    resident kept an unrelated flake in their state repository — a
+    false positive traded for a rarer true one, in a check whose whole
+    value is being trusted. This is a layout these docs do not describe
+    and do not recommend; it is recorded here, in
+    `docs/private-layer.md`, and in the brief's non-goals rather than
+    silently missed.
+
+    Advisory only. It reports; it never refuses. The store copy is made
+    by `nixos-rebuild`, not by this tool, so refusing to run `validate`
+    or `digest` would prevent nothing and withhold the two commands
+    most likely to carry the news to the resident.
+    """
+    # Symlinks resolved, because the store copies what a path really
+    # resolves to and not the name the resident typed. Tolerant of a
+    # path that does not exist yet: this is a question about names and
+    # ancestry, and every test below is an existence check that simply
+    # answers False.
+    resolved = pathlib.Path(os.path.realpath(path))
+
+    flake_root = None
+    inner_repo = None
+    for directory in (resolved, *resolved.parents):
+        if not (directory / ".git").exists():
+            continue
+        if (directory / "flake.nix").exists():
+            flake_root = directory
+            break
+        # A repository that is not a flake. Remembered, not stopped at
+        # — it decides only how this degrades when git cannot be asked.
+        if inner_repo is None:
+            inner_repo = directory
+    if flake_root is None:
+        return None
+
+    tracked, why_unknown = _state_tracked_in(flake_root, resolved)
+    if tracked is False:
+        return None
+    if tracked is None and inner_repo is not None:
+        # Degradation, direction one — see the docstring.
+        return None
+
+    if tracked:
+        opening = (
+            f"the state directory {resolved} is committed inside the git "
+            f"repository at {flake_root}, which carries a flake.nix"
+        )
+        hedge = ""
+    else:
+        opening = (
+            f"the state directory {resolved} is inside the git repository at "
+            f"{flake_root}, which carries a flake.nix"
+        )
+        hedge = (
+            f" Whether anything in it is actually committed was not checked "
+            f"({why_unknown}), and an untracked or ignored directory is never "
+            "copied — if nothing under it is committed, this warning does not "
+            "apply to you."
+        )
+
+    return (
+        f"{opening}. Evaluating that flake — which every `nixos-rebuild "
+        "--flake` does — copies the repository's whole tracked tree into "
+        "/nix/store, where every file is readable by every account and every "
+        "process on this machine, immutably until garbage collection."
+        f"{hedge} Move the state directory out of the flake's tracked tree "
+        "and repoint castle.agent.stateDir at it: docs/private-layer.md, "
+        "\"The agent's state\" and \"Migrating state out of the flake\"."
+    )
+
+
+def _warn_state_layout() -> None:
+    """Print the layout finding, once, if there is one.
+
+    On stderr in both call sites, deliberately. `castle digest` writes a
+    document a resident may reasonably redirect to a file or pipe into a
+    reader; a warning about the machine's configuration is not part of
+    that document and must not end up inside it. stderr is where it can
+    be seen without being folded into the thing being read.
+    """
+    finding = _state_layout_finding(state_dir())
+    if finding:
+        print(f"WARNING: {finding}", file=sys.stderr)
+
+
 def runtime_dir_is_fallback() -> bool:
     """True when `runtime_dir()` resolved to its `/tmp` last resort.
 
@@ -4748,6 +5002,11 @@ def cmd_digest(args: argparse.Namespace) -> int:
     absent (scope 7, docs/tasks/0010): every correction in the period,
     verbatim first line, created time, and any refs the resident
     supplied."""
+    # Before anything is folded, and before the "No errands recorded"
+    # early return below — a resident whose journal is still empty is
+    # exactly the resident best placed to move it somewhere safe
+    # (docs/tasks/0030-state-outside-the-flake.md).
+    _warn_state_layout()
     records = load_all(journal_dir())
     requests = [rec for rec in records.values() if rec.type == "request"]
     corrections = [rec for rec in records.values() if rec.type == "correction"]
@@ -5033,6 +5292,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
         for ref in rec.refs:
             if ref not in records:
                 errors.append(f"{rec.path.name}: refs unknown record '{ref}'")
+
+    # Unconditionally, and outside the pass/fail branch below: an unsafe
+    # state layout is a fact about the environment, not a malformed
+    # record, so it must print whether or not the journal is
+    # schema-clean — and it must not join `errors`, which would fail a
+    # perfectly valid journal for a reason no edit to any record could
+    # fix (docs/tasks/0030-state-outside-the-flake.md). Nothing about
+    # this line changes the exit code.
+    #
+    # Asked of `state_dir()` rather than `jdir`: the question is where
+    # the resident's state lives, and `--journal` points this command
+    # at some other directory for a one-off check without moving
+    # anything.
+    _warn_state_layout()
 
     if errors:
         for err in errors:
