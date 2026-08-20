@@ -12,7 +12,11 @@
 #   2. install completes and the VM boots from its own disk, installer
 #      detached;
 #   3. SSH comes up as the admin, by key, with zero console interaction
-#      (regression test for the first-boot lockout, finding #1);
+#      (regression test for the first-boot lockout, finding #1), and on
+#      that same boot a secret encrypted before the install decrypted
+#      itself into /run/secrets — the whole sops-nix pipeline, key
+#      planted by --extra-files and all
+#      (docs/tasks/0031-secrets-tooling.md);
 #   4. survives a power-cycle (hard stop + restart);
 #   5. survives an NVRAM wipe, forcing the firmware down the ESP fallback
 #      path EFI/BOOT/BOOTX64.EFI (finding #2/#5, the dead-CMOS lesson).
@@ -75,7 +79,9 @@ cleanup() {
     # sets CASTLE_HARNESS_LOG_DIR to a workspace path), the workdir has
     # nothing worth keeping and goes wholesale; when the logs live
     # inside it (the local default), keep the directory.
-    rm -f "$DISK" "$OVMF_VARS" "$ADMIN_KEY" "$ADMIN_PUB"
+    rm -f "$DISK" "$OVMF_VARS" "$ADMIN_KEY" "$ADMIN_PUB" \
+      "$AGE_KEY" "$SECRETS_FILE" "$WORKDIR/expected-secret" "$WORKDIR/actual-secret"
+    rm -rf "$EXTRA_FILES"
     case "$LOG_DIR/" in
       "$WORKDIR"/*) ;;
       *) rm -rf "$WORKDIR" ;;
@@ -95,25 +101,36 @@ build_expr() {
   nix build --impure "${NIX_BUILD_ARGS[@]}" --expr "$1" | head -n1
 }
 
-log "Building harness tooling (qemu, OVMF, nixos-anywhere, openssh) from this flake's pinned nixpkgs..."
-# One linkFarm build, not four sequential `nix build --impure --expr`
-# calls: this evaluates pkgs.nix once and builds the four derivations in
+log "Building harness tooling (qemu, OVMF, nixos-anywhere, openssh, age, sops) from this flake's pinned nixpkgs..."
+# One linkFarm build, not six sequential `nix build --impure --expr`
+# calls: this evaluates pkgs.nix once and builds the derivations in
 # parallel inside a single nix invocation, turning a sum of build times
 # into a max. The output selectors are the same attribute accesses the
 # per-package calls used ("OVMF.fd" is already a specific output of the
 # OVMF derivation — appending ".out" to it would re-select OVMF's plain
 # "out" output instead, discarding the ".fd" narrowing).
-TOOLS=$(build_expr "let pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"harness-tools\" { qemu = pkgs.qemu.out; \"OVMF.fd\" = pkgs.OVMF.fd; nixos-anywhere = pkgs.nixos-anywhere.out; openssh = pkgs.openssh.out; }")
+#
+# age and sops joined the list with docs/tasks/0031-secrets-tooling.md:
+# this harness now generates its own throwaway age keypair and its own
+# throwaway encrypted fixture per run, following exactly the
+# never-committed convention the throwaway admin SSH keypair below
+# already set. Both come from this flake's pinned nixpkgs for the same
+# reason every other tool here does.
+TOOLS=$(build_expr "let pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"harness-tools\" { qemu = pkgs.qemu.out; \"OVMF.fd\" = pkgs.OVMF.fd; nixos-anywhere = pkgs.nixos-anywhere.out; openssh = pkgs.openssh.out; age = pkgs.age.out; sops = pkgs.sops.out; }")
 QEMU=$(readlink -f "$TOOLS/qemu")
 OVMF=$(readlink -f "$TOOLS/OVMF.fd")
 NIXOS_ANYWHERE=$(readlink -f "$TOOLS/nixos-anywhere")
 OPENSSH=$(readlink -f "$TOOLS/openssh")
+AGE=$(readlink -f "$TOOLS/age")
+SOPS=$(readlink -f "$TOOLS/sops")
 
 QEMU_BIN="$QEMU/bin/qemu-system-x86_64"
 QEMU_IMG_BIN="$QEMU/bin/qemu-img"
 SSH_BIN="$OPENSSH/bin/ssh"
 SSH_KEYGEN_BIN="$OPENSSH/bin/ssh-keygen"
 NIXOS_ANYWHERE_BIN="$NIXOS_ANYWHERE/bin/nixos-anywhere"
+AGE_KEYGEN_BIN="$AGE/bin/age-keygen"
+SOPS_BIN="$SOPS/bin/sops"
 
 OVMF_CODE="$OVMF/FV/OVMF_CODE.fd"
 OVMF_VARS_TEMPLATE="$OVMF/FV/OVMF_VARS.fd"
@@ -122,6 +139,80 @@ log "Generating a throwaway admin key for this run only (never committed)..."
 ADMIN_KEY="$WORKDIR/admin_key"
 "$SSH_KEYGEN_BIN" -q -t ed25519 -N "" -C "castle-turing-harness" -f "$ADMIN_KEY"
 ADMIN_PUB="$ADMIN_KEY.pub"
+
+# --- The secrets fixture (docs/tasks/0031-secrets-tooling.md) -------------
+# Everything about this fixture is made here, seconds before it is used,
+# and destroyed with the workdir afterwards: the age keypair, the
+# ciphertext, and the plaintext marker inside it. That is the answer to
+# "what must a fake example secret satisfy so CI can assert it is not
+# real" — the job that asserts the value came back unchanged is the same
+# job that invented it, and nothing about it is ever committed.
+#
+# **Where the plaintext marker reaches disk, stated rather than
+# glossed.** It is not confined to memory, and an earlier version of
+# this comment claimed it was — which is the more dangerous kind of
+# error, because someone could swap in a realistic fixture on the
+# strength of that sentence. Three places, all of them under $WORKDIR
+# or $LOG_DIR:
+#
+#   * $WORKDIR/expected-secret and $WORKDIR/actual-secret, written by
+#     phase 2c so `cmp` can compare bytes rather than shell strings;
+#   * $LOG_DIR/phase2c-secret-actual.od, an `od -c` dump written only
+#     when that comparison fails — and $LOG_DIR is what CI uploads as
+#     an artifact, with `if: always()`;
+#   * inside the VM, at /run/secrets/harness-fixture, which is the
+#     whole point.
+#
+# That is acceptable for *this* fixture and only because of what it is:
+# a marker string this script invented moments earlier, for a keypair
+# that is deleted when the run ends, meaning nothing about it is a
+# credential anywhere. **If you ever put a realistic value here, those
+# three places are what you have to fix first** — the CI artifact
+# especially, since a red run publishes it.
+#
+# There is deliberately no permanent example keypair anywhere in this
+# repo; see nixosConfigurations.example's own comment in flake.nix for
+# the argument, which is about what a committed artifact would cost
+# rather than about what evaluation requires.
+#
+# The marker string is what phase 2c compares byte-for-byte, which is
+# what makes this an end-to-end proof rather than a "some file appeared"
+# check: encrypt here -> plant the key with --extra-files -> decrypt at
+# the installed system's first activation -> read it back over SSH.
+log "Generating a throwaway age key and encrypting the fixture secret for this run only (never committed)..."
+AGE_KEY="$WORKDIR/age-key.txt"
+SECRETS_FILE="$WORKDIR/harness-secrets.yaml"
+FIXTURE_SECRET="castle-turing-vm-install-harness-fixture"
+"$AGE_KEYGEN_BIN" -o "$AGE_KEY" 2>"$LOG_DIR/age-keygen.log" ||
+  fail "could not generate the throwaway age key (see $LOG_DIR/age-keygen.log)"
+chmod 600 "$AGE_KEY"
+AGE_RECIPIENT=$("$AGE_KEYGEN_BIN" -y "$AGE_KEY")
+# The marker goes to sops on stdin rather than through a temp file, so
+# this step writes only ciphertext — but see the block above for the
+# three later places the plaintext *does* reach disk. This line is not
+# the whole story and must not be read as one.
+# --filename-override tells sops which format to parse stdin as, since
+# there is no filename to infer it from.
+if ! printf 'harness-fixture: %s\n' "$FIXTURE_SECRET" |
+  "$SOPS_BIN" --encrypt --age "$AGE_RECIPIENT" \
+    --input-type yaml --output-type yaml \
+    --filename-override harness-secrets.yaml /dev/stdin \
+    >"$SECRETS_FILE" 2>"$LOG_DIR/sops-encrypt.log"; then
+  fail "could not encrypt the harness fixture with sops (see $LOG_DIR/sops-encrypt.log)"
+fi
+
+# The one thing that must never be versioned, staged where
+# nixos-anywhere --extra-files will copy it: recursively onto the
+# target's root, after disko has mounted it at /mnt and before
+# nixos-install runs, root-owned (tar --no-same-owner) with permissions
+# preserved from here. Hence the modes below — 700 on the directory and
+# 600 on the key, exactly what docs/private-layer.md tells a resident to
+# stage by hand, and 755 on /var and /var/lib because tar applies these
+# modes to those directories on the target too.
+EXTRA_FILES="$WORKDIR/extra-files"
+install -d -m 755 "$EXTRA_FILES" "$EXTRA_FILES/var" "$EXTRA_FILES/var/lib"
+install -d -m 700 "$EXTRA_FILES/var/lib/sops-nix"
+install -m 600 "$AGE_KEY" "$EXTRA_FILES/var/lib/sops-nix/key.txt"
 
 log "Building the installer image (flake.nixosModules.installer, docs/tasks/0006) and the target system (hosts/vm-test + a throwaway admin key) in parallel..."
 # Two independent evaluations, so one backgrounded nix invocation each,
@@ -140,7 +231,7 @@ ISO_OUT_FILE="$WORKDIR/iso-out.txt"
 ARTIFACTS_FILE="$WORKDIR/artifacts-out.txt"
 build_expr "(import \"$HARNESS_DIR/installer.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }).config.system.build.isoImage" >"$ISO_OUT_FILE" &
 ISO_BUILD_PID=$!
-build_expr "let system = import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; }; pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"vm-test-artifacts\" { toplevel = system.config.system.build.toplevel; diskoScript = system.config.system.build.diskoScript; }" >"$ARTIFACTS_FILE" &
+build_expr "let system = import \"$HARNESS_DIR/vm-test-system.nix\" { pubkeyFile = \"$ADMIN_PUB\"; secretsFile = \"$SECRETS_FILE\"; }; pkgs = import \"$HARNESS_DIR/pkgs.nix\"; in pkgs.linkFarm \"vm-test-artifacts\" { toplevel = system.config.system.build.toplevel; diskoScript = system.config.system.build.diskoScript; }" >"$ARTIFACTS_FILE" &
 ARTIFACTS_BUILD_PID=$!
 ISO_STATUS=0
 ARTIFACTS_STATUS=0
@@ -334,11 +425,20 @@ else
 fi
 
 log "[phase1] Running nixos-anywhere (disko + install)..."
+# --extra-files is independent of --store-paths vs. --flake: it is
+# handled inside nixos-anywhere's install phase, between the closure
+# copy and nixos-install, regardless of how the closure was specified
+# (verified in src/nixos-anywhere.sh's nixosInstall(), in the
+# nixos-anywhere pkgs.nix resolves to). So the harness plants the age
+# key by exactly the same
+# flag, in exactly the same place in the sequence, that
+# docs/private-layer.md tells a resident to use on real hardware.
 if ! "$NIXOS_ANYWHERE_BIN" \
     --store-paths "$DISKO_SCRIPT" "$TOPLEVEL" \
     --target-host "root@127.0.0.1" \
     -p "$SSH_PORT" \
     -i "$ADMIN_KEY" \
+    --extra-files "$EXTRA_FILES" \
     --phases disko,install \
     2>&1 | tee "$LOG_DIR/phase1-nixos-anywhere.log"; then
   fail "nixos-anywhere install failed — see $LOG_DIR/phase1-nixos-anywhere.log"
@@ -431,6 +531,43 @@ if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.
   fail "assertion failed: Sway's IPC socket did not appear or did not answer swaymsg (see $LOG_DIR/phase2b-sway-ipc.log)"
 fi
 log "[phase2b] PASS: Sway IPC socket present and answered swaymsg."
+
+# --- Phase 2c: the planted key decrypted a real secret --------------------
+# docs/tasks/0031-secrets-tooling.md. Same still-booted VM as phase 2 —
+# this needs no reboot of its own, only a machine that has activated
+# once. Two assertions, in the order a failure is easiest to read:
+# first that the key survived the install with the ownership and mode
+# --extra-files promises (a key readable by anyone, or lost entirely, is
+# a different bug from a key that failed to decrypt), then that the
+# secret behind it came back byte-for-byte.
+#
+# Over root's SSH session rather than the admin's: sops writes
+# /run/secrets/<name> as root-owned mode 0400 by default, and this
+# harness is asserting the mechanism's own default rather than
+# configuring an owner to make the check convenient.
+log "[phase2c] Checking the age key landed with the ownership and mode --extra-files promises..."
+KEY_STAT=$("$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+  'stat -c "%a %U:%G" /var/lib/sops-nix/key.txt' 2>"$LOG_DIR/phase2c-key-stat.log") ||
+  fail "assertion failed: /var/lib/sops-nix/key.txt is not present on the installed system — nixos-anywhere --extra-files did not plant the age key where castle.secrets.ageKeyFile expects it (see $LOG_DIR/phase2c-key-stat.log)"
+if [ "$KEY_STAT" != "600 root:root" ]; then
+  fail "assertion failed: /var/lib/sops-nix/key.txt is '$KEY_STAT', expected '600 root:root' — --extra-files preserves the staged permissions and forces root ownership (tar --no-same-owner), so this means the staging in this script, or that behavior, changed"
+fi
+log "[phase2c] PASS: age key present, mode 600, owned by root."
+
+log "[phase2c] Asserting the fixture secret decrypted at first activation..."
+printf '%s' "$FIXTURE_SECRET" >"$WORKDIR/expected-secret"
+if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+    'cat /run/secrets/harness-fixture' >"$WORKDIR/actual-secret" 2>"$LOG_DIR/phase2c-secret.log"; then
+  fail "assertion failed: /run/secrets/harness-fixture does not exist on the installed system — the secrets pipeline (docs/tasks/0031) broke somewhere between encrypting the fixture and activation decrypting it; check the activation log in $LOG_DIR/phase2-first-boot.serial.log for sops-install-secrets, and $LOG_DIR/phase2c-secret.log"
+fi
+# cmp, not a shell string comparison: `$(...)` strips trailing newlines
+# from both sides, which would let a mechanism that helpfully appended
+# one pass a test whose whole point is that the value survives unchanged.
+if ! cmp -s "$WORKDIR/expected-secret" "$WORKDIR/actual-secret"; then
+  od -c "$WORKDIR/actual-secret" >"$LOG_DIR/phase2c-secret-actual.od" 2>&1 || true
+  fail "assertion failed: /run/secrets/harness-fixture did not decrypt to the exact fixture value this run encrypted (byte dump: $LOG_DIR/phase2c-secret-actual.od)"
+fi
+log "[phase2c] PASS: the fixture secret decrypted byte-for-byte, with nobody at any keyboard."
 
 # --- Phase 3: power-cycle (hard stop + restart), NVRAM intact -------------
 log "[phase3] Power-cycling (hard stop, then restart with NVRAM intact)..."

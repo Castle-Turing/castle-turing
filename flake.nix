@@ -20,8 +20,16 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # Secrets tooling (agenix or sops-nix) MUST be added here before the
-    # first credential exists anywhere in the system. See Principle 01.
+    # Encrypted secrets — the tooling Principle 01 consequence 1 requires
+    # to exist before the first credential does
+    # (docs/tasks/0031-secrets-tooling.md). Bound into
+    # nixosModules.secrets below, the same wrapper pattern as
+    # home-manager/disko above, so a private layer needs neither this
+    # input nor sops-nix's own nixosModule import.
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -31,6 +39,7 @@
       nixos-hardware,
       disko,
       home-manager,
+      sops-nix,
     }:
     {
       # The mechanism, exported for private layers to assemble
@@ -70,6 +79,20 @@
         # for the installed system — no console interaction, no separate
         # identity mechanism. See modules/installer.nix.
         installer = ./modules/installer.nix;
+        # The secrets slot: which encrypted file the private layer keeps
+        # its credentials in, and where on the machine the age key that
+        # decrypts them lives (docs/tasks/0031-secrets-tooling.md). The
+        # wrapper binds this flake's sops-nix pin, same pattern as
+        # home/host-xps9370 above, so a private layer imports one module
+        # and gets the whole upstream mechanism (sops.secrets.*,
+        # sops.templates.*) with it. Optional, like desktop/dev/agent:
+        # nothing requires a resident to have any secrets yet.
+        secrets = {
+          imports = [
+            sops-nix.nixosModules.sops
+            ./modules/secrets.nix
+          ];
+        };
         # Hardware facts only. The wrapper binds this flake's
         # nixos-hardware and disko pins so consumers need neither input.
         host-xps9370 = {
@@ -106,6 +129,39 @@
       # even though hosts/vm-test below deliberately omits it —
       # see docs/private-layer.md. Real configurations live in private
       # layers.
+      #
+      # And plus secrets (docs/tasks/0031-secrets-tooling.md), with
+      # castle.secrets.sopsFile left at its null default and no
+      # sops.secrets declared.
+      #
+      # What a declared secret would actually demand of this repo, since
+      # an earlier version of this comment got the mechanism wrong and a
+      # future designer reasoning from it would reject workable designs.
+      # Two checks, neither of which decrypts anything:
+      #
+      #   * at *evaluation*, with validateSopsFiles at its default true,
+      #     the file must exist and be readable — the secret submodule
+      #     runs builtins.hashFile over it and the manifest runs
+      #     builtins.pathExists, and both also require it to be in the
+      #     Nix store;
+      #   * at *build* of the manifest derivation, its checkPhase runs
+      #     sops-install-secrets -check-mode=sopsfile, which parses the
+      #     file and checks the named key is present in it
+      #     (recurseSecretKey) before returning.
+      #
+      # Neither step needs the *private* key. So a committed ciphertext
+      # alone would satisfy both, and the reason this repo still ships
+      # none is not that it cannot: it is that passing those two checks
+      # would only prove a file parses. The claim this task actually
+      # makes — that a machine decrypts a real secret unattended — needs
+      # a private key on that machine, and a permanently working keypair
+      # committed to a public tree is the thing rejected in the brief's
+      # "Considered and rejected". A standing ciphertext blob here would
+      # also be a permanent "is this a credential?" question for every
+      # scanner and every future reader, bought for a parse check.
+      # The decrypt-for-real path is proven instead in test/vm-install/,
+      # against a throwaway key and ciphertext generated per run and
+      # never committed.
       nixosConfigurations.example = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
@@ -115,8 +171,9 @@
           self.nixosModules.desktop
           self.nixosModules.dev
           self.nixosModules.agent
+          self.nixosModules.secrets
           (
-            { config, lib, ... }:
+            { config, options, lib, ... }:
             {
               castle.admin = {
                 username = "resident";
@@ -240,6 +297,64 @@
                     is left at its default. Automatic dispatch is opt-in
                     (docs/tasks/0021-auto-dispatch.md): importing
                     nixosModules.agent must never start errands on its own.
+                  '';
+                }
+                {
+                  # docs/tasks/0031-secrets-tooling.md: what this repo
+                  # can prove about the secrets slot without ever
+                  # holding a key. Three facts, all about the empty
+                  # case — a resident who imports nixosModules.secrets
+                  # and has not declared a secret yet:
+                  #
+                  #   1. sops.age.keyFile resolves to the framework's
+                  #      documented default, unconditionally. The
+                  #      install-time `--extra-files` staging in
+                  #      docs/private-layer.md plants the key at
+                  #      exactly this path; the two have to agree or
+                  #      the first activation fails with a missing-key
+                  #      error, so the constant is pinned on both sides
+                  #      rather than trusted to stay in sync.
+                  #   2. sops.defaultSopsFile is left *undefined*, not
+                  #      set to some stand-in. It is types.path with no
+                  #      upstream default, so defining it here would
+                  #      demand a file that does not exist; leaving it
+                  #      undefined is precisely what makes the slot
+                  #      importable before a resident has any secrets.
+                  #   3. No SSH-derived identity is in play, in either
+                  #      of the two forms sops-nix derives one.
+                  #      Upstream defaults sops.age.sshKeyPaths to the
+                  #      host's ed25519 keys and sops.gnupg.sshKeyPaths
+                  #      to its RSA keys, and sops-install-secrets
+                  #      imports each *alongside* keyFile — so a secret
+                  #      could be encrypted to an identity a reinstall
+                  #      destroys, the exact re-enrollment trap
+                  #      docs/tasks/0031 chose a planted key file to
+                  #      avoid. Both are pinned here because an earlier
+                  #      version of this assertion pinned only the age
+                  #      half while its message claimed the whole
+                  #      thing, which is worse than not checking: it
+                  #      reads as proof of a guarantee that was not
+                  #      being held.
+                  assertion =
+                    config.sops.age.keyFile == "/var/lib/sops-nix/key.txt"
+                    && !options.sops.defaultSopsFile.isDefined
+                    && config.sops.age.sshKeyPaths == [ ]
+                    && config.sops.gnupg.sshKeyPaths == [ ];
+                  message = ''
+                    nixosConfigurations.example: the secrets slot
+                    (docs/tasks/0031-secrets-tooling.md) does not resolve the
+                    way modules/secrets.nix promises. Expected
+                    sops.age.keyFile == "/var/lib/sops-nix/key.txt" (the path
+                    docs/private-layer.md's enrollment steps plant the key at
+                    with nixos-anywhere --extra-files), sops.defaultSopsFile
+                    left undefined while castle.secrets.sopsFile is null (it
+                    has no upstream default, and defining it here would demand
+                    a file that cannot exist in a public repo), and BOTH
+                    sops.age.sshKeyPaths and sops.gnupg.sshKeyPaths empty (a
+                    host SSH key is not a decryption identity in this design,
+                    in either its ed25519/age or its RSA/gnupg form — a wipe
+                    gives the machine new ones and anything encrypted to them
+                    is gone).
                   '';
                 }
               ];

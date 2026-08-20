@@ -109,10 +109,17 @@ survive:
    Wi-Fi credentials are deliberately **not** baked into the image: a
    PSK is private-layer data, and baking one in would mean writing it in
    plaintext into a private-layer file, which this repo treats as
-   equivalent to committing a credential (no secrets tooling like
-   sops-nix exists here yet — see `docs/private-layer.md`). One guided,
-   unmissable Wi-Fi join at the console is the accepted trade-off, not a
-   gap — see `docs/private-layer.md` for the reasoning.
+   equivalent to committing a credential. One guided, unmissable Wi-Fi
+   join at the console is the accepted trade-off, not a gap — see
+   `docs/private-layer.md` for the reasoning.
+
+   That stayed true when encrypted secrets landed
+   (`docs/tasks/0031-secrets-tooling.md`), and the distinction is worth
+   holding on to, because the *installed* system's story did change —
+   see step 6. Secrets are decrypted with an age key planted on the
+   target's disk during step 4, after disko has partitioned it. At this
+   step no such disk exists yet, so there is nowhere for the image to
+   read a key from and nothing about this console flow changes.
 
 3. Once the console shows its status block, reach the installer exactly
    as it says:
@@ -136,14 +143,50 @@ survive:
    (fine even if it's still the placeholder — the `dell-xps-13-9370`
    nixos-hardware module already carries this chassis's known quirks);
    the real one is captured as a *side effect* of this same command for
-   you to commit afterward, not consumed by it. From that same private
-   flake directory, with Nix installed:
+   you to commit afterward, not consumed by it.
+
+   **First, if you keep secrets** (`docs/private-layer.md`'s "Secrets"
+   section — a declarative Wi-Fi profile is the reason to start): stage
+   the machine's age key, here on the workstation you are about to run
+   the install from. That key is the one artifact which may never be
+   committed to either repo, and this command is the moment it gets
+   onto the machine.
 
    ```sh
+   # A named directory, not `mktemp -d`: the invocation below is a
+   # separate paste, and a temp path held only in a shell variable is
+   # gone the moment you open a new terminal or change directory.
+   root=~/castle-key-staging
+   rm -rf "$root"
+   install -d -m 755 "$root" "$root/var" "$root/var/lib"
+   install -d -m 700 "$root/var/lib/sops-nix"
+   install -m 600 /path/to/your/key.txt "$root/var/lib/sops-nix/key.txt"
+   ```
+
+   `nixos-anywhere` copies that tree onto the target's root after disko
+   has mounted it and before `nixos-install` runs, owned by root, with
+   these permissions preserved — so the key is there before the
+   machine's very first activation, and your secrets decrypt during the
+   install itself rather than on some later boot. Skip this if you have
+   not set `castle.secrets.sopsFile`, and drop the guard line and the
+   `--extra-files` line below along with it. Delete `$root` when the
+   install is done.
+
+   Then, from that same private flake directory, with Nix installed:
+
+   ```sh
+   # The guard is one command with the install, joined by &&, so a
+   # missing key refuses the install rather than quietly producing a
+   # machine that can decrypt nothing. It prints the staged key's mode
+   # on the way past, which is the other thing worth seeing before an
+   # install you cannot repeat cheaply. Drop this line only if you
+   # staged no key.
+   ls -l "${root:?stage the age key first — see the block above}/var/lib/sops-nix/key.txt" &&
    nix run github:nix-community/nixos-anywhere -- \
      --flake .#xps9370 \
      --generate-hardware-config nixos-generate-config \
        /abs/path/to/your/checkout/hosts/xps9370/hardware-configuration.nix \
+     --extra-files "$root" \
      --phases disko,install \
      root@castle-installer.local
    ```
@@ -161,6 +204,25 @@ survive:
    swap boot media (detach the USB stick), not just reboot in place, so
    the installed filesystems stay mounted at `/mnt` over the same
    installer SSH session afterward — that's what the next step needs.
+
+   `--extra-files "$root"` is the key-staging line from above; drop it
+   if you staged no key. With it, the key lands at
+   `/var/lib/sops-nix/key.txt` on the target —
+   `castle.secrets.ageKeyFile`'s default — in time for the first
+   activation, which happens inside this command's own `install` phase.
+
+   **That first activation does not fail the install, and it is worth
+   knowing that before you rely on it.** `nixos-install` reaches
+   activation through `nixos-enter`, which runs it as
+   `"$system/activate" || true`, and NixOS's activation wrapper prints
+   `Activation script snippet 'setupSecrets' failed (1)` and carries
+   on. So a missing or wrong key still leaves `nixos-anywhere` exiting
+   0 and reporting a successful install, with the real diagnostic one
+   line in a long log — grep the transcript for `setupSecrets` rather
+   than trusting the exit code. The machine's own *first boot* is where
+   this failure is genuinely loud (step 6), and
+   `docs/private-layer.md`'s "When the key is missing or wrong" is how
+   to tell a missing key from a wrong one.
 
    **Before trusting a reboot, verify the boot actually landed** — don't
    just watch the log. `bootctl install`'s log output claiming it wrote
@@ -185,21 +247,31 @@ survive:
 
 6. On the *installed* system's own first independent boot (not the
    chroot install above, which never left the installer's own SSH
-   session) — this chassis has no Ethernet port, so it needs Wi-Fi to
-   be reachable at all, and Wi-Fi still needs a human at the physical
-   keyboard running `nmtui` once: there is no password on the admin
-   account and no declarative Wi-Fi profile either, which is its own
-   chicken-and-egg problem — see finding #1. This installer image closes
-   finding #3 (installer ephemerality); finding #1 is explicitly **not**
-   closed by this task — it needs either a private-layer admin password
-   or a declarative, private-layer Wi-Fi profile, neither of which is
-   in scope here (both would change what the installed system contains,
-   a non-goal of `docs/tasks/0006-installer-image.md`, and touch
-   `hosts/xps9370/default.nix`, which this task doesn't own). Until
-   that lands, plan for a human at the keyboard for exactly this one
-   step, on this one chassis, on a from-scratch install. (An
-   already-installed machine keeps its NetworkManager Wi-Fi profile
-   across ordinary reboots — this only bites a fresh wipe.)
+   session): this chassis has no Ethernet port, so it needs Wi-Fi to be
+   reachable at all — and whether that needs a human at the physical
+   keyboard now depends on whether you declared a Wi-Fi profile.
+
+   **With a declarative Wi-Fi profile** (`docs/private-layer.md`'s
+   "Secrets" section: a `castle.secrets.sopsFile`, a `sops.secrets`
+   entry for the PSK, and a `networking.networkmanager.ensureProfiles`
+   profile that consumes it, with the age key staged in step 4), the
+   machine joins the network on its own and comes up SSH-reachable with
+   nobody at the keyboard. This is the half of finding #1 that
+   `docs/tasks/0031-secrets-tooling.md` closed. If it doesn't happen,
+   the machine is not silent about why: `systemctl --failed` and
+   `journalctl -b` name the failure, and
+   `docs/private-layer.md`'s "When the key is missing or wrong" reads
+   both cases.
+
+   **Without one**, nothing has changed: Wi-Fi needs a human at the
+   physical keyboard running `nmtui` once, and there is no password on
+   the admin account either, which is the chicken-and-egg of finding
+   #1. Plan for a human at the keyboard for exactly this one step, on
+   this one chassis, on a from-scratch install.
+
+   Either way, an already-installed machine keeps its NetworkManager
+   Wi-Fi profile across ordinary reboots — this only ever bites a fresh
+   wipe.
 
 ## Rebuilding after changes
 

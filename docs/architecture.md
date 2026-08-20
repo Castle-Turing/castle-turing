@@ -281,8 +281,13 @@ as its own document:
   made-then-reported category: commits are routine, and the diff is
   part of the audit trail.
 - The push cadence (and the credential that enables pushing from a
-  host) is an open design item; until secrets tooling lands, commits
-  may be local-only with pushes left to the resident.
+  host) is an open design item. Secrets tooling has landed since this
+  was written (docs/tasks/0031-secrets-tooling.md), so such a
+  credential now has somewhere to live — but nothing has decided what
+  it is, what it may push to, or what an unattended push is allowed to
+  do with nobody watching, which is an authority question rather than a
+  storage one. Commits stay local-only, with pushes left to the
+  resident, until that is answered.
 - Automatic dispatch of resident-filed errands
   (`castle.agent.dispatch.enable`, docs/tasks/0021-auto-dispatch.md) is
   a **standing authority** too: opt-in and default-off, because it lets

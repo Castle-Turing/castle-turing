@@ -36,8 +36,9 @@
 let
   # The console's one job: get a human onto a network, then hand off to
   # the agent driving the install over SSH. Not a limitation being
-  # apologized for — Wi-Fi provisioning genuinely can't be baked in
-  # without a secrets mechanism this repo doesn't have yet (see the
+  # apologized for — Wi-Fi provisioning genuinely can't be baked into
+  # this image, and the secrets mechanism that arrived in
+  # docs/tasks/0031-secrets-tooling.md does not change that (see the
   # networking.networkmanager.enable comment below), so this script
   # makes the one remaining manual step impossible to miss instead of
   # requiring the operator to already know NixOS's own `nmtui` ritual.
@@ -574,10 +575,8 @@ in
     #
     # Wi-Fi is intentionally NOT provisioned by this module — that's a
     # deliberate scope decision, not a gap this module tries to paper
-    # over. A Wi-Fi PSK is private-layer data (Principle 01), and this
-    # repo has no secrets mechanism yet — sops-nix is explicitly out of
-    # scope for this task (docs/tasks/0006-installer-image.md). Baking a
-    # PSK into a NetworkManager connection profile at ISO-build time
+    # over. A Wi-Fi PSK is private-layer data (Principle 01), and baking
+    # one into a NetworkManager connection profile at ISO-build time
     # would mean writing it in plaintext into a private-layer Nix file,
     # which is exactly the kind of plaintext-credential-in-a-repo
     # Principle 01 and docs/private-layer.md rule out even for the
@@ -585,6 +584,16 @@ in
     # One manual Wi-Fi join, guided and impossible to miss (statusScript
     # above), is a better trade than inventing a hack around that. See
     # docs/private-layer.md and hosts/xps9370/README.md.
+    #
+    # sops-nix landing (docs/tasks/0031-secrets-tooling.md) did not
+    # change this, and it is worth saying so where the old comment used
+    # to say sops-nix was merely out of scope. That mechanism decrypts
+    # with an age key planted on the target's *disk* by `nixos-anywhere
+    # --extra-files`, after disko has partitioned one. This image runs
+    # before that has happened, on a machine whose disk is still whatever
+    # was there before, so there is nowhere for it to read a key from.
+    # The installed system gets a declarative profile; the installer
+    # image gets the same guided join it always had.
     networking.networkmanager.enable = lib.mkForce true;
 
     # The console's whole job now: get the machine onto a network (with
