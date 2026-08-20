@@ -79,18 +79,69 @@ while :; do
 done
 
 # ---------------------------------------------------------------------
-log "building the four layouts"
+log "building the six layouts"
 # ---------------------------------------------------------------------
 
 # Case 1 — state inside the flake repo's own tracked tree. The layout
 # docs/private-layer.md used to recommend, and the one this whole task
 # exists to warn about.
 INFLAKE="$WORKDIR/inflake"
-mkdir -p "$INFLAKE/state/journal"
+mkdir -p "$INFLAKE/state/journal" "$INFLAKE/state/nested"
 write_flake "$INFLAKE"
+# Committed, not merely present. The rule's third stage asks git
+# whether anything under the state directory is *tracked* — untracked
+# content is never copied into the store, so it is not the hazard — and
+# an empty directory is not a git object at all, so a fixture that only
+# mkdir'd state/ would leave nothing tracked under it and would
+# correctly be reported safe, making this case assert a warning that
+# should not fire.
+#
+# What gets committed is deliberately not a journal record. Every case
+# here drives `castle validate` over the directory, and that command
+# parses every `journal/*.md` it finds; a planted file that is not a
+# well-formed record fails the schema check and the run with it,
+# turning a test about a stderr warning into a test about frontmatter.
+# A `.gitkeep` inside `journal/` and a `resident-model.md` beside it
+# are both real parts of the documented layout, both tracked, and
+# neither is a `journal/*.md`.
+: > "$INFLAKE/state/journal/.gitkeep"
+: > "$INFLAKE/state/resident-model.md"
+: > "$INFLAKE/state/nested/.gitkeep"
 git -C "$INFLAKE" init -q
 git -C "$INFLAKE" add -A
-git -C "$INFLAKE" commit -q -m "fixture: a flake repo with state/ inside it"
+git -C "$INFLAKE" commit -q -m "fixture: a flake repo with a committed state/ inside it"
+
+# Case 5 — the false positive the path-only rule produced, and the
+# reason this rule asks git at all (docs/tasks/0030 finding 2). A
+# resident's home directory is itself a git repository with a flake.nix
+# in it — an ordinary dotfiles-flake setup, nothing to do with this
+# project — and they leave castle.agent.stateDir unset, so the CLI
+# resolves ~/.local/state/castle. Stages 1 and 2 alone find a root
+# carrying a flake and warn; the layout is safe, because nothing under
+# that directory is in the index and an untracked path is never copied.
+# A warning on the default configuration is a warning residents learn
+# to skip.
+DOTFILES="$WORKDIR/dotfiles-home"
+mkdir -p "$DOTFILES/.local/state/castle/journal"
+write_flake "$DOTFILES"
+git -C "$DOTFILES" init -q
+git -C "$DOTFILES" add flake.nix
+git -C "$DOTFILES" commit -q -m "fixture: a dotfiles flake in a home directory"
+
+# Case 6 — the same shape stated explicitly rather than by omission: a
+# state/ inside a flake repo that is gitignored. Also safe, also for
+# the tracked-ness reason, and worth its own case because a resident
+# who deliberately ignored the directory took the right precaution and
+# must not be nagged for it.
+IGNORED="$WORKDIR/ignored"
+mkdir -p "$IGNORED/state/journal"
+write_flake "$IGNORED"
+printf 'state/\n' > "$IGNORED/.gitignore"
+: > "$IGNORED/state/journal/.gitkeep"
+: > "$IGNORED/state/resident-model.md"
+git -C "$IGNORED" init -q
+git -C "$IGNORED" add -A
+git -C "$IGNORED" commit -q -m "fixture: a flake repo whose state/ is ignored"
 
 # The repository `state/` becomes a submodule of, in case 2. A separate
 # repository in its own right — which is also, unchanged, the
@@ -192,7 +243,7 @@ for sub in validate digest; do
   log "case 1 — state inside the flake repo ($sub): warns, and names both paths"
   assert_warns "inside-flake" "$INFLAKE/state" "$sub" "$INFLAKE"
 
-  log "case 1b — a subdirectory of it ($sub): warns too"
+  log "case 1b — a tracked subdirectory of it ($sub): warns too"
   assert_warns "inside-flake/nested" "$INFLAKE/state/nested" "$sub" "$INFLAKE"
 
   log "case 2 — state as a submodule of the flake repo ($sub): silent"
@@ -204,6 +255,12 @@ for sub in validate digest; do
 
   log "case 4 — no repository above it at all ($sub): silent"
   assert_silent "xdg-default" "$PLAIN" "$sub"
+
+  log "case 5 — the XDG default under a dotfiles-flake home directory ($sub): silent"
+  assert_silent "dotfiles-home" "$DOTFILES/.local/state/castle" "$sub"
+
+  log "case 6 — a gitignored state/ inside a flake repo ($sub): silent"
+  assert_silent "gitignored" "$IGNORED/state" "$sub"
 done
 
 # ---------------------------------------------------------------------
@@ -234,6 +291,48 @@ grep -q 'WARNING' "$WORKDIR/err.txt" "$WORKDIR/out.txt" \
   && fail "castle dispatch printed the layout warning — it runs once a minute under a timer, so this is log spam by design"
 
 # ---------------------------------------------------------------------
+log "with no git to ask, the rule still warns — and says what it did not check"
+# ---------------------------------------------------------------------
+# `git` reaches a session only through the optional modules/dev, so a
+# host running the agent layer without it genuinely has none. The rule
+# then cannot run its third stage, and the direction it fails in is a
+# decision rather than an accident: it warns on what stages 1 and 2
+# established, and the message names the untracked case as the one it
+# could not rule out. A false positive costs a paragraph of reading; a
+# silent miss costs a published journal.
+#
+# A PATH holding python3 and nothing else. `castle` is stdlib-only, so
+# this is enough to run it — which is itself the reason this fixture
+# can exist at all.
+NOGIT_BIN="$WORKDIR/bin-nogit"
+mkdir -p "$NOGIT_BIN"
+ln -s "$(command -v python3)" "$NOGIT_BIN/python3"
+PATH="$NOGIT_BIN" command -v git >/dev/null \
+  && fail "the no-git fixture still has git on its PATH, so it proves nothing"
+
+env PATH="$NOGIT_BIN" CASTLE_STATE_DIR="$INFLAKE/state" "$CASTLE" validate \
+  >"$WORKDIR/out.txt" 2>"$WORKDIR/err.txt" \
+  || fail "castle validate failed with no git on PATH: $(cat "$WORKDIR/err.txt")"
+grep -q '^WARNING: ' "$WORKDIR/err.txt" \
+  || fail "with no git to ask, the committed-inside-a-flake case drew no warning at all — the fallback fails in the wrong direction"
+grep -qF 'not checked' "$WORKDIR/err.txt" \
+  || fail "the fallback warning does not say that tracked-ness went unchecked, so it claims a git-verified fact no git verified: $(cat "$WORKDIR/err.txt")"
+grep -qF 'PATH' "$WORKDIR/err.txt" \
+  || fail "the fallback warning does not say why it could not check: $(cat "$WORKDIR/err.txt")"
+
+# And the hedged warning reaches the safe-but-unverifiable case too,
+# which is the honest cost of the fallback rather than a defect: with
+# no git, an ignored state/ is indistinguishable from a committed one.
+env PATH="$NOGIT_BIN" CASTLE_STATE_DIR="$IGNORED/state" "$CASTLE" validate \
+  >/dev/null 2>"$WORKDIR/err.txt" || fail "castle validate failed on the ignored case with no git"
+grep -q '^WARNING: ' "$WORKDIR/err.txt" \
+  || fail "the no-git fallback did not warn on the ignored case — it cannot tell that case apart, so silence there would mean it is not falling back at all"
+
+# The contrast that proves the two branches are actually different:
+# with git present, that same directory is silent.
+assert_silent "gitignored (git present)" "$IGNORED/state" validate
+
+# ---------------------------------------------------------------------
 log "mutation: a walk that does not stop at the first repository root fails case 2"
 # ---------------------------------------------------------------------
 # Case 2 asserts a *silence*, and a silence passes for any number of
@@ -242,9 +341,11 @@ log "mutation: a walk that does not stop at the first repository root fails case
 # exists to defend and checking that the fixture notices.
 #
 # The mutation is the smallest edit that expresses "do not stop at the
-# first repository root": where the real rule returns None on finding a
-# repository root with no flake.nix, the mutant keeps walking, so it
-# sails past the submodule's own .git, reaches the outer flake repo,
+# first repository root": the real rule's walk stops at the first
+# directory carrying a .git, whatever it finds there, and the mutant
+# keeps walking until it finds one that carries a flake.nix as well.
+# So the mutant sails past the submodule's own .git, reaches the outer
+# flake repo, finds the gitlink `state` tracked in that repo's index,
 # and warns about a layout that is provably safe.
 #
 # This is not a second implementation of the rule maintained alongside
@@ -260,11 +361,13 @@ import sys
 
 real, mutant = sys.argv[1], sys.argv[2]
 src = pathlib.Path(real).read_text()
-anchor = '''        if not (directory / "flake.nix").exists():
-            return None
+anchor = '''        if (directory / ".git").exists():
+            root = directory
+            break
 '''
-patched = '''        if not (directory / "flake.nix").exists():
-            continue
+patched = '''        if (directory / ".git").exists() and (directory / "flake.nix").exists():
+            root = directory
+            break
 '''
 if src.count(anchor) != 1:
     sys.stderr.write(

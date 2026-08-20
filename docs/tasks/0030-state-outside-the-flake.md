@@ -219,7 +219,37 @@ cases the check must get right:
 - **State at the XDG default, nothing versioned above it.** The walk
   never finds a `.git` at all. **Safe.**
 
-**Pure filesystem, no `git` subprocess.** `git` reaches a session only
+**Pure filesystem, no `git` subprocess.**
+
+> **Superseded during implementation — the rule asks git, when git is
+> there to ask.** This paragraph was right about the question it
+> thought the rule asked and wrong about the question the rule turned
+> out to have. Two filesystem stages alone produce a **false positive
+> on the default configuration**: a resident whose home directory is
+> itself a git repository with a `flake.nix` in it — an ordinary
+> dotfiles flake — who leaves `castle.agent.stateDir` unset gets
+> `~/.local/state/castle`, whose first repository root above it
+> carries a flake. Their layout is safe (that path is not in the
+> index, and an untracked path is never copied), and the message
+> would tell them to move it "out of the flake's tracked tree" — a
+> tree it was never in. A warning that fires on the shipped default
+> is a warning residents learn to skip, which costs exactly the
+> resident this check exists for. So a **third stage** asks `git
+> ls-files` whether anything under the state directory is actually
+> tracked, and only then warns. See the amended considered-and-rejected
+> entry below, and `_state_tracked_in` in `agent/castle`.
+>
+> What survives unchanged: the two filesystem stages still run first
+> and still decide the common case for free, so the subprocess only
+> ever runs on the rare branch. And `git` genuinely may not exist —
+> which is why the fallback keeps this paragraph's reasoning as its
+> own: when git cannot be asked, the check warns on the first two
+> stages alone and the message claims only what was checked, naming
+> untracked content as the case it could not rule out. Warning with a
+> hedge is the direction to fail in; a silent miss costs a published
+> journal, a false positive costs a paragraph of reading.
+
+`git` reaches a session only
 through `modules/dev`, which is optional — the same reason
 `_checkout_fault` (§16 of 0024) tests filesystem state before ever
 shelling out. This check never needs git's own answer to "is this a
@@ -389,6 +419,27 @@ Three caveats, stated rather than implied:
   check runs unconditionally on every `validate`/`digest` — it must
   not silently stop working, or start printing a different kind of
   error, on a host that never installed `git`.
+
+  **Partly reversed during implementation, and the part that reversed
+  is the part this entry never considered.** The rejection weighed
+  only whether git was *needed to identify a repository* — it is not,
+  and `pathlib` still does that. What it never weighed is whether the
+  filesystem can answer the question that decides the verdict: **is
+  this directory tracked?** It cannot. Nothing short of git's index
+  distinguishes a committed `state/` (published on every rebuild) from
+  an ignored or never-added one (published never), and the two are the
+  difference between the hazard and the shipped default. Reimplementing
+  git's ignore precedence in Python to avoid a subprocess would be a
+  worse version of the same dependency, wrong in more cases.
+
+  So the subprocess is adopted for the third stage only, and this
+  entry's actual argument — never silently stop working on a host with
+  no git — is honoured by the fallback rather than by avoidance: no
+  git means the check warns on the two filesystem stages and says
+  which question went unasked. `GIT_*` is stripped from the probe
+  environment for the reason 0024 documents at `_checkout_fault`. What
+  is still rejected is using git for stages 1 and 2, which would make
+  the common, safe case pay for a subprocess it does not need.
 - **A dedicated new subcommand (`castle check-layout` or similar)
   instead of widening `cmd_validate`.** Rejected, argued in §2: a new
   subcommand is invisible to a resident who does not already know it
@@ -462,7 +513,14 @@ Three caveats, stated rather than implied:
   the top of `cmd_digest` (before the "No errands recorded" early
   return and the per-errand loop).
 - **`test/agent-loop/state-layout.sh`** (new) — the four-case harness,
-  §4.
+  §4. Grew to six cases plus a no-git fallback case during
+  implementation; see amendment 8.
+- **`flake.nix`** — `nixosConfigurations.example-dispatch`'s
+  `dummyStateDir`, moved beside the dummy checkout rather than inside
+  it (amendment 9). Not in the original list.
+- **`docs/tasks/0024-config-target.md`** — one parenthetical noting
+  that the backlog path it names was promoted here and deleted. Not in
+  the original list.
 - **`.github/workflows/check.yml`** — one new step in the
   `agent-loop-test` job (no Nix required, same stock-runner reasoning
   already given for every step in that job; `git init` is available on
@@ -511,6 +569,22 @@ changed since this brief was written.
   for whichever repository holds `state/` after this task — sibling or
   submodule, neither gets automatic pushing before secrets tooling
   lands.
+- **Detecting a flake whose `flake.nix` is in a subdirectory
+  (`?dir=`).** Added during implementation, and confirmed rather than
+  theorised: a repository with `flake.nix` at `repo/nix/flake.nix`,
+  evaluated as `git+file:///repo?dir=nix`, publishes the whole tracked
+  tree — journal included — while this task's rule finds no `flake.nix`
+  at the repository root and reports it safe. Closing it means
+  searching the repository for a `flake.nix` at any depth, which is
+  expensive on every `validate` and `digest` and, worse, would fire on
+  the layout this task *recommends* the moment a resident keeps an
+  unrelated flake anywhere in their sibling state repository — trading
+  a rarer true positive for a common false one, in a check whose entire
+  value is being trusted enough to read. This is not a layout
+  `docs/private-layer.md` describes or recommends. Recorded as a known
+  gap in `_state_layout_finding`'s docstring and in that document, on
+  the principle that a written-down limitation is a different thing
+  from a silent one.
 - **Resolving `docs/backlog/where-do-host-modules-live.md`, or any
   other open backlog entry this task's reasoning brushes past.**
   Untouched, per the same discipline `docs/tasks/0024-config-target.md`
@@ -680,6 +754,60 @@ brief got wrong or left out, all found while implementing it.
    stop-at-the-first-repository-root branch rather than the
    walk-to-the-filesystem-root branch. Both must be silent; both are
    asserted.
+
+### Review findings, and what they changed
+
+Five findings from `/code-review` on the implementation branch, all
+reproduced independently before being acted on. Two of them changed
+the design rather than the code, which is why they are recorded here
+and not only in the git history.
+
+7. **The migration instruction destroyed the journal it was
+   migrating.** §3's submodule route said "`git rm -r state` first,
+   then `git submodule add <url> state`". `git rm -r` removes the
+   working copy from disk as well as from the index, nothing told the
+   reader to create and populate the new repository first, and the
+   audience for that sentence is by definition the residents who have
+   real journal content in that directory. Followed literally it left
+   their decision history recoverable only from git history — the one
+   artifact this project calls least reproducible. Rewritten so every
+   sequence copies first, verifies the copy arrived, and only then
+   removes anything; the ordering is now stated as a rule before the
+   steps, not implied by them. The whole sequence was run against a
+   fixture with real content and the record count checked at each
+   step.
+
+8. **The rule produced a false positive on the default
+   configuration.** Superseded §2's "no `git` subprocess" constraint;
+   see that paragraph and the considered-and-rejected entry, both
+   amended in place.
+
+9. **The repo's own most-read file still demonstrated the forbidden
+   layout.** `flake.nix`'s `nixosConfigurations.example-dispatch` set
+   `dummyStateDir = "/home/resident/private/state"` inside
+   `dummyRepoRoot = "/home/resident/private"` — a worked example, in
+   the first file a stranger opens, of exactly what the module
+   description and the check now tell residents not to do. Fixed, and
+   then the whole repository grepped again for the pattern rather than
+   assuming the third instance was the last: the remaining matches are
+   `_checkout_fault`'s own test cases (about checkouts, not state), the
+   migration section's `cp -r ~/private/state` (the old location, being
+   migrated *from*), the submodule section's unchanged path (correct —
+   that layout keeps it), `test/desktop-loop`'s already-sibling path,
+   and a quoted historical error message in `modules/agent`. All
+   correct as they stand.
+
+10. **The documentation described a narrower trigger than the code
+    had.** It said the warning fires when state "sits inside the
+    tracked tree of a repository that carries a `flake.nix`" while the
+    check never consulted tracked-ness. Finding 8's fix made the
+    sentence true; it was then rewritten anyway, to describe all three
+    questions in order, the `?dir=` gap, and the no-git fallback —
+    because a resident who sees the hedged wording needs to know what
+    it means.
+
+11. **`?dir=` flakes are a silent miss.** Recorded as a non-goal above
+    rather than closed; see that entry for the cost of closing it.
 
 ## Implementation prompt
 

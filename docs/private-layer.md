@@ -651,16 +651,51 @@ wrong place to keep two years of elicited preferences.
 
 `castle validate` and `castle digest` each check where the state
 directory actually resolved, and print a `WARNING:` naming both it and
-the repository if it sits inside the tracked tree of a repository that
-carries a `flake.nix`. It is advisory: the exit code does not change,
-and nothing refuses to run. The copy is made by `nixos-rebuild`, not
-by `castle`, so refusing would prevent nothing and would withhold the
-two commands most likely to bring you the news.
+the repository if it is committed inside a repository that carries a
+`flake.nix`. It asks three questions in order, and stops at the first
+one that clears you:
 
-A `state/` wired in as a submodule does not trigger it — the check
-stops at the first repository root above the state directory, which
-for a submodule is the submodule itself. Deliberately not wired into
-`castle dispatch`, which a timer runs once a minute.
+1. **Is the state directory inside a git repository at all?** It walks
+   upward looking for a `.git`, and stops at the first one it finds.
+   If there is none, nothing evaluates the directory and nothing can
+   copy it.
+2. **Does that repository carry a `flake.nix`?** If not, it is not a
+   flake, so nobody is going to evaluate it.
+3. **Is anything under the state directory actually tracked there?**
+   This is `git ls-files`, asking git rather than guessing: an
+   untracked or `.gitignore`d directory is never copied into the
+   store, so it is not the hazard. This is also why the check does not
+   fire on the common case of a home directory that happens to be a
+   dotfiles flake with `castle.agent.stateDir` left unset — your
+   `~/.local/state/castle` is not in that repository's index.
+
+A `state/` wired in as a submodule clears question 1 rather than
+question 3: the walk stops at the first repository root above the
+state directory, which for a submodule is the submodule itself.
+
+**If `git` is not installed, question 3 cannot be asked**, and the
+check warns on questions 1 and 2 alone rather than staying quiet. The
+message says so explicitly and names untracked content as the case it
+could not rule out — so if you see that wording and your `state/` is
+ignored or uncommitted, the warning does not apply to you. Warning
+with a caveat is the deliberate direction to fail in: reading an extra
+paragraph is cheap, and a published journal is not.
+
+It is advisory throughout: the exit code does not change, and nothing
+refuses to run. The copy is made by `nixos-rebuild`, not by `castle`,
+so refusing would prevent nothing and would withhold the two commands
+most likely to bring you the news. Deliberately not wired into `castle
+dispatch`, which a timer runs once a minute.
+
+One case it does **not** catch: a repository whose `flake.nix` lives in
+a subdirectory, evaluated as `git+file:///your/repo?dir=nix`. That
+publishes the whole tracked tree exactly as a root-level flake does,
+but question 2 finds no `flake.nix` at the repository root and calls it
+safe. It is not a layout this document describes, and closing it would
+mean searching your whole repository for flakes on every `validate` —
+which would then fire on a sibling state repository that happens to
+contain an unrelated flake. If you keep your flake in a subdirectory,
+this check will not help you; the rest of this section still does.
 
 ### Two things worth repeating
 
@@ -675,19 +710,68 @@ repository ends up holding `state/`:
 
 ## Migrating state out of the flake
 
-If you already followed the old advice, here is the move. It is three
+If you already followed the old advice, here is the move. It is four
 steps and three caveats, and the caveats matter more than the steps.
 
-1. **Move the directory.** For a sibling repository carrying the
-   history with it, `git filter-repo --subdirectory-filter state` on a
-   clone is the thorough route; for most people the honest and simple
-   one is `cp -r state ../private-state`, `git init` in the new
-   location, commit, then `git rm -r state` in the config repo and
-   commit that. For the submodule layout, `git rm -r state` first,
-   then `git submodule add <url> state`.
-2. **Repoint `castle.agent.stateDir`** at the new location and
+**Copy first, delete last, and never in the other order.** Your
+journal is the least reproducible thing on the machine. Every sequence
+below is written so that nothing is removed until the new copy exists
+somewhere else and you have looked at it. `git rm -r state` deletes
+the working copy off disk as well as from the index; run it before the
+content is safely elsewhere and the only surviving copy of your
+decision history is inside git history, which is precisely the
+artifact you least want to be relying on.
+
+1. **Copy the content into its new home, and check that it arrived.**
+
+   For the **sibling repository**:
+
+   ```console
+   $ cp -r ~/private/state ~/private-state
+   $ cd ~/private-state && git init && git add -A && git commit -m 'journal'
+   $ ls journal | wc -l          # compare with the old directory
+   ```
+
+   For the **submodule** layout, the new repository has to exist and
+   have your content in it *before* anything references it, because
+   `git submodule add` clones from it rather than into it:
+
+   ```console
+   $ cp -r ~/private/state ~/private-state
+   $ cd ~/private-state && git init && git add -A && git commit -m 'journal'
+   $ git remote add origin <url> && git push -u origin HEAD   # if it has a remote
+   $ ls journal | wc -l          # compare with the old directory
+   ```
+
+   If you want the sibling repository to carry the journal's *history*
+   rather than a snapshot, `git filter-repo --subdirectory-filter
+   state` on a fresh clone of the config repo is the thorough route.
+   It is optional: the journal itself is append-only, so a snapshot
+   loses no records, only the commit-by-commit account of when each
+   arrived.
+
+2. **Only now remove the old directory.** In the config repo, with the
+   copy confirmed in step 1:
+
+   ```console
+   $ cd ~/private && git rm -r state && git commit -m 'state moved out of the flake'
+   ```
+
+   For the submodule layout, that removal is what makes room for the
+   reference, so it comes first and the `add` clones your content back
+   into place:
+
+   ```console
+   $ git submodule add <url> state && git commit -m 'state as a submodule'
+   $ ls state/journal | wc -l    # the same count as step 1
+   ```
+
+3. **Repoint `castle.agent.stateDir`** at the new location and
    rebuild. Run `castle validate`; the warning above should be gone.
-3. **Run `nix-collect-garbage`** once the move is committed and
+   (For the submodule layout the path does not change — the directory
+   is in the same place, holding the same files, by a different
+   mechanism.)
+4. **Run `nix-collect-garbage`** once the move is committed and
    rebuilt, or wait for the host's normal GC schedule.
 
 And now the parts that are less satisfying than they should be:

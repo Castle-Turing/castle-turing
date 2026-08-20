@@ -407,7 +407,18 @@
           (
             { config, lib, ... }:
             let
-              dummyStateDir = "/home/resident/private/state";
+              # A sibling of the config checkout, not a directory
+              # inside it (docs/tasks/0030-state-outside-the-flake.md).
+              # This is the most-read file in the repo and the first
+              # worked example a stranger sees, so a dummy value here
+              # is not inert: it demonstrates a layout. The one it used
+              # to demonstrate — state/ inside the checkout whose
+              # flake.nix gets evaluated — is the one modules/agent's
+              # own option description now warns against and `castle
+              # validate` prints a warning about, which would have left
+              # this repo illustrating the thing it tells residents not
+              # to do.
+              dummyStateDir = "/home/resident/private-state";
               dummyRepoRoot = "/home/resident/private";
               # Both roots, not just one: docs/tasks/0024-config-target.md
               # split CASTLE_REPO_ROOT into a private and a mechanism
