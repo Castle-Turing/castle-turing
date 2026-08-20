@@ -79,8 +79,17 @@ if packet_has "CONFIG-TARGET-FIXTURE-PERCEPTUAL"; then
     # (agent/castle-worker-claude, docs/tasks/0024 §12) rather than
     # hard-coding a path, because a fixture that always named one
     # would assert the very behaviour that was wrong.
+    # Three branches, matching the real tenant's own (agent/castle-
+    # worker-claude). Two would make this fixture structurally
+    # incapable of catching the bug it exists to catch: with only
+    # if/else, a configured-but-unusable mechanism root falls into the
+    # "none configured" arm and the question tells the resident
+    # something their own configuration contradicts — which is exactly
+    # how the real prompt regressed while this fixture stayed green.
     if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
       sweep_line="Run ${CASTLE_MECHANISM_ROOT}/tools/font-sweep.sh and tell me the number you settled on."
+    elif [ -n "${CASTLE_MECHANISM_ROOT_INVALID:-}" ]; then
+      sweep_line="The configured mechanism checkout ${CASTLE_MECHANISM_ROOT_INVALID} is unusable, so the sweep tool under it is out of reach; compare a few candidate sizes side by side and tell me which one reads best."
     else
       sweep_line="No sweep tool is installed on this host, so compare a few candidate sizes side by side and tell me which one reads best."
     fi

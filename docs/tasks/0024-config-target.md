@@ -489,6 +489,23 @@ values are documented in `agent/README.md`, not enforced in code.
 a test fixture constructing a `result` record directly, needs the same
 lever the automatic path has.
 
+**A second correction, on the guard those refusals rest on.** The
+write-time checks below stop `--target` producing a record
+`cmd_validate` would condemn — but they sat on top of
+`_reject_newline_fields`, which searched for a newline while
+`parse_record` reads records back with `str.splitlines()`, and
+`splitlines()` breaks on ten characters rather than one. So
+`castle record --target $'private<CR>mechanism'` passed every guard,
+was written, printed its id, exited 0 — and made its own record
+unparseable forever, in an append-only journal. Fixed at the root
+rather than with a third `--target`-only check: the guard now
+round-trips each value through `splitlines()` and rejects anything
+that does not come back as exactly one identical line. That is
+derived from the reader's own behaviour instead of transcribing a
+character list that could drift from it — the same reasoning as §16's
+`GIT_*` prefix strip — and it covers `--evidence` and `--fact`, which
+shared the hole, and catches a trailing break too.
+
 **Corrected during implementation: it takes `--blocking`'s
 hard-refusal treatment, not `--outcome`'s convention-only one.** This
 paragraph originally specified the looser posture, reasoning that
@@ -1304,6 +1321,26 @@ to this brief's first draft:
    misconfiguration as an absence). `agent/castle-worker-claude`'s
    prompt (§18) is written against all three states explicitly, not
    just the two it currently distinguishes.
+
+   **Corrected during implementation: three states means every
+   consumer branches three ways, and one of them did not.** The prompt
+   assembles its prose from several independently-branched shell
+   variables, and the sweep-tool pointer (§12) tested
+   `CASTLE_MECHANISM_ROOT` alone. On a host with a configured-but-
+   unusable mechanism root, one prompt therefore said both "configured
+   at `<path>`, but NOT a usable git working tree" and, two screens
+   later, "no mechanism checkout is configured here" — the exact
+   collapse this variable exists to prevent, reintroduced in the one
+   place that never got the third arm. The consequence is durable: the
+   tenant composes its blocking question from a premise the harness
+   itself contradicted, and that question is append-only.
+
+   The fixture mirrored the same two-way test, so it was structurally
+   incapable of catching it. Both now branch three ways, and
+   `config-target.sh` asserts against the **rendered prompt itself**
+   in all three states — the fixture's behaviour cannot see this class
+   of defect, because the contradiction is between two pieces of prose
+   neither of which the fixture executes.
 2. **The result body states a configured-but-unusable mechanism root
    on every errand this turn produces a result for — not only ones
    whose diagnosis happened to touch that layer.** Computed once, near
@@ -1573,6 +1610,17 @@ keeps the `agent-loop-test` CI job free of a Nix install.
   gain `CASTLE_TARGET_FILE`, since §18 makes the tenant require it.
   All four are one-line, mechanical, and land in the commits that
   made them necessary.
+
+**A helper hazard worth stating, since two assertions below turn on
+it.** Record ids are a one-second timestamp plus a random hex suffix,
+so "the newest result for this errand" cannot be answered by sorting
+filenames: two results written inside the same second sort by chance.
+Assertion 8 deliberately produces two results and asserts on the
+second, which makes it the one place a fast machine could fail for a
+reason unrelated to the code. The harness sorts on nanosecond mtime
+instead — `stat -c '%.Y'`, not `%Y`, because whole seconds tie and
+fall straight back into the same defect, which was checked rather than
+assumed.
 
 **Assertions, in the order they should be written, mirroring
 `docs/tasks/0023 §11`'s own enumerated-coverage style:**

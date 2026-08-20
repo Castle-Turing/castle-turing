@@ -34,7 +34,8 @@ which is the exact double-compensation
 — Sway scales the cursor itself, so doubling on top of a 2.0 output
 scale rendered it at roughly 96 physical pixels. `default.nix`'s own
 long comment on `cursorSize` argues the corrected value in full; read
-it there rather than re-deriving it here. All three are machine facts about this panel,
+it there rather than re-deriving it here. All three are machine facts
+about this panel,
 not personal data, and any of them can still be overridden from a
 private layer for taste (docs/private-layer.md).
 

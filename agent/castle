@@ -368,8 +368,8 @@ def parse_record(path: pathlib.Path) -> Record:
     return Record(fields=fields, body=body, path=path)
 
 
-def _reject_newline_fields(fields: dict, *, what: str) -> None:
-    """A field value containing a newline breaks this format at the
+def _reject_line_breaking_fields(fields: dict, *, what: str) -> None:
+    """A field value carrying a line break breaks this format at the
     root (0009 review pass finding 6): render_record/render_model_entry
     write `f"{key}: {value}"` on one line, with no escaping, so a
     multi-line value produces a continuation line with no colon.
@@ -382,13 +382,40 @@ def _reject_newline_fields(fields: dict, *, what: str) -> None:
     every writer *before* anything is written, so the failure is loud,
     immediate, and leaves no partial file behind — multi-line content
     belongs in the body, which has no such restriction.
+
+    **The test is a round trip through `str.splitlines()`, not a search
+    for `"\n"`, and that widening closed a real hole.** `parse_record`
+    reads records back with `splitlines()`, which breaks on ten
+    characters, not one: CR, VT, FF, the three file/group/record
+    separators, NEL, and the two Unicode line separators. A guard
+    looking only for `"\n"` therefore let `castle record --target
+    $'private\rmechanism'` through — written, id printed, exit 0 — and
+    `parse_record` then raised on it forever, in an append-only
+    journal. That is precisely the invariant `--target`'s own write-time
+    guards exist to enforce, defeated through the one character class
+    those guards did not know about.
+
+    Asking `splitlines()` itself rather than listing its characters is
+    deliberate: a transcribed list is a copy of another implementation's
+    behaviour that cannot notice when the original changes, and the
+    same reasoning put a `GIT_*` prefix strip in `_checkout_fault`
+    instead of an enumeration. A value survives iff splitting it yields
+    exactly one line and that line is the value unchanged — which also
+    catches a *trailing* break, where `splitlines()` returns one line
+    but the character would still reach the file.
     """
     for key, value in fields.items():
-        if isinstance(value, str) and "\n" in value:
+        if not isinstance(value, str) or not value:
+            continue
+        lines = value.splitlines()
+        if len(lines) != 1 or lines[0] != value:
             raise RecordError(
-                f"{what} field {key!r} contains a newline, which this format's "
-                f"flat frontmatter cannot represent: {value!r}. Put multi-line "
-                "content in the record body instead."
+                f"{what} field {key!r} contains a line break, which this format's "
+                f"flat frontmatter cannot represent: {value!r}. This is whatever "
+                "`str.splitlines()` treats as a line boundary — a newline, but "
+                "also CR, VT, FF, NEL and the Unicode line separators — because "
+                "that is what reads these records back. Put multi-line content in "
+                "the record body instead."
             )
 
 
@@ -824,7 +851,7 @@ def write_record(
             f"Proposal 05): {harm}"
         )
 
-    _reject_newline_fields(fields, what="record")
+    _reject_line_breaking_fields(fields, what="record")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{record_id}.md"
     path.write_text(render_record(fields, body))
@@ -892,7 +919,7 @@ def render_model_entry(fields: dict, body: str) -> str:
     # reason the journal is, and `fact` in particular can come straight
     # from an unchecked `castle answer --fact` argument (or, since
     # docs/tasks/0010, straight from a correction's own first line).
-    _reject_newline_fields(fields, what="resident-model")
+    _reject_line_breaking_fields(fields, what="resident-model")
     lines = ["---"]
     for key in MODEL_FIELD_ORDER:
         if key in fields:
@@ -2567,11 +2594,17 @@ def _checkout_fault(root: str) -> str | None:
         # making the resident go and find it is a refusal that
         # diagnoses without prescribing.
         if "dubious ownership" in reason:
+            # shlex.quote, because this string is written for a resident
+            # to paste into a shell. A path with a space in it would
+            # otherwise register the wrong directory and say nothing —
+            # a prescribed fix that fails while appearing to have
+            # worked, which is the exact failure shape the rest of this
+            # function exists to remove.
             return (
                 f"git refuses to use it ({reason}) — this is an ownership "
                 "mismatch, not a broken checkout. Either take ownership of the "
                 f"directory, or tell git it is safe: `git config --global --add "
-                f"safe.directory {root}`"
+                f"safe.directory {shlex.quote(root)}`"
             )
         return f"git cannot use it as a working tree ({reason})"
 

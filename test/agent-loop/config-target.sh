@@ -145,9 +145,30 @@ referencing() {
   grep -l "^refs: .*$id" "$JOURNAL"/*-"$rtype"-*.md 2>/dev/null || true
 }
 count_referencing() { referencing "$1" "$2" | grep -c . || true; }
+# The newest result for an errand, by MTIME and not by filename.
+# Record ids carry a one-second timestamp and a random hex suffix, so
+# two results written inside the same second sort by that suffix —
+# which is to say, by chance. Every call site but one has a single
+# result and would never notice; the ask-first case deliberately
+# produces two and then asserts on the second, so a fast machine could
+# make it read the first and fail for a reason that has nothing to do
+# with the code. This repo has been bitten by one-second id
+# granularity before, so the fix is to stop asking filenames a
+# question they cannot answer.
+#
+# `%.Y` and not `%Y`: whole-second mtimes reproduce the very problem
+# being fixed, since two records written in the same second tie and
+# fall back to filename order again. Checked rather than assumed — with
+# `%Y` this helper still picked the wrong file out of a same-second
+# pair; with nanoseconds it picks the one actually written last. Tab
+# separator so the filename is untouched by the split.
 newest_result_for() {
   local id="$1"
-  referencing result "$id" | sort | tail -1
+  referencing result "$id" \
+    | xargs -r stat -c '%.Y	%n' 2>/dev/null \
+    | sort -k1,1n \
+    | tail -1 \
+    | cut -f2-
 }
 blocking_question_for() {
   local request_id="$1" path
@@ -608,6 +629,88 @@ grep -q 'font-sweep.sh' "$JOURNAL/$QP.md" \
   && fail "the question names a sweep script on a host with no mechanism checkout to hold one"
 grep -q 'compare a few candidate sizes side by side' "$JOURNAL/$QP.md" \
   || fail "the question offers the resident no way to settle the value: $(sed -n '/^$/,$p' "$JOURNAL/$QP.md")"
+
+# ---------------------------------------------------------------------
+log "the rendered prompt never contradicts itself about the mechanism checkout"
+# ---------------------------------------------------------------------
+# Asserted against the REAL tenant's rendered prompt, not the fixture's
+# behaviour, because this is a defect the fixture cannot see: the
+# prompt is prose assembled from several independently-branched
+# variables, and one of them regressed to a two-way test while the
+# others stayed three-way. The result was a single prompt saying, two
+# screens apart, both "configured at <path> but not usable" and "no
+# mechanism checkout is configured here" — the collapse of "absent"
+# into "misconfigured" that the third variable exists to prevent.
+#
+# Rendered with the tenant's own exec replaced by a cat, the same
+# technique resume.sh uses on this file. Every branch of every
+# mechanism-keyed variable has to agree, so the test is a search for
+# the absent-phrasing in a state where it is false.
+#
+# EVERY SEARCH GOES THROUGH `flat`, which squashes all whitespace onto
+# one line first. The prompt is hand-wrapped prose, so "no mechanism
+# checkout is configured" is split across two lines in the source and
+# a line-oriented grep for it silently never matches. The first
+# version of this assertion had exactly that defect and passed against
+# a deliberately reintroduced bug; it is the third time in this task
+# that a check has been written against text it could not see, and the
+# only reliable fix is to stop matching against wrapped prose.
+PROMPT_RENDER="$WORKDIR/render-tenant.sh"
+sed 's|^exec claude.*|cat <\&3|' "$REPO_ROOT/agent/castle-worker-claude" > "$PROMPT_RENDER"
+render_prompt() {
+  # $1 is one of: usable | invalid | absent
+  local packet='CASTLE-PACKET-0123456789abcdef a rendering probe, not a real packet'
+  case "$1" in
+    usable)  env CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE=/dev/null CASTLE_TARGET_FILE=/dev/null \
+               CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT="$MECHANISM" \
+               bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
+    invalid) env CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE=/dev/null CASTLE_TARGET_FILE=/dev/null \
+               CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT_INVALID="$NOT_A_CHECKOUT" \
+               bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
+    absent)  env -u CASTLE_MECHANISM_ROOT -u CASTLE_MECHANISM_ROOT_INVALID \
+               CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE=/dev/null CASTLE_TARGET_FILE=/dev/null \
+               CASTLE_PRIVATE_ROOT="$PRIVATE" \
+               bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
+  esac
+}
+
+# Whole rendered prompt, all whitespace collapsed, so a phrase the
+# prose wrapped is still one searchable string.
+flat() { printf '%s' "$1" | tr -s '[:space:]' ' '; }
+
+R_INVALID="$(flat "$(render_prompt invalid)")"
+printf '%s' "$R_INVALID" | grep -qF "$NOT_A_CHECKOUT" \
+  || fail "the invalid-mechanism prompt never names the broken path"
+printf '%s' "$R_INVALID" | grep -qF 'no mechanism checkout is configured' \
+  && fail "the rendered prompt says a mechanism checkout is configured-but-broken AND that none is configured — the three-state channel has collapsed somewhere in it"
+printf '%s' "$R_INVALID" | grep -qF 'NOT a usable git working tree' \
+  || fail "the invalid-mechanism prompt does not describe the checkout as unusable"
+
+R_ABSENT="$(flat "$(render_prompt absent)")"
+printf '%s' "$R_ABSENT" | grep -qF 'NO checkout of the public Castle Turing framework repository is configured' \
+  || fail "the absent-mechanism prompt does not say plainly that none is configured"
+printf '%s' "$R_ABSENT" | grep -qF 'NOT a usable git working tree' \
+  && fail "the absent-mechanism prompt describes a broken checkout that does not exist"
+
+R_USABLE="$(flat "$(render_prompt usable)")"
+printf '%s' "$R_USABLE" | grep -qF "$MECHANISM/tools/font-sweep.sh" \
+  || fail "the usable-mechanism prompt does not point at the sweep tool that really is there"
+printf '%s' "$R_USABLE" | grep -qF 'no mechanism checkout is configured' \
+  && fail "the usable-mechanism prompt claims none is configured"
+
+# The positive control for the searches above: the phrase they hunt
+# for must really be findable in the one state where it belongs, or
+# all three greps are vacuous whatever the code does.
+printf '%s' "$R_ABSENT" | grep -qF 'no mechanism checkout is configured' \
+  || fail "the absent-state prompt does not contain the phrase the other two states are checked against — those checks would pass vacuously"
+
+# And no branch may leave a shell substitution error in the tenant's
+# own instructions — the backtick hazard this prompt already carries a
+# warning about, checked rather than trusted.
+for state in usable invalid absent; do
+  printf '%s\n' "$(render_prompt $state)" | grep -qE 'command not found|missing operand|unexpected EOF' \
+    && fail "the $state-mechanism prompt renders with a shell error in it"
+done
 
 # ---------------------------------------------------------------------
 log "assertion 10: this empty diff is legible as 'waiting on you', not as 'no change warranted'"

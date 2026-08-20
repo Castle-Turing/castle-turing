@@ -184,6 +184,19 @@ fi
 # has to describe what would settle the value instead — the tools are
 # not packaged for a deployed host, and deciding to package them is a
 # separate call this prompt has no standing to make.
+#
+# THREE BRANCHES, matching mechanism_note above, and the third one is
+# not decoration. An earlier version tested CASTLE_MECHANISM_ROOT
+# alone, so on a host where the mechanism root was configured but
+# unusable this text said "no mechanism checkout is configured here"
+# while the MECHANISM bullet two screens earlier said it was
+# configured at a named path and broken. One prompt, two incompatible
+# premises, and the tenant composes a blocking question from whichever
+# it read last — the exact collapse of "absent" into "misconfigured"
+# that the three-state channel exists to prevent, reintroduced in the
+# one place that never got the three-way branch. Any new text keyed on
+# the mechanism checkout gets all three arms or it will drift the same
+# way.
 if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
   sweep_note="Point them at the sweep tool, which exists on this host because a
        mechanism checkout is configured: ${CASTLE_MECHANISM_ROOT}/tools/font-sweep.sh
@@ -192,6 +205,17 @@ if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
        the one surface here that cannot be previewed from inside a
        running Wayland session at all. Naming the tool is cheaper for
        them than eyeballing a value against nothing."
+elif [ -n "${CASTLE_MECHANISM_ROOT_INVALID:-}" ]; then
+  sweep_note="DO NOT name a sweep script, and DO NOT describe the mechanism
+       checkout as absent — one IS configured, at
+       ${CASTLE_MECHANISM_ROOT_INVALID}, and it is unusable. The sweep tools
+       would live under that path, so naming one would point them at
+       something their own broken configuration is keeping out of
+       reach. Describe what would settle the value instead: comparing a
+       few candidate values side by side and saying which reads best.
+       For a console font, say plainly that it can only be judged from
+       a text console, not from inside this session. If the checkout is
+       worth mentioning at all, call it unusable, never missing."
 else
   sweep_note="DO NOT name a sweep script. Those live in the public framework
        repo under tools/, which is developer tooling rather than
