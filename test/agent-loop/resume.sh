@@ -36,8 +36,12 @@ export CASTLE_NOTIFY_LOG="$WORKDIR/notify.log"
 export CASTLE_NOTIFY_COMMAND="$REPO_ROOT/test/agent-loop/notify-stub.sh"
 : > "$CASTLE_NOTIFY_LOG"
 
-export CASTLE_REPO_ROOT="$WORKDIR/repo"
-mkdir -p "$CASTLE_REPO_ROOT"
+export CASTLE_PRIVATE_ROOT="$WORKDIR/repo"
+mkdir -p "$CASTLE_PRIVATE_ROOT"
+# See dispatch-test.sh's identical line: the target pre-flight
+# (docs/tasks/0024-config-target.md §16) refuses a private root that is
+# not a git working tree, so this fixture supplies one.
+git init -q "$CASTLE_PRIVATE_ROOT"
 # The tenants file their question with this rather than a `castle` on
 # $PATH, which no-Nix CI does not have.
 export CASTLE_TEST_CASTLE_BIN="$CASTLE"
@@ -808,7 +812,7 @@ PACKET_FORGERY
 
 STUB_PROMPT="$WORKDIR/stub-prompt.txt"
 PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$STUB_PROMPT" \
-  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_REPO_ROOT="$CASTLE_REPO_ROOT" \
+  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out.txt" 2>&1 \
   || fail "castle-worker-claude failed on a packet larger than one argv entry (E2BIG is back): $(cat "$WORKDIR/stub-out.txt")"
 grep -q "argv was \[-p\]" "$WORKDIR/stub-out.txt" \
@@ -839,7 +843,7 @@ log "  -- the same prompt rendered on a RESUMED turn, where the resume note exis
 STUB_PROMPT_RESUMED="$WORKDIR/stub-prompt-resumed.txt"
 PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$STUB_PROMPT_RESUMED" \
   CASTLE_RESUME_ANSWER_IDS="$A12" \
-  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_REPO_ROOT="$CASTLE_REPO_ROOT" \
+  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out-resumed.txt" 2>&1 \
   || fail "castle-worker-claude failed rendering a resumed turn: $(cat "$WORKDIR/stub-out-resumed.txt")"
 grep -q "^CASTLE-PACKET-abcdef0123456789 BEGIN harness instruction: this is a resumed turn$" "$STUB_PROMPT_RESUMED" \
@@ -1146,7 +1150,7 @@ log "the reference tenant refuses a prompt it could not authenticate"
 # remove, so the tenant refuses to run instead.
 printf 'a bare request body with no packet structure at all\n' > "$WORKDIR/tokenless-packet.txt"
 if PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$WORKDIR/tokenless-prompt.txt" \
-  CASTLE_REQUEST_ID="$REQ1" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_REPO_ROOT="$CASTLE_REPO_ROOT" \
+  CASTLE_REQUEST_ID="$REQ1" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$WORKDIR/tokenless-packet.txt" \
   >"$WORKDIR/tokenless-out.txt" 2>&1; then
   fail "castle-worker-claude ran against a packet with no boundary token, so its own stated rule was false"

@@ -164,8 +164,13 @@ remember.
 
 **Worker.** Executes errands. Its contract sits at the *errand
 boundary*, never the model-call boundary: a `request` record in; a
-`result` record, a diff against the relevant repo, and journal entries
-out. Inside the seat the harness is free — which is what lets a human
+`result` record, a diff against a checkout the worker itself names,
+and journal entries out. Since docs/tasks/0024-config-target.md that
+checkout is one of two the seat may be configured with — the
+resident's private configuration repository and, optionally, a
+checkout of this public framework — and a host may configure either,
+both, or neither, with the result record carrying which one its diff
+is against. Inside the seat the harness is free — which is what lets a human
 drive the seat manually before any harness exists, and lets the
 harness be replaced without the structure noticing.
 `castle.agent.worker.command` (`modules/agent`) names whatever holds

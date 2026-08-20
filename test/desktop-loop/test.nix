@@ -170,14 +170,19 @@ let
   # a synthetic one.
   testStateDir = "/home/resident/private/state";
 
-  # Non-default for the same reason testStateDir is: `castle work`
-  # falls back to its working directory when CASTLE_REPO_ROOT is
-  # unset, and the dispatch unit's working directory is `%h` — so a
-  # test that left this alone could not tell a working
-  # castle.agent.worker.repoRoot handoff from a silent fallback to the
-  # resident's home directory. Nothing is checked out here; the path
-  # exists only to be carried through the unit's environment into the
-  # tenant's, where the scripted worker prints it back.
+  # Non-default for the same reason testStateDir is. `castle work`
+  # used to fall back to its working directory when no repo root was
+  # configured, and the dispatch unit's working directory is `%h` — so
+  # a test that left this alone could not tell a working
+  # castle.agent.repo.private handoff from a silent fallback to the
+  # resident's home directory. docs/tasks/0024-config-target.md
+  # removed that fallback, but the blindness argument is unchanged:
+  # a default-valued fixture proves nothing about the handoff. Nothing
+  # is checked out here beyond the `.git` the activation script below
+  # creates — the path exists to be carried through the unit's
+  # environment into the tenant's, where the scripted worker prints it
+  # back, and (since 0024) to satisfy the pre-flight that refuses a
+  # private root which is not a working tree.
   testRepoRoot = "/home/resident/private/checkout";
 
   # Plain, hardware-neutral fixture text — not personal data, never
@@ -288,9 +293,9 @@ in
       # one request through the modal and a routed outcome appears with
       # no subsequent resident CLI action at all. It also proves the
       # systemd user unit really saw the configured CASTLE_STATE_DIR
-      # and CASTLE_REPO_ROOT (bug 2b's shape, now proven for the
+      # and CASTLE_PRIVATE_ROOT (bug 2b's shape, now proven for the
       # dispatch unit specifically rather than only for the modal): the
-      # scripted tenant prints its $CASTLE_REPO_ROOT, and the test
+      # scripted tenant prints its $CASTLE_PRIVATE_ROOT, and the test
       # asserts that string lands in the result record.
       # An existing state directory IS the documented resident
       # contract: castle.agent.stateDir points into a private repo
@@ -310,9 +315,51 @@ in
         "d ${testStateDir} 0755 resident users -"
       ];
 
+      # A real git working tree at testRepoRoot, not a bare directory.
+      # Since docs/tasks/0024-config-target.md `castle work` refuses a
+      # turn whose private checkout is not one — the same reasoning as
+      # the state directory above: a real host's private repo is a
+      # clone the resident made before turning dispatch on
+      # (docs/private-layer.md), and this VM has to supply what that
+      # clone supplies. It stays empty apart from `.git`; nothing is
+      # checked out here, and the path exists only to be carried
+      # through the unit's environment into the tenant's, where the
+      # scripted worker prints it back.
+      #
+      # An activation script rather than a tmpfiles rule because
+      # tmpfiles cannot run `git init`, and it runs at boot activation,
+      # well before the 5s-after-login dispatch timer could reach it.
+      system.activationScripts.castleLoopTestCheckout = {
+        # `deps = [ "users" ]` is load-bearing and its absence was a
+        # real defect, caught by /code-review and confirmed in this
+        # test's own boot log: with no dependency declared the snippet
+        # is ordered before the `users` snippet that creates the
+        # resident account, so `chown` ran against a user that did not
+        # exist yet —
+        #
+        #   chown: invalid user: 'resident:users'
+        #   Activation script snippet 'castleLoopTestCheckout' failed (1)
+        #
+        # — on every boot. The checkout was left root-owned, which
+        # makes this fixture quietly untrue: it claims to supply what
+        # a resident's own clone supplies, and a real tenant could not
+        # have written a byte into it. The test passed anyway only
+        # because the pre-flight it exists to satisfy is a read-only
+        # probe. The assertion in testScript below is what stops the
+        # next failed snippet passing just as silently.
+        deps = [ "users" ];
+        text = ''
+          mkdir -p ${testRepoRoot}
+          if [ ! -e ${testRepoRoot}/.git ]; then
+            ${pkgs.git}/bin/git -C ${testRepoRoot} init -q
+          fi
+          chown -R resident:users ${testRepoRoot}
+        '';
+      };
+
       castle.agent.dispatch.enable = true;
       castle.agent.worker.command = "${dispatchWorker}";
-      castle.agent.worker.repoRoot = testRepoRoot;
+      castle.agent.repo.private = testRepoRoot;
 
       # Not a departure from the mechanism under test: a bare NixOS
       # system has no `python3` on $PATH by default (modules/agent's
@@ -346,6 +393,58 @@ in
 
     start_all()
     machine.wait_for_unit("multi-user.target")
+
+    # No activation snippet may fail, and this is checked before
+    # anything else because a broken one poisons everything after it.
+    # It is here because of a defect that shipped and passed: this
+    # test's own castleLoopTestCheckout snippet failed on every boot
+    # for want of `deps = [ "users" ]`, the VM still exited 0, every
+    # OK line still printed, and nobody read the boot log. A green
+    # exit code is not evidence that nothing failed inside the
+    # machine — so the machine is asked directly.
+    #
+    # Deliberately not scoped to this repo's own snippet: any failed
+    # snippet, from any module, is a broken activation and worth
+    # failing on. Anchored on the exact sentence
+    # nixos/modules/system/activation/activation-script.nix prints:
+    #
+    #   printf "Activation script snippet '%s' failed (%s)\n" ...
+    #
+    # One regex matching that whole shape, rather than two loose
+    # substring greps chained together. The loose form worked, and was
+    # one journald configuration away from matching its own command
+    # line: its text contained both substrings, so anything that
+    # logged the backdoor shell's commands would have made the guard
+    # fail permanently against itself. This pattern cannot match its
+    # own command line — the literal `[^']*` in it does not satisfy
+    # `'[^']*'` followed by ` failed [(]`, which was checked rather
+    # than assumed.
+    #
+    # `[(]` rather than a backslash-escaped paren on purpose: this
+    # string crosses Nix, then Python, then the shell, and each of the
+    # three has its own opinion about backslashes. A bracket
+    # expression needs none of them.
+    activation_failures = machine.succeed(
+        "journalctl -b --no-pager | "
+        "grep -E \"Activation script snippet '[^']*' failed [(]\" || true"
+    ).strip()
+    assert not activation_failures, (
+        "an activation script snippet failed during boot:\n" + activation_failures
+    )
+    print("OK: every activation script snippet succeeded")
+
+    # And the snippet's actual effect, not merely its exit status. The
+    # ownership is the half that made the failure above matter: a
+    # private checkout the resident cannot write to is not the thing
+    # this fixture claims to be standing in for, and only a read-only
+    # pre-flight let the test pass without it.
+    checkout_owner = machine.succeed("stat -c %U ${testRepoRoot}").strip()
+    assert checkout_owner == "resident", (
+        f"${testRepoRoot} is owned by {checkout_owner}, not resident — "
+        "the fixture is not supplying a checkout its own tenant could write to"
+    )
+    machine.succeed("test -e ${testRepoRoot}/.git")
+    print("OK: the private checkout exists, is a working tree, and belongs to the resident")
 
     # --- Log in for real: type at the real, unmodified tuigreet -------
     machine.wait_until_succeeds("pgrep -x tuigreet", timeout=dt.timedelta(minutes=2))
@@ -467,10 +566,17 @@ in
     assert "outcome: completed" in result_record, result_record
     assert f"refs: {request_id}" in result_record, result_record
     assert "provenance: requested" in result_record, result_record
-    # The tenant printed its own $CASTLE_REPO_ROOT: this string can
+    # The tenant printed its own $CASTLE_PRIVATE_ROOT: this string can
     # only be here if the unit's Environment= reached the worker
     # process, which is bug 2b's shape proven for the dispatch unit.
     assert "${testRepoRoot}" in result_record, result_record
+    # docs/tasks/0024-config-target.md, the same handoff one layer on:
+    # contract-worker.sh stamps $CASTLE_TARGET_FILE with `private` and
+    # `castle work` folds that into the result's own frontmatter. This
+    # is the cheapest available proof that the target channel survives
+    # the real dispatch unit's environment, not only the plain-bash
+    # harness's.
+    assert "target: private" in result_record, result_record
     print("OK: a worker turn ran and wrote a completed result, with no resident CLI action")
 
     # The routing decision, produced by the same sweep's tail step.

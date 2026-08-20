@@ -59,6 +59,25 @@ let
   };
 in
 {
+  # docs/tasks/0024-config-target.md §1. `castle.agent.worker.repoRoot`
+  # shipped in docs/tasks/0021-auto-dispatch.md, is named in
+  # docs/private-layer.md's own `resident.nix` template, and is
+  # therefore a value a real private layer may already be setting —
+  # one this repo cannot see, audit, or migrate on anyone's behalf
+  # (Principle 02). Splitting it into `repo.private`/`repo.mechanism`
+  # by deletion would fail that private layer's evaluation the next
+  # time its owner bumped their flake.lock pin, with no warning and no
+  # forwarding address. nixpkgs' own answer to this shape of change is
+  # what is used here: the old path stays declared as an alias for the
+  # new one, so the old spelling keeps evaluating and prints a
+  # deprecation warning naming where it moved to.
+  imports = [
+    (lib.mkRenamedOptionModule
+      [ "castle" "agent" "worker" "repoRoot" ]
+      [ "castle" "agent" "repo" "private" ]
+    )
+  ];
+
   options.castle.agent = {
     stateDir = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -113,9 +132,15 @@ in
 
         The contract, whatever holds this option: the request body is
         piped to the command's stdin; `$CASTLE_REQUEST_ID`,
-        `$CASTLE_DIFF_FILE`, and
-        `$CASTLE_REPO_ROOT` are set in its environment; reasoning goes
-        to stdout, a diff (or nothing) goes to `$CASTLE_DIFF_FILE`.
+        `$CASTLE_DIFF_FILE`, `$CASTLE_TARGET_FILE`, and — when
+        configured and usable — `$CASTLE_PRIVATE_ROOT` and
+        `$CASTLE_MECHANISM_ROOT` are set in its environment; reasoning
+        goes to stdout, a diff (or nothing) goes to
+        `$CASTLE_DIFF_FILE`, and the one word naming which checkout
+        that diff targets (`private` or `mechanism`) goes to
+        `$CASTLE_TARGET_FILE`, from where `castle work` folds it into
+        the result record's `target` field
+        (docs/tasks/0024-config-target.md).
         Since docs/tasks/0023-resume-cold.md the request body arrives
         under a heading, and on an errand this seat has already worked
         it is followed by that errand's own prior results, the
@@ -176,33 +201,109 @@ in
       '';
     };
 
-    worker.repoRoot = lib.mkOption {
+    repo.private = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        The repository the worker tenant operates on — wired into
-        `CASTLE_REPO_ROOT`, which `castle work` puts in the tenant's
-        environment (see `agent/castle-worker-claude`, which tells the
-        model to diagnose the problem in the repository checked out
-        there).
+        Your own private configuration repository — the checkout that
+        holds `resident.nix`, any host module you wrote yourself, and
+        (under `stateDir`) the journal. Wired into
+        `CASTLE_PRIVATE_ROOT`, which `castle work` puts in the worker
+        tenant's environment; see `agent/castle-worker-claude`, which
+        tells the model this is the checkout its configuration changes
+        are proposed against.
+
+        **Renamed from `castle.agent.worker.repoRoot`**
+        (docs/tasks/0024-config-target.md). The old name still
+        evaluates and still works, printing a deprecation warning that
+        names this one — see this module's `imports` for why a rename
+        rather than a break.
 
         Default `null`, and it cannot be otherwise: the private
         flake's actual checkout path on disk is resident data, which
         this repo may never guess (Principle 02, the same reasoning
-        `stateDir` above documents).
+        `stateDir` above documents). There is deliberately no
+        "must be non-null" assertion either, for `stateDir`'s reason:
+        the agent layer is optional the way `desktop`/`dev` are, and
+        Principle 02 consequence 2 forbids requiring anything
+        person-shaped at evaluation time.
 
-        **Left unset, a dispatched worker is told its repo is your
-        home directory.** `castle work` falls back to the current
-        working directory, and the dispatch unit's working directory
-        is `%h` — which is very unlikely to be the repo a real tenant
-        needs to operate on. Set this whenever you enable
-        `castle.agent.dispatch.enable`.
+        **The refusal that matters happens at errand time instead.**
+        `castle work` no longer guesses a directory when this is
+        unset — the old fallback was the process's working directory,
+        which under the dispatch unit is `%h`, so an unconfigured
+        dispatched worker was unconditionally told its repo was your
+        home directory. It now writes a `result` record with
+        `outcome: failed` naming this option and runs no tenant at
+        all. Per docs/tasks/0021's one-automatic-attempt rule that
+        result also makes the errand permanently ineligible for
+        automatic dispatch, so set this whenever you enable
+        `castle.agent.dispatch.enable` — before, not after, the first
+        errand is filed.
 
-        Must not contain a literal `"` character — see `stateDir`'s
-        description for why (this option rides
+        A `str`, never a `path`, and the type is load-bearing rather
+        than stylistic. Beyond `stateDir`'s own reason (a `path` would
+        coerce to a store path in an environment-variable slot), a Nix
+        `path` literal is **copied into the world-readable
+        `/nix/store` at evaluation time** — so writing
+        `castle.agent.repo.private = ./private;` would publish every
+        journal entry and stated priority in that checkout to any
+        local user who can read the store. A string cannot do that:
+        Nix has no way to read "please copy this directory in" out of
+        one.
+
+        Must be an absolute path, and must not contain a literal `"`
+        character — both asserted below. See `stateDir`'s description
+        for what the quote breaks (this option rides
         `environment.sessionVariables` the same way, so a hand-run
-        `castle work` in a terminal gets the same repo root a
-        dispatched one does).
+        `castle work` in a terminal gets the same roots a dispatched
+        one does).
+      '';
+    };
+
+    repo.mechanism = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        A checkout of the **public** Castle Turing framework repo —
+        `modules/`, `hosts/`, the option declarations themselves.
+        Wired into `CASTLE_MECHANISM_ROOT`, the second half of the
+        Principle 01 split `repo.private` names the first half of
+        (docs/tasks/0024-config-target.md).
+
+        **Null is the normal case, not a misconfiguration, and nothing
+        in this framework treats it as one.** Principle 02 consequence
+        1: the public repo has no installable configuration. A
+        resident consumes it as a flake input pinned in `flake.lock`,
+        not as a working tree they keep on disk — see
+        docs/private-layer.md's `flake.nix` template, which names it
+        only as `inputs.castle-turing.url`. A checkout exists on the
+        machine this framework is *developed* on; that is a fact about
+        that machine, not about Castle Turing.
+
+        What it costs to leave unset is stated plainly rather than
+        hidden: a worker on such a host cannot propose a change to
+        `modules/` at all, because there is nowhere on disk to diff
+        against — the flake input resolves to a read-only store path,
+        and a diff against a store path is not something you can
+        apply. The tenant is told to say so and stop, rather than
+        fabricate a diff or silently do nothing (Proposal 03's
+        degradation rule, applied one layer down from a seat to a
+        checkout).
+
+        Unlike `repo.private`, a broken value here never refuses a
+        turn. If this names something that is not a usable git working
+        tree, `castle work` treats the mechanism checkout as
+        unavailable for that turn, passes the configured path to the
+        tenant in `CASTLE_MECHANISM_ROOT_INVALID` instead so the
+        tenant can name the real reason, and appends one sentence
+        saying so to **every** result it writes that turn — including
+        errands that never needed a mechanism checkout, which is the
+        only way a typo here stays visible at all (docs/tasks/0024
+        §16).
+
+        Same `str`-not-`path`, same two assertions, same reasons as
+        `repo.private` above.
       '';
     };
 
@@ -231,8 +332,10 @@ in
         (docs/private-layer.md).
 
         Requires `castle.agent.stateDir` (asserted below), and you
-        almost certainly want `castle.agent.worker.repoRoot` too —
-        see that option's description for what happens without it.
+        want `castle.agent.repo.private` too — without it every
+        dispatched errand ends in a `failed` result that says so, and
+        each one spends that errand's single automatic attempt. See
+        that option's description.
 
         **Enable this on at most one host per journal.** The lease that
         guarantees one turn at a time is machine-local, and nothing yet
@@ -338,19 +441,28 @@ in
     # different command than the one configured — the same shape of
     # silent-wrong-behavior bug 2 was, just for a different value.
     #
-    # CASTLE_WORKER_TIMEOUT and CASTLE_REPO_ROOT joined the block with
+    # CASTLE_WORKER_TIMEOUT and the repo roots joined the block with
     # docs/tasks/0021-auto-dispatch.md, for the same reason the other
     # three are here rather than only on the dispatch unit below: a
     # `castle work` a resident runs by hand from a terminal inside the
-    # Sway session must get the identical timeout guard and repo root
+    # Sway session must get the identical timeout guard and repo roots
     # an automatically-dispatched worker gets, not a weaker version of
     # either. The timeout rides unconditionally (it always has a
-    # value); the repo root only when one is actually configured.
+    # value); each root only when one is actually configured.
+    #
+    # Two roots, not one, since docs/tasks/0024-config-target.md: the
+    # tenant has to be able to tell the resident's private
+    # configuration checkout from a checkout of this framework, which
+    # is exactly the Principle 01 split it is asked to decide a fix's
+    # layer against. A single CASTLE_REPO_ROOT could not name both,
+    # and is retired rather than kept alongside them — one renamed
+    # alias would just relocate the ambiguity under a new name.
     environment.sessionVariables =
       (lib.optionalAttrs (cfg.stateDir != null) { CASTLE_STATE_DIR = cfg.stateDir; })
       // { CASTLE_WORKER_COMMAND = cfg.worker.command; }
       // { CASTLE_WORKER_TIMEOUT = toString cfg.worker.timeoutSeconds; }
-      // (lib.optionalAttrs (cfg.worker.repoRoot != null) { CASTLE_REPO_ROOT = cfg.worker.repoRoot; })
+      // (lib.optionalAttrs (cfg.repo.private != null) { CASTLE_PRIVATE_ROOT = cfg.repo.private; })
+      // (lib.optionalAttrs (cfg.repo.mechanism != null) { CASTLE_MECHANISM_ROOT = cfg.repo.mechanism; })
       // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
 
     # ---------------------------------------------------------------
@@ -461,11 +573,14 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${castleCli}/bin/castle dispatch";
-        # %h — the resident's home directory. `castle work` falls back
-        # to the working directory when CASTLE_REPO_ROOT is unset,
-        # which is why worker.repoRoot's description says plainly that
-        # an operator who leaves it null is telling the tenant its repo
-        # is their home directory.
+        # %h — the resident's home directory. It used to be load-
+        # bearing in the worst way: `castle work` fell back to its
+        # working directory when no repo root was configured, so an
+        # unconfigured dispatched worker was told its repo was the
+        # resident's home folder. docs/tasks/0024-config-target.md
+        # deleted that fallback outright — an unconfigured turn now
+        # refuses honestly instead — so this is once again nothing but
+        # a defined place for the sweep to start from.
         WorkingDirectory = "%h";
         # Baked in at `nixos-rebuild switch` rather than inherited.
         # Not because environment.sessionVariables cannot reach a
@@ -495,8 +610,8 @@ in
       # exactly what systemd's own syntax wants. The existing
       # `"`-character assertions on these options are what keep that
       # quoting always representable. A null value is simply omitted
-      # (same systemd-lib line), so notify/repoRoot need no
-      # optionalAttrs dance here.
+      # (same systemd-lib line), so notify and the two repo roots need
+      # no optionalAttrs dance here.
       environment = {
         # A systemd user manager hands its units a bare PATH that
         # contains neither of the two binaries this sweep actually
@@ -523,7 +638,8 @@ in
         CASTLE_WORKER_COMMAND = cfg.worker.command;
         CASTLE_WORKER_TIMEOUT = toString cfg.worker.timeoutSeconds;
         CASTLE_NOTIFY_COMMAND = cfg.notify.command;
-        CASTLE_REPO_ROOT = cfg.worker.repoRoot;
+        CASTLE_PRIVATE_ROOT = cfg.repo.private;
+        CASTLE_MECHANISM_ROOT = cfg.repo.mechanism;
       };
     };
 
@@ -663,12 +779,49 @@ in
         '';
       }
       {
-        assertion = cfg.worker.repoRoot == null || !(lib.hasInfix "\"" cfg.worker.repoRoot);
+        assertion = cfg.repo.private == null || !(lib.hasInfix "\"" cfg.repo.private);
         message = ''
-          castle.agent.worker.repoRoot contains a literal `"` character —
+          castle.agent.repo.private contains a literal `"` character —
           see castle.agent.stateDir's identical assertion message for
           why that breaks environment.sessionVariables' PAM-format
           write. Use a path without a quote in it.
+        '';
+      }
+      {
+        # New with docs/tasks/0024-config-target.md, and deliberately
+        # narrower than it could be: stateDir carries no equivalent
+        # check today and widening it to match is a separate, easy
+        # follow-up rather than something folded in here just because
+        # the pattern became visible. A relative path in this option
+        # would be resolved against whatever directory the tenant
+        # happened to start in — which is precisely the guessing this
+        # task removed from `castle work`, reintroduced one layer up.
+        assertion = cfg.repo.private == null || lib.hasPrefix "/" cfg.repo.private;
+        message = ''
+          castle.agent.repo.private is not an absolute path. It is
+          wired straight into CASTLE_PRIVATE_ROOT and handed to a
+          worker tenant whose working directory this repo does not
+          control, so a relative path names a different place
+          depending on who invoked the turn. Give the full path to
+          your private checkout.
+        '';
+      }
+      {
+        assertion = cfg.repo.mechanism == null || !(lib.hasInfix "\"" cfg.repo.mechanism);
+        message = ''
+          castle.agent.repo.mechanism contains a literal `"` character —
+          see castle.agent.stateDir's identical assertion message for
+          why that breaks environment.sessionVariables' PAM-format
+          write. Use a path without a quote in it.
+        '';
+      }
+      {
+        assertion = cfg.repo.mechanism == null || lib.hasPrefix "/" cfg.repo.mechanism;
+        message = ''
+          castle.agent.repo.mechanism is not an absolute path — see
+          castle.agent.repo.private's identical assertion for why a
+          relative one names a different place depending on who
+          invoked the turn.
         '';
       }
       {

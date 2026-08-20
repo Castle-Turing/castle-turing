@@ -108,6 +108,16 @@ jobs:
       # mechanism with the identical toolchain; a separate job would
       # pay for another checkout to prove nothing extra.
       - run: test/agent-loop/resume.sh
+      # The worker seat's two checkouts
+      # (docs/tasks/0024-config-target.md): which repository a diff is
+      # against, the honest refusal when the private one is not
+      # configured, and the mechanism checkout degrading rather than
+      # refusing when it is configured but broken. In this job rather
+      # than the agent-loop one for the reason resume.sh is here — it
+      # drives `castle dispatch` and `castle work` against the real
+      # worker contract, which is exactly what this job already exists
+      # to cover, and the two share every helper and convention.
+      - run: test/agent-loop/config-target.sh
 
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and

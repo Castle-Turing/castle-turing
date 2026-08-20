@@ -409,6 +409,13 @@
             let
               dummyStateDir = "/home/resident/private/state";
               dummyRepoRoot = "/home/resident/private";
+              # Both roots, not just one: docs/tasks/0024-config-target.md
+              # split CASTLE_REPO_ROOT into a private and a mechanism
+              # checkout, and a configuration that wired only the first
+              # would prove half the dispatch unit's environment and
+              # leave the other half to be discovered on a real host.
+              # Invented, hardware-neutral, and nothing that exists.
+              dummyMechanismRoot = "/home/resident/src/castle-turing";
               unit = config.systemd.user.services.castle-dispatch or null;
               watermarkUnit = config.systemd.user.services.castle-dispatch-watermark or null;
               # The unit-level `environment` attrset, not a raw
@@ -422,7 +429,8 @@
               castle.agent = {
                 dispatch.enable = true;
                 stateDir = dummyStateDir;
-                worker.repoRoot = dummyRepoRoot;
+                repo.private = dummyRepoRoot;
+                repo.mechanism = dummyMechanismRoot;
               };
 
               assertions = [
@@ -480,7 +488,8 @@
                     # comment; the VM test caught this one too.
                     && lib.hasPrefix "/run/current-system/sw/bin" (environment.PATH or "")
                     && environment.CASTLE_WORKER_TIMEOUT or null == "900"
-                    && environment.CASTLE_REPO_ROOT or null == dummyRepoRoot
+                    && environment.CASTLE_PRIVATE_ROOT or null == dummyRepoRoot
+                    && environment.CASTLE_MECHANISM_ROOT or null == dummyMechanismRoot
                     && (environment.CASTLE_WORKER_COMMAND or "") != ""
                     && config.systemd.user.paths.castle-dispatch.pathConfig.PathChanged
                       == "${dummyStateDir}/journal"
@@ -514,7 +523,8 @@
                     nixosConfigurations.example-dispatch: the castle-dispatch units
                     do not carry what the sweep needs. Expected a oneshot service
                     running from %h with CASTLE_STATE_DIR, CASTLE_WORKER_COMMAND,
-                    CASTLE_WORKER_TIMEOUT and CASTLE_REPO_ROOT baked in
+                    CASTLE_WORKER_TIMEOUT, CASTLE_PRIVATE_ROOT and
+                    CASTLE_MECHANISM_ROOT baked in
                     (determinism, not an inheritance gap — see modules/agent's own
                     comment), a path unit watching the configured journal
                     directory rather than a filename pattern, a one-minute

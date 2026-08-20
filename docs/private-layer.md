@@ -79,25 +79,35 @@ The exported modules:
   gh, ripgrep, fd, claude-code, python3). No private data, no assertions.
 - `nixosModules.agent` — the agent layer's CLI (`castle`, plus
   `castle-modal` and the default `castle-worker-claude` worker tenant)
-  and six options: `castle.agent.stateDir` (wired into
+  and seven options: `castle.agent.stateDir` (wired into
   `CASTLE_STATE_DIR`), `castle.agent.worker.command` (wired into
   `CASTLE_WORKER_COMMAND` — which tenant holds the worker seat),
   `castle.agent.worker.timeoutSeconds` (`CASTLE_WORKER_TIMEOUT`),
-  `castle.agent.worker.repoRoot` (`CASTLE_REPO_ROOT` — which
-  repository the tenant operates on), `castle.agent.notify.command`
+  `castle.agent.repo.private` and `castle.agent.repo.mechanism`
+  (`CASTLE_PRIVATE_ROOT`/`CASTLE_MECHANISM_ROOT` — which checkouts the
+  tenant operates on; the old name `castle.agent.worker.repoRoot` still
+  works, with a deprecation warning naming the new one),
+  `castle.agent.notify.command`
   (wired into `CASTLE_NOTIFY_COMMAND` — what the router's `notify`
   channel actually runs), and `castle.agent.dispatch.enable` (whether
   filed errands start themselves). See "The agent's state" below and
-  `agent/README.md`. An unset `stateDir`/`notify.command`/`repoRoot`
-  just falls back to a per-user or built-in default rather than
-  failing evaluation, since the agent layer is optional the way
-  `desktop`/`dev` are; `worker.command` and `worker.timeoutSeconds`
-  always have a usable default (a headless `claude -p`, and fifteen
-  minutes) since the worker seat needs *something* to default to. One
-  assertion beyond the "no literal `"` in the value" check every
-  string option here carries: `dispatch.enable` requires `stateDir`,
-  because unattended writing is exactly when the journal has to be the
-  durable one you chose rather than a per-user fallback.
+  `agent/README.md`. An unset `stateDir`/`notify.command` just falls
+  back to a per-user or built-in default rather than failing
+  evaluation, since the agent layer is optional the way `desktop`/`dev`
+  are, and the two `repo.*` options do not fail evaluation either — the
+  refusal they carry happens at errand time instead, when a worker turn
+  with no private checkout writes a `failed` result naming the option
+  rather than guessing a directory; `worker.command` and
+  `worker.timeoutSeconds` always have a usable default (a headless
+  `claude -p`, and fifteen minutes) since the worker seat needs
+  *something* to default to.
+  Three assertions beyond the "no literal `"` in the value" check
+  every string option here carries: `dispatch.enable` requires
+  `stateDir`, because unattended writing is exactly when the journal
+  has to be the durable one you chose rather than a per-user fallback;
+  and each of `repo.private`/`repo.mechanism`, when set at all, must
+  be an **absolute** path, since a relative one names a different
+  place depending on who invoked the worker turn.
 - `nixosModules.installer` — the agentic installer image: bootable NixOS
   media, SSH-reachable with zero console interaction, using the same
   `castle.admin` values as everything else here. See "The installer
@@ -143,13 +153,22 @@ The values this repo may never contain:
   # castle.agent.notify.command = "";  # e.g. to no-op on a headless host
   # castle.agent.worker.timeoutSeconds = 900;  # how long a hung tenant may run
 
+  # Which checkouts the worker tenant is given. repo.private is this
+  # repository's own path on the machine — set it whenever you enable
+  # dispatch below, or every dispatched errand fails saying it has
+  # nowhere to work. repo.mechanism is a checkout of the public Castle
+  # Turing framework, and leaving it unset is the normal case: you
+  # consume that framework as a flake input, not as a working tree.
+  # The old name castle.agent.worker.repoRoot still works and still
+  # means repo.private, with a deprecation warning.
+  # castle.agent.repo.private = "/home/<your-login>/private";
+  # castle.agent.repo.mechanism = "/home/<your-login>/src/castle-turing";
+
   # Optional, and the one authority decision in this file: let filed
   # errands start themselves, with no `castle work` typed by hand.
   # Off unless you turn it on — see "Automatic dispatch" below before
-  # you do, and set worker.repoRoot with it (a worker told nothing
-  # thinks your home directory is the repo).
+  # you do, and set repo.private with it.
   # castle.agent.dispatch.enable = true;
-  # castle.agent.worker.repoRoot = "/home/<your-login>/private";
 
   # Optional — taste, only meaningful if you use nixosModules.desktop.
   # hosts/xps9370 already supplies hardware-derived scale/cursor/console
@@ -208,12 +227,62 @@ The values this repo may never contain:
   records `outcome: timeout`. Default 900 (fifteen minutes), a chosen
   value rather than a measured one; raise it if your tenant
   legitimately takes longer.
-- `castle.agent.worker.repoRoot` — the repository the worker tenant is
-  told to operate on (`$CASTLE_REPO_ROOT`). No default this repo could
-  supply: your checkout path is your data, not the framework's.
-  **Unset, a worker is told its repo is your home directory**, since
-  `castle work` falls back to its working directory — set this
-  whenever you enable automatic dispatch.
+- `castle.agent.repo.private` — your own configuration repository, the
+  one this file lives in (`$CASTLE_PRIVATE_ROOT`). No default this repo
+  could supply: your checkout path is your data, not the framework's.
+  **Unset, a worker turn refuses**: it writes a `failed` result naming
+  this option rather than guessing a directory, which is what it used
+  to do — and the directory it guessed under automatic dispatch was
+  your home folder. Set this whenever you enable dispatch, and note
+  that each errand which fails this way has spent its one automatic
+  attempt for good. Must be an absolute path. Renamed from
+  `castle.agent.worker.repoRoot`, which still works and prints a
+  deprecation warning.
+- **The worker checks your private checkout before every turn, and
+  git has to be able to use it.** Beyond existing and being absolute,
+  the path must be the **root** of a git working tree — not a
+  subdirectory of one, since a diff produced there would carry paths
+  relative to the wrong root. Where `git` is on the worker's `$PATH`
+  it is asked directly; where it is not (it arrives via
+  `nixosModules.dev`, which is optional) the check falls back to
+  looking for `.git` and says so rather than claiming more.
+
+  One failure here is worth knowing in advance because the fix is not
+  obvious: if your checkout was cloned by `root` during install, or
+  lives on a mount owned by a different uid, git refuses it with
+  "detected dubious ownership" and the turn writes a `failed` result.
+  That refusal is deliberate — a repository git will not touch is not
+  one this can work in reliably — and the result record names the fix
+  in place. It is either taking ownership of the directory, or:
+
+      git config --global --add safe.directory /home/<you>/private
+
+- `castle.agent.repo.mechanism` — a checkout of the *public* Castle
+  Turing framework, if you happen to keep one
+  (`$CASTLE_MECHANISM_ROOT`). **Leaving this unset is the normal
+  case**, not a misconfiguration: you consume the framework as a flake
+  input pinned in `flake.lock`, and only someone developing it keeps a
+  working tree around. What it costs you is stated rather than hidden —
+  a worker on such a host cannot propose a change to the framework's
+  own `modules/` at all, because there is nowhere on disk to diff
+  against, and it will say so and stop rather than fabricate one. A
+  path here that is not a usable git working tree never refuses a
+  turn; it degrades that checkout for the turn and says so in every
+  result the turn writes, so a typo cannot go quiet.
+- **Your real checkout path may appear in the journal, and must never
+  appear in the public repo.** The journal lives inside this
+  repository, so a path in a result body is fine. A path pasted out of
+  a journal into a framework PR, a test fixture, a doc or a commit
+  message is not — that is the hard rule in the public repo's own
+  `CLAUDE.md`, and the placeholders it publishes (`/home/resident/...`)
+  exist so nobody has to invent one.
+- **`stateDir` and both `repo.*` values land in
+  `/etc/pam/environment`, which is world-readable.** They ride
+  `environment.sessionVariables`, which is how they reach a
+  greetd-launched Sway session at all. On a single-user laptop this is
+  not a problem; on a machine with other login accounts, those accounts
+  can read the *paths* (never the contents) you configured here. Worth
+  knowing before you decide where your private repo lives.
 - `castle.agent.dispatch.enable` — whether filed errands start
   themselves. Default `false`. See "Automatic dispatch" below.
 - `castle.agent.notify.command` — what the router's `notify` channel
@@ -494,9 +563,37 @@ Every request in that restored history would then look new.
 
 Two settings to get right when you enable it. `castle.agent.stateDir`
 is required (evaluation fails without it). And
-`castle.agent.worker.repoRoot` should name the repository you actually
-want worked on — without it, a dispatched worker is told its repo is
-your home directory.
+`castle.agent.repo.private` must name the repository you actually want
+worked on. Without it, every dispatched errand ends in a `failed`
+result saying there is nowhere to work — honest, but each one has
+spent that errand's single automatic attempt, and configuring the path
+afterwards does not give any of them back. `castle work <id>` by hand
+still runs them.
+
+**Your `nixosConfigurations` attribute should match your
+`networking.hostName`.** This has always been the shape every template
+here uses, and since `docs/tasks/0024-config-target.md` a worker
+follows it: to find which host module applies to the machine it is
+running on, it reads `/proc/sys/kernel/hostname` and looks for the
+`nixosConfigurations` entry of that name in your `flake.nix`, then
+follows its imports. Read from the running kernel rather than declared
+as a third option that could silently drift from the truth. If your
+attribute is named something else the worker says what it looked for
+and asks you, rather than guessing at a near match — so a mismatch
+costs you a question, not the errand.
+
+**The worker never evaluates your flake, and this is deliberate.** It
+reads the files. Evaluating a local flake copies its whole tracked
+tree into `/nix/store`, which is world-readable — and your journal and
+resident model live in that tree. Reading a file copies nothing. The
+cost of that choice is that the worker learns what each file *says*
+rather than which definition Nix would actually pick, so where the two
+could differ — an `mkForce`, a numbered `mkOverride`, a computed value
+— it asks you instead of guessing. (Your `nixos-rebuild` still
+evaluates the flake, and still publishes that tree; that is a
+pre-existing property of flakes rather than anything the agent layer
+does, and it is filed at
+`docs/backlog/private-layer-lands-in-the-world-readable-store.md`.)
 
 **One host per journal.** If you sync this private repo between
 machines, turn dispatch on for only one of them. The lease that keeps

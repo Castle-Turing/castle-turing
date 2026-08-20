@@ -53,6 +53,7 @@ import fcntl
 import os
 import pathlib
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -116,6 +117,39 @@ FILED_DURING_TURN_FIELD = "filed-during-turn"
 # rather than a judgment about anyone else's.
 BLOCKING_FIELD = "blocking"
 
+# The `target` field on `result` records: which checkout the diff a
+# turn produced is meant to be applied to
+# (docs/tasks/0024-config-target.md §6). Written from what the tenant
+# put in $CASTLE_TARGET_FILE, so it is an observation about which file
+# the tenant wrote — never an inference about the resident, and never
+# a route into the resident model.
+#
+# It carries a **role** (`private`, `mechanism`), not a path. A role is
+# legible cold, to a human or a tenant, years later: an absolute path
+# would read fine today and be a lie the first time the checkout moved
+# or the machine was reinstalled. The resolved path is stated in the
+# result's body prose beside the diff, where staleness is obvious
+# rather than load-bearing.
+#
+# Deliberately **not** a closed vocabulary the way OUTCOME_VALUES is,
+# and the difference is a decision rather than an oversight. There are
+# two roles today; a third checkout — a resident's own fork of
+# something they depend on — would widen the set, and a membership
+# check here would make that a schema migration for no safety anyone
+# needs. `cmd_validate` asks only "non-blank, and on a result record."
+# The two known values are documented in agent/README.md.
+TARGET_FIELD = "target"
+
+# Where the tenant writes that one word. A second output file, exactly
+# symmetric with $CASTLE_DIFF_FILE, rather than a sentinel line on
+# stdout: stdout is the reasoning channel, quoted verbatim into the
+# result body, and parsing structure out of prose is the thing the flat
+# frontmatter format exists to avoid. Nor a `castle record` call from
+# inside the tenant — `_write_worker_result` is the one writer of a
+# turn's result, and a second writer for one record is the defect shape
+# docs/tasks/0023 §5 already had to close once.
+TARGET_FILE_ENV = "CASTLE_TARGET_FILE"
+
 # The environment variable that carries the running turn's claim id
 # into the tenant's own environment, and from there into any `castle`
 # the tenant invokes. Set on the tenant's env dict only — never on
@@ -145,6 +179,24 @@ WORKER_CLAIM_ENV = "CASTLE_WORKER_CLAIM"
 # heading text, exactly as WORKER_CLAIM_ENV exists so a tenant's writes
 # can be attributed without parsing anything.
 RESUME_ANSWER_IDS_ENV = "CASTLE_RESUME_ANSWER_IDS"
+
+# The two checkouts a worker tenant may be given, and the third
+# variable that reports a mechanism checkout configured but unusable
+# (docs/tasks/0024-config-target.md §2, §16). These replace a single
+# CASTLE_REPO_ROOT outright rather than renaming it: "the repo root"
+# as a singular concept is exactly what could not express the
+# Principle 01 split the worker seat is asked to decide a fix against,
+# and one renamed alias would have relocated that ambiguity under a
+# new name.
+#
+# Absence is the signal, throughout. A root that was never configured
+# is simply not in the tenant's environment — there is no empty-string
+# spelling and no guessed default, which is what retired the old
+# `setdefault(..., cwd())` that told a dispatched worker its repo was
+# the resident's home directory.
+PRIVATE_ROOT_ENV = "CASTLE_PRIVATE_ROOT"
+MECHANISM_ROOT_ENV = "CASTLE_MECHANISM_ROOT"
+MECHANISM_ROOT_INVALID_ENV = "CASTLE_MECHANISM_ROOT_INVALID"
 
 # The closed vocabulary of the `outcome` field on `result` records
 # (docs/tasks/0021 §3.5). `completed`/`failed`/`timeout` are written by
@@ -200,6 +252,12 @@ CHANNELS = ("notify", "digest")
 # and a reader skimming a result should meet it before the prose;
 # `watermark` sits at the end, beside the other decision-only fields,
 # where it leaves `channel`'s sorted-remainder placement untouched.
+#
+# `target` (result-only, docs/tasks/0024 §6) sits immediately after
+# `outcome` for the identical reason and by the same presentation-only
+# rule: the two together are what a result says about itself before
+# any prose — what happened to the turn, and which checkout its diff
+# is against.
 FIELD_ORDER = (
     "id",
     "type",
@@ -208,6 +266,7 @@ FIELD_ORDER = (
     "seat",
     "created",
     "outcome",
+    "target",
     # Request-only, and next to `outcome` for the same reason: it is
     # the machine-readable half of what the record says about its own
     # circumstances, and a reader skimming a request should meet it
@@ -309,8 +368,8 @@ def parse_record(path: pathlib.Path) -> Record:
     return Record(fields=fields, body=body, path=path)
 
 
-def _reject_newline_fields(fields: dict, *, what: str) -> None:
-    """A field value containing a newline breaks this format at the
+def _reject_line_breaking_fields(fields: dict, *, what: str) -> None:
+    """A field value carrying a line break breaks this format at the
     root (0009 review pass finding 6): render_record/render_model_entry
     write `f"{key}: {value}"` on one line, with no escaping, so a
     multi-line value produces a continuation line with no colon.
@@ -323,13 +382,40 @@ def _reject_newline_fields(fields: dict, *, what: str) -> None:
     every writer *before* anything is written, so the failure is loud,
     immediate, and leaves no partial file behind — multi-line content
     belongs in the body, which has no such restriction.
+
+    **The test is a round trip through `str.splitlines()`, not a search
+    for `"\n"`, and that widening closed a real hole.** `parse_record`
+    reads records back with `splitlines()`, which breaks on ten
+    characters, not one: CR, VT, FF, the three file/group/record
+    separators, NEL, and the two Unicode line separators. A guard
+    looking only for `"\n"` therefore let `castle record --target
+    $'private\rmechanism'` through — written, id printed, exit 0 — and
+    `parse_record` then raised on it forever, in an append-only
+    journal. That is precisely the invariant `--target`'s own write-time
+    guards exist to enforce, defeated through the one character class
+    those guards did not know about.
+
+    Asking `splitlines()` itself rather than listing its characters is
+    deliberate: a transcribed list is a copy of another implementation's
+    behaviour that cannot notice when the original changes, and the
+    same reasoning put a `GIT_*` prefix strip in `_checkout_fault`
+    instead of an enumeration. A value survives iff splitting it yields
+    exactly one line and that line is the value unchanged — which also
+    catches a *trailing* break, where `splitlines()` returns one line
+    but the character would still reach the file.
     """
     for key, value in fields.items():
-        if isinstance(value, str) and "\n" in value:
+        if not isinstance(value, str) or not value:
+            continue
+        lines = value.splitlines()
+        if len(lines) != 1 or lines[0] != value:
             raise RecordError(
-                f"{what} field {key!r} contains a newline, which this format's "
-                f"flat frontmatter cannot represent: {value!r}. Put multi-line "
-                "content in the record body instead."
+                f"{what} field {key!r} contains a line break, which this format's "
+                f"flat frontmatter cannot represent: {value!r}. This is whatever "
+                "`str.splitlines()` treats as a line boundary — a newline, but "
+                "also CR, VT, FF, NEL and the Unicode line separators — because "
+                "that is what reads these records back. Put multi-line content in "
+                "the record body instead."
             )
 
 
@@ -765,7 +851,7 @@ def write_record(
             f"Proposal 05): {harm}"
         )
 
-    _reject_newline_fields(fields, what="record")
+    _reject_line_breaking_fields(fields, what="record")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{record_id}.md"
     path.write_text(render_record(fields, body))
@@ -833,7 +919,7 @@ def render_model_entry(fields: dict, body: str) -> str:
     # reason the journal is, and `fact` in particular can come straight
     # from an unchecked `castle answer --fact` argument (or, since
     # docs/tasks/0010, straight from a correction's own first line).
-    _reject_newline_fields(fields, what="resident-model")
+    _reject_line_breaking_fields(fields, what="resident-model")
     lines = ["---"]
     for key in MODEL_FIELD_ORDER:
         if key in fields:
@@ -1317,6 +1403,51 @@ def cmd_record(args: argparse.Namespace) -> int:
     # answered, and never attributable — the exact dead end this refuses
     # to write, reached by exactly the mistake it predicts. A guard that
     # applies a different rule from the thing it guards is not a guard.
+    # `--target` gets write-time refusals too, and this is a reversal
+    # of what an earlier pass of this task decided (docs/tasks/0024 §6).
+    # That pass modelled the flag on `--outcome`'s convention-only
+    # posture, on the grounds that `target` carries none of
+    # `--blocking`'s dangling-reference hazard. True, and beside the
+    # point: `cmd_validate` was written in the same pass to *reject*
+    # `target` on a non-result record and to reject a blank value, so
+    # the door ended up laxer than the backstop — the exact defect the
+    # `--blocking` comment below names, running the other way.
+    #
+    # That asymmetry is worse here than the abstract argument suggests,
+    # because this journal is append-only. `castle record` would write
+    # the record, print its id, exit 0, and only `castle validate` —
+    # advisory, and invoked by nothing automatically — would later say
+    # it was malformed, by which point the only remedy is hand-editing
+    # history the whole design says is never edited. A writer must not
+    # be able to produce a record its own validator condemns.
+    #
+    # No `--spool` refusal, unlike `--blocking`: that one exists
+    # because a durable claim that an errand stopped is incoherent in a
+    # store that promises to forget, and a target stamped on a spooled
+    # scratch record makes no such claim about anything.
+    target_arg = getattr(args, "target", None)
+    if target_arg is not None:
+        if args.type != "result":
+            print(
+                f"castle record: --target is only meaningful on a result record, not "
+                f"on --type {args.type}. It names which checkout that turn's diff is "
+                "against, nothing reads it on any other type, and `castle validate` "
+                "rejects it there — so this would be written, print an id, and fail "
+                "the validator afterwards, in an append-only journal "
+                "(docs/tasks/0024-config-target.md).",
+                file=sys.stderr,
+            )
+            return 1
+        if not target_arg.strip():
+            print(
+                "castle record: --target is present but blank. It names which checkout "
+                "this turn's diff is against; absent means no target was stamped, and "
+                "there is no empty spelling of one. `castle validate` rejects a blank "
+                "value, so writing it would produce a permanently invalid record.",
+                file=sys.stderr,
+            )
+            return 1
+
     if getattr(args, "blocking", False):
         # A `--blocking` question says an errand has stopped and needs
         # the resident. The spool is explicitly ephemeral — machine-local
@@ -1393,6 +1524,15 @@ def cmd_record(args: argparse.Namespace) -> int:
         extra["fact"] = args.fact
     if getattr(args, "outcome", None):
         extra["outcome"] = args.outcome
+    # From the local checked above, not re-read from `args`, and
+    # stripped — the guard rejected a blank value, so what survives
+    # here is a real word, and storing it with stray whitespace would
+    # write something the validator's own non-blank test only barely
+    # tolerates. Spelled `target_arg` rather than `target` because the
+    # local `target` a few lines above is the *directory* this record
+    # is being written into; the two are unrelated.
+    if target_arg:
+        extra[TARGET_FIELD] = target_arg.strip()
     if getattr(args, "blocking", False):
         # The literal the validator checks for, and the only spelling
         # any writer in this repo produces.
@@ -1795,6 +1935,24 @@ WORKER_PROPOSES_NOTE = (
 # record missing the last words of a tenant that had already timed out.
 TENANT_DRAIN_SECONDS = 5
 
+# How long the checkout pre-flight waits on its one `git rev-parse`
+# (docs/tasks/0024 §16). Generous for a command that answers instantly
+# on any local checkout, and bounded so a git that hangs — on a repo
+# whose objects live behind a dead network mount, say — cannot hold
+# the sweep open indefinitely.
+#
+# **This bounds the subprocess and nothing else, which is less than an
+# earlier version of this comment claimed.** It said a stalled network
+# filesystem "must degrade this check, not wedge the sweep," and that
+# is not what it buys: `_checkout_fault` calls `path.exists()` and
+# `path.is_dir()` before ever reaching the probe, both unbounded
+# syscalls, so a root on a hung NFS or autofs mount wedges dispatch in
+# `stat()` and never gets here. Bounding those needs a different
+# mechanism than a subprocess timeout — see
+# docs/backlog/stalled-mount-wedges-a-sweep.md, which records the gap
+# rather than pretending this constant closes it.
+CHECKOUT_PROBE_SECONDS = 10
+
 # How often, while waiting on a tenant, to stop waiting on its *pipes*
 # and ask the *process* whether it is still alive.
 #
@@ -1827,7 +1985,7 @@ def _drain_after_exit(
     is still in the tenant's process group then this turn can — and
     must — end it: the journal's account of the turn is about to be
     final, and a child that outlives it can still be writing to
-    $CASTLE_REPO_ROOT afterwards, mutating a working tree whose result
+    $CASTLE_PRIVATE_ROOT afterwards, mutating a working tree whose result
     record already claims to describe what happened. `_kill_tenant_group`
     was previously unreachable on this path (it ran only when
     `poll()` was None), so an in-group straggler survived the turn
@@ -2286,8 +2444,187 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
     return "".join(parts)
 
 
+def _checkout_fault(root: str) -> str | None:
+    """Why `root` is not usable as a checkout to work in, or None if it
+    is (docs/tasks/0024-config-target.md §16).
+
+    **Layered on purpose: three free filesystem stages, then git
+    itself when git is reachable.** An earlier version of this
+    function stopped after testing that `.git` exists, and argued for
+    that as a virtue — no subprocess, no $PATH dependency, no extra
+    error mode in a check whose job is to fail cleanly. Half of that
+    argument survives and half of it did not: `.git` existing does not
+    establish that git can *use* the directory, while this function's
+    own refusal message claimed exactly that. An empty `.git`
+    directory and a linked-worktree `.git` file whose target has been
+    removed both pass an existence test and both leave git unable to
+    do anything at all. A pre-flight that exists to fail before a
+    model call is spent, and then lets a broken checkout through to
+    spend one, has not done its job (Codex review, P2).
+
+    The filesystem stages stay first and unchanged, because they are
+    free and they give the clearest messages for the mistakes people
+    actually make — a typo'd path, a file where a directory was meant,
+    a relative path. Only after they pass does git get asked, and it
+    is asked the question that actually matters: `rev-parse
+    --show-toplevel`, whose exit status says whether git can use the
+    directory and whose output says which working tree it landed in.
+
+    **A toplevel that differs from the configured root is a fault, and
+    it is one nobody had considered.** It means the resident pointed
+    at a *subdirectory* of a checkout. Nothing about that is obviously
+    wrong until a tenant produces a diff there, whose paths are then
+    relative to a root the applier will not be using — an unapplyable
+    proposal that no downstream step could detect, since the diff
+    itself looks perfectly well formed. Compared through
+    `os.path.realpath` on both sides, because git resolves symlinks in
+    what it reports and the configured value may not be resolved (or
+    may carry a trailing slash).
+
+    **When git is not on $PATH, this does not refuse.** `git` reaches
+    a dispatched worker only through `modules/dev`, which is optional,
+    and the dispatch unit pins `PATH` — so a host running the agent
+    layer without that module genuinely has no git, and refusing there
+    would break work that can still succeed: a tenant can write a
+    unified diff by hand without git existing anywhere. The fallback
+    is the old existence test, and the wording says which check
+    actually ran rather than asserting a git-verified fact no git ever
+    verified. Same blast-radius reasoning that makes a broken
+    mechanism root degrade rather than refuse (§16).
+
+    **Absoluteness is checked here and not only in `modules/agent`,
+    and the duplication is the point.** That module asserts it at
+    evaluation time, which covers a value arriving through Nix and
+    nothing else — while the documented way to set these roots outside
+    Nix is the environment variable directly, which is how every
+    harness in `test/agent-loop/` sets them and how any other
+    non-NixOS caller would. The module's own justification ("a
+    relative path names a different place depending on who invoked the
+    turn") applies with more force on this route, not less: here there
+    is no evaluation to fail, only a turn that would quietly resolve
+    the path against whatever directory the sweep happened to start
+    in. Checked before `exists()` deliberately — a relative path that
+    happens to resolve against the caller's cwd is the failure, not an
+    escape from it.
+    """
+    if not root.startswith("/"):
+        return "the path is not absolute"
+    path = pathlib.Path(root)
+    if not path.exists():
+        return "the path does not exist"
+    if not path.is_dir():
+        return "the path is not a directory"
+
+    git = shutil.which("git")
+    if git is None:
+        # No git to ask, so claim only what was actually tested.
+        if not (path / ".git").exists():
+            return (
+                "it has no `.git` entry (and `git` is not on this turn's PATH, so "
+                "nothing stronger than that was checked)"
+            )
+        return None
+
+    # **Every GIT_* variable is stripped, and the blanket is
+    # deliberate rather than lazy.** This subprocess would otherwise
+    # inherit the ambient environment, and git reads that environment
+    # to decide what a repository even is — so the answer this whole
+    # pre-flight turns on becomes a property of whoever happened to
+    # export something, which is the exact ambient-inheritance defect
+    # this task exists to delete, reappearing inside the check meant
+    # to close it. Two directions, both reproduced: with GIT_DIR set,
+    # a directory that is not a checkout at all reports a toplevel and
+    # is accepted, spending a model call; with GIT_WORK_TREE set, a
+    # perfectly good checkout is refused as "inside the working tree
+    # rooted at" somewhere else. A git hook, a `git rebase --exec`, or
+    # a resident with either in their shell profile all reach here.
+    #
+    # Stripping an enumerated list was tried first and is not safe:
+    # git's own manual sorts these into "repository location" versus
+    # "object storage", and reasoning from that split gets it wrong.
+    # GIT_OBJECT_DIRECTORY is documented purely as where objects live
+    # and looks irrelevant to `--show-toplevel`, which reads no
+    # objects — but setting it to a nonexistent path makes git call a
+    # valid checkout "not a git repository", because repository setup
+    # validates the object store. Discovered by running it, not by
+    # reading. An enumeration that the documentation's own categories
+    # mispredict is an enumeration that will drift.
+    #
+    # The accepted cost: a resident who relocates their git config
+    # with GIT_CONFIG_GLOBAL loses it here, so a `safe.directory`
+    # entry living only in that file will not be seen and the
+    # ownership refusal below can fire wrongly. That refusal is loud
+    # and carries its own remedy, which is the direction to fail in —
+    # the alternative is a silent false accept, a spent model call and
+    # a diff computed against the wrong tree.
+    probe_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        probe = subprocess.run(
+            [git, "-C", root, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=probe_env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # git resolved but would not run, or hung — a stalled network
+        # filesystem is the realistic case. Degrade to the filesystem
+        # test rather than refusing on the strength of a probe that
+        # never produced an answer either way.
+        if not (path / ".git").exists():
+            return (
+                "it has no `.git` entry (and `git` could not be run to check "
+                "anything stronger)"
+            )
+        return None
+
+    if probe.returncode != 0:
+        detail = (probe.stderr or "").strip().splitlines()
+        reason = detail[0] if detail else f"git exited {probe.returncode}"
+        # Ownership is worth prescribing for rather than merely
+        # reporting. A checkout cloned by root during an install, or
+        # living on a shared mount owned by another uid, is a real
+        # shape — this repo's own VM fixture produced the adjacent
+        # version of it — and git's refusal is deliberate rather than
+        # broken. The refusal stands: a repository git will not touch
+        # is not one this feature can work in reliably, and failing
+        # loudly beats proceeding into a confusing partial failure.
+        # But the fix is one command, it is already known here, and
+        # making the resident go and find it is a refusal that
+        # diagnoses without prescribing.
+        if "dubious ownership" in reason:
+            # shlex.quote, because this string is written for a resident
+            # to paste into a shell. A path with a space in it would
+            # otherwise register the wrong directory and say nothing —
+            # a prescribed fix that fails while appearing to have
+            # worked, which is the exact failure shape the rest of this
+            # function exists to remove.
+            return (
+                f"git refuses to use it ({reason}) — this is an ownership "
+                "mismatch, not a broken checkout. Either take ownership of the "
+                f"directory, or tell git it is safe: `git config --global --add "
+                f"safe.directory {shlex.quote(root)}`"
+            )
+        return f"git cannot use it as a working tree ({reason})"
+
+    toplevel = probe.stdout.strip()
+    if toplevel and os.path.realpath(toplevel) != os.path.realpath(root):
+        return (
+            f"it is inside the working tree rooted at `{toplevel}`, not the root of "
+            "one — a diff produced here would carry paths relative to the wrong "
+            "root, and nothing downstream could tell"
+        )
+    return None
+
+
 def _write_worker_result(
-    request: Record, *, outcome: str, body_lines: list[str], claim_id: str
+    request: Record,
+    *,
+    outcome: str,
+    body_lines: list[str],
+    claim_id: str,
+    target: str | None = None,
 ) -> str:
     """Every result `run_worker_turn` writes goes through here, so the
     `outcome` field cannot be forgotten on one branch and remembered on
@@ -2308,6 +2645,15 @@ def _write_worker_result(
     body_lines = list(body_lines)
     body_lines.append("")
     body_lines.append(WORKER_PROPOSES_NOTE)
+    extra = {"outcome": outcome}
+    # Only ever non-None from the one call site that follows a tenant
+    # that actually ran (docs/tasks/0024 §17). Every `TenantNotRunnable`
+    # branch — including this task's own target pre-flight — calls this
+    # with no target at all, because no tenant existed to write one, and
+    # a blank field asserting "no target" would be a claim those turns
+    # are in no position to make.
+    if target:
+        extra[TARGET_FIELD] = target
     return write_record(
         journal_dir(),
         type="result",
@@ -2315,7 +2661,7 @@ def _write_worker_result(
         seat="worker",
         refs=[request.id, claim_id],
         body="\n".join(body_lines),
-        extra={"outcome": outcome},
+        extra=extra,
     )
 
 
@@ -2337,8 +2683,17 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
     to agent/castle-worker-claude, a thin wrapper around a headless
     `claude -p` that this function knows nothing about beyond its
     contract: read the request body on stdin, write reasoning to
-    stdout, write a diff (or nothing) to $CASTLE_DIFF_FILE, and — this
+    stdout, write a diff (or nothing) to $CASTLE_DIFF_FILE, name which
+    checkout that diff is against in $CASTLE_TARGET_FILE, and — this
     is a hard product decision, not a nicety — never deploy anything.
+
+    Which checkouts exist is configuration, not a guess. A turn is
+    handed $CASTLE_PRIVATE_ROOT when one is configured and usable, and
+    refuses outright when it is not: there is no fallback to the
+    working directory any more, because under the dispatch unit that
+    directory is the resident's home folder
+    (docs/tasks/0024-config-target.md). $CASTLE_MECHANISM_ROOT is
+    optional and its absence is the normal case.
 
     THE WORKER MUST NOT DEPLOY. This function never runs nixos-rebuild,
     never commits, never applies the diff it collects; it only ever
@@ -2362,7 +2717,50 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
     spend_lock = None
     try:
         command = os.environ.get("CASTLE_WORKER_COMMAND", DEFAULT_WORKER_COMMAND)
+        # Read from the ambient environment here, before any tenant-
+        # facing `env` dict exists, because several paths below need
+        # them earlier than that dict is built — see the env block near
+        # the tenant spawn for what is done with them and why the
+        # ambient copies are popped rather than inherited.
+        private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+        mechanism_root = os.environ.get(MECHANISM_ROOT_ENV, "").strip()
         started = dt.datetime.now(dt.timezone.utc).strftime(CREATED_FMT)
+
+        # The mechanism checkout has three states, not two, and the
+        # tenant is told them apart (docs/tasks/0024 §16). Unset is the
+        # NORMAL case — a resident consumes this framework as a pinned
+        # flake input, not as a working tree they keep — so it is never
+        # a fault and never refuses anything. Configured and usable
+        # sets CASTLE_MECHANISM_ROOT. Configured and broken sets
+        # neither: it sets CASTLE_MECHANISM_ROOT_INVALID instead,
+        # carrying the raw path so the tenant can name it, because
+        # "there is no mechanism checkout" and "the one you configured
+        # is not a git working tree" are different things to tell a
+        # resident and collapsing them makes a typo indistinguishable
+        # from a deliberate choice.
+        mechanism_fault = _checkout_fault(mechanism_root) if mechanism_root else None
+        mechanism_invalid = mechanism_root if mechanism_fault else ""
+        if mechanism_fault:
+            mechanism_root = ""
+
+        # And the same fact, stated in the result body on EVERY errand
+        # this turn produces a result for — not only ones whose
+        # diagnosis happened to need mechanism. This is harness-level
+        # on purpose. A tenant working a private-layer errand has no
+        # reason to mention a mechanism-root typo it never touched, so
+        # leaving the disclosure to the model would make the
+        # misconfiguration silent on every errand except the rare one
+        # that needed it — which is the same shape of quietly-tolerated
+        # defect this whole task exists to remove one layer down.
+        mechanism_note: list[str] = []
+        if mechanism_fault:
+            mechanism_note = [
+                "",
+                f"Note: `castle.agent.repo.mechanism` is configured "
+                f"(`{mechanism_invalid}`) but {mechanism_fault}, so this turn "
+                "treated the mechanism checkout as unavailable. Nothing else "
+                "about the turn was refused on that account.",
+            ]
 
         # What this turn is resuming, and the context it will be handed
         # to resume it with, pinned here — after the lease, before the
@@ -2572,7 +2970,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # and the tenant call certainly must not hold it.
         spend_lock.close()
 
-        # What the three branches below owe a resident whose answer this
+        # What the four branches below owe a resident whose answer this
         # turn already spent. The claim naming that answer is what stops
         # a misconfigured tenant being retried once a minute forever
         # (docs/tasks/0021 §3.4, reached from a new direction by
@@ -2580,19 +2978,28 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # says so. Without this the resident reads "nothing ran",
         # believes their answer is still waiting, and has no reason to
         # think the errand needs anything but a fixed config.
-        spent_note: list[str] = []
-        if resuming:
-            spent_note = [
+        # `remedy` names what has to change before a hand retry is
+        # worth typing, and it differs by branch: the three tenant
+        # faults below are fixed by fixing the tenant, while this
+        # task's target pre-flight is fixed by configuring a checkout.
+        # One paragraph, parameterised, rather than two nearly-
+        # identical ones drifting apart.
+        def spent_note_for(remedy: str) -> list[str]:
+            if not resuming:
+                return []
+            return [
                 "",
                 "The answer(s) this turn was going to resume on — "
                 + ", ".join(f"`{answer.id}`" for answer in resuming)
                 + " — are spent by its claim, which is what stops a misconfigured "
                 "tenant being retried automatically once a minute forever. No sweep "
                 "will pick this errand up again on their account. Running "
-                f"`castle work {request.id}` by hand once the tenant is fixed still "
+                f"`castle work {request.id}` by hand once {remedy} still "
                 "hands those answers to it: the errand's records are rendered into "
                 "the tenant's context on every turn, spent or not.",
             ]
+
+        spent_note = spent_note_for("the tenant is fixed")
 
         # The three recordless failure paths this task fixes
         # (docs/tasks/0021 §3.4). Under a human typing `castle work`
@@ -2605,6 +3012,106 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # exactly one automatic attempt) and tells the resident through
         # the ordinary router path instead of leaving them to notice a
         # growing pile of nothing.
+        # The target pre-flight (docs/tasks/0024 §16): a fourth
+        # configuration-shaped fault, structurally identical to the
+        # three below it — after the claim, no tenant started, a
+        # `failed` result written through the one result writer, then
+        # `TenantNotRunnable`.
+        #
+        # First of the four rather than last, because it is the one
+        # that needs nothing resolved to run: the brief's own wording
+        # is "before the tenant command is resolved at all." A host
+        # misconfigured in two ways at once therefore hears about this
+        # one, which is defensible in either order and worth being
+        # deliberate about rather than incidental.
+        #
+        # **After the claim write, not before**, which is the
+        # ordering docs/tasks/0023 §3 already worked through for a
+        # structurally identical check: every path that starts a turn
+        # has to leave a claim, or a misconfigured host retries forever
+        # at one model call per timer tick. It costs this errand its
+        # one automatic attempt, permanently — see the body text below,
+        # which says so rather than letting a resident discover it.
+        #
+        # **`repo.private` only.** A configured-but-unusable
+        # `repo.mechanism` degrades that checkout for the turn and
+        # nothing more (see the three-state split above). An earlier
+        # draft of this design refused symmetrically, on the reasonable-
+        # sounding theory that a resident who set either root expects it
+        # to work; working the blast radius through killed it. The
+        # errands this seat handles overwhelmingly target the private
+        # checkout or a host module inside it, so a typo in the
+        # mechanism path would refuse nearly all of them to report a
+        # fault in something they never touched — and refusing buys
+        # nothing even in the case it is about, since a tenant asked to
+        # fix something in mechanism answers "I cannot" identically
+        # whether that checkout is absent or broken.
+        private_fault = _checkout_fault(private_root) if private_root else None
+        if not private_root or private_fault:
+            if not private_root:
+                message = (
+                    "no private checkout configured "
+                    f"(castle.agent.repo.private / {PRIVATE_ROOT_ENV} is unset)"
+                )
+                diagnosis = [
+                    f"Errand `{request.id}` could not start: this host has no private "
+                    "configuration checkout configured, so there is nowhere for a "
+                    "worker tenant to diagnose in or propose a change against "
+                    f"(`castle.agent.repo.private` is unset, so {PRIVATE_ROOT_ENV} is "
+                    "absent from the tenant's environment).",
+                    "",
+                    "Nothing ran. `castle work` deliberately does not guess a "
+                    "directory here — it used to fall back to its own working "
+                    "directory, which under the dispatch unit is the resident's home "
+                    "folder (docs/tasks/0024-config-target.md). Set "
+                    "`castle.agent.repo.private` (modules/agent) to your private "
+                    f"repository's checkout path, then re-run `castle work "
+                    f"{request.id}`.",
+                ]
+            else:
+                message = (
+                    f"private checkout {private_root!r} is not usable: {private_fault}"
+                )
+                # Worded to stay true across all three faults this
+                # can carry. An earlier version ended "so there is no
+                # working tree to diagnose in", which is a non-sequitur
+                # for a relative path — the tree may exist perfectly
+                # well; what is missing is any guarantee that it is the
+                # same tree from one caller to the next.
+                diagnosis = [
+                    f"Errand `{request.id}` could not start: "
+                    f"`castle.agent.repo.private` names `{private_root}`, but "
+                    f"{private_fault} — so this turn has no checkout it can trust "
+                    "it is working in.",
+                    "",
+                    "Nothing ran. Give `castle.agent.repo.private` (modules/agent) "
+                    "the absolute path of a git working tree you want worked on — "
+                    "cloning it into place first if it is not there yet — then "
+                    f"re-run `castle work {request.id}`.",
+                ]
+            print(f"castle work: {message}", file=sys.stderr)
+            raise TenantNotRunnable(
+                message,
+                _write_worker_result(
+                    request,
+                    outcome="failed",
+                    claim_id=claim_id,
+                    body_lines=diagnosis
+                    + [
+                        "",
+                        "This `failed` result also makes the errand permanently "
+                        "ineligible for AUTOMATIC dispatch, per "
+                        "docs/tasks/0021-auto-dispatch.md's one-automatic-attempt "
+                        "rule: any result at all bars a further automatic turn, and "
+                        "configuring the checkout later does not undo that. A hand-run "
+                        f"`castle work {request.id}` is the way back, and it is "
+                        "unbounded.",
+                    ]
+                    + spent_note_for("the checkout is configured")
+                    + mechanism_note,
+                ),
+            )
+
         if not command.strip():
             message = "no worker command configured (CASTLE_WORKER_COMMAND is empty)"
             print(f"castle work: {message}", file=sys.stderr)
@@ -2622,7 +3129,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         "to whatever should hold the worker seat, then re-run "
                         f"`castle work {request.id}`.",
                     ]
-                    + spent_note,
+                    + spent_note
+                    + mechanism_note,
                 ),
             )
         try:
@@ -2643,13 +3151,23 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         "Nothing ran. Fix `castle.agent.worker.command` (modules/agent) "
                         f"and re-run `castle work {request.id}`.",
                     ]
-                    + spent_note,
+                    + spent_note
+                    + mechanism_note,
                 ),
             )
 
         diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
         os.close(diff_fd)
         diff_path = pathlib.Path(diff_path_str)
+        # The second output file (docs/tasks/0024 §5): at most one word,
+        # naming which checkout the diff is against. Created the same
+        # way, handed over the same way, read back the same way and
+        # unlinked in the same `finally` as the diff — a tenant that
+        # already knows how to write one output file needs no second
+        # mechanism explained to it.
+        target_fd, target_path_str = tempfile.mkstemp(prefix="castle-work-target-")
+        os.close(target_fd)
+        target_path = pathlib.Path(target_path_str)
         timeout = worker_timeout_seconds()
         try:
             env = dict(os.environ)
@@ -2665,7 +3183,38 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # consuming the request's one automatic attempt. A channel
             # nothing reads is not worth a size limit nobody documented.
             env["CASTLE_DIFF_FILE"] = str(diff_path)
-            env.setdefault("CASTLE_REPO_ROOT", str(pathlib.Path.cwd()))
+            env[TARGET_FILE_ENV] = str(target_path)
+            # The two roots, and the third variable that reports a
+            # configured-but-unusable mechanism checkout
+            # (docs/tasks/0024-config-target.md §2). Three properties
+            # here are deliberate and each replaces something worse.
+            #
+            # **Popped first, unconditionally.** `env` starts as a copy
+            # of os.environ, so merely declining to set a key would
+            # leave whatever the ambient environment happened to carry
+            # — a stale export from an earlier login, or a value a
+            # tenant that itself runs `castle work` inherited — and a
+            # turn would silently operate on a checkout nobody
+            # configured for it. Same defensive shape
+            # RESUME_ANSWER_IDS_ENV uses a few lines below, for the
+            # same reason.
+            #
+            # **Assigned, never `setdefault`.** What was here before
+            # defaulted the (single) repo root to `pathlib.Path.cwd()`,
+            # which under the dispatch unit is `%h`: an unconfigured
+            # dispatched worker was unconditionally told its repo was
+            # the resident's home directory. Nothing replaces that
+            # guess. Absent configuration means the variable is absent,
+            # and `run_worker_turn`'s own pre-flight above is what a
+            # turn does about it.
+            for key in (PRIVATE_ROOT_ENV, MECHANISM_ROOT_ENV, MECHANISM_ROOT_INVALID_ENV):
+                env.pop(key, None)
+            if private_root:
+                env[PRIVATE_ROOT_ENV] = private_root
+            if mechanism_root:
+                env[MECHANISM_ROOT_ENV] = mechanism_root
+            if mechanism_invalid:
+                env[MECHANISM_ROOT_INVALID_ENV] = mechanism_invalid
             # On the TENANT's environment only — never on os.environ,
             # which would stamp every request this process later wrote
             # as though a turn had filed it. Any `castle` the tenant
@@ -2747,7 +3296,8 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                             "executable, then re-run "
                             f"`castle work {request.id}`.",
                         ]
-                    + spent_note,
+                    + spent_note
+                    + mechanism_note,
                     ),
                 )
 
@@ -2876,11 +3426,31 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 diff_text = diff_path.read_bytes().decode("utf-8", errors="replace").strip()
             except OSError:
                 diff_text = ""
-        finally:
+
+            # Read exactly as leniently as the diff, and for the same
+            # reason: a tenant's output encoding is not part of the
+            # contract. One word is expected, so only the first
+            # non-blank line is taken and the rest ignored — a tenant
+            # that wrote a paragraph here has said something the
+            # contract has no room for, and truncating is more honest
+            # than folding prose into a frontmatter field. Empty or
+            # unreadable means no target stamped, the same handling an
+            # empty $CASTLE_DIFF_FILE already gets.
+            target_text = ""
             try:
-                diff_path.unlink()
+                raw_target = target_path.read_bytes().decode("utf-8", errors="replace")
+                for line in raw_target.splitlines():
+                    if line.strip():
+                        target_text = line.strip()
+                        break
             except OSError:
-                pass
+                target_text = ""
+        finally:
+            for scratch in (diff_path, target_path):
+                try:
+                    scratch.unlink()
+                except OSError:
+                    pass
 
         if timed_out:
             outcome = "timeout"
@@ -2925,6 +3495,154 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "(no diff produced — either no change was proposed, or the worker "
                 "tenant did not write one to $CASTLE_DIFF_FILE)"
             )
+        # The role goes in the frontmatter field; the resolved path goes
+        # here, in prose next to the diff it belongs to
+        # (docs/tasks/0024 §6). Splitting them that way is the point: a
+        # role stays true forever and a path goes stale the first time
+        # the checkout moves, so only one of them belongs in a field
+        # something else will key on.
+        #
+        # A target this turn does not recognise is stated verbatim with
+        # no path resolution attempted, rather than guessed at. There is
+        # no variable to look a third role up against, and naming the
+        # wrong directory would be worse than naming none.
+        # **A target is only meaningful alongside a diff, so both the
+        # sentence and the field are gated on one.** `target` means
+        # "the checkout this diff applies to"; with no diff there is
+        # nothing for it to be about, and the record would read as an
+        # applicable proposal with nothing to apply — precisely the
+        # wrong thing to hand docs/tasks/0025's approval binding and
+        # docs/tasks/0026's applier, both of which are documented as
+        # keying on this field to decide where a proposal goes. It is
+        # also self-contradictory on its face: the body would say "(no
+        # diff produced)" and then, one line later, "this diff targets
+        # the private checkout."
+        #
+        # Discarded rather than silently swallowed. A tenant that
+        # stamped a target and wrote no diff has misunderstood the
+        # contract, and that is worth one visible sentence — the same
+        # reasoning as the mechanism-unusable note above, which exists
+        # so a fault cannot go quiet just because nothing downstream
+        # happened to need it.
+        # **Three conditions, not one, before a `target` is recorded.**
+        # The field is what docs/tasks/0025 and 0026 route on, so it
+        # has to mean "this result carries a proposal, and here is the
+        # checkout it applies to." Each condition removes a way that
+        # sentence could be false while the field said otherwise.
+        #
+        # A non-empty diff (§6): a target naming nothing is
+        # incoherent.
+        #
+        # `outcome == "completed"`: any other outcome means the tenant
+        # did not finish. A tenant killed at the timeout that had
+        # already written both files yields `timeout` *and* a partial
+        # diff *and* a target that all look complete to anything
+        # reading fields — with the truth only in prose, which is
+        # exactly the "no surface may read failure out of prose"
+        # hazard the closed `outcome` vocabulary exists to prevent.
+        # `completed` is the only outcome where the tenant exited 0
+        # and its two output files are its finished work; `failed`,
+        # `timeout` and `interrupted` are all accounts of a turn that
+        # stopped early.
+        #
+        # A role this turn can actually resolve: see below.
+        finished_cleanly = outcome == "completed"
+        stamped_target = target_text if (diff_text and finished_cleanly) else ""
+        if target_text and not diff_text:
+            body_lines.append("")
+            body_lines.append(
+                f"The worker tenant wrote `{target_text}` to $CASTLE_TARGET_FILE but "
+                "produced no diff. A target names the checkout a diff applies to, so "
+                "with no diff there is nothing for it to name: it has been discarded "
+                "rather than recorded, and this result carries no `target` field."
+            )
+        # And the mirror, which matters more than the case above it.
+        # A stamp with no diff is incoherent but inert — there is
+        # nothing to misroute. A diff with no target is a real,
+        # applyable artifact with its destination missing, and
+        # docs/tasks/0025's approval binding and docs/tasks/0026's
+        # applier are both documented as reading this field to decide
+        # which checkout a proposal goes to. Silence there would hand
+        # them exactly the gap this whole task exists to close, one
+        # layer further in.
+        #
+        # It is also the likelier of the two mistakes: a tenant that
+        # produces a real diff and forgets the second file is an
+        # ordinary slip, while one that stamps a target and produces
+        # nothing is odd. Having decided a discarded stamp must be
+        # visible, leaving this silent would be an asymmetry with no
+        # argument behind it.
+        #
+        # A note, not a failure, and deliberately so: the turn did the
+        # work and the diff is still the durable artifact this seat
+        # exists to produce. What is missing is routing information a
+        # later task needs, which is worth saying plainly and is not
+        # worth discarding a proposal over.
+        elif diff_text and not target_text and finished_cleanly:
+            # Gated on `finished_cleanly`, because on any other outcome
+            # this sentence would charge a contract violation that may
+            # never have happened: a tenant killed by the timeout or a
+            # signal between writing the diff and writing the target
+            # did not "declare no target", it was stopped mid-work.
+            # Saying otherwise blames the tenant for the invoker's own
+            # kill — and it printed *above* the "may be partial"
+            # caveat, so the resident met the accusation first.
+            body_lines.append("")
+            body_lines.append(
+                "The worker tenant produced a diff but declared no target: nothing "
+                "was written to $CASTLE_TARGET_FILE, so this result carries no "
+                "`target` field. The diff above stands on its own, but a proposal "
+                "with no target cannot be routed to a checkout — whatever applies it "
+                "has no way to know which repository its paths are relative to."
+            )
+        elif diff_text and not stamped_target:
+            # The unfinished cases, described rather than blamed. This
+            # is about what the record can be used for, not about what
+            # the tenant did or failed to do.
+            body_lines.append("")
+            body_lines.append(
+                "This result carries no `target` field: the turn did not end in "
+                "`completed`, so whatever is in the diff above is the state of an "
+                "unfinished attempt rather than a proposal this seat stands behind. "
+                "Nothing downstream should route it to a checkout."
+            )
+        resolved = {
+            "private": env.get(PRIVATE_ROOT_ENV),
+            "mechanism": env.get(MECHANISM_ROOT_ENV),
+        }.get(stamped_target) if stamped_target else None
+        if stamped_target and not resolved:
+            # **Diagnosed as unusable, so not recorded.** An earlier
+            # version printed exactly this sentence and then wrote the
+            # value into the frontmatter anyway, which is the code
+            # contradicting itself in the same breath: a one-character
+            # slip (`Private`, `mechanism.`) produced a record
+            # `cmd_validate` accepts — its check is deliberately open,
+            # for a future third role — and an applier reads as
+            # routable while it points nowhere.
+            #
+            # The open vocabulary is right for `castle record
+            # --target`, where a human may legitimately know about a
+            # role this code does not. It is wrong here, where this
+            # turn has just failed to resolve the value against any
+            # root it was given. Recording what you have this instant
+            # established you cannot use is the same class of mistake
+            # as a refusal message claiming a check that never ran.
+            stamped_target = ""
+            body_lines.append("")
+            body_lines.append(
+                f"The worker tenant named `{target_text}` as this diff's target, "
+                "which is not a checkout role this turn had a configured path for. "
+                "It has not been recorded as the result's `target`: a field naming a "
+                "checkout nothing can resolve would read as routable to whatever "
+                "applies these proposals, while pointing nowhere. The two roles this "
+                "turn could have resolved are `private` and `mechanism`."
+            )
+        elif stamped_target:
+            body_lines.append("")
+            body_lines.append(
+                f"This diff targets the **{stamped_target}** checkout, which on "
+                f"this host resolved to `{resolved}`."
+            )
         if timed_out:
             body_lines.append("")
             body_lines.append(
@@ -2942,9 +3660,14 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "and this turn cannot end it. Nothing above came from the tenant's "
                 "output stream."
             )
+        body_lines += mechanism_note
         return (
             _write_worker_result(
-                request, outcome=outcome, body_lines=body_lines, claim_id=claim_id
+                request,
+                outcome=outcome,
+                body_lines=body_lines,
+                claim_id=claim_id,
+                target=stamped_target,
             ),
             outcome,
         )
@@ -3844,11 +4567,22 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                 # single pass, and exit 0 while doing it. Stop at one,
                 # and let the unit go red so the health signal says
                 # what is actually wrong.
+                # Worded for what this handler actually knows, which
+                # is less than it used to claim. `TenantNotRunnable`
+                # covered three tenant-command faults when this line
+                # was written, so naming the tenant was fair;
+                # docs/tasks/0024 added a fourth that is not about the
+                # command at all, and a resident whose sweep went red
+                # over an unconfigured `castle.agent.repo.private` was
+                # pointed at `castle.agent.worker.command` instead.
+                # The parenthetical always carried the truth — now the
+                # sentence does too, and defers to it.
                 print(
-                    f"castle dispatch: the configured worker tenant could not be "
-                    f"run ({exc}); recorded {exc.result_id} for {request.id} and "
-                    "stopping this sweep rather than spending every other eligible "
-                    "request's one automatic attempt on the same fault",
+                    f"castle dispatch: this turn could not start ({exc}); recorded "
+                    f"{exc.result_id} for {request.id} and stopping this sweep "
+                    "rather than spending every other eligible request's one "
+                    "automatic attempt on the same fault. That result record names "
+                    "the specific misconfiguration and how to fix it",
                     file=sys.stderr,
                 )
                 # Route before returning. This path writes a `failed`
@@ -4215,6 +4949,40 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "other value."
             )
 
+        # `target` (result-only, docs/tasks/0024 §6), same append-only
+        # treatment again: checked when present, never required, so no
+        # result written before this field existed is failed
+        # retroactively.
+        #
+        # Two checks and deliberately not a third. Scoped to results,
+        # mirroring `blocking`'s question-only scoping and for the same
+        # reason: nothing anywhere reads `target` off another record
+        # type, so one written there would validate, read as
+        # meaningful, and do nothing. And non-blank, because a present
+        # but empty field claims to name a checkout while naming none.
+        #
+        # What is deliberately absent is a membership test against a
+        # fixed pair of words. `outcome` gets one because its four
+        # values are a named cross-task contract several surfaces
+        # branch on; `target` is two values today with room for a third
+        # checkout role, and a closed vocabulary here would turn adding
+        # one into a schema migration to buy safety nothing needs. See
+        # TARGET_FIELD's own comment.
+        target_raw = rec.fields.get(TARGET_FIELD)
+        if target_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{TARGET_FIELD}' is a result-record field and this "
+                f"is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0024-config-target.md)."
+            )
+        elif target_raw is not None and not target_raw.strip():
+            errors.append(
+                f"{path.name}: '{TARGET_FIELD}' is present but blank. It names which "
+                "checkout this turn's diff is against; absent means no target was "
+                "stamped, and there is no empty spelling of one."
+            )
+
         considered_raw = rec.fields.get("considered")
         considered_list: list[str] | None = None
         if considered_raw is not None:
@@ -4356,6 +5124,23 @@ def build_parser() -> argparse.ArgumentParser:
             "holding the worker seat by hand should pass this: no surface may "
             "read failure out of prose, so a failed errand with no `outcome` "
             "field reads as done, forever (docs/tasks/0021-auto-dispatch.md)."
+        ),
+    )
+    p_record.add_argument(
+        "--target",
+        default=None,
+        help=(
+            "which checkout this turn's diff is against — `private` or "
+            "`mechanism`. The automatic path fills this in from whatever the "
+            "tenant wrote to $CASTLE_TARGET_FILE; this flag is the same lever "
+            "for a human holding the worker seat by hand, or a fixture building "
+            "a result record directly. Enforced at write time, like --blocking "
+            "and unlike --fact/--outcome: refused on any --type but result, and "
+            "refused blank, because `castle validate` rejects both and a writer "
+            "must not be able to produce a record its own validator condemns in "
+            "an append-only journal. NOT restricted to those two words, though "
+            "— a third checkout role should not need a schema migration "
+            "(docs/tasks/0024-config-target.md)."
         ),
     )
     p_record.add_argument(
