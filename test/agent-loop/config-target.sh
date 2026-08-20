@@ -60,8 +60,10 @@ git -C "$MECHANISM" commit -q -m "fixture: this framework at HEAD"
 # The private checkout is synthetic, and every literal in it is one
 # this repo already publishes: nixosConfigurations.example's "resident"
 # admin username and its placeholder key string, and the
-# /home/resident/private-state path shape test/desktop-loop/test.nix
-# already uses. Nothing here resembles a real resident.
+# /home/resident/private-state state-directory shape, which is
+# docs/private-layer.md's own recommended layout written with the
+# placeholder resident this repo already publishes. Nothing here
+# resembles a real one.
 PRIVATE="$WORKDIR/private"
 mkdir -p "$PRIVATE"
 cat > "$PRIVATE/flake.nix" <<'EOF'
