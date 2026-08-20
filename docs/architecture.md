@@ -253,15 +253,21 @@ judgment.
 ## Where runtime state lives
 
 The journal and the resident model are plain text in the **private
-repo**, under a `state/` directory: Nix declares the slot and the
+layer**, under a `state/` directory: Nix declares the slot and the
 schema, git carries the contents, and neither is in the derivation
 path — runtime state can change without a rebuild, and a rebuild
-never contains a person (Principle 02).
+never contains a person (Principle 02). Which repository that
+directory belongs to is a layout choice with a security consequence,
+because evaluating a flake copies its tracked tree into the
+world-readable Nix store — see `docs/private-layer.md`'s "The agent's
+state" for the two layouts this project recommends and why a
+subdirectory of the flake repo is not one of them
+(`docs/tasks/0030-state-outside-the-flake.md`).
 
-Private-repo-tracked rather than machine-local is a deliberate
-durability decision: the accumulated model and journal are the most
-valuable artifacts on the machine and the least reproducible. They
-must survive a reinstall, move to the next machine, and survive a
+Git-tracked rather than machine-local is a deliberate durability
+decision: the accumulated model and journal are the most valuable
+artifacts on the machine and the least reproducible. They must
+survive a reinstall, move to the next machine, and survive a
 *model* transition — two years of elicited preferences and decided
 outcomes should be exactly what a successor intelligence reads on day
 one. They are portable precisely because no model's format is

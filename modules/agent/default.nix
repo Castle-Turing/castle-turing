@@ -85,18 +85,30 @@ in
       description = ''
         Where the `castle` CLI's journal (and the resident model) live
         — see docs/architecture.md's "Where runtime state lives" and
-        docs/private-layer.md. This is a path into the private repo's
-        checkout on the host (its `state/` directory), never a value
-        this repo can guess correctly, so the default is `null`: the
-        CLI then falls back to its own `$XDG_STATE_HOME/castle` /
-        `~/.local/state/castle` resolution (see agent/castle's
-        `state_dir()`), which is a reasonable per-user default but not
-        the durable, private-repo-tracked location the architecture
-        doc calls for.
+        docs/private-layer.md. This is a path to a durable, git-tracked
+        directory on the host, never a value this repo can guess
+        correctly, so the default is `null`: the CLI then falls back to
+        its own `$XDG_STATE_HOME/castle` / `~/.local/state/castle`
+        resolution (see agent/castle's `state_dir()`), which is a
+        reasonable per-user default but not the durable, git-tracked
+        location the architecture doc calls for.
+
+        **Not a subdirectory of the private flake repo**, which is what
+        this description recommended until
+        docs/tasks/0030-state-outside-the-flake.md: evaluating a path
+        flakeref copies that flake's whole tracked tree into
+        /nix/store, where every file is world-readable, so a journal
+        committed there is published on every `nixos-rebuild`.
+        docs/private-layer.md's "The agent's state" documents the two
+        layouts that avoid it — a sibling repository (recommended) or a
+        git submodule at `state/`. Nothing here can check which one a
+        resident chose; evaluation must not stat a resident's disk, so
+        the check lives in the CLI (`castle validate` and `castle
+        digest` warn) rather than in this option.
 
         Set from the private layer, e.g.:
 
-          castle.agent.stateDir = "/home/<you>/private/state";
+          castle.agent.stateDir = "/home/<you>/private-state";
 
         Wired into the `CASTLE_STATE_DIR` environment variable via
         `environment.sessionVariables` (see this module's `config` for
@@ -827,7 +839,7 @@ in
       {
         # docs/tasks/0021-auto-dispatch.md: automatic dispatch is
         # exactly the situation where the journal has to be the
-        # durable, private-repo-tracked one. Left to the fallback
+        # durable, git-tracked one. Left to the fallback
         # (~/.local/state/castle), the configured path and the
         # fallback coincide — the same blindness
         # test/desktop-loop/test.nix's testStateDir comment documents
@@ -838,10 +850,12 @@ in
           castle.agent.dispatch.enable is true but castle.agent.stateDir
           is unset. Automatic dispatch writes claim, result, and
           decision records unattended; they must land in the durable,
-          private-repo-tracked journal you chose, not in whatever
-          per-user fallback the CLI resolves on its own
-          (~/.local/state/castle). Set castle.agent.stateDir to your
-          private repo's state/ directory — see docs/private-layer.md.
+          git-tracked journal you chose, not in whatever per-user
+          fallback the CLI resolves on its own (~/.local/state/castle).
+          Set castle.agent.stateDir to that directory — and not to a
+          subdirectory of your flake repo, which would publish the
+          journal to the world-readable Nix store on every rebuild. See
+          docs/private-layer.md's "The agent's state".
         '';
       }
       {

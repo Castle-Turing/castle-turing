@@ -140,10 +140,14 @@ The values this repo may never contain:
   };
 
   # Optional — only meaningful if you use nixosModules.agent. Points the
-  # `castle` CLI at this private repo's own state/ directory rather than
-  # a per-user default under $XDG_STATE_HOME — see "The agent's state"
-  # below.
-  castle.agent.stateDir = "/home/<your-login>/private/state";
+  # `castle` CLI at a durable, git-tracked directory rather than a
+  # per-user default under $XDG_STATE_HOME. Deliberately a *sibling* of
+  # this repo and not a directory inside it: everything committed in
+  # this repo is copied into the world-readable /nix/store every time
+  # the flake is evaluated, and a journal is the last thing that should
+  # be. See "The agent's state" below, which is worth reading before
+  # you pick a path.
+  castle.agent.stateDir = "/home/<your-login>/private-state";
 
   # Optional — override the worker tenant (default: a headless
   # `claude -p`, see agent/castle-worker-claude) or the router's notify
@@ -215,8 +219,10 @@ The values this repo may never contain:
   resident model) live. Optional even if you import
   `nixosModules.agent`: unset, the CLI falls back to
   `$XDG_STATE_HOME/castle`, a reasonable per-user default but not the
-  durable, git-tracked location the architecture calls for. See "The
-  agent's state" below.
+  durable, git-tracked location the architecture calls for. Where you
+  point it matters for more than durability — a path inside this
+  repo's tracked tree publishes your journal to the Nix store on every
+  rebuild. Read "The agent's state" below before choosing one.
 - `castle.agent.worker.command` — which tenant holds the worker seat
   (docs/architecture.md's Proposal 03). Defaults to a headless
   `claude -p` (`agent/castle-worker-claude`); override only if you're
@@ -458,45 +464,259 @@ of a placeholder.
 
 `nixosModules.agent` installs the `castle` CLI but creates no state
 anywhere — Principle 02 again: a rebuild never contains a person, so
-the journal and resident model can't live in the derivation path. They
-live in this repo, your private one, under a `state/` directory you
-create:
+the journal and resident model can't live in the derivation path. You
+create the directory yourself, and it holds two things:
 
 ```
-state/
-  journal/            One file per record — requests, decisions,
-                       results, questions, answers, and corrections (the
-                       resident volunteering how the system is doing,
-                       unprompted — docs/tasks/0010-correction-record.md).
-                       Append-only in spirit: nothing is ever edited,
-                       only added to.
-  resident-model.md    A derived, regenerable view over the journal, not
-                       a second source of truth: one entry per fact,
-                       each carrying its own provenance — either
-                       elicited (question asked, answer given, when) or
-                       volunteered (which correction it came from,
-                       when). See agent/README.md for the entry formats
-                       and worked (fake) examples. Starts empty, or
-                       absent entirely, until the first elicited answer
-                       or volunteered correction.
+journal/            One file per record — requests, decisions,
+                     results, questions, answers, and corrections (the
+                     resident volunteering how the system is doing,
+                     unprompted — docs/tasks/0010-correction-record.md).
+                     Append-only in spirit: nothing is ever edited,
+                     only added to.
+resident-model.md    A derived, regenerable view over the journal, not
+                     a second source of truth: one entry per fact,
+                     each carrying its own provenance — either
+                     elicited (question asked, answer given, when) or
+                     volunteered (which correction it came from,
+                     when). See agent/README.md for the entry formats
+                     and worked (fake) examples. Starts empty, or
+                     absent entirely, until the first elicited answer
+                     or volunteered correction.
 ```
 
-Point `castle.agent.stateDir` at this directory (an absolute path,
+Point `castle.agent.stateDir` at that directory (an absolute path,
 since it's wired straight into an environment variable — see
 `resident.nix` above) and every `castle` invocation in your session
 reads and writes there instead of a throwaway per-user default.
-Because it's an ordinary directory in a git repo you already commit
-and control, it survives a reinstall, a move to new hardware, and a
-change of which model or harness holds the worker seat — which is the
-entire point (`docs/architecture.md`'s "Where runtime state lives").
 
-Two things `docs/architecture.md` is explicit about and worth
-repeating here: committing to this directory is a standing,
-made-then-reported authority — the diff is the audit trail, not a
-thing to approve in advance — and **pushing stays manual** until
-secrets tooling gives this repo a credential story for doing it
-unattended. Don't wire a cron job or a service to `git push` this
-repo's state until that lands.
+Keep it in git. That is where every property this directory is
+supposed to have comes from: it survives a reinstall, moves to new
+hardware, and survives a change of which model or harness holds the
+worker seat, because a `git clone` puts it back exactly as it was
+(`docs/architecture.md`'s "Where runtime state lives"). One commit per
+turn is the audit trail.
+
+**Which repository, though, is the question this section exists to
+answer** — and there is one wrong answer, which is the obvious one.
+
+### Not inside the repo you build the machine from
+
+Do not put `state/` inside your private flake repo's tracked tree.
+Earlier versions of this document told you to; they were wrong, and
+here is the mechanism, because you should not have to take this on
+trust.
+
+Nix keeps everything it builds from, and everything it builds, in
+`/nix/store`: one directory, owned by `root`, in which every file is
+mode `r--r--r--`. There are no per-path permissions in the store and
+no way to add any. If a file is in there, every account and every
+process on that machine can read it. That is not a flaw — it is what
+makes the store a shareable cache — but it means the store is the
+wrong place for anything private, without exception.
+
+`nixos-rebuild --flake /path/to/private#yourhost` — the documented way
+to build your machine — has to hand Nix your flake before it can
+evaluate it, and the way it does that is by **copying the flake's
+directory into the store**. What it copies is the repository's tracked
+git tree: everything you have committed, whether or not the build ever
+looks at it. Your `flake.nix` and `resident.nix` are the point of the
+exercise. A journal committed at `state/journal/` in the same
+repository goes along with them.
+
+So the old advice published every request, decision, question, answer
+and correction you had ever filed to every account on the machine, on
+every rebuild. Nothing about typing `nixos-rebuild` looks like it does
+that, which is exactly why it needs saying out loud.
+
+You can watch it happen, on any machine with Nix, in about a minute:
+
+```console
+$ mkdir -p /tmp/demo/state/journal && cd /tmp/demo
+$ echo '{ outputs = { self }: { x = 1; }; }' > flake.nix
+$ echo 'a private thing' > state/journal/rec.md
+$ git init -q && git add -A && git commit -qm x
+$ nix eval /tmp/demo#x
+1
+$ grep -rl 'a private thing' /nix/store
+/nix/store/<hash>-source/state/journal/rec.md
+```
+
+No build, no `nixos-rebuild`, no root — a single `nix eval` was
+enough. Three things make it worse than a one-off slip:
+
+- **Store paths are immutable.** Deleting the file from your repo
+  later removes nothing that is already in the store.
+- **They persist until garbage collection.** `nix-collect-garbage` is
+  the only thing that removes them, and only once nothing still refers
+  to them.
+- **Each distinct content gets its own store path.** So you accumulate
+  a version history of your own private records, in a place you had no
+  reason to think held any.
+
+Only the *tracked* tree is copied. An untracked or `.gitignore`d
+`state/` is not published this way — but a journal you never commit is
+a journal you lose at the next reinstall, which is the whole reason it
+lives in git. (One exception worth knowing if you ever write flakerefs
+by hand: the explicit `path:` scheme — `path:/path/to/private` rather
+than the plain `/path/to/private` — copies the directory as it stands
+on disk, untracked files included. Everything here assumes the plain
+form, which is what `nixos-rebuild --flake` documents and what these
+docs use throughout.)
+
+If your reaction is "no one else uses this machine": possibly not
+today, and possibly not this machine. Principle 01's premise is that
+strangers adopt this framework on hardware this project cannot see — a
+shared VPS with other tenants, a work laptop with a managed monitoring
+agent, a desktop with a second account for someone else in the house.
+And the store is readable by every *process*, not only every person,
+which on a machine running an agent layer is a distinction worth
+keeping in view.
+
+### Recommended: a sibling git repository
+
+Give `state/` its own repository, beside your config repo rather than
+inside it:
+
+```
+~/private/               your flake repo — flake.nix, flake.lock, resident.nix
+~/private-state/         a second, separate git repository
+  journal/                 same contents, same schema, same append-only
+                            discipline as before
+  resident-model.md
+```
+
+```nix
+castle.agent.stateDir = "/home/<your-login>/private-state";
+```
+
+Nothing is lost by splitting them. Every durability property above
+comes from git, not from cohabiting with the flake, and a `git clone`
+restores this repository exactly as it restores the config one. The
+cost is real and small: two repositories to `git commit` in — and, per
+"pushing stays manual" below, two to push.
+
+This is the recommendation because its safety does not depend on
+anything: no flake evaluates this directory, so no invocation of
+anything can copy it into the store.
+
+### Documented alternative: a git submodule at `state/`
+
+If you would rather keep one clone and one everyday workflow, wire
+`state/` in as a git **submodule** of your config repo:
+
+```console
+$ cd ~/private
+$ git submodule add <url-of-your-state-repo> state
+$ git commit -m 'state as a submodule'
+```
+
+`castle.agent.stateDir` then points where it always did
+(`/home/<your-login>/private/state`), `git status` inside `state/`
+behaves normally, and the store copy of your flake contains **no
+`state/` directory at all** — verified against a real `nix eval`, not
+assumed. The reason is that a plain path flakeref does not fetch
+submodule content: Nix copies the `.gitmodules` file and the gitlink,
+and stops there.
+
+**And that is also the catch, so read this before choosing it.** The
+exclusion holds *only* because of how the flake is referenced. A
+flakeref carrying the `?submodules=1` query parameter fetches the
+submodule's content and puts it straight back into the store copy:
+
+```console
+# do NOT do this — it puts state/ back in the store:
+$ nixos-rebuild switch --flake "/path/to/private?submodules=1#host"
+```
+
+Nothing about that command looks alarming, and nothing warns you. If
+you choose this layout, the rule is: **never add `?submodules=1` to
+any flakeref naming this flake, anywhere** — not in a `nixos-rebuild`
+invocation, not in a CI job, not in another flake's `inputs`. That is
+a rule you have to keep remembering, months later, possibly on a
+different machine. The sibling repository has no equivalent rule to
+forget, which is why it is the recommendation and this is the
+alternative.
+
+### If you set nothing at all
+
+Leaving `castle.agent.stateDir` unset is safe. The CLI falls back to
+`$XDG_STATE_HOME/castle` (or `~/.local/state/castle`), which is
+outside any flake and therefore never copied anywhere. It is a
+reasonable per-user default and a poor durable one — nothing about it
+survives a reinstall — so it is a fine place to try the tool and the
+wrong place to keep two years of elicited preferences.
+
+### `castle` will tell you if you get this wrong
+
+`castle validate` and `castle digest` each check where the state
+directory actually resolved, and print a `WARNING:` naming both it and
+the repository if it sits inside the tracked tree of a repository that
+carries a `flake.nix`. It is advisory: the exit code does not change,
+and nothing refuses to run. The copy is made by `nixos-rebuild`, not
+by `castle`, so refusing would prevent nothing and would withhold the
+two commands most likely to bring you the news.
+
+A `state/` wired in as a submodule does not trigger it — the check
+stops at the first repository root above the state directory, which
+for a submodule is the submodule itself. Deliberately not wired into
+`castle dispatch`, which a timer runs once a minute.
+
+### Two things worth repeating
+
+Both are from `docs/architecture.md`, and both hold for whichever
+repository ends up holding `state/`:
+
+- Committing to it is a standing, made-then-reported authority — the
+  diff is the audit trail, not a thing to approve in advance.
+- **Pushing stays manual** until secrets tooling gives this project a
+  credential story for doing it unattended. Don't wire a cron job or a
+  service to `git push` your state repository until that lands.
+
+## Migrating state out of the flake
+
+If you already followed the old advice, here is the move. It is three
+steps and three caveats, and the caveats matter more than the steps.
+
+1. **Move the directory.** For a sibling repository carrying the
+   history with it, `git filter-repo --subdirectory-filter state` on a
+   clone is the thorough route; for most people the honest and simple
+   one is `cp -r state ../private-state`, `git init` in the new
+   location, commit, then `git rm -r state` in the config repo and
+   commit that. For the submodule layout, `git rm -r state` first,
+   then `git submodule add <url> state`.
+2. **Repoint `castle.agent.stateDir`** at the new location and
+   rebuild. Run `castle validate`; the warning above should be gone.
+3. **Run `nix-collect-garbage`** once the move is committed and
+   rebuilt, or wait for the host's normal GC schedule.
+
+And now the parts that are less satisfying than they should be:
+
+- **Old store copies persist until garbage collection actually
+  runs.** Removing `state/` from the repository removes nothing
+  already in `/nix/store` — store paths are immutable by design.
+  `nix-collect-garbage` deletes them only once nothing still refers to
+  them, and an older system generation that points at a build
+  containing the old source path keeps it alive. Removing stale
+  generations (`nix-collect-garbage -d`, or
+  `nix-env --delete-generations`) may be needed first, which is a
+  decision about your rollback history and therefore yours.
+- **Your config repo's git history still contains the journal.** A
+  `git rm` and a commit do not erase the blobs; every earlier commit's
+  tree still holds them. That is not a store exposure — evaluation
+  publishes the tracked tree at a revision, not the history — but it
+  becomes one the moment that repository is pushed anywhere, cloned by
+  anyone, or made public. Rewriting history (`git filter-repo` or
+  equivalent) on a repository that has not been shared is the standard
+  remedy, and the same reasoning Principle 02's fourth consequence
+  gives for a leak into a public repo applies here. Whether it is
+  worth doing is your call; this document is not going to pretend
+  there is a tidy answer.
+- **If you never committed `state/`, nothing was ever exposed.** Only
+  the tracked tree is copied. A `state/` that was untracked or
+  `.gitignore`d the whole time never reached the store, and moving it
+  now is tidying rather than remediation. Check before assuming either
+  way — `git log --oneline -- state` in your config repo answers it.
 
 ## Automatic dispatch (optional, off by default)
 
@@ -584,18 +804,17 @@ costs you a question, not the errand.
 
 **The worker never evaluates your flake, and this is deliberate.** It
 reads the files. Evaluating a local flake copies its whole tracked
-tree into `/nix/store`, which is world-readable — and your journal and
-resident model live in that tree. Reading a file copies nothing. The
-cost of that choice is that the worker learns what each file *says*
-rather than which definition Nix would actually pick, so where the two
-could differ — an `mkForce`, a numbered `mkOverride`, a computed value
-— it asks you instead of guessing. (Your `nixos-rebuild` still
-evaluates the flake, and still publishes that tree; that is a
-pre-existing property of flakes rather than anything the agent layer
-does, and it is filed at
-`docs/backlog/private-layer-lands-in-the-world-readable-store.md`.)
+tree into `/nix/store`, which is world-readable. Reading a file copies
+nothing. The cost of that choice is that the worker learns what each
+file *says* rather than which definition Nix would actually pick, so
+where the two could differ — an `mkForce`, a numbered `mkOverride`, a
+computed value — it asks you instead of guessing. (Your
+`nixos-rebuild` still evaluates the flake, and still publishes that
+tree — which is why "The agent's state" above tells you to keep the
+journal out of it. This rule is the other half of the same defence,
+and it holds whatever layout you chose.)
 
-**One host per journal.** If you sync this private repo between
+**One host per journal.** If you sync your state repository between
 machines, turn dispatch on for only one of them. The lease that keeps
 a single worker per errand is machine-local — it lives in the runtime
 directory, not in the journal — so two dispatch-enabled hosts sharing
