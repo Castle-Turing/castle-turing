@@ -582,6 +582,105 @@ real `state/` directory on a real machine, per §3 — nothing in this
 task's scope can do that on anyone's behalf, and nothing should try
 to; §3's steps are what a human follows by hand.
 
+## Amendments made during implementation
+
+Recorded here rather than left to a PR description, per `CLAUDE.md`:
+a brief the work overtakes gets corrected in place. Six things this
+brief got wrong or left out, all found while implementing it.
+
+1. **The file-by-file list was incomplete, and its two "nothing
+   changes here" claims were both false.** The brief scoped the
+   documentation change to one section of `docs/private-layer.md`,
+   but four other places recommend the layout this task moves away
+   from, and one of them is the single most consequential: the
+   `resident.nix` **template** at `docs/private-layer.md`'s
+   "`resident.nix`" section, which a stranger copies verbatim, set
+   `castle.agent.stateDir = "/home/<your-login>/private/state"` with
+   a comment describing it as "this private repo's own state/
+   directory". Fixing the explanatory section while leaving the
+   template pointing inside the flake would have changed nothing
+   about what an adopter actually does. Also rewritten, for the same
+   reason:
+   - `docs/private-layer.md`'s `castle.agent.stateDir` bullet in the
+     `resident.nix` option list.
+   - `docs/private-layer.md`'s paragraph in "Automatic dispatch"
+     explaining why the worker never evaluates the flake, which
+     asserted that "your journal and resident model live in that
+     tree" and pointed at the backlog entry this brief deletes — a
+     link that would have dangled the moment the entry was removed.
+   - **`modules/agent/default.nix`** — the brief says "Nothing in
+     `modules/agent/default.nix` changes." Wrong: that option's own
+     `description` told a resident the value "is a path into the
+     private repo's checkout on the host (its `state/` directory)"
+     and gave `/home/<you>/private/state` as the example, and the
+     `dispatch.enable` assertion message said "Set
+     castle.agent.stateDir to your private repo's state/ directory."
+     Those strings are rendered into the NixOS option documentation a
+     resident reads. No option's type, default, or assertion changed —
+     the brief's actual constraint holds — but the prose did.
+   - **`agent/README.md`** — the brief says it "names no layout for
+     `state/` today" and asks the implementer to confirm. It did name
+     one, in four places ("the private repo's own `state/`
+     directory", "Living at `state/resident-model.md` in the private
+     repo", and two more). Corrected.
+
+2. **"Path flakeref" needed qualifying, and the doc now qualifies
+   it.** Re-verified for this implementation: a *bare* path flakeref
+   (`nix eval /path#attr`, what `nixos-rebuild --flake /path#host`
+   uses) copies only the tracked tree — an untracked file at
+   `state/journal/` was confirmed absent from the store copy. But the
+   **explicit `path:` scheme** (`path:/path#attr`) copies the
+   directory as it stands, untracked files and all; that was
+   confirmed too, by finding an untracked marker file inside the
+   resulting store path. The brief's "the exposure is exactly the
+   tracked tree, nothing more and nothing less" is true of the form
+   this project documents and false of the other one, so
+   `docs/private-layer.md` states the distinction rather than
+   inheriting the ambiguity — it matters directly to the migration
+   caveat that an uncommitted `state/` was never exposed.
+
+3. **The `digest` warning goes to stderr, like `validate`'s.** The
+   brief says stderr for `validate` and only "at the very top of
+   `cmd_digest`'s output" for `digest`. stderr for both: `castle
+   digest` writes a document a resident may redirect to a file or pipe
+   into a reader, and a warning about the machine's configuration is
+   not part of that document. The harness asserts the warning is
+   absent from stdout for exactly this reason.
+
+4. **`cmd_validate` asks about `state_dir()`, not `args.journal`.**
+   As the brief specifies — recorded here because the two can differ
+   (`castle validate --journal <path>` checks some other directory)
+   and the choice deserves to be visible rather than looking like an
+   oversight. The question is where the resident's state lives;
+   `--journal` is a one-off check of somewhere else and moves nothing.
+
+5. **The mutation test is executed, not only commented.** The brief
+   calls it "a fixture-construction requirement, not a second
+   implementation to write." Both, in the end: the fixture is
+   constructed as specified (the submodule case's outer repo carries
+   `flake.nix`), *and* `test/agent-loop/state-layout.sh` applies a
+   two-line patch to the real `agent/castle` at runtime — turning the
+   "no `flake.nix` here" branch's `return None` into `continue` — and
+   asserts the resulting mutant *does* warn on the submodule case.
+   That is not a second implementation maintained alongside the first;
+   it is the first one, broken on purpose. Without it, case 2 asserts
+   a silence, and a silence is satisfied by a rule that never warns at
+   all. The mutation step fails loudly if its anchor stops matching,
+   which is the correct outcome: whoever rewrites the rule should
+   re-express the mutation.
+
+6. **The harness cannot assume its own `$TMPDIR` is outside every
+   repository.** The XDG-default case wants "no `.git` anywhere in
+   its ancestry". Found in practice on the machine this was written
+   on: a stray empty `/tmp/.git` left behind by some other tool. The
+   harness therefore refuses to run only when an ancestor of
+   `$WORKDIR` carries **both** `.git` and `flake.nix` (which would
+   make every case warn for an environmental reason and mean
+   nothing), and otherwise logs that case 4 is exercising the
+   stop-at-the-first-repository-root branch rather than the
+   walk-to-the-filesystem-root branch. Both must be silent; both are
+   asserted.
+
 ## Implementation prompt
 
 For the session that implements this brief: read `CLAUDE.md` in full,
