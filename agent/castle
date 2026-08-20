@@ -471,6 +471,104 @@ def journal_dir() -> pathlib.Path:
     return d
 
 
+def _state_layout_finding(path: pathlib.Path) -> str | None:
+    """Why `path` is a dangerous place to keep a journal, or None if it
+    is not (docs/tasks/0030-state-outside-the-flake.md).
+
+    **The hazard.** `/nix/store` is one global directory, root-owned,
+    every file mode `r--r--r--`, with no per-path permissions and no
+    way to add any. Evaluating a path flakeref — `nixos-rebuild --flake
+    /path/to/private#host`, the documented way to use this framework —
+    copies that flake's entire tracked git tree into it. So a state
+    directory inside a flake repository's tracked tree publishes every
+    request, decision, question, answer and correction the resident has
+    ever filed to every account and every process on the machine, on
+    every rebuild, immutably until garbage collection. Nothing about
+    running `nixos-rebuild` looks like it does that, which is exactly
+    why it needs saying out loud.
+
+    **The rule: stop at the first repository root.** Walk upward from
+    `path`, asking one question at each directory — is there a `.git`
+    entry here? The *first* directory that answers yes is the
+    repository this state directory belongs to, and it is the only
+    directory this function then asks the second question of: does it
+    also carry a `flake.nix`? Yes means the state directory sits in the
+    tracked tree of an evaluated flake. No means it does not, and
+    nothing above that root can change that.
+
+    That stopping condition is load-bearing rather than an
+    optimisation. A `state/` wired in as a git *submodule* of the flake
+    repository carries its own `.git` (a file, not a directory —
+    submodules and linked worktrees both do), and a plain path flakeref
+    does not fetch submodule content, so the store copy of the outer
+    flake contains no `state/` directory at all. Verified for
+    docs/tasks/0030 against a real fixture, not assumed. A version of
+    this walk that instead asked "does any ancestor have `.git`, and
+    does any ancestor have `flake.nix`" would sail past the
+    submodule's own `.git`, reach the outer flake, and report a
+    provably safe layout as unsafe — on every `validate` and every
+    `digest`, until the resident stopped reading the warning.
+
+    **No `git` subprocess, and unlike `_checkout_fault` that is not a
+    compromise.** `git` reaches a session only through the optional
+    `modules/dev`, so a check that runs unconditionally must not need
+    it. `_checkout_fault` shells out anyway because it needs an answer
+    an existence test cannot give — whether git can *use* a checkout.
+    This function needs no such thing: "is there a `.git` entry here"
+    is the whole question, and `pathlib` answers it exactly, with no
+    subprocess and no `$PATH` dependency.
+
+    Advisory only. It reports; it never refuses. The store copy is made
+    by `nixos-rebuild`, not by this tool, so refusing to run `validate`
+    or `digest` would prevent nothing and withhold the two commands
+    most likely to carry the news to the resident.
+    """
+    # Symlinks resolved, because the store copies what a path really
+    # resolves to and not the name the resident typed. Tolerant of a
+    # path that does not exist yet: this is a question about names and
+    # ancestry, and every test below is an existence check that simply
+    # answers False.
+    resolved = pathlib.Path(os.path.realpath(path))
+
+    for directory in (resolved, *resolved.parents):
+        if not (directory / ".git").exists():
+            continue
+        # The first repository root above `path`. Stop here whatever
+        # the answer is — see the docstring.
+        if not (directory / "flake.nix").exists():
+            return None
+        return (
+            f"the state directory {resolved} is inside the git repository at "
+            f"{directory}, which carries a flake.nix. Evaluating that flake — "
+            "which every `nixos-rebuild --flake` does — copies the repository's "
+            "whole tracked tree into /nix/store, where every file is readable by "
+            "every account and every process on this machine. If the journal is "
+            "committed there, it is published on every rebuild and stays "
+            "published until garbage collection. Move the state directory out of "
+            "the flake's tracked tree and repoint castle.agent.stateDir at it: "
+            "docs/private-layer.md, \"The agent's state\" and \"Migrating state "
+            "out of the flake\"."
+        )
+
+    # No repository anywhere above it — nothing evaluates it, nothing
+    # copies it.
+    return None
+
+
+def _warn_state_layout() -> None:
+    """Print the layout finding, once, if there is one.
+
+    On stderr in both call sites, deliberately. `castle digest` writes a
+    document a resident may reasonably redirect to a file or pipe into a
+    reader; a warning about the machine's configuration is not part of
+    that document and must not end up inside it. stderr is where it can
+    be seen without being folded into the thing being read.
+    """
+    finding = _state_layout_finding(state_dir())
+    if finding:
+        print(f"WARNING: {finding}", file=sys.stderr)
+
+
 def runtime_dir_is_fallback() -> bool:
     """True when `runtime_dir()` resolved to its `/tmp` last resort.
 
@@ -4748,6 +4846,11 @@ def cmd_digest(args: argparse.Namespace) -> int:
     absent (scope 7, docs/tasks/0010): every correction in the period,
     verbatim first line, created time, and any refs the resident
     supplied."""
+    # Before anything is folded, and before the "No errands recorded"
+    # early return below — a resident whose journal is still empty is
+    # exactly the resident best placed to move it somewhere safe
+    # (docs/tasks/0030-state-outside-the-flake.md).
+    _warn_state_layout()
     records = load_all(journal_dir())
     requests = [rec for rec in records.values() if rec.type == "request"]
     corrections = [rec for rec in records.values() if rec.type == "correction"]
@@ -5033,6 +5136,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
         for ref in rec.refs:
             if ref not in records:
                 errors.append(f"{rec.path.name}: refs unknown record '{ref}'")
+
+    # Unconditionally, and outside the pass/fail branch below: an unsafe
+    # state layout is a fact about the environment, not a malformed
+    # record, so it must print whether or not the journal is
+    # schema-clean — and it must not join `errors`, which would fail a
+    # perfectly valid journal for a reason no edit to any record could
+    # fix (docs/tasks/0030-state-outside-the-flake.md). Nothing about
+    # this line changes the exit code.
+    #
+    # Asked of `state_dir()` rather than `jdir`: the question is where
+    # the resident's state lives, and `--journal` points this command
+    # at some other directory for a one-off check without moving
+    # anything.
+    _warn_state_layout()
 
     if errors:
         for err in errors:
