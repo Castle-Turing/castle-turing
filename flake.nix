@@ -132,15 +132,36 @@
       #
       # And plus secrets (docs/tasks/0031-secrets-tooling.md), with
       # castle.secrets.sopsFile left at its null default and no
-      # sops.secrets declared. That is the boundary this repo can prove
-      # and no further: sops-nix validates ciphertext at *evaluation*
-      # time (validateSopsFiles defaults true, and the secret submodule
-      # calls builtins.hashFile on the file), so a configuration here
-      # that declared a real secret would need a real, permanently
-      # working keypair committed to this public tree. The full
-      # decrypt-a-secret-on-a-real-machine path is proven instead in
-      # test/vm-install/, against a throwaway key and ciphertext
-      # generated per run and never committed.
+      # sops.secrets declared.
+      #
+      # What a declared secret would actually demand of this repo, since
+      # an earlier version of this comment got the mechanism wrong and a
+      # future designer reasoning from it would reject workable designs.
+      # Two checks, neither of which decrypts anything:
+      #
+      #   * at *evaluation*, with validateSopsFiles at its default true,
+      #     the file must exist and be readable — the secret submodule
+      #     runs builtins.hashFile over it and the manifest runs
+      #     builtins.pathExists, and both also require it to be in the
+      #     Nix store;
+      #   * at *build* of the manifest derivation, its checkPhase runs
+      #     sops-install-secrets -check-mode=sopsfile, which parses the
+      #     file and checks the named key is present in it
+      #     (recurseSecretKey) before returning.
+      #
+      # Neither step needs the *private* key. So a committed ciphertext
+      # alone would satisfy both, and the reason this repo still ships
+      # none is not that it cannot: it is that passing those two checks
+      # would only prove a file parses. The claim this task actually
+      # makes — that a machine decrypts a real secret unattended — needs
+      # a private key on that machine, and a permanently working keypair
+      # committed to a public tree is the thing rejected in the brief's
+      # "Considered and rejected". A standing ciphertext blob here would
+      # also be a permanent "is this a credential?" question for every
+      # scanner and every future reader, bought for a parse check.
+      # The decrypt-for-real path is proven instead in test/vm-install/,
+      # against a throwaway key and ciphertext generated per run and
+      # never committed.
       nixosConfigurations.example = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [

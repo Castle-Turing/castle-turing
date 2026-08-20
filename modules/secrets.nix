@@ -72,11 +72,23 @@ in
     (lib.mkIf (cfg.sopsFile != null) { sops.defaultSopsFile = cfg.sopsFile; })
 
     {
-      # Unconditional, unlike the above: declaring a path nothing yet
-      # consumes costs nothing, and it means the enrollment path always
-      # targets the same documented location whether or not a resident
-      # has declared any secrets yet.
-      sops.age.keyFile = cfg.ageKeyFile;
+      # Unconditional, unlike the gated defaultSopsFile above: declaring
+      # a path nothing yet consumes costs nothing, and it means the
+      # enrollment path always targets the same documented location
+      # whether or not a resident has declared any secrets yet.
+      #
+      # mkDefault for the same reason as the two lines below, and it was
+      # a bare definition until review asked why this one line was
+      # rigid. A private layer that follows sops-nix's own documentation
+      # and writes `sops.age.keyFile = "/persist/sops/key.txt"` directly
+      # should simply win. Bare, it did not: two definitions of a
+      # non-mergeable option collide on mergeEqualOption, and the error
+      # a resident gets talks about conflicting definitions without ever
+      # naming castle.secrets.ageKeyFile as the way out. This module's
+      # premise is that the resident keeps the whole upstream surface,
+      # so the framework states preferences at a priority their own
+      # definitions beat.
+      sops.age.keyFile = lib.mkDefault cfg.ageKeyFile;
 
       # The machine's SSH host keys are NOT decryption identities here,
       # in either of the two forms sops-nix derives one.

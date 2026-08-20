@@ -4,13 +4,28 @@
 layout so it is part of the reproducible install rather than a manual
 step.
 
-**Why it matters.** A laptop is a stolen-laptop risk, and this one will
-hold GitHub tokens, agent credentials, and eventually the resident's
-private layer — priorities, correspondence, the agent's model of its
-user. Without encryption the login password is decoration: anyone
-holding the machine can read the disk directly. Encryption is also what
-makes the seeded login password (see `modules/base`) a real boundary
-instead of a speed bump.
+**Why it matters — and this changed in kind, not just degree, with
+`docs/tasks/0031-secrets-tooling.md`.** A laptop is a stolen-laptop
+risk. As of that task the reference host does not merely *hold* secrets
+eventually; it holds, right now, a plaintext **age master key** at a
+fixed and publicly documented path — `/var/lib/sops-nix/key.txt`, mode
+`600`, root-owned — and that one file decrypts *every* secret in the
+resident's private repo: the Wi-Fi PSK today, and whatever tokens and
+credentials the mail and agent layers add later. Anyone holding this
+machine and able to read its disk gets the key, and with it a
+private-repo history's worth of credentials rather than one machine's
+worth. `600` and root ownership are protections against other *logged-in
+users*; they are worth nothing against physical possession.
+
+That is a deliberate, argued trade — see that task's "The honest
+limitation" and `docs/private-layer.md`'s section of the same name —
+not an oversight, and it is the correct trade only for as long as this
+entry stays open. Without encryption the login password is decoration
+and the age key is in the clear; encryption is also what makes the
+seeded login password (see `modules/base`) a real boundary instead of a
+speed bump. The eventual arrival of GitHub tokens and the resident's
+own priorities and correspondence raises the stakes further, but the
+stakes are already real today.
 
 **What we already know.**
 
@@ -31,6 +46,16 @@ instead of a speed bump.
     someone unlocks it.
   - **Console passphrase.** Simplest and strongest; ends unattended
     boot entirely.
+- **The key-planting step is now part of the install flow this would
+  change.** `docs/tasks/0031` plants the age key with `nixos-anywhere
+  --extra-files`, which writes into `/mnt` after disko has partitioned
+  *and mounted* the target — so on an encrypted root the key lands
+  inside the encrypted volume without any change to that step, which is
+  the good case. What does need thought is the unlock path chosen
+  below: a TPM2-bound key means the disk unlocks for whoever powers the
+  machine on, which protects the age key against a pulled drive but not
+  against a booted laptop; an initrd-SSH or console unlock protects it
+  against both and costs unattended boot.
 - Ripple effects: `modules/disk-layout.nix`, the installer flow, and
   the VM harness's power-cycle and NVRAM-wipe assertions (an encrypted
   target changes what "boots successfully" means in

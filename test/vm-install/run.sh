@@ -146,11 +146,34 @@ ADMIN_PUB="$ADMIN_KEY.pub"
 # ciphertext, and the plaintext marker inside it. That is the answer to
 # "what must a fake example secret satisfy so CI can assert it is not
 # real" — the job that asserts the value came back unchanged is the same
-# job that invented it, and nothing about it is ever committed. There is
-# deliberately no permanent example keypair anywhere in this repo: sops
-# validates its ciphertext at *evaluation* time, so a committed example
-# would have to be a permanently working key (see
-# nixosConfigurations.example's own comment in flake.nix).
+# job that invented it, and nothing about it is ever committed.
+#
+# **Where the plaintext marker reaches disk, stated rather than
+# glossed.** It is not confined to memory, and an earlier version of
+# this comment claimed it was — which is the more dangerous kind of
+# error, because someone could swap in a realistic fixture on the
+# strength of that sentence. Three places, all of them under $WORKDIR
+# or $LOG_DIR:
+#
+#   * $WORKDIR/expected-secret and $WORKDIR/actual-secret, written by
+#     phase 2c so `cmp` can compare bytes rather than shell strings;
+#   * $LOG_DIR/phase2c-secret-actual.od, an `od -c` dump written only
+#     when that comparison fails — and $LOG_DIR is what CI uploads as
+#     an artifact, with `if: always()`;
+#   * inside the VM, at /run/secrets/harness-fixture, which is the
+#     whole point.
+#
+# That is acceptable for *this* fixture and only because of what it is:
+# a marker string this script invented moments earlier, for a keypair
+# that is deleted when the run ends, meaning nothing about it is a
+# credential anywhere. **If you ever put a realistic value here, those
+# three places are what you have to fix first** — the CI artifact
+# especially, since a red run publishes it.
+#
+# There is deliberately no permanent example keypair anywhere in this
+# repo; see nixosConfigurations.example's own comment in flake.nix for
+# the argument, which is about what a committed artifact would cost
+# rather than about what evaluation requires.
 #
 # The marker string is what phase 2c compares byte-for-byte, which is
 # what makes this an end-to-end proof rather than a "some file appeared"
@@ -164,8 +187,10 @@ FIXTURE_SECRET="castle-turing-vm-install-harness-fixture"
   fail "could not generate the throwaway age key (see $LOG_DIR/age-keygen.log)"
 chmod 600 "$AGE_KEY"
 AGE_RECIPIENT=$("$AGE_KEYGEN_BIN" -y "$AGE_KEY")
-# The plaintext exists only inside this pipeline: sops reads it on
-# stdin, and only the ciphertext is ever written to disk.
+# The marker goes to sops on stdin rather than through a temp file, so
+# this step writes only ciphertext — but see the block above for the
+# three later places the plaintext *does* reach disk. This line is not
+# the whole story and must not be read as one.
 # --filename-override tells sops which format to parse stdin as, since
 # there is no filename to infer it from.
 if ! printf 'harness-fixture: %s\n' "$FIXTURE_SECRET" |

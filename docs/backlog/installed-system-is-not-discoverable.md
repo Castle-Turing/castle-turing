@@ -41,7 +41,17 @@ before writing a spec:
   stay quiet elsewhere? NetworkManager knows the connection; nothing
   currently consumes that.
 - Does this overlap with what a private-layer Wi-Fi profile would want
-  anyway, given both are blocked on the same missing secrets mechanism?
+  anyway? It no longer shares a blocker with one: the secrets mechanism
+  both were waiting on landed in `docs/tasks/0031-secrets-tooling.md`,
+  and a resident can now declare a Wi-Fi profile whose PSK comes from an
+  encrypted file (`docs/private-layer.md`, "Secrets"). That makes this
+  entry *more* pointed rather than less. A machine that joins a known
+  network by itself on first boot, and still cannot be found on it
+  without reading a router's lease table, is exactly the gap this
+  describes — the first half of the unattended story now works and the
+  second half does not. Whether the two should be declared together in
+  one private-layer block, or stay separate mechanisms, is the open
+  question that replaces the old shared-blocker one.
 
 **What we already know.**
 

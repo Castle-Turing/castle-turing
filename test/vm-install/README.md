@@ -243,6 +243,19 @@ keypair into the run's temp directory, `sops --encrypt --age <that key's
 recipient>` encrypts one known marker value into
 `harness-secrets.yaml`, and the private key is staged into an
 `--extra-files` directory as `var/lib/sops-nix/key.txt` (mode 600).
-The plaintext is never written to disk at all — it goes to `sops` on a
-pipe — and the key and ciphertext are deleted with the workdir when the
-run succeeds.
+The marker reaches `sops` on a pipe rather than through a temp file, and
+the key and ciphertext are deleted with the workdir when the run
+succeeds. It does **not** follow that the plaintext stays out of files,
+and an earlier version of this paragraph said it did. Phase 2c writes it
+to `$WORKDIR/expected-secret` and `$WORKDIR/actual-secret` so `cmp` can
+compare bytes rather than shell strings, and on a mismatch dumps it to
+`phase2c-secret-actual.od` in the log directory — which CI uploads as an
+artifact with `if: always()`, so a red run publishes it.
+
+That is fine for what this fixture is: a marker string invented by the
+run itself, for a keypair discarded at the end of it, so there is no
+credential anywhere to leak. It stops being fine the moment someone puts
+a realistic value in `FIXTURE_SECRET`, and those three paths are what
+would have to change first. The claim is written out here rather than
+left implicit precisely because a false invariant is what would license
+that swap.

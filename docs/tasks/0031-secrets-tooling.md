@@ -233,10 +233,15 @@ in
   config = lib.mkMerge [
     (lib.mkIf (cfg.sopsFile != null) { sops.defaultSopsFile = cfg.sopsFile; })
     {
-      sops.age.keyFile = cfg.ageKeyFile;
-      # Added during implementation — see "Amended during implementation",
-      # item 1. Not in this brief as written.
+      sops.age.keyFile = lib.mkDefault cfg.ageKeyFile;
+      # Both SSH-derived identity lists, not one: added during
+      # implementation, and the second of them only after review caught
+      # that the first fix was itself half a fix. See "Amended during
+      # implementation", item 1. Neither line is in this brief as
+      # originally written; nor is the mkDefault on keyFile above, which
+      # is item 14.
       sops.age.sshKeyPaths = lib.mkDefault [ ];
+      sops.gnupg.sshKeyPaths = lib.mkDefault [ ];
     }
   ];
 }
@@ -481,22 +486,46 @@ alongside the existing `castle.display` assertion block).
 
 What does **not** ship is a permanent, working example age keypair and
 a matching sops-encrypted file committed to this repo. That was
-considered and is argued against in Considered and rejected — the
-short version: `sops.secrets.<name>` with the honest, unweakened
+considered and is argued against in Considered and rejected.
+
+~~The short version: `sops.secrets.<name>` with the honest, unweakened
 default `validateSopsFiles = true` requires a real, decryptable
 ciphertext file to exist on disk at *evaluation* time (verified:
 `modules/sops/default.nix`'s `sopsFileHash` calls `builtins.hashFile`
 directly, gated only on that option), so proving the full
 `ensureProfiles`/`sops.secrets` pattern in `nix flake check` would
-require either committing a real, permanently-working keypair (a
-standing secret-scanner and confused-future-reader hazard, in a repo
-whose own `CLAUDE.md` treats "never write personal data" as a hard
-rule) or turning that safety check off for the demo, which proves
-nothing while looking like it proves something. The pattern is instead
-proven for real, with a throwaway keypair and a throwaway ciphertext
-file, neither ever committed, inside the `test/vm-install/` harness —
-see Verification plan. That is a real, argued design choice, not an
-oversight; flagged for the human's review rather than assumed.
+require either committing a real, permanently-working keypair … or
+turning that safety check off for the demo.~~ **The mechanism in that
+sentence is wrong, and it is corrected here rather than left to
+mislead — see "Amended during implementation", item 12.** Nothing
+decrypts at evaluation. What `validateSopsFiles` actually buys is two
+checks: at eval the file must exist, be readable and be in the store
+(`builtins.hashFile` in the secret submodule, `builtins.pathExists` in
+`manifest-for.nix`), and at *build* of the manifest derivation its
+`checkPhase` runs `sops-install-secrets -check-mode=sopsfile`, which
+parses the file and confirms the named key is present
+(`recurseSecretKey`). Neither needs the private key.
+
+**The decision survives the corrected reasoning, for a different and
+better reason than the one originally given.** A committed ciphertext
+with its private key discarded *would* satisfy both checks — so the
+constraint is not "impossible" but "not worth it". Passing those two
+checks proves a file parses; it does not prove the thing this task
+claims, which is that a machine decrypts a real secret with nobody
+present. Proving *that* in this repo needs a private key committed
+alongside it — a permanently working keypair in a public tree, which is
+the standing secret-scanner and confused-future-reader hazard the
+Considered-and-rejected entry names, in a repo whose own `CLAUDE.md`
+treats "never write personal data" as a hard rule. Turning
+`validateSopsFiles` off instead proves nothing while looking like it
+proves something. And a permanent ciphertext blob, even a defanged one,
+is a standing "is this a credential?" question every scanner and every
+future reader has to answer, bought in exchange for a parse check. The
+pattern is instead proven for real, with a throwaway keypair and a
+throwaway ciphertext file, neither ever committed, inside the
+`test/vm-install/` harness — see Verification plan. That is a real,
+argued design choice, not an oversight; flagged for the human's review
+rather than assumed.
 
 ## Considered and rejected
 
@@ -993,6 +1022,96 @@ Everything above is the brief as specced except where it points here.
     `ls -l` earns its place over a bare `test -f` by printing the
     staged key's mode on the way past — verified in all four states
     (unset, empty, staged-but-missing, present).
+
+
+12. **"sops-nix validates ciphertext at evaluation time" was wrong
+    about the mechanism, and the wrong version was load-bearing in two
+    files.** Nothing decrypts at eval, and neither of the two checks
+    that do run needs the *private* key. At evaluation, with
+    `validateSopsFiles` at its default `true`, the file must exist, be
+    readable and be in the store (`builtins.hashFile` in the secret
+    submodule; `builtins.pathExists` plus a store-prefix check in
+    `manifest-for.nix`). At *build* of the manifest derivation, its
+    `checkPhase` runs `sops-install-secrets -check-mode=sopsfile`,
+    which parses the file and confirms the named key is present
+    (`recurseSecretKey` in `main.go`) and returns before doing any
+    install work. Corrected in `flake.nix`'s
+    `nixosConfigurations.example` comment, in `test/vm-install/run.sh`,
+    and in the "obviously-fake example" section above.
+
+    **The decision not to commit an example survives, on better
+    reasoning.** A committed ciphertext whose private key was discarded
+    *would* pass both checks — so the honest argument is not "the
+    tooling forbids it" but "it would buy a parse check and cost a
+    permanent artifact." Proving what this task actually claims — a
+    machine decrypting a real secret with nobody present — needs a
+    private key on that machine, which is the permanently-working
+    keypair the Considered-and-rejected entry refuses; and a standing
+    ciphertext blob in a public repo is a "is this a credential?"
+    question every scanner and every future reader has to answer. This
+    matters beyond bookkeeping: a future agent reasoning from the wrong
+    version would reject designs that in fact work.
+
+13. **The harness claimed an invariant it does not hold.** `run.sh` and
+    `test/vm-install/README.md` both said the fixture's plaintext is
+    never written to disk. It is: phase 2c writes
+    `$WORKDIR/expected-secret` and `$WORKDIR/actual-secret` so `cmp` can
+    compare bytes rather than shell strings, and on mismatch dumps
+    `phase2c-secret-actual.od` into `$LOG_DIR` — which
+    `.github/workflows/vm-install-test.yml` uploads as an artifact with
+    `if: always()` and 14-day retention (verified in that file). Only
+    the *encryption step* keeps plaintext off disk, by piping it to
+    `sops`.
+
+    Harmless for what the fixture is — a marker the run invents seconds
+    before use, for a keypair deleted at the end of it. The hazard was
+    the sentence, not the behaviour: a false invariant written down is
+    what licenses someone to swap in a realistic fixture later, and then
+    a red run publishes it. Both places now state exactly which three
+    paths the plaintext reaches and say plainly that those are what must
+    change first if the fixture ever stops being a marker. Described
+    rather than tightened, deliberately: an honest account of real
+    behaviour is worth more here than a cleverer comparison that would
+    make the sentence true and then drift out of date the same way.
+
+14. **`sops.age.keyFile` is `lib.mkDefault`, not a bare definition.**
+    It was bare, sitting directly above two `mkDefault` lines whose
+    reasons were stated — an unexplained asymmetry, and one with a real
+    cost. `sops.age.keyFile` is `nullOr pathNotInStore`, whose `merge`
+    is `mergeEqualOption`, so a private layer following sops-nix's own
+    documentation and writing `sops.age.keyFile = "/persist/sops/key.txt"`
+    got a conflict, not an override. Verified both directions on this
+    branch rather than reasoned: bare, that resident's definition
+    produced `error: The option 'sops.age.keyFile' has conflicting
+    definition values`, naming `modules/secrets.nix` and `<unknown-file>`
+    and never mentioning `castle.secrets.ageKeyFile` as the way out;
+    with `mkDefault`, the same definition resolves to
+    `/persist/sops/key.txt`. This module's premise is that the resident
+    keeps the whole upstream surface, so the framework states its
+    preferences at a priority a resident's own definitions beat.
+
+15. **Two backlog entries the earlier sweep missed**, both of which
+    this task changes the truth of:
+
+    - `docs/backlog/disk-encryption.md` described in *future* tense what
+      an unencrypted disk "will hold". As of this task it holds, today,
+      a plaintext age master key at a fixed and publicly documented
+      path, and that one file opens every secret in the resident's
+      private repo — not one machine's worth of credentials but a
+      repository history's worth. The entry now says that in present
+      tense and names this task as what changed it, plus a new bullet
+      on how the key-planting step interacts with each unlock path.
+      This one mattered most: `docs/private-layer.md`'s "honest
+      limitation" *defers* to that entry ("now true of one more file"),
+      so before this fix the fact lived only in the document pointing
+      away from it, and a resident weighing whether disk encryption
+      matters reads the entry, not the deferral.
+    - `docs/backlog/installed-system-is-not-discoverable.md` said it and
+      declarative Wi-Fi were "blocked on the same missing secrets
+      mechanism". That mechanism is this task. The entry now records
+      that the shared blocker is gone and that this makes it sharper,
+      not softer: a machine that joins a known network by itself and
+      still cannot be found on it is precisely the remaining gap.
 
 ## Implementation prompt
 
