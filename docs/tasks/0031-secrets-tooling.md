@@ -232,7 +232,12 @@ in
 
   config = lib.mkMerge [
     (lib.mkIf (cfg.sopsFile != null) { sops.defaultSopsFile = cfg.sopsFile; })
-    { sops.age.keyFile = cfg.ageKeyFile; }
+    {
+      sops.age.keyFile = cfg.ageKeyFile;
+      # Added during implementation — see "Amended during implementation",
+      # item 1. Not in this brief as written.
+      sops.age.sshKeyPaths = lib.mkDefault [ ];
+    }
   ];
 }
 ```
@@ -309,7 +314,11 @@ what that file's file-by-file entry below expands into prose:
 
 Read directly out of this task's pinned `nixos-anywhere` source
 (`ad8fa24e11eef167fd72d49fafefa3f840312d71`), not assumed from its
-prose docs alone:
+prose docs alone — and **re-read during implementation** out of what
+this flake actually resolves, which is `pkgs.nixos-anywhere` at version
+`1.13.0` from the pinned nixpkgs (a release tarball, so a version
+rather than a rev is what identifies it here). Every claim below held
+against that source, unchanged:
 
 - `--extra-files`'s copy (`src/nixos-anywhere.sh`, the `Copying extra
   files` step) runs via `tar -C "$extraFiles" ... | runSsh "tar -C /mnt
@@ -501,10 +510,17 @@ oversight; flagged for the human's review rather than assumed.
   reinstalled machine gets a fresh host key by construction, which
   means a wipe destroys the ability to read every secret that existed
   before it — precisely the "re-enrollment puzzle" `docs/backlog/secrets-tooling.md`
-  names as a requirement to avoid. This task's module sets
+  names as a requirement to avoid. ~~This task's module sets
   `sops.age.keyFile` unconditionally, which means sops-nix never falls
   through to the SSH-derived path at all — nothing needs to be
-  disabled, only never enabled.
+  disabled, only never enabled.~~ **Wrong as written; corrected during
+  implementation.** `sops.age.sshKeyPaths` is not a fallback that a set
+  `keyFile` suppresses: it defaults to the host's ed25519 keys and
+  `sops-install-secrets` imports those *alongside* the key file, into
+  one age keyring (verified in `pkgs/sops-install-secrets/main.go`,
+  which writes both into a single `age-keys.txt`). Disabling it
+  therefore does take a line, and `modules/secrets.nix` now carries it
+  — see "Amended during implementation", item 1.
 - **A hardware token** (a YubiKey or similar, via `age-plugin-yubikey`
   and `sops.age.plugins`). The right eventual end state — a key that
   cannot be exfiltrated by copying a file — but rejected for *this*
@@ -647,7 +663,12 @@ oversight; flagged for the human's review rather than assumed.
   this branch per the tasks convention.
 
 Nothing in `modules/base/default.nix` changes — see Non-goals. Nothing
-in `modules/installer.nix` changes — see "Re-reading finding #1" above.
+*behavioural* in `modules/installer.nix` changes — see "Re-reading
+finding #1" above — though two of its comments turned out to assert
+that no secrets mechanism exists in this repo, and were corrected: see
+"Amended during implementation", item 3, along with two further
+stale-claim sites in `docs/architecture.md` and `docs/private-layer.md`
+that the file-by-file list did not anticipate (item 4).
 
 ## Non-goals
 
@@ -706,10 +727,16 @@ in `modules/installer.nix` changes — see "Re-reading finding #1" above.
   'an obviously-fake example' means here" for why this is the right
   boundary rather than a gap), and the new assertion that
   `sops.age.keyFile` resolves to the framework's documented default.
-  This also pulls `sops-install-secrets`'s package build into the
+  ~~This also pulls `sops-install-secrets`'s package build into the
   `nixosConfigurations.example` closure for the first time — a real,
   modest addition to `flake-check`'s build time, worth noting rather
-  than hiding, not a blocker.
+  than hiding, not a blocker.~~ **Predicted wrong; measured during
+  implementation.** `nix flake check` *evaluates* every
+  `nixosConfiguration` (which is what forces the assertions) but does
+  not build any of their `toplevel`s, so no sops package build enters
+  that gate at all. Measured on the implementing machine, cold cache
+  either side: 56.0s before this task's changes, 55.7s and 57.4s after
+  — i.e. no detectable difference, well inside run-to-run noise.
 - **`test/vm-install/`, extended.** This is the harness that actually
   proves an unattended install, and the brief does not hand-wave past
   it: it is extended to plant a key and assert a secret decrypts, not
@@ -778,6 +805,107 @@ manager, running a real `nixos-anywhere --extra-files` install against
 real hardware, and confirming a real Wi-Fi network is actually joined
 (the one thing no VM harness here can simulate, per the gap named
 above). Nothing in this task's scope can do that on anyone's behalf.
+
+## Amended during implementation
+
+Written by the implementing session, per `CLAUDE.md`'s rule that a
+design shift during implementation corrects its brief in the same PR.
+Everything above is the brief as specced except where it points here.
+
+1. **`sops.age.sshKeyPaths` had to be turned off explicitly; the brief
+   said it did not.** The "Considered and rejected" bullet on
+   SSH-derived keys asserted that setting `sops.age.keyFile` means
+   sops-nix "never falls through to the SSH-derived path at all."
+   Read against the locked rev (`a8627b21`), that is false in a way
+   that matters: `sops.age.sshKeyPaths` has its own default —
+   `config.services.openssh.hostKeys`'s ed25519 entries, and
+   `modules/base` enables OpenSSH — and `sops-install-secrets` imports
+   the SSH-derived identities *and* the key file into one keyring
+   (`pkgs/sops-install-secrets/main.go`: both are appended to a single
+   `age-keys.txt`, gated on `len(AgeSSHKeyPaths) != 0 || AgeKeyFile !=
+   ""`). Nothing breaks either way — the planted key still decrypts —
+   but a resident could encrypt a secret to the host key without
+   noticing and lose it permanently at the next reinstall, which is the
+   precise failure this design chose a planted key to avoid.
+   `modules/secrets.nix` therefore sets `sops.age.sshKeyPaths =
+   lib.mkDefault [ ]`: `mkDefault` rather than a bare definition so a
+   resident who actually wants SSH-derived identities can still say so,
+   and so the framework's posture sits at a priority their own
+   configuration wins over.
+
+2. **`nix flake check`'s cost did not move.** See the corrected
+   Verification-plan bullet: the gate evaluates configurations, it does
+   not build their toplevels, so `sops-install-secrets` never enters
+   it. Measured, not assumed.
+
+3. **`modules/installer.nix` did change, in comments only.** The
+   file-by-file list said "Nothing in `modules/installer.nix` changes,"
+   which was right about behaviour and wrong about truth: two comments
+   there stated that "this repo has no secrets mechanism yet — sops-nix
+   is explicitly out of scope," a claim this task falsifies the moment
+   it lands. Both now say what is actually true — the installer image
+   is unaffected *because it has no disk to plant a key onto yet*,
+   which is a stronger statement than the one they used to make. No
+   option, script, or guided-join behaviour in that file was touched.
+
+4. **The stale-claim sweep found two more live sites than the brief
+   named**, both about pushing rather than Wi-Fi:
+   `docs/architecture.md`'s "until secrets tooling lands, commits may be
+   local-only" and `docs/private-layer.md`'s "**Pushing stays manual**
+   until secrets tooling gives this project a credential story." Both
+   name this task's arrival as their unblocking condition, and both
+   would have read as satisfied the moment it merged — while the
+   Non-goals section here is explicit that a push credential is *not*
+   what this ships. Both were rewritten to separate the two: the
+   storage mechanism exists now; the authority question of what an
+   unattended push may do has not been answered, and that is what still
+   gates it. `README.md`'s "Secrets tooling enters the repo before the
+   first credential exists" was checked and deliberately left alone —
+   it states a standing rule, not a status.
+
+5. **`nixosConfigurations.example` asserts three facts, not one.**
+   The brief specced `config.sops.age.keyFile == "/var/lib/sops-nix/key.txt"`.
+   The shipped assertion adds `!options.sops.defaultSopsFile.isDefined`
+   (the gate in §1 is the reason the module is importable with no
+   secrets declared, so it is worth pinning that it really is left
+   undefined rather than set to something) and
+   `config.sops.age.sshKeyPaths == [ ]` (item 1 above — a regression
+   there is silent and only bites at a reinstall, which is the worst
+   possible time to find out).
+
+6. **The harness asserts the key's mode and ownership too.** The brief
+   specced one post-first-boot assertion, on the decrypted value. The
+   shipped harness checks `stat` on `/var/lib/sops-nix/key.txt` first
+   (`600 root:root`), because "the key never arrived", "the key arrived
+   world-readable" and "the key arrived but did not decrypt" are three
+   different bugs and the value assertion alone cannot tell them apart.
+   It is also the only automated check anywhere that
+   `--extra-files`'s permission-preserving and `--no-same-owner`
+   behaviour — which this brief verified by reading source — is really
+   what happens.
+
+7. **The fixture's plaintext never touches disk.** The brief's sketch
+   was `sops --encrypt --age <recipient>` over a file. `run.sh` pipes
+   the marker into `sops` on stdin instead, with
+   `--filename-override harness-secrets.yaml` so sops still infers the
+   YAML format, so the only plaintext copy of the fixture lives in a
+   shell variable for the length of one pipeline.
+
+8. **The backlog deletion rides the first implementation commit**, not
+   the brief's own. `b059f47`'s message says it promotes and deletes
+   `secrets-tooling.md` and edits `declarative-wifi.md` in place; its
+   diff is the brief and nothing else. Both backlog changes landed on
+   the next commit instead — same branch, same PR, same review, so
+   `docs/backlog/README.md`'s lifecycle rule is satisfied in substance,
+   and saying so here is cheaper than rewriting history to make one
+   commit message literally true.
+
+9. **`flake.nix` and `modules/installer.nix` are not `nixfmt`-clean,
+   and were already not clean on `origin/main`** (verified by running
+   the check against a stashed tree). They were left as they are: this
+   task's edits introduce no new formatting divergence, and
+   reformatting either file would bury a small diff inside a large one.
+   `modules/secrets.nix` is clean.
 
 ## Implementation prompt
 
