@@ -78,19 +78,39 @@ in
       # has declared any secrets yet.
       sops.age.keyFile = cfg.ageKeyFile;
 
-      # The machine's SSH host key is NOT a decryption identity here.
-      # Upstream defaults `sops.age.sshKeyPaths` to the host's ed25519
-      # keys and `sops-install-secrets` imports them *alongside*
-      # keyFile, into one age keyring — so setting keyFile does not on
-      # its own keep the SSH-derived identity out, which is what
-      # docs/tasks/0031 originally assumed and this implementation
-      # corrected. Left in place, a resident could encrypt a secret to
-      # the host key without noticing, and lose it permanently on the
-      # next reinstall: a wiped machine gets a fresh host key, and that
-      # is exactly the re-enrollment puzzle the planted age key exists
-      # to avoid. mkDefault, not a bare definition, so a resident who
-      # actually wants ssh-derived identities can still say so.
+      # The machine's SSH host keys are NOT decryption identities here,
+      # in either of the two forms sops-nix derives one.
+      #
+      # Upstream gives `sops.age.sshKeyPaths` the host's *ed25519* keys
+      # as its default and `sops.gnupg.sshKeyPaths` the host's *RSA*
+      # keys, sixteen lines apart in the same file, and
+      # `sops-install-secrets` imports each into a keyring it decrypts
+      # with. So setting `age.keyFile` keeps neither of them out —
+      # which is what docs/tasks/0031 originally assumed, and what two
+      # successive passes over this module each half-corrected: the
+      # first closed only the age half, and the review that verified it
+      # read past the gnupg sibling in its own grep output.
+      #
+      # Left in place, either one lets a resident encrypt a secret to
+      # an identity the machine will not have after a wipe — add the
+      # host key's PGP fingerprint to .sops.yaml, the common recipe,
+      # and everything works until the reinstall that makes it
+      # permanently unreadable. That is precisely the re-enrollment
+      # puzzle the planted age key exists to avoid, so both lists are
+      # emptied, not one.
+      #
+      # mkDefault, not a bare definition, so a resident who actually
+      # wants ssh-derived identities can still say so. Emptying the
+      # gnupg list has a second, smaller benefit: upstream requires it
+      # to be explicitly unset before `sops.gnupg.home` may be set at
+      # all, so this clears that footgun too.
+      #
+      # Nothing else on this module's surface carries a decryption
+      # identity by default — checked rather than assumed:
+      # age.generateKey is false, age.plugins is empty, and gnupg.home
+      # is null on a configuration importing this module.
       sops.age.sshKeyPaths = lib.mkDefault [ ];
+      sops.gnupg.sshKeyPaths = lib.mkDefault [ ];
     }
   ];
 }

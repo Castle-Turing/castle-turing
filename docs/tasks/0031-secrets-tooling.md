@@ -425,7 +425,10 @@ Traced through the verified mechanism above, not asserted:
   `modules/sops/default.nix`) fails with a nonzero exit naming the
   missing `sops.age.keyFile` path; that failure is visible in the
   activation log (`journalctl -b`, or the console during
-  `nixos-rebuild`/`nixos-install` itself). `sops.templates."wifi.env"`
+  `nixos-rebuild`/`nixos-install` itself) — though at *install* time it
+  does not stop the install, which this brief implied and which is
+  corrected in "Amended during implementation", item 10.
+  `sops.templates."wifi.env"`
   is never rendered. `networking.networkmanager.ensureProfiles`'s own
   systemd unit, `NetworkManager-ensure-profiles.service`, has
   `EnvironmentFile` pointing at a file that does not exist and is
@@ -518,9 +521,12 @@ oversight; flagged for the human's review rather than assumed.
   `keyFile` suppresses: it defaults to the host's ed25519 keys and
   `sops-install-secrets` imports those *alongside* the key file, into
   one age keyring (verified in `pkgs/sops-install-secrets/main.go`,
-  which writes both into a single `age-keys.txt`). Disabling it
-  therefore does take a line, and `modules/secrets.nix` now carries it
-  — see "Amended during implementation", item 1.
+  which writes both into a single `age-keys.txt`). Nor is age the only
+  form: `sops.gnupg.sshKeyPaths` does the same with the host's RSA
+  keys. Disabling them therefore takes two lines, not zero, and
+  `modules/secrets.nix` now carries both — see "Amended during
+  implementation", item 1, which also records that this guard was left
+  incomplete twice before it was complete.
 - **A hardware token** (a YubiKey or similar, via `age-plugin-yubikey`
   and `sops.age.plugins`). The right eventual end state — a key that
   cannot be exfiltrated by copying a file — but rejected for *this*
@@ -833,6 +839,35 @@ Everything above is the brief as specced except where it points here.
    and so the framework's posture sits at a priority their own
    configuration wins over.
 
+
+   **And that fix was itself only half of one — the guard was
+   incomplete twice before it was complete.** `sops.gnupg.sshKeyPaths`
+   has the identical upstream shape sixteen lines below its age
+   sibling: `default = defaultImportKeys "rsa"`, the RSA entries of
+   `config.services.openssh.hostKeys`, imported by
+   `sops-install-secrets` into a keyring it decrypts with. So after the
+   age half was closed, `nixosConfigurations.example` still evaluated
+   to `{"age":[],"gpg":["/etc/ssh/ssh_host_rsa_key"]}`, the block's own
+   comment claiming "the machine's SSH host key is NOT a decryption
+   identity here" was false as written, and the trap stayed reachable
+   by the common recipe of adding the host key's PGP fingerprint to
+   `.sops.yaml` — works, warns about nothing, unreadable after the next
+   wipe.
+
+   Both passes failed the same way, which is the part worth recording.
+   The implementing session found the age option by reading the source
+   and stopped at the instance it had found; the reviewing session
+   verifying that finding ran a `grep` for `sshKeyPaths` whose own
+   output printed **both** options — age at `:364`, gnupg at `:384` —
+   confirmed the one it was checking and read past the sibling in its
+   own terminal. The rule this project keeps relearning is *sweep for
+   the class, not the instance*, and neither the fix nor the
+   verification of the fix applied it. `modules/secrets.nix` now empties
+   both lists, and the whole identity surface was enumerated by
+   evaluation rather than reading: `age.generateKey` false,
+   `age.plugins` empty, `gnupg.home` null, both `sshKeyPaths` empty —
+   nothing else on that surface carries an identity by default.
+
 2. **`nix flake check`'s cost did not move.** See the corrected
    Verification-plan bullet: the gate evaluates configurations, it does
    not build their toplevels, so `sops-install-secrets` never enters
@@ -863,15 +898,25 @@ Everything above is the brief as specced except where it points here.
    first credential exists" was checked and deliberately left alone —
    it states a standing rule, not a status.
 
-5. **`nixosConfigurations.example` asserts three facts, not one.**
+5. **`nixosConfigurations.example` asserts four facts, not one.**
    The brief specced `config.sops.age.keyFile == "/var/lib/sops-nix/key.txt"`.
    The shipped assertion adds `!options.sops.defaultSopsFile.isDefined`
    (the gate in §1 is the reason the module is importable with no
    secrets declared, so it is worth pinning that it really is left
-   undefined rather than set to something) and
-   `config.sops.age.sshKeyPaths == [ ]` (item 1 above — a regression
+   undefined rather than set to something) and **both**
+   `config.sops.age.sshKeyPaths == [ ]` and
+   `config.sops.gnupg.sshKeyPaths == [ ]` (item 1 above — a regression
    there is silent and only bites at a reinstall, which is the worst
    possible time to find out).
+
+   The first version of this assertion checked only the age list while
+   its failure message claimed "a host SSH key is not a decryption
+   identity in this design" — a claim that was false on the very
+   configuration doing the asserting. That is worse than not checking
+   at all: it reads to a future maintainer as proof that a guarantee is
+   held, and the half nobody was watching is exactly the half that had
+   drifted. Where an assertion's message names a property, the
+   assertion has to check every part of that property.
 
 6. **The harness asserts the key's mode and ownership too.** The brief
    specced one post-first-boot assertion, on the decrypted value. The
@@ -906,6 +951,48 @@ Everything above is the brief as specced except where it points here.
    task's edits introduce no new formatting divergence, and
    reformatting either file would bury a small diff inside a large one.
    `modules/secrets.nix` is clean.
+
+10. **The install-time failure is quieter than this brief implied, and
+    the docs now say what actually happens.** "What the resident sees
+    when the key is absent or wrong" says the failure "is visible in
+    the activation log (`journalctl -b`, or the console during
+    `nixos-rebuild`/`nixos-install` itself)", which is true but reads
+    as though the install would stop. It does not. `nixos-install`
+    reaches activation through `nixos-enter`, which runs it as
+    `"$system/activate" || true` (`pkgs/by-name/ni/nixos-enter/nixos-enter.sh`,
+    line 104 at this pin), and NixOS's activation wrapper prints
+    `Activation script snippet '%s' failed (%s)` and carries on
+    (`nixos/modules/system/activation/activation-script.nix`, line 22).
+    So a missing or wrong key leaves `nixos-anywhere` exiting 0 and
+    reporting a successful install, with the diagnostic one line in a
+    long transcript. `hosts/xps9370/README.md` and
+    `docs/private-layer.md` now describe that precisely and point at
+    the machine's *first boot* — where `systemctl --failed` and a
+    dead network really are loud — as the place the failure is
+    genuinely obvious. Decision #2's "loud and recoverable" argument
+    survives this intact; it was always an argument about the running
+    machine, not about the installer's exit code.
+
+11. **An empty `--extra-files` argument is silently ignored, so the
+    documented flow now refuses rather than skips.** `nixos-anywhere`
+    guards its copy with `if [[ -n ${extraFiles} ]]`, so an unset or
+    empty `$root` skips the copy without a word and the install
+    succeeds. The staging block and the install command are separate
+    pastes — in `hosts/xps9370/README.md` two fenced blocks with prose
+    between them, and in `docs/private-layer.md` a different document
+    entirely — so losing the variable to a new terminal or a `cd` is a
+    normal thing to do, not a careless one. Combined with item 10, the
+    failure mode on the reference chassis is specific and bad: a
+    laptop with no Ethernet port that boots, decrypts nothing, joins no
+    network, and cannot be reached at all, after an install that
+    reported success. Both documents now stage into a named directory
+    rather than `mktemp -d`, and put
+    `ls -l "${root:?...}/var/lib/sops-nix/key.txt" &&` in front of the
+    install as one command, so an unset variable or an unstaged key
+    stops the install instead of quietly producing that laptop. The
+    `ls -l` earns its place over a bare `test -f` by printing the
+    staged key's mode on the way past — verified in all four states
+    (unset, empty, staged-but-missing, present).
 
 ## Implementation prompt
 

@@ -299,18 +299,26 @@
                   #      demand a file that does not exist; leaving it
                   #      undefined is precisely what makes the slot
                   #      importable before a resident has any secrets.
-                  #   3. No SSH-derived age identity is in play.
+                  #   3. No SSH-derived identity is in play, in either
+                  #      of the two forms sops-nix derives one.
                   #      Upstream defaults sops.age.sshKeyPaths to the
-                  #      host's ed25519 keys, and sops-install-secrets
-                  #      imports those *alongside* keyFile — so a
-                  #      secret could be encrypted to an identity that
-                  #      a reinstall destroys, which is the exact
-                  #      re-enrollment trap docs/tasks/0031 chose a
-                  #      planted key file to avoid.
+                  #      host's ed25519 keys and sops.gnupg.sshKeyPaths
+                  #      to its RSA keys, and sops-install-secrets
+                  #      imports each *alongside* keyFile — so a secret
+                  #      could be encrypted to an identity a reinstall
+                  #      destroys, the exact re-enrollment trap
+                  #      docs/tasks/0031 chose a planted key file to
+                  #      avoid. Both are pinned here because an earlier
+                  #      version of this assertion pinned only the age
+                  #      half while its message claimed the whole
+                  #      thing, which is worse than not checking: it
+                  #      reads as proof of a guarantee that was not
+                  #      being held.
                   assertion =
                     config.sops.age.keyFile == "/var/lib/sops-nix/key.txt"
                     && !options.sops.defaultSopsFile.isDefined
-                    && config.sops.age.sshKeyPaths == [ ];
+                    && config.sops.age.sshKeyPaths == [ ]
+                    && config.sops.gnupg.sshKeyPaths == [ ];
                   message = ''
                     nixosConfigurations.example: the secrets slot
                     (docs/tasks/0031-secrets-tooling.md) does not resolve the
@@ -320,10 +328,12 @@
                     with nixos-anywhere --extra-files), sops.defaultSopsFile
                     left undefined while castle.secrets.sopsFile is null (it
                     has no upstream default, and defining it here would demand
-                    a file that cannot exist in a public repo), and
-                    sops.age.sshKeyPaths empty (a host SSH key is not a
-                    decryption identity in this design — a wipe gives the
-                    machine a new one and anything encrypted to it is gone).
+                    a file that cannot exist in a public repo), and BOTH
+                    sops.age.sshKeyPaths and sops.gnupg.sshKeyPaths empty (a
+                    host SSH key is not a decryption identity in this design,
+                    in either its ed25519/age or its RSA/gnupg form — a wipe
+                    gives the machine new ones and anything encrypted to them
+                    is gone).
                   '';
                 }
               ];

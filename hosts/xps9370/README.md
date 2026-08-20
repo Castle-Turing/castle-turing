@@ -153,8 +153,12 @@ survive:
    onto the machine.
 
    ```sh
-   root=$(mktemp -d)
-   install -d -m 755 "$root/var" "$root/var/lib"
+   # A named directory, not `mktemp -d`: the invocation below is a
+   # separate paste, and a temp path held only in a shell variable is
+   # gone the moment you open a new terminal or change directory.
+   root=~/castle-key-staging
+   rm -rf "$root"
+   install -d -m 755 "$root" "$root/var" "$root/var/lib"
    install -d -m 700 "$root/var/lib/sops-nix"
    install -m 600 /path/to/your/key.txt "$root/var/lib/sops-nix/key.txt"
    ```
@@ -164,12 +168,20 @@ survive:
    these permissions preserved — so the key is there before the
    machine's very first activation, and your secrets decrypt during the
    install itself rather than on some later boot. Skip this if you have
-   not set `castle.secrets.sopsFile`, and drop the `--extra-files` line
-   below with it. Delete `$root` when the install is done.
+   not set `castle.secrets.sopsFile`, and drop the guard line and the
+   `--extra-files` line below along with it. Delete `$root` when the
+   install is done.
 
    Then, from that same private flake directory, with Nix installed:
 
    ```sh
+   # The guard is one command with the install, joined by &&, so a
+   # missing key refuses the install rather than quietly producing a
+   # machine that can decrypt nothing. It prints the staged key's mode
+   # on the way past, which is the other thing worth seeing before an
+   # install you cannot repeat cheaply. Drop this line only if you
+   # staged no key.
+   ls -l "${root:?stage the age key first — see the block above}/var/lib/sops-nix/key.txt" &&
    nix run github:nix-community/nixos-anywhere -- \
      --flake .#xps9370 \
      --generate-hardware-config nixos-generate-config \
@@ -198,9 +210,19 @@ survive:
    `/var/lib/sops-nix/key.txt` on the target —
    `castle.secrets.ageKeyFile`'s default — in time for the first
    activation, which happens inside this command's own `install` phase.
-   A missing or wrong key is named in this command's own output rather
-   than failing quietly later; see `docs/private-layer.md`'s "When the
-   key is missing or wrong" for how to tell those two apart.
+
+   **That first activation does not fail the install, and it is worth
+   knowing that before you rely on it.** `nixos-install` reaches
+   activation through `nixos-enter`, which runs it as
+   `"$system/activate" || true`, and NixOS's activation wrapper prints
+   `Activation script snippet 'setupSecrets' failed (1)` and carries
+   on. So a missing or wrong key still leaves `nixos-anywhere` exiting
+   0 and reporting a successful install, with the real diagnostic one
+   line in a long log — grep the transcript for `setupSecrets` rather
+   than trusting the exit code. The machine's own *first boot* is where
+   this failure is genuinely loud (step 6), and
+   `docs/private-layer.md`'s "When the key is missing or wrong" is how
+   to tell a missing key from a wrong one.
 
    **Before trusting a reboot, verify the boot actually landed** — don't
    just watch the log. `bootctl install`'s log output claiming it wrote

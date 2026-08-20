@@ -1180,8 +1180,13 @@ skip and regret.
    which is why the modes below are load-bearing rather than tidy:
 
    ```sh
-   root=$(mktemp -d)
-   install -d -m 755 "$root/var" "$root/var/lib"
+   # A named directory rather than `mktemp -d`, because the install
+   # command that consumes it lives in another document and, most
+   # likely, another shell: a temp path held only in a variable is gone
+   # by the time you get there.
+   root=~/castle-key-staging
+   rm -rf "$root"
+   install -d -m 755 "$root" "$root/var" "$root/var/lib"
    install -d -m 700 "$root/var/lib/sops-nix"
    install -m 600 key.txt "$root/var/lib/sops-nix/key.txt"
    ```
@@ -1191,7 +1196,23 @@ skip and regret.
    agree or activation fails with a missing-key error.
 
 Then add `--extra-files "$root"` to the `nixos-anywhere` invocation in
-`hosts/xps9370/README.md`'s install step, and delete `$root` afterwards.
+`hosts/xps9370/README.md`'s install step — **with the guard that step
+puts in front of it**, not on its own:
+
+```sh
+ls -l "${root:?stage the age key first}/var/lib/sops-nix/key.txt" &&
+nix run github:nix-community/nixos-anywhere -- ... --extra-files "$root" ...
+```
+
+That guard is not ceremony. `nixos-anywhere` tests `--extra-files`'s
+argument for emptiness and silently skips the copy if it is empty, so
+an unset `$root` — a new terminal, a `cd`, a lost variable — installs a
+machine with no key on it and reports success. On a chassis with no
+Ethernet port, what you get is a laptop that boots, cannot decrypt its
+Wi-Fi PSK, joins no network, and cannot be reached at all. Refusing to
+start is much cheaper than that.
+
+Delete `$root` when the install is done.
 
 ### Using the secret: a declarative Wi-Fi profile
 
@@ -1269,7 +1290,11 @@ hand with `nmtui`, the way you did before any of this existed.
 - **Key file absent.** `sops-install-secrets` fails at activation,
   naming the path it could not read. That is on the console during
   `nixos-install` or `nixos-rebuild`, and in `journalctl -b` afterwards.
-  Nothing downstream runs: no template is rendered, and
+  At *install* time it does not stop anything: `nixos-enter` runs
+  activation as `"$system/activate" || true`, so the line goes by and
+  the install still reports success. On the machine's own **first
+  boot** the failure is loud in the way you want, because nothing
+  downstream runs: no template is rendered, and
   `NetworkManager-ensure-profiles.service` then fails too (its
   `EnvironmentFile` points at a file that does not exist), which
   `systemctl --failed` shows you.
