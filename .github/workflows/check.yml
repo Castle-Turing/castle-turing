@@ -83,11 +83,13 @@ jobs:
       # same reason as the job above.
       - run: test/agent-loop/tenant-swap.sh
       # Where the journal is allowed to live
-      # (docs/tasks/0030-state-outside-the-flake.md): the four layouts
-      # `castle validate` and `castle digest` have to tell apart, one
-      # of which — a `state/` committed inside the flake repo — puts
-      # the resident's whole decision history in the world-readable
-      # Nix store on every rebuild. In this job rather than the
+      # (docs/tasks/0030-state-outside-the-flake.md): the seven layouts
+      # `castle validate` and `castle digest` have to tell apart, two
+      # of which — a `state/` committed inside the flake repo, and a
+      # half-finished migration out of one — put the resident's whole
+      # decision history in the world-readable Nix store on every
+      # rebuild. Also runs the set with no `git` on PATH, and against a
+      # deliberately broken copy of the rule. In this job rather than the
       # dispatch one because it drives no worker and no sweep; it needs
       # nothing but `castle`, `git` and stdlib python3, all of which
       # the stock runner already has, for the same reason given above.

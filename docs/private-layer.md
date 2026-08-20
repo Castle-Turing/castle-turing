@@ -529,17 +529,21 @@ and correction you had ever filed to every account on the machine, on
 every rebuild. Nothing about typing `nixos-rebuild` looks like it does
 that, which is exactly why it needs saying out loud.
 
-You can watch it happen, on any machine with Nix, in about a minute:
+You can watch it happen, on any machine with Nix, in well under a
+minute. `nix flake metadata` prints the store path Nix copied the
+flake to, so there is no need to go looking for it:
 
 ```console
 $ mkdir -p /tmp/demo/state/journal && cd /tmp/demo
-$ echo '{ outputs = { self }: { x = 1; }; }' > flake.nix
+$ echo '{ outputs = { self }: { }; }' > flake.nix
 $ echo 'a private thing' > state/journal/rec.md
-$ git init -q && git add -A && git commit -qm x
-$ nix eval /tmp/demo#x
-1
-$ grep -rl 'a private thing' /nix/store
-/nix/store/<hash>-source/state/journal/rec.md
+$ git init -q && git add -A && git commit -qm 'a fixture'
+$ nix flake metadata /tmp/demo | grep Path
+Path:           /nix/store/<hash>-source
+$ cat /nix/store/<hash>-source/state/journal/rec.md
+a private thing
+$ ls -l /nix/store/<hash>-source/state/journal/rec.md
+-r--r--r-- 1 root root 16 Jan  1  1970 /nix/store/<hash>-source/state/journal/rec.md
 ```
 
 No build, no `nixos-rebuild`, no root — a single `nix eval` was
@@ -669,9 +673,15 @@ one that clears you:
    dotfiles flake with `castle.agent.stateDir` left unset — your
    `~/.local/state/castle` is not in that repository's index.
 
-A `state/` wired in as a submodule clears question 1 rather than
-question 3: the walk stops at the first repository root above the
-state directory, which for a submodule is the submodule itself.
+A `state/` wired in as a submodule is cleared by question 3, not by
+question 2: the walk goes past the submodule's own `.git` to the flake
+repository above it and asks that repository the tracked-ness question,
+where a submodule shows up as a single reference to another repository
+rather than as content. That distinction is why the check can still
+catch a half-finished migration — a `git init` inside `state/` without
+the `git rm` that takes it out of the config repo's index leaves your
+journal committed in the flake repo, and still published, even though
+`state/` now looks like a repository of its own.
 
 **If `git` is not installed, question 3 cannot be asked**, and the
 check warns on questions 1 and 2 alone rather than staying quiet. The
@@ -724,23 +734,43 @@ artifact you least want to be relying on.
 
 1. **Copy the content into its new home, and check that it arrived.**
 
-   For the **sibling repository**:
+   Both layouts start the same way. Note the `/.` on the source and
+   the explicit `mkdir -p`: `cp -r a b` means "copy *into* b" when `b`
+   already exists and "copy *as* b" when it does not, so the plain
+   form silently produces `~/private-state/state/journal/…` for anyone
+   who created the directory first — a shape that commits cleanly,
+   passes a careless check, and leaves `castle` creating a second,
+   empty `journal/` beside your real one. `cp -r <src>/. <dst>/` means
+   the same thing either way.
 
    ```console
-   $ cp -r ~/private/state ~/private-state
+   $ mkdir -p ~/private-state
+   $ cp -r ~/private/state/. ~/private-state/
    $ cd ~/private-state && git init && git add -A && git commit -m 'journal'
-   $ ls journal | wc -l          # compare with the old directory
    ```
 
-   For the **submodule** layout, the new repository has to exist and
-   have your content in it *before* anything references it, because
-   `git submodule add` clones from it rather than into it:
+   Then check it arrived, with a comparison rather than a count you
+   have to eyeball:
 
    ```console
-   $ cp -r ~/private/state ~/private-state
-   $ cd ~/private-state && git init && git add -A && git commit -m 'journal'
+   $ before=$(ls ~/private/state/journal | wc -l)
+   $ after=$(ls ~/private-state/journal | wc -l)
+   $ [ "$before" = "$after" ] && echo "OK: $after records" || echo "MISMATCH: $before -> $after"
+   ```
+
+   `MISMATCH` — or an `ls:` error naming a directory that does not
+   exist — means the copy did not land where you meant it to, most
+   likely one level too deep. **Stop there.** Nothing has been removed
+   yet, so fix the copy and re-run this check before going on; that is
+   the entire reason this step comes first.
+
+   For the **submodule** layout, do the above and then give the new
+   repository somewhere to be cloned from, because `git submodule add`
+   clones *from* it rather than into it:
+
+   ```console
+   $ cd ~/private-state
    $ git remote add origin <url> && git push -u origin HEAD   # if it has a remote
-   $ ls journal | wc -l          # compare with the old directory
    ```
 
    If you want the sibling repository to carry the journal's *history*
@@ -762,9 +792,23 @@ artifact you least want to be relying on.
    into place:
 
    ```console
-   $ git submodule add <url> state && git commit -m 'state as a submodule'
+   $ git -c protocol.file.allow=always submodule add <url> state
+   $ git commit -m 'state as a submodule'
    $ ls state/journal | wc -l    # the same count as step 1
    ```
+
+   The `protocol.file.allow=always` is needed whenever `<url>` is a
+   local path — `~/private-state`, with no remote — because git has
+   refused the `file` transport for submodules since 2.38 (the
+   CVE-2022-39253 mitigation) and fails with `fatal: transport 'file'
+   not allowed`. A local path is the ordinary case here: this project
+   has no credential story yet, so "pushing stays manual" and the
+   remote in the step above is optional. Do not delete the flag as
+   noise; without it this command does not run at all.
+
+   If you hit that error before adding the flag, nothing is lost: your
+   content is already committed in `~/private-state` from step 1, and
+   that is what copy-first buys you. Add the flag and re-run.
 
 3. **Repoint `castle.agent.stateDir`** at the new location and
    rebuild. Run `castle validate`; the warning above should be gone.

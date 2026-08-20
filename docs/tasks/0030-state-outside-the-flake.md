@@ -181,6 +181,37 @@ flake that gets evaluated.
 **The rule.** Add `_state_layout_finding(path: pathlib.Path) -> str |
 None` beside `state_dir()`/`journal_dir()` in `agent/castle`:
 
+> **Superseded during implementation — the walk no longer stops at the
+> first repository root, and the "stop at the first" clause below is
+> not the shipped mechanism.** It was specified to avoid a false
+> positive on the submodule layout, and it did avoid it. What it also
+> did — invisibly, because stage 3 did not exist when this was
+> written — was fall silent on a **half-finished migration**, which is
+> the likeliest wrong state a resident reaches while following this
+> task's own §3. Reproduced: a repository with `flake.nix` and
+> `state/journal/.gitkeep` committed warns correctly; run `git init`
+> inside `state/` (the first half of "give it its own repository",
+> without the `git rm`) and the warning disappears, while the *outer*
+> index still holds `state/journal/.gitkeep` and the next rebuild
+> still copies it to the store. The tool went quiet exactly when the
+> resident most needed telling.
+>
+> The shipped rule instead walks **past** inner repository roots to
+> the nearest ancestor that is both a repository and a flake, then
+> asks that repository whether its index holds anything under the
+> state path whose mode is not `160000`. A submodule contributes
+> exactly one entry, a gitlink at mode `160000`, and nothing else — so
+> the submodule false positive this clause existed to prevent is now
+> prevented by the mode test instead, without buying the blind spot.
+> The four cases below still reach the right verdicts; only the
+> instrument changed. See `_state_layout_finding` and
+> `_state_tracked_in` in `agent/castle`, and amendment 12.
+>
+> The mutation test moved with it: it no longer guards "stop at the
+> first repository root" (not a mechanism any more) but the mode
+> discrimination, and fails when a mutant counts a gitlink as tracked
+> content.
+
 Resolve `path` to an absolute path, then walk upward. At each
 directory, ask one question: does it contain a `.git` entry (file or
 directory — a submodule and a linked worktree both carry a `.git`
@@ -808,6 +839,65 @@ and not only in the git history.
 
 11. **`?dir=` flakes are a silent miss.** Recorded as a non-goal above
     rather than closed; see that entry for the cost of closing it.
+
+### Review findings, pass 2
+
+Nine more, three medium, each reproduced before being acted on.
+
+12. **The stopping rule silently missed a still-published journal.**
+    §2's specified mechanism replaced; see the superseded block there.
+    The half-finished migration is now case 7 of the harness, and the
+    mutation test guards the mode discrimination that replaced the
+    stopping rule. The rule degrades in two directions when `git` is
+    absent rather than one, and the docstring states both: silent when
+    an inner repository root sits below the flake root (the submodule
+    and sibling shapes, which must not be nagged), warning otherwise.
+    The residual gap is stated rather than hidden — a half-finished
+    migration on a host with no git is missed, because the outer index
+    is the only evidence of it and nothing else can read that.
+
+13. **The submodule command in §3 could not run on the layout §1
+    recommends.** `git submodule add <url> state` with a local `<url>`
+    is refused by git ≥ 2.38 (`fatal: transport 'file' not allowed`,
+    the CVE-2022-39253 mitigation), and a local path is the ordinary
+    case here because this project has no credential story and the
+    remote is optional. Confirmed on git 2.55. The doc now carries
+    `-c protocol.file.allow=always` with the reason attached so nobody
+    deletes it, and says that copy-first is what makes hitting the
+    error harmless.
+
+14. **`cp -r` was order-dependent and the verification could not
+    fail.** `cp -r a b` copies *into* `b` when `b` exists, so a
+    resident who created `~/private-state` first — plausible, since §1
+    shows that tree — got `~/private-state/state/journal/…`, committed
+    the wrong shape, and saw `ls journal | wc -l` print `0` rather
+    than fail. Both copies now use `cp -r <src>/. <dst>/` after an
+    explicit `mkdir -p`, and the check compares the two counts and
+    names what a mismatch means.
+
+15. **Five smaller ones.** `_state_tracked_in`'s docstring claimed the
+    subprocess never runs on the common case, which is the opposite of
+    the dotfiles-flake case that motivated it — corrected, and the
+    cost stated where it is paid. An off-by-one in the doc's
+    three-question list ("clears question 1" for a case cleared by
+    question 3), rewritten with the half-migration consequence. The
+    reproduction ended in `grep -rl` across the whole store — tens of
+    gigabytes against a claim of "about a minute" — replaced with
+    `nix flake metadata`, measured at 0.1s. Two stale "four layouts"
+    comments. And `$WORKDIR` in the harness is now canonicalised with
+    `pwd -P`, because the code under test calls `os.path.realpath` and
+    a symlinked `$TMPDIR` would have had the two walking different
+    ancestries.
+
+16. **The layout claim in prose, not only in paths.** The first sweep
+    grepped for `/private/state`; this one grepped for the *claim*
+    that the journal lives in the private repo, and found it in four
+    more live places: `modules/agent`'s path-unit comment (the one
+    filed), `flake.nix`'s MakeDirectory assertion comment,
+    `test/agent-loop/dispatch-test.sh` twice, and
+    `test/desktop-loop/test.nix`'s resident-contract comment. All four
+    corrected. The remaining matches are in `docs/tasks/0008` and
+    `0021`, which are historical briefs and stay as written.
 
 ## Implementation prompt
 

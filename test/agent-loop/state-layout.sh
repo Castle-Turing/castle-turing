@@ -6,9 +6,10 @@
 # directory sits inside the tracked tree of a git repository that
 # carries a flake.nix, because evaluating such a flake — every
 # `nixos-rebuild --flake /path#host` does — copies that tracked tree
-# into the world-readable /nix/store. This harness builds the four
+# into the world-readable /nix/store. This harness builds the seven
 # layouts the rule has to tell apart and asserts on stderr for both
-# commands.
+# commands, then runs the whole set again with no `git` on PATH and
+# once more against a deliberately broken copy of the rule.
 #
 # Same conventions as config-target.sh next door: plain bash, stdlib
 # python3, no Nix, no models, no network, a throwaway state directory
@@ -23,6 +24,16 @@ CASTLE="$REPO_ROOT/agent/castle"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-state-layout.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
+# Canonicalised, because `_state_layout_finding` calls os.path.realpath
+# on the state directory before it walks anywhere. If $TMPDIR is or
+# contains a symlink, an uncanonicalised $WORKDIR makes this harness
+# and the code under test walk two different ancestries: the guard
+# below would clear a $WORKDIR that really does sit inside a flake
+# checkout, and `assert_warns` would compare the unresolved path it
+# built against the resolved path the warning prints, failing for a
+# reason that has nothing to do with the rule. `pwd -P` resolves every
+# component, which is exactly what realpath does.
+WORKDIR="$(cd "$WORKDIR" && pwd -P)"
 
 log() { printf '>>> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -196,6 +207,31 @@ mkdir -p "$SIBLING_STATE/nested"
 git -C "$SIBLING_STATE" init -q
 git -C "$SIBLING_STATE" commit -q --allow-empty -m "fixture: the state repo"
 
+# Case 7 — a half-finished migration, and the reason the walk no longer
+# stops at the first repository root. A resident reads "give state/ its
+# own repository", runs `git init` inside it, and stops — without the
+# `git rm` that takes it out of the config repo's index. The inner
+# `.git` now exists, so a rule that stopped at the first repository
+# root would find no flake.nix beside it and fall silent. The outer
+# index still holds `state/journal/.gitkeep`, so the next rebuild still
+# publishes it. This is the likeliest wrong state a resident can be in
+# while following this project's own migration instructions, and the
+# check going quiet at that exact moment is the failure this case
+# exists to prevent. Built by mutating a fresh copy of case 1 rather
+# than case 1 itself, so the two stay independent.
+HALFWAY="$WORKDIR/halfway"
+mkdir -p "$HALFWAY/state/journal"
+write_flake "$HALFWAY"
+: > "$HALFWAY/state/journal/.gitkeep"
+: > "$HALFWAY/state/resident-model.md"
+git -C "$HALFWAY" init -q
+git -C "$HALFWAY" add -A
+git -C "$HALFWAY" commit -q -m "fixture: a flake repo with a committed state/"
+git -C "$HALFWAY/state" init -q
+[ -d "$HALFWAY/state/.git" ] || fail "the halfway fixture has no inner repository, so it is just case 1 again"
+git -C "$HALFWAY" ls-files -s -- state | grep -q '^100644' \
+  || fail "the halfway fixture's OUTER index no longer tracks real content under state/, so nothing is published and this case proves nothing"
+
 # Case 4 — a plain directory with no repository anywhere above it: what
 # an unset `castle.agent.stateDir` already resolves to.
 PLAIN="$WORKDIR/plain/state"
@@ -261,6 +297,9 @@ for sub in validate digest; do
 
   log "case 6 — a gitignored state/ inside a flake repo ($sub): silent"
   assert_silent "gitignored" "$IGNORED/state" "$sub"
+
+  log "case 7 — a half-finished migration ($sub): warns, because the outer repo still tracks it"
+  assert_warns "halfway" "$HALFWAY/state" "$sub" "$HALFWAY"
 done
 
 # ---------------------------------------------------------------------
@@ -333,27 +372,31 @@ grep -q '^WARNING: ' "$WORKDIR/err.txt" \
 assert_silent "gitignored (git present)" "$IGNORED/state" validate
 
 # ---------------------------------------------------------------------
-log "mutation: a walk that does not stop at the first repository root fails case 2"
+log "mutation: a rule that cannot tell a gitlink from a blob fails case 2"
 # ---------------------------------------------------------------------
 # Case 2 asserts a *silence*, and a silence passes for any number of
 # wrong reasons — a rule that never warns at all satisfies it. This
 # step proves the case is load-bearing by breaking the one property it
 # exists to defend and checking that the fixture notices.
 #
-# The mutation is the smallest edit that expresses "do not stop at the
-# first repository root": the real rule's walk stops at the first
-# directory carrying a .git, whatever it finds there, and the mutant
-# keeps walking until it finds one that carries a flake.nix as well.
-# So the mutant sails past the submodule's own .git, reaches the outer
-# flake repo, finds the gitlink `state` tracked in that repo's index,
-# and warns about a layout that is provably safe.
+# What defends it is the mode test. The walk deliberately does NOT stop
+# at the submodule's own `.git` any more (that stopping rule was
+# removed because it silently missed case 7), so the outer flake repo
+# is asked about `state/` in both the submodule case and the committed
+# case. The only thing separating them is what the outer index holds:
+# one gitlink at mode 160000 for the submodule, real blobs at 100644
+# for a committed journal. Delete that discrimination and the submodule
+# layout — whose content Nix provably never copies — is reported
+# unsafe on every validate and every digest.
 #
-# This is not a second implementation of the rule maintained alongside
-# the first — it is a two-line patch applied to the real file at
-# runtime. If `_state_layout_finding` is rewritten such that the anchor
-# below no longer matches, this step fails loudly rather than quietly
-# passing, and whoever rewrote it should re-express the same mutation
-# rather than delete this check.
+# So the mutation is one line: where the real rule ignores an entry
+# whose mode is GITLINK_MODE, the mutant counts every entry. It is not
+# a second implementation maintained alongside the first — it is a
+# one-line patch applied to the real file at runtime. If
+# `_state_tracked_in` is rewritten such that the anchor below no longer
+# matches, this step fails loudly rather than quietly passing, and
+# whoever rewrote it should re-express the same mutation rather than
+# delete this check.
 MUTANT="$WORKDIR/castle-mutant"
 python3 - "$CASTLE" "$MUTANT" <<'MUTATE_PY'
 import pathlib
@@ -361,20 +404,14 @@ import sys
 
 real, mutant = sys.argv[1], sys.argv[2]
 src = pathlib.Path(real).read_text()
-anchor = '''        if (directory / ".git").exists():
-            root = directory
-            break
-'''
-patched = '''        if (directory / ".git").exists() and (directory / "flake.nix").exists():
-            root = directory
-            break
-'''
+anchor = "        if mode != GITLINK_MODE:\n"
+patched = "        if mode:\n"
 if src.count(anchor) != 1:
     sys.stderr.write(
-        "the mutation anchor matched %d times, not once — _state_layout_finding "
-        "has been rewritten. Re-express the same mutation (a walk that does not "
-        "stop at the first repository root) against the new shape; do not delete "
-        "this check, which is the only thing proving the submodule case is not "
+        "the mutation anchor matched %d times, not once — _state_tracked_in has "
+        "been rewritten. Re-express the same mutation (a rule that counts a "
+        "gitlink as tracked content) against the new shape; do not delete this "
+        "check, which is the only thing proving the submodule case is not "
         "vacuous.\n" % src.count(anchor)
     )
     raise SystemExit(1)
@@ -382,16 +419,31 @@ pathlib.Path(mutant).write_text(src.replace(anchor, patched, 1))
 MUTATE_PY
 chmod +x "$MUTANT"
 
-# The mutant must still be right about everything the fixture does not
-# distinguish — otherwise it proves nothing about *this* property.
+# The mutant must still be right about everything this property does
+# not touch — otherwise it could warn on case 2 for some unrelated
+# reason and prove nothing. Case 1 must still warn, case 4 must still
+# be silent, and — the sharpest of the three — case 6 must still be
+# silent, because a gitignored state/ contributes no index entry at all
+# and so is decided by a part of the rule the mutation does not touch.
 run_case "mutant/inside-flake" "$INFLAKE/state" validate "$MUTANT"
 grep -q '^WARNING: ' "$WORKDIR/err.txt" || fail "the mutant does not warn on case 1, so it is broken in some other way and proves nothing here"
 run_case "mutant/xdg-default" "$PLAIN" validate "$MUTANT"
 grep -q 'WARNING' "$WORKDIR/err.txt" && fail "the mutant warns on case 4, so it is broken in some other way and proves nothing here"
+run_case "mutant/gitignored" "$IGNORED/state" validate "$MUTANT"
+grep -q 'WARNING' "$WORKDIR/err.txt" && fail "the mutant warns on case 6, so it is broken more broadly than the one property under test and proves nothing here"
 
 run_case "mutant/submodule" "$OUTER/state" validate "$MUTANT"
 grep -q '^WARNING: ' "$WORKDIR/err.txt" \
-  || fail "a walk that does not stop at the first repository root did NOT warn on the submodule case — which means the submodule fixture is not load-bearing (most likely the outer repo lost its flake.nix), and case 2 above is passing vacuously"
+  || fail "a rule that counts a gitlink as tracked content did NOT warn on the submodule case — so the submodule fixture is not load-bearing (most likely the outer repo lost its flake.nix, or state/ stopped being a real submodule), and case 2 above is passing vacuously"
+
+# The same mutant on case 7 must still warn, and for the ordinary
+# reason: case 7's outer index holds real blobs, not a gitlink, so the
+# mutation changes nothing there. This is what shows the mutant's case-2
+# warning came from the mode test specifically and not from having
+# broken the outer-repository question outright.
+run_case "mutant/halfway" "$HALFWAY/state" validate "$MUTANT"
+grep -q '^WARNING: ' "$WORKDIR/err.txt" \
+  || fail "the mutant stopped warning on case 7, so it did not merely lose the gitlink discrimination — it broke something else, and its case-2 warning proves nothing"
 
 # ---------------------------------------------------------------------
 log "no home-shaped path in anything this fixture commits to the repo"

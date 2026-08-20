@@ -555,7 +555,10 @@ in
         # — and creating the resident's state directory from a unit is
         # exactly the restore-order hazard `castle dispatch`'s own
         # guard closes: on a machine where dispatch is enabled before
-        # the private repo holding the journal is cloned, a unit that
+        # the repository holding the journal is cloned — the state
+        # repository, which since
+        # docs/tasks/0030-state-outside-the-flake.md is deliberately
+        # not the config repo — a unit that
         # helpfully mkdir'd the path would both break that clone and
         # let castle-dispatch-watermark (or, failing that, the first
         # sweep) write a watermark declaring that nothing predates it,

@@ -506,8 +506,8 @@
                       == "${dummyStateDir}/journal"
                     # Asserted absent, not merely unset by accident: a
                     # MakeDirectory here would create the resident's
-                    # state directory before their private repo is
-                    # restored into it (docs/tasks/0021 §1/§2.2).
+                    # state directory before their journal is restored
+                    # into it (docs/tasks/0021 §1/§2.2).
                     && !(config.systemd.user.paths.castle-dispatch.pathConfig ? MakeDirectory)
                     && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec
                       == "1min"
