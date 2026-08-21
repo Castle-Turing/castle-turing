@@ -3217,7 +3217,16 @@ def _file_proposal_question(request: Record, result_id: str, target: str) -> Non
             body=PROPOSAL_QUESTION_BODY.format(target=target),
             extra={PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest()},
         )
-    except OSError as exc:
+    except (OSError, RecordError) as exc:
+        # `RecordError` as well as `OSError`, which is wider than the
+        # brief specified and costs nothing: `write_record` raises it
+        # *instead of* writing, so nothing malformed can land, and the
+        # only way to reach it from here would be a frontmatter value
+        # carrying a newline — which a parsed `provenance`, a hex
+        # digest and a constant body cannot. Catching it anyway is the
+        # same argument as the one below, applied to the one other way
+        # this call could fail.
+        #
         # Printed, never raised. The result is already durable by the
         # time this runs — the turn's actual, hard-won output — and a
         # failure writing the *second* record must not look like the
