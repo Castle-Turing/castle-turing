@@ -494,8 +494,20 @@ field that is `decision`'s closest structural precedent — the same
 shape of "a closed-vocabulary, closed-scope, optional field on results
 only" this task is about to add a second instance of. Leaving it open
 invites a future reader copying the `blocking`/`target` pattern to
-copy the one instance that forgot the scoping instead. The fix is one
-line, added to the existing block:
+copy the one instance that forgot the scoping instead.
+
+**Corrected after review: the writer half of this was missing, and
+closing only the validator half made things strictly worse than
+leaving both lax.** `castle record --type answer --outcome completed`
+went on printing an id and exiting 0, and now produced a record
+`castle validate` condemns forever, in an append-only journal whose
+only remedy would be editing history the whole design says is never
+edited. That is precisely the asymmetry 0024 reversed itself to close
+for `--target` — a door laxer than its own backstop — running the
+other way, and `cmd_record` gains the mirror of `--target`'s guard
+beside it. The omission was this brief's, not the implementation's.
+
+The validator fix is one line, added to the existing block:
 
 ```python
 if outcome_raw is not None and rtype != "result":
@@ -720,6 +732,58 @@ What survives, mechanically available without inventing any parsing:
    direct extension of docs/tasks/0010's "no seat paraphrases,"
    applied to a read rather than a write: summarizing it here would be
    exactly the paraphrase that rule forbids, one surface over.
+
+   **Corrected after review: the diff's boundary is a nonce in the
+   result's frontmatter, not a markdown fence in its body.** As first
+   implemented this section was read literally — "minus the diff
+   fence" — and the renderer scanned for ```` ```diff ```` and
+   ```` ``` ````. That is content being trusted to be structure, and it
+   fails on an ordinary case rather than an exotic one: a unified diff
+   of a file that itself contains a fenced code block carries context
+   lines that strip to exactly those, so the block closed early and the
+   rest of the diff — real `-`/`+` lines — printed under "Castle's own
+   account of why." The resident was shown less than the change they
+   were approving, with the missing part relabelled as the machine's
+   reasoning, on the one screen in this system where authority is
+   granted. A context line spelling ```` ```diff ```` moves the START
+   of the block, which is worse again.
+
+   The fix is structural, and it takes the design this repo already
+   reached for the same problem: `render_continuation_packet`'s nonce
+   (docs/tasks/0023 — "section boundaries are unforgeable; body text is
+   not trusted to be structure"). `run_worker_turn` generates eight
+   random bytes *after* the tenant has exited and every byte of the
+   diff is fixed, wraps the diff in `CASTLE-DIFF-<nonce> BEGIN` / `END`
+   lines, and stamps the nonce in a new result-only frontmatter field,
+   `diff-boundary`. No diff content can contain a token that did not
+   exist when the diff was written, and the frontmatter is somewhere a
+   body cannot reach — so the boundary is unforgeable by construction
+   rather than by a stricter pattern.
+
+   *Alternatives considered.* **A stricter match** — requiring the
+   fence at column zero, which a well-formed unified diff's leading
+   ' '/'+'/'-' rules out — was rejected: the diff is bytes a tenant
+   wrote and is not guaranteed well-formed, so it makes the boundary
+   very likely rather than impossible, and "very likely" is not a
+   property to hang an authorization surface on. **Deriving the marker
+   from the result id** needs no new field and is equally unforgeable
+   (the id is assigned after the content exists), but its random half
+   is 24 bits against a nonce's 64, and it reads as a coincidence
+   rather than as a deliberate boundary. **Escaping the diff** was
+   rejected for the reason `render_continuation_packet` already gives:
+   it means editing what the record says, and a diff's leading spaces
+   are its meaning.
+
+   The one difference from the packet's nonce is that this one is
+   **stored**: a packet is rendered and consumed inside one process,
+   while a record is written once and read months later, so the token
+   has to travel with it. The markdown fence stays inside the boundary
+   as decoration, so a journal still renders as a diff; nothing keys on
+   it. A result carrying no boundary — every result written before the
+   field existed — has its body shown **whole**, because with no
+   trustworthy end to the diff the honest move is to decline the split
+   rather than show three-quarters of a change under a heading that
+   promises all of it.
 
    **Two more exclusions, added during implementation, both for the
    same reason as the target sentence: they are the *harness's* prose,
@@ -1090,6 +1154,12 @@ task's actual shape rather than the assumed one:
   - `cmd_record` / `p_record`: `--decision` flag and its refusal (§E).
   - `cmd_validate`: the new field checks, the cross-record checks, and
     the `outcome` type-scoping fix (§F).
+  - `cmd_record`: the `--outcome` writer guard mirroring `--target`'s
+    (§F, corrected after review).
+  - `DIFF_BOUNDARY_FIELD` and `diff_boundary_lines`, the unforgeable
+    boundary a result's embedded diff is wrapped in; `run_worker_turn`
+    generates the nonce and `_write_worker_result` stamps it (§G,
+    corrected after review).
   - `cmd_digest`: print `target` when present (§J).
   - `FIELD_ORDER`: `decision` and `proposal-sha256` added
     (presentation only).
@@ -1210,6 +1280,41 @@ made against the shape the journal now has.
   new refusals honour the fuller list; the four existing ones are left
   exactly as they are, since rewording load-bearing habit for no
   functional reason is what 0022 already declined to do.
+- **The decision overlay is keyed to the request, and never masks a
+  newer turn.** Two review findings against the first implementation of
+  §H, both of which it shares with defects `_errand_state` had already
+  fixed for its other folds. `_collect_downstream` is transitive over
+  `refs`, so a follow-up's proposal lands in its parent's fold and a
+  verdict on the follow-up relabelled the parent — the same
+  contamination `results` and `claims` are already keyed against, and
+  the proposal fold is now keyed the same way, on `refs[0]`. And the
+  override was unconditional, so a decision went on describing an
+  errand whose next turn had since failed, hiding both the failure and
+  its retry command; it now stands aside for a live turn and for
+  anything newer than itself. "Newer" compares the timestamp half of
+  the id rather than the whole id: a full id is
+  `<stamp>-<type>-<suffix>`, so within one second the *type name*
+  decides, and `answer` sorting before `result` made every decision
+  taken in the same second as its own proposal look older than it —
+  which is what a scripted caller does every time. Ties go to the
+  decision, which is right on its own terms: a decision can only exist
+  after the change it decides.
+- **`_pending_questions`' docstring said something that had stopped
+  being true.** It claimed `file_answer` guarantees an answer's refs is
+  exactly the one question it closes; a decision answer refs
+  `[question, result]`, so the `answered` set is now a superset. It is
+  harmless where it is used (only questions are tested against it) and
+  the docstring is corrected rather than deleted, because a stated
+  invariant is precisely what a later change widening that fold would
+  have relied on.
+- **`test/agent-loop/pty-drive.py`'s final drain could spin forever.**
+  `pump()` returned the same value for "read something" and "waited and
+  nothing came", so the drain could only ever end on EOF — which
+  arrives when the child's exit closes the last handle on the slave,
+  and does not arrive at all if a grandchild is holding the pty. It
+  returns three states now, and the drain ends on EOF, on the first
+  quiet poll, or at a deadline. A harness that hangs instead of failing
+  is worse than one that fails.
 - **`test/agent-loop/approval.sh` carries two proofs beyond the ones
   this brief specified**, both because the specified ones are
   structural where the risk is behavioural. After an approval it runs

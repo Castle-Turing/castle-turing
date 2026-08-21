@@ -164,7 +164,7 @@ pending_proposals() {
 clear_pending_proposals() {
   local id
   for id in $(pending_proposals); do
-    "$CASTLE" answer --decision defer "$id" >/dev/null \
+    "$CASTLE" answer --decision defer "$id" </dev/null >/dev/null \
       || fail "could not clear pending change $id before an interactive scenario"
   done
   [ -z "$(pending_proposals)" ] || fail "changes are still pending after clearing: $(pending_proposals)"
@@ -338,7 +338,7 @@ printf '%s\n' "$STATUS_APPROVED" | grep -F "$REQ1" | grep -q 'waiting on you' \
   && fail "a decided change still reads as waiting on the resident"
 
 log "  -- a second decision on the same change is refused"
-if "$CASTLE" answer --decision reject "$Q1" >/dev/null 2>"$WORKDIR/second.err"; then
+if "$CASTLE" answer --decision reject "$Q1" </dev/null >/dev/null 2>"$WORKDIR/second.err"; then
   fail "a second decision was written on a change already decided"
 fi
 grep -q 'already answered' "$WORKDIR/second.err" \
@@ -354,7 +354,7 @@ decide_a_fresh_change() {
   "$CASTLE" work "$request" >/dev/null
   question="$(proposal_question_for "$request")"
   [ -n "$question" ] || fail "$marker: the turn filed no change to decide"
-  answer="$("$CASTLE" answer --decision "$verdict" "$question")"
+  answer="$("$CASTLE" answer --decision "$verdict" "$question" </dev/null)"
   printf '%s %s %s\n' "$request" "$question" "$answer"
 }
 
@@ -398,7 +398,7 @@ R_STALE="$(newest_result_for "$REQ_STALE")"
 cp "$R_STALE" "$WORKDIR/stale-original"
 printf ' ' >> "$R_STALE"
 FILES_BEFORE="$(journal_file_count)"
-if "$CASTLE" answer --decision approve "$Q_STALE" >/dev/null 2>"$WORKDIR/stale.err"; then
+if "$CASTLE" answer --decision approve "$Q_STALE" </dev/null >/dev/null 2>"$WORKDIR/stale.err"; then
   fail "a change altered on disk since it was proposed was approved anyway"
 fi
 grep -q 'has changed on disk' "$WORKDIR/stale.err" \
@@ -411,7 +411,7 @@ log "  -- and restoring the exact bytes makes it decidable again: the check is a
 # The control. Without it the refusal above is satisfied by a check
 # that simply never lets anything through once it has been near a file.
 cp "$WORKDIR/stale-original" "$R_STALE"
-"$CASTLE" answer --decision reject "$Q_STALE" >/dev/null \
+"$CASTLE" answer --decision reject "$Q_STALE" </dev/null >/dev/null \
   || fail "a change whose bytes are exactly what was proposed is still refused"
 
 # ---------------------------------------------------------------------
@@ -441,7 +441,7 @@ Q_FACT_ID="20260201T000900Z-question-planted"
 } > "$JOURNAL/$Q_FACT_ID.md"
 FILES_BEFORE="$(journal_file_count)"
 MODEL_BEFORE="$(model_byte_count)"
-if "$CASTLE" answer --decision approve "$Q_FACT_ID" >/dev/null 2>"$WORKDIR/fact.err"; then
+if "$CASTLE" answer --decision approve "$Q_FACT_ID" </dev/null >/dev/null 2>"$WORKDIR/fact.err"; then
   fail "a proposal that also elicits a fact was decided, writing a preference the resident never stated"
 fi
 grep -q 'resident model' "$WORKDIR/fact.err" \
@@ -453,7 +453,7 @@ log "  -- and so is --fact supplied on the command line beside a decision"
 # The other half of the same door, and the likelier one: the question's
 # own field is not the only way a fact reaches the write path.
 if "$CASTLE" answer --decision approve --fact "invented-preference-key" "$Q_DEF" \
-  >/dev/null 2>"$WORKDIR/fact-flag.err"; then
+  </dev/null >/dev/null 2>"$WORKDIR/fact-flag.err"; then
   fail "--fact beside --decision wrote a resident-model entry as a side effect of a decision"
 fi
 [ "$(model_byte_count)" = "$MODEL_BEFORE" ] || fail "--fact beside --decision wrote into the resident model"
@@ -467,6 +467,168 @@ grep -q "carries 'fact'" "$WORKDIR/validate-fact.err" \
   || fail "the validator does not name the fact-carrying proposal: $(cat "$WORKDIR/validate-fact.err")"
 rm -f "$JOURNAL/$Q_FACT_ID.md"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate once the planted record is removed"
+
+# ---------------------------------------------------------------------
+log "a diff full of markdown fences survives the round trip whole"
+# ---------------------------------------------------------------------
+# The writer half of the boundary this task's code review found missing
+# (finding 1). The rendering half is asserted in
+# modal-headless-test.sh against a planted body; this proves the real
+# `castle work` path stamps a boundary and wraps the real tenant's
+# real diff in it, for the diff shape that broke the old fence scan: a
+# change to a file that itself contains a fenced code block, whose
+# context lines strip to exactly the fences a scanner looks for.
+FENCED_TENANT="$WORKDIR/fenced-tenant.sh"
+cat > "$FENCED_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'fenced tenant: this change touches a file containing a code fence\n'
+cat > "$CASTLE_DIFF_FILE" <<'DIFF'
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,7 @@
+ Prose above a fenced block.
+ 
+ ```diff
+-FENCED-BEFORE-INSIDE
++FENCED-AFTER-INSIDE
+ ```
+ 
+-FENCED-BEFORE-AFTER
++FENCED-AFTER-AFTER
+DIFF
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+TENANT
+chmod +x "$FENCED_TENANT"
+REQ_FENCED="$("$CASTLE" ask "APPROVAL-FIXTURE-FENCED: an invented complaint about a file that contains a code fence.")"
+CASTLE_WORKER_COMMAND="$FENCED_TENANT" "$CASTLE" work "$REQ_FENCED" >/dev/null
+R_FENCED="$(newest_result_for "$REQ_FENCED")"
+grep -q '^outcome: completed$' "$R_FENCED" || fail "the fenced-diff turn did not complete"
+
+log "  -- the result stamps a boundary, and it is sixteen hex characters of it"
+BOUNDARY="$(sed -n 's/^diff-boundary: //p' "$R_FENCED")"
+[ -n "$BOUNDARY" ] || fail "a turn that embedded a diff stamped no boundary"
+printf '%s' "$BOUNDARY" | grep -qE '^[0-9a-f]{16}$' \
+  || fail "the stamped boundary is not sixteen lowercase hex characters: $BOUNDARY"
+
+log "  -- the boundary lines wrap the whole diff, and the diff's own fences are inside them"
+grep -qF "CASTLE-DIFF-$BOUNDARY BEGIN" "$R_FENCED" || fail "no BEGIN boundary in the result body"
+grep -qF "CASTLE-DIFF-$BOUNDARY END" "$R_FENCED" || fail "no END boundary in the result body"
+# Everything the tenant wrote, still there and still between the two
+# boundary lines. `sed` between the markers is the same slice the modal
+# takes, done by a different tool.
+INSIDE="$(sed -n "/^CASTLE-DIFF-$BOUNDARY BEGIN\$/,/^CASTLE-DIFF-$BOUNDARY END\$/p" "$R_FENCED")"
+for NEEDLE in FENCED-BEFORE-INSIDE FENCED-AFTER-INSIDE FENCED-BEFORE-AFTER FENCED-AFTER-AFTER; do
+  printf '%s\n' "$INSIDE" | grep -q -- "$NEEDLE" \
+    || fail "$NEEDLE is not inside the boundary — the diff was split by its own fences"
+done
+# And the boundary is not something the diff could have produced: the
+# nonce is made after the tenant exits, so it appears nowhere in what
+# the tenant wrote.
+grep -qF "$BOUNDARY" "$WORKDIR/fenced-tenant.sh" \
+  && fail "the fixture tenant contains the boundary — this run proves nothing about forgeability"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after a fenced diff"
+assert_checkouts_untouched "after the fenced-diff turn"
+
+# ---------------------------------------------------------------------
+log "castle record refuses an --outcome it would then fail to validate"
+# ---------------------------------------------------------------------
+# The writer half of the type scoping this task gave the validator. Both
+# ends were lax before; closing only the validator would have left the
+# door laxer than the backstop, in an append-only journal where the
+# record `castle record` wrote could never be withdrawn.
+if "$CASTLE" record --type answer --provenance requested --seat intake \
+  --refs "$Q1" --outcome completed --body "placeholder" >/dev/null 2>"$WORKDIR/outcome.err"; then
+  fail "castle record wrote --outcome on an answer record, which castle validate then rejects"
+fi
+grep -q 'only meaningful on a result record' "$WORKDIR/outcome.err" \
+  || fail "the --outcome refusal says something unexpected: $(cat "$WORKDIR/outcome.err")"
+# The control: on a result it is still accepted, so the guard refuses a
+# type rather than the flag.
+OUTCOME_OK="$("$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$REQ1" --outcome failed --body "An invented hand-written result.")"
+grep -q '^outcome: failed$' "$JOURNAL/$OUTCOME_OK.md" \
+  || fail "the --outcome guard now refuses a perfectly good result record"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the --outcome cases"
+
+# ---------------------------------------------------------------------
+log "a follow-up errand's verdict never relabels the errand it was filed against"
+# ---------------------------------------------------------------------
+# `_collect_downstream` is transitive over refs, so a follow-up filed
+# with `castle ask --refs R1` drags its own change into R1's fold.
+# Without keying the decision overlay to the request the way its
+# neighbours are keyed, rejecting the FOLLOW-UP's change printed
+# "[R1] requested — you declined this" about an errand the resident
+# declined nothing on.
+NO_PROPOSAL_TENANT="$WORKDIR/no-proposal-tenant.sh"
+cat > "$NO_PROPOSAL_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'no-proposal tenant: nothing here needed changing\n'
+TENANT
+chmod +x "$NO_PROPOSAL_TENANT"
+REQ_PARENT="$("$CASTLE" ask "APPROVAL-FIXTURE-PARENT: an invented complaint whose turn proposes nothing.")"
+CASTLE_WORKER_COMMAND="$NO_PROPOSAL_TENANT" "$CASTLE" work "$REQ_PARENT" >/dev/null
+[ -z "$(proposal_question_for "$REQ_PARENT")" ] \
+  || fail "the parent errand proposed something, so this case proves nothing"
+REQ_CHILD="$("$CASTLE" ask --refs "$REQ_PARENT" "APPROVAL-FIXTURE-CHILD: an invented follow-up whose turn does propose something.")"
+"$CASTLE" work "$REQ_CHILD" >/dev/null
+Q_CHILD="$(proposal_question_for "$REQ_CHILD")"
+[ -n "$Q_CHILD" ] || fail "the follow-up errand proposed nothing"
+"$CASTLE" answer --decision reject "$Q_CHILD" </dev/null >/dev/null
+STATUS_FOLLOWUP="$("$MODAL" --mode status --limit 40)"
+printf '%s\n' "$STATUS_FOLLOWUP" | grep -F "$REQ_CHILD" | grep -q 'you declined this' \
+  || fail "the follow-up errand does not carry its own verdict: $(printf '%s\n' "$STATUS_FOLLOWUP" | grep -F "$REQ_CHILD")"
+printf '%s\n' "$STATUS_FOLLOWUP" | grep -F "$REQ_PARENT" | grep -q 'you declined this' \
+  && fail "a verdict on the follow-up's change relabelled the errand it was filed against"
+printf '%s\n' "$STATUS_FOLLOWUP" | grep -F "$REQ_PARENT" | grep -q 'done' \
+  || fail "the parent errand lost its own state: $(printf '%s\n' "$STATUS_FOLLOWUP" | grep -F "$REQ_PARENT")"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the follow-up case"
+
+# ---------------------------------------------------------------------
+log "a verdict never masks a newer turn, or the retry command that turn needs"
+# ---------------------------------------------------------------------
+# This block's own rule is that an errand's state is the state of its
+# newest turn. An unconditional override broke it: approve, run another
+# turn by hand, have it fail, and the surface went on reading
+# "approved — nothing applied yet" while the failure and its
+# `castle work <id> to retry` remedy vanished.
+REQ_RETRY="$("$CASTLE" ask "APPROVAL-FIXTURE-RETRY: an invented complaint whose second turn fails after a decision.")"
+"$CASTLE" work "$REQ_RETRY" >/dev/null
+Q_RETRY="$(proposal_question_for "$REQ_RETRY")"
+[ -n "$Q_RETRY" ] || fail "the retry-case turn proposed nothing"
+"$CASTLE" answer --decision approve "$Q_RETRY" </dev/null >/dev/null
+STATUS_APPROVED_ONLY="$("$MODAL" --mode status --limit 40)"
+printf '%s\n' "$STATUS_APPROVED_ONLY" | grep -F "$REQ_RETRY" | grep -q 'approved — nothing applied yet' \
+  || fail "the approved errand does not read as approved before its retry"
+FAILING_TENANT="$WORKDIR/failing-tenant.sh"
+cat > "$FAILING_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'failing tenant: this turn does not finish\n' >&2
+exit 3
+TENANT
+chmod +x "$FAILING_TENANT"
+# A whole second, because record ids are chronological only to one, and
+# the overlay's tie-break deliberately favours the DECISION: a decision
+# and the result it is about routinely share a second (a scripted
+# caller always does; a resident approving straight off a notification
+# can), and there the decision really is the later event. A decision
+# and a turn run afterwards sharing a second is coincidence, not
+# structure, and is not worth inverting the rule for — so the harness
+# separates them the way a human's hands would.
+sleep 1
+CASTLE_WORKER_COMMAND="$FAILING_TENANT" "$CASTLE" work "$REQ_RETRY" >/dev/null 2>&1 || true
+STATUS_AFTER_FAIL="$("$MODAL" --mode status --limit 40)"
+printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY" | grep -q "failed — castle work $REQ_RETRY to retry" \
+  || fail "a newer failed turn is masked by an older verdict: $(printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY")"
+printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY" | grep -q 'approved — nothing applied yet' \
+  && fail "the surface still reports a verdict older than the errand's newest turn"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the retry case"
+assert_checkouts_untouched "after the overlay-keying cases"
 
 # ---------------------------------------------------------------------
 log "review mode on a pty: dismissal writes nothing, and the change stays waiting"
@@ -619,7 +781,7 @@ GUARD
 done
 Q_GUARD="$(pending_proposals | head -1)"
 [ -n "$Q_GUARD" ] || fail "no change is pending to make the no-subprocess proof against"
-PATH="$GUARD_BIN:$PATH" "$CASTLE" answer --decision approve "$Q_GUARD" >/dev/null \
+PATH="$GUARD_BIN:$PATH" "$CASTLE" answer --decision approve "$Q_GUARD" </dev/null >/dev/null \
   || fail "approving under the shadowed PATH failed"
 [ ! -s "$GUARD_LOG" ] \
   || fail "deciding a change ran something that could apply or activate one: $(cat "$GUARD_LOG")"
@@ -739,6 +901,19 @@ plant 20260201T000004Z-answer-eeeeee answer \
   "20260201T000002Z-question-cccccc,20260201T000001Z-result-bbbbbb" \
   "decision: reject" "proposal-sha256: $VALID_HASH"
 expect_invalid "two decisions on one change" "a second decision on"
+
+log "  -- a diff boundary on a record that embeds no diff to bound"
+plant_base
+plant 20260201T000003Z-answer-dddddd answer \
+  "20260201T000002Z-question-cccccc,20260201T000001Z-result-bbbbbb" \
+  "decision: approve" "proposal-sha256: $VALID_HASH" "diff-boundary: 0123456789abcdef"
+expect_invalid "a boundary on an answer" "'diff-boundary' is a result-record field"
+
+log "  -- a diff boundary that is not the nonce shape, so it names a boundary no reader can find"
+plant_base
+plant 20260201T000003Z-result-eeeeee result 20260201T000000Z-request-aaaaaa \
+  "outcome: completed" "diff-boundary: NOT-A-NONCE"
+expect_invalid "a malformed boundary" "16 lowercase hex"
 
 log "  -- and the correction this task made in passing: an outcome on a record that is not a result"
 plant_base

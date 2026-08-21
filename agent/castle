@@ -253,6 +253,50 @@ PROPOSAL_QUESTION_BODY = (
     "Nothing has been applied. Review it to approve, reject, or set it aside."
 )
 
+# The boundary that says where a result record's embedded diff starts
+# and stops, and the field the value lives in
+# (docs/tasks/0025-approval.md §G, finding 1 of its code review).
+#
+# **A markdown fence cannot be this boundary, and the reason is the
+# same one docs/tasks/0023 hit with the continuation packet: content
+# was being trusted to be structure.** The diff embedded in a result
+# body is arbitrary bytes a tenant produced, and a unified diff of a
+# file that itself contains a fenced code block carries context lines
+# like " ```" and " ```diff" — which is to say, a reader
+# scanning for a fence finds one *inside* the diff and closes the
+# block early. Everything after it then reads as prose. On the review
+# surface that is not a rendering wobble: the resident is shown less
+# than the change they are approving, with the missing half relabelled
+# as the machine's reasoning, on the one screen in this system where
+# authority is granted.
+#
+# A nonce closes it by construction rather than by escaping, exactly
+# as `render_continuation_packet`'s does. Eight random bytes, generated
+# when the result is written — which is *after* the tenant has finished
+# producing every byte of that diff — so no diff content can contain
+# it, spell it, move it, or close it. It is stamped in the frontmatter,
+# where a body cannot reach, and the frontmatter's copy is the only
+# thing that makes a line in the body a boundary.
+#
+# Escaping the diff instead was the alternative and would have been
+# wrong for the reason that function already gives: it means editing
+# what the record says, and a result body carries a diff whose leading
+# spaces are its meaning.
+#
+# The markdown fence stays, *inside* the boundary, so the record still
+# renders as a diff wherever a journal is read as markdown. It is
+# decoration now, not structure: nothing keys on it.
+DIFF_BOUNDARY_FIELD = "diff-boundary"
+
+
+def diff_boundary_lines(boundary: str) -> tuple[str, str]:
+    """The two literal lines that delimit an embedded diff. One
+    function so the writer in `run_worker_turn` and every reader —
+    today `castle-modal`'s review mode — cannot spell them differently.
+    """
+    return (f"CASTLE-DIFF-{boundary} BEGIN", f"CASTLE-DIFF-{boundary} END")
+
+
 # The router's channel vocabulary (docs/architecture.md's Router
 # section). Named once, here, so `cmd_route` and the `considered` field
 # it writes can't drift apart — "considered" is defined as "the channels
@@ -306,6 +350,10 @@ FIELD_ORDER = (
     "created",
     "outcome",
     "target",
+    # Result-only, and beside `target` for the same presentation-only
+    # reason: it is machine-readable structure about the body below,
+    # not prose (docs/tasks/0025-approval.md).
+    "diff-boundary",
     # Request-only, and next to `outcome` for the same reason: it is
     # the machine-readable half of what the record says about its own
     # circumstances, and a reader skimming a request should meet it
@@ -1814,8 +1862,9 @@ def cmd_record(args: argparse.Namespace) -> int:
     refs = split_refs(args.refs or "")
 
     # A hard refusal, unlike the soft "question records only, by
-    # convention" posture `--fact` and `--outcome` take about *which
-    # type* they land on. What this prevents is not cosmetic: a
+    # convention" posture `--fact` still takes about *which type* it
+    # lands on (`--outcome` shed that posture in
+    # docs/tasks/0025-approval.md; see its guard below). What this prevents is not cosmetic: a
     # blocking question that no fold can attribute to a request —
     # empty `refs`, so `_find_root_request` returns None on the first
     # hop — is unresumable forever and looks exactly like a working one
@@ -1904,6 +1953,34 @@ def cmd_record(args: argparse.Namespace) -> int:
             )
             return 1
 
+    # And the same guard for `--outcome`, which docs/tasks/0025-approval
+    # §F gave the validator the type scoping `blocking` and `target`
+    # already had, and left this writer where it was. That is worse
+    # than the asymmetry it was fixing: before, both ends were lax and
+    # agreed; after, `castle record --type answer --outcome completed`
+    # printed an id, exited 0, and produced a record `castle validate`
+    # condemns forever, in a journal whose only remedy would be editing
+    # history the whole design says is never edited. A writer must not
+    # be able to produce a record its own validator condemns — the
+    # sentence `--target`'s guard above already turns on, applied to
+    # the flag that was still missing it.
+    #
+    # No blank check to go with it, unlike `--target`: `--outcome` is a
+    # closed vocabulary enforced by argparse `choices=`, so there is no
+    # empty spelling to reach this code.
+    outcome_arg = getattr(args, "outcome", None)
+    if outcome_arg is not None and args.type != "result":
+        print(
+            f"castle record: --outcome is only meaningful on a result record, not on "
+            f"--type {args.type}. It says what happened to a worker turn, nothing "
+            "reads it on any other type, and `castle validate` rejects it there — so "
+            "this would be written, print an id, and fail the validator afterwards, "
+            "in an append-only journal (docs/tasks/0021-auto-dispatch.md, "
+            "docs/tasks/0025-approval.md).",
+            file=sys.stderr,
+        )
+        return 1
+
     if getattr(args, "blocking", False):
         # A `--blocking` question says an errand has stopped and needs
         # the resident. The spool is explicitly ephemeral — machine-local
@@ -1927,9 +2004,11 @@ def cmd_record(args: argparse.Namespace) -> int:
             )
             return 1
 
-        # And the flag is question-only with teeth, unlike `--fact` and
-        # `--outcome`, which document their record type by convention
-        # and enforce nothing. That precedent was the right one to
+        # And the flag is question-only with teeth, unlike `--fact`,
+        # which documents its record type by convention and enforces
+        # nothing. (`--outcome` was in that sentence too until
+        # docs/tasks/0025-approval.md gave it a guard of its own, for
+        # the reason this comment goes on to give.) That precedent was the right one to
         # follow while `--blocking` was equally unenforced; it stopped
         # applying the moment this flag acquired write-time guards of
         # its own (empty refs, then reachability). Refusing an
@@ -3121,6 +3200,7 @@ def _write_worker_result(
     body_lines: list[str],
     claim_id: str,
     target: str | None = None,
+    diff_boundary: str | None = None,
 ) -> str:
     """Every result `run_worker_turn` writes goes through here, so the
     `outcome` field cannot be forgotten on one branch and remembered on
@@ -3150,6 +3230,13 @@ def _write_worker_result(
     # are in no position to make.
     if target:
         extra[TARGET_FIELD] = target
+    # Stamped only when this turn actually wrapped a diff in the body.
+    # Absent means "no embedded diff to find", which is the honest
+    # reading for every result that produced none — and for every
+    # result written before this field existed, in an append-only
+    # journal that cannot be backfilled.
+    if diff_boundary:
+        extra[DIFF_BOUNDARY_FIELD] = diff_boundary
     return write_record(
         journal_dir(),
         type="result",
@@ -4067,8 +4154,15 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             body_lines.append("")
         if outcome != "completed" and (stderr or "").strip():
             body_lines += ["stderr:", "```", stderr.strip(), "```", ""]
+        # The nonce is made HERE, after the tenant has exited and every
+        # byte of `diff_text` is already fixed, which is the whole of
+        # what makes it unforgeable: there is no order of events in
+        # which that diff could contain this token. See
+        # DIFF_BOUNDARY_FIELD.
+        diff_boundary = os.urandom(8).hex() if diff_text else ""
         if diff_text:
-            body_lines += ["```diff", diff_text, "```"]
+            begin, end = diff_boundary_lines(diff_boundary)
+            body_lines += [begin, "```diff", diff_text, "```", end]
         else:
             body_lines.append(
                 "(no diff produced — either no change was proposed, or the worker "
@@ -4246,6 +4340,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             body_lines=body_lines,
             claim_id=claim_id,
             target=stamped_target,
+            diff_boundary=diff_boundary,
         )
         if stamped_target:
             _file_proposal_question(request, result_id, stamped_target)
@@ -5591,6 +5686,33 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "stamped, and there is no empty spelling of one."
             )
 
+        # `diff-boundary` (result-only, docs/tasks/0025-approval.md §G),
+        # same "well-formed if present" treatment: absent means this
+        # result embeds no diff, which is true of every result written
+        # before the field existed and of every turn that proposed
+        # nothing. Scoped and shape-checked for the same reason
+        # `blocking` and `target` are — nothing reads it off another
+        # type, and a value that is not the nonce this repo's only
+        # writer produces names a boundary no reader can find, which is
+        # the silently half-rendered diff this field exists to make
+        # impossible.
+        boundary_raw = rec.fields.get(DIFF_BOUNDARY_FIELD)
+        if boundary_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{DIFF_BOUNDARY_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0025-approval.md)."
+            )
+        elif boundary_raw is not None and (
+            len(boundary_raw) != 16
+            or any(char not in "0123456789abcdef" for char in boundary_raw)
+        ):
+            errors.append(
+                f"{path.name}: '{DIFF_BOUNDARY_FIELD}' ({boundary_raw!r}) is not 16 "
+                "lowercase hex characters — the only shape the eight random bytes "
+                "this field carries can have."
+            )
         # `decision` and `proposal-sha256`
         # (docs/tasks/0025-approval.md §F), same "well-formed if
         # present, never required" treatment as everything above, for
@@ -5869,8 +5991,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=OUTCOME_VALUES,
         help=(
-            "what happened to a worker turn (result records only, by convention — "
-            "the same way --fact is question-records-by-convention). A human "
+            "what happened to a worker turn. Result records only, and enforced "
+            "rather than left to convention since docs/tasks/0025-approval.md — "
+            "`castle validate` rejects it on any other type, and a writer must "
+            "not be able to produce a record its own validator condemns. A human "
             "holding the worker seat by hand should pass this: no surface may "
             "read failure out of prose, so a failed errand with no `outcome` "
             "field reads as done, forever (docs/tasks/0021-auto-dispatch.md)."

@@ -43,24 +43,35 @@ transcript = b""
 
 
 def pump(timeout=0.2):
+    """One poll of the pty master. Returns "data", "idle" or "eof".
+
+    Three states rather than a boolean, because two of them used to
+    collapse: "I read something" and "I waited and nothing came" both
+    returned true, so the final drain below could only ever end on EOF.
+    That works while the child's exit closes the last handle on the
+    slave — but a grandchild holding the pty open leaves `proc.poll()`
+    non-None, the master perfectly healthy, and the drain spinning
+    forever with no deadline anywhere to stop it. A harness that hangs
+    instead of failing is worse than one that fails.
+    """
     global transcript
     ready, _, _ = select.select([main_fd], [], [], timeout)
     if main_fd not in ready:
-        return True
+        return "idle"
     try:
         chunk = os.read(main_fd, 4096)
     except OSError:
-        return False
+        return "eof"
     if not chunk:
-        return False
+        return "eof"
     transcript += chunk
-    return True
+    return "data"
 
 
 def wait_for(needle: bytes, timeout=15.0) -> bool:
     deadline = time.time() + timeout
     while needle not in transcript and time.time() < deadline:
-        if not pump():
+        if pump() == "eof":
             break
     return needle in transcript
 
@@ -105,9 +116,15 @@ for step in steps:
 
 deadline = time.time() + 15
 while proc.poll() is None and time.time() < deadline:
-    if not pump():
+    if pump() == "eof":
         break
-while pump(0.05):
+# The final drain: everything the child wrote before it exited but that
+# has not been read yet. It stops on EOF, on the first quiet poll, or
+# at a deadline — three exits, because the first is the one that used
+# to be the only one and the one a grandchild holding the pty can deny
+# forever.
+drain_deadline = time.time() + 5
+while time.time() < drain_deadline and pump(0.05) == "data":
     pass
 try:
     returncode = proc.wait(timeout=5)

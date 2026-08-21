@@ -282,11 +282,25 @@ def _pending_questions(records: dict) -> list:
     silently unanswerable" cannot inherit a fold that can hide a question
     by construction.
 
-    Pending is the direct predicate, exact rather than heuristic:
-    file_answer guarantees every answer's refs is exactly the one
-    question it closes, so there is no ambiguity to approximate around.
-    It is the same test castle's own pendingness check and the status
-    surface's "waiting on you" overlay apply.
+    Pending is the direct predicate, exact rather than heuristic: an
+    answer's FIRST ref is the one question it closes, always, and the
+    `answered` set below is the union of every answer's refs. It is the
+    same test castle's own pendingness check and the status surface's
+    "waiting on you" overlay apply.
+
+    That set is deliberately a superset of the questions: since
+    docs/tasks/0025-approval.md an answer deciding a proposed change
+    refs `[question, result]`, so result ids are in it too, and
+    `castle record --type answer --refs A,B` has always been able to
+    put anything else in. It is safe here because it is only ever used
+    to *exclude* — and only questions are tested against it, so a
+    result id in the set matches nothing. **A reader widening this fold
+    past `rec.type == "question"` must not inherit the assumption that
+    every member of `answered` is a question that was answered.** The
+    old wording of this paragraph said `file_answer` guaranteed exactly
+    that, which was true when it was written and is not any more; it is
+    corrected rather than deleted because a stated invariant is
+    precisely what a later change would have relied on.
 
     Sorted by full id, which is chronological only to one-second
     granularity (review round 1, finding 7): `make_id` prefixes a
@@ -756,65 +770,103 @@ def _resize_for_review() -> None:
         pass
 
 
-def _split_proposal_body(castle, body: str) -> tuple[str, str, str]:
-    """Take a result record's body apart into the three things this mode
-    shows separately: where the change applies, Castle's account of why,
-    and the diff.
+def _split_proposal_body(castle, result) -> tuple[str, str, str]:
+    """Take a result record apart into the three things this mode shows
+    separately: where the change applies, Castle's account of why, and
+    the diff.
 
-    Nothing here parses the *tenant's* prose. The two things it does
-    recognise are both the harness's own writing, in `run_worker_turn`:
-    the fenced ```diff block it wraps the diff in, and the one sentence
-    it writes naming the resolved checkout. An earlier design (the
-    decision pass's N20) wanted five sections — current state, proposed
-    state, how to reverse it — and that is exactly the parser this
-    cannot have: `agent/castle-worker-claude` tells a tenant only to
-    "explain the reasoning on stdout", with no required headings, so a
-    parser built against headings would work today and break silently
-    the first time a tenant phrased its account differently. A false
-    promise of structure is worse than none.
+    **The diff's boundary is the nonce in the record's own frontmatter,
+    never a markdown fence in its body.** The first version of this
+    function scanned for ```` ```diff ```` and ```` ``` ````, which is
+    content being trusted to be structure — and a unified diff of a
+    file that itself contains a fenced code block carries context lines
+    that strip to exactly those, so the block closed early, the rest of
+    the diff was relabelled as the machine's reasoning, and the
+    resident was shown less than the change they were approving. That
+    is the worst shape a defect can take on this surface, so the fix is
+    structural rather than a stricter pattern: `run_worker_turn`
+    generates eight random bytes *after* the tenant has finished
+    producing the diff, wraps the diff in lines carrying them, and
+    stamps them in the frontmatter. No diff content can contain a token
+    that did not exist when the diff was written, and the frontmatter
+    is somewhere a body cannot reach. `render_continuation_packet`
+    solved the same problem the same way for the same reason
+    (docs/tasks/0023); this is that idea applied to a record rather
+    than to a stream, which is why the nonce has to be stored instead
+    of merely generated.
 
-    The LAST ```diff fence, not the first: the harness appends its own
-    after the tenant's stdout, so a tenant that printed a fenced diff of
-    its own in its reasoning does not steal the position of the real one
-    — which has to be last on screen and whole.
+    **Nothing here parses the tenant's prose.** The two other things
+    this recognises are the harness's own writing — its opening line
+    and the sentence naming the resolved checkout — and both are looked
+    for only OUTSIDE the diff, which the boundary makes possible: a
+    tenant that writes "This diff targets the ..." into a file this
+    change touches can no longer have that line lifted out of the diff
+    and shown as the harness's own. An earlier design (the decision
+    pass's N20) wanted five parsed sections; that is exactly the parser
+    this cannot have, since `agent/castle-worker-claude` tells a tenant
+    only to "explain the reasoning on stdout" with no required
+    headings, and a parser built against headings nobody promised would
+    work today and break silently later.
 
-    `WORKER_PROPOSES_NOTE` is dropped rather than shown under Castle's
-    account. It is harness prose, not the tenant's account of why, so
-    quoting it under that label would misattribute it — and what it
-    says ("the worker proposes; it does not deploy") is precisely what
-    the boundary statement above now says in this surface's own words
-    and without the internal vocabulary.
+    `WORKER_PROPOSES_NOTE` and the turn's opening line are dropped
+    rather than shown under Castle's account: both are harness prose,
+    not the tenant's account of why, so quoting them under that label
+    misattributes them — and the opening line additionally carries a
+    record id and the tenant's store path, the two things this surface
+    may never print.
+
+    **A result with no boundary stamped shows its body whole.** That is
+    every result written before this field existed, and any a hand
+    written proposal points at. Nothing is hidden and nothing is
+    lifted: with no trustworthy way to say where the diff ends, this
+    declines to guess rather than showing a resident three-quarters of
+    a change under a heading that promises all of it.
     """
+    body = result.body if result is not None else ""
+    boundary = (
+        result.fields.get(castle.DIFF_BOUNDARY_FIELD, "").strip()
+        if result is not None
+        else ""
+    )
+    if not boundary:
+        return "", body.strip(), ""
+
+    begin, end = castle.diff_boundary_lines(boundary)
     lines = body.splitlines()
-    start = None
-    for index, line in enumerate(lines):
-        if line.strip() == "```diff":
-            start = index
-    diff_lines: list[str] = []
-    rest = list(lines)
-    if start is not None:
-        end = len(lines)
-        for index in range(start + 1, len(lines)):
-            if lines[index].strip() == "```":
-                end = index
-                break
-        diff_lines = lines[start + 1 : end]
-        rest = lines[:start] + lines[end + 1 :]
+    try:
+        start = lines.index(begin)
+        stop = lines.index(end, start + 1)
+    except ValueError:
+        # Stamped but not findable — a truncated or hand-edited record.
+        # Same answer as no stamp at all: show everything, split
+        # nothing.
+        return "", body.strip(), ""
+
+    diff_lines = lines[start + 1 : stop]
+    # The markdown fence the harness writes just inside the boundary is
+    # decoration, kept so the record still renders as a diff wherever a
+    # journal is read as markdown. Dropped here only on an exact match,
+    # so a body that somehow lacks it loses nothing but a reader's
+    # tidiness.
+    if diff_lines and diff_lines[0] == "```diff":
+        diff_lines = diff_lines[1:]
+    if diff_lines and diff_lines[-1] == "```":
+        diff_lines = diff_lines[:-1]
+
+    before = lines[:start]
+    after = lines[stop + 1 :]
 
     where = ""
     kept: list[str] = []
-    for index, line in enumerate(rest):
+    for index, line in enumerate(before):
         if index == 0 and line.startswith("Errand `"):
-            # `run_worker_turn`'s own opening line, which names the
-            # request's record id and the tenant's command — on a real
-            # host a /nix/store path. It is not the tenant's account of
-            # why, so showing it under that label misattributes it, and
-            # it is exactly the two things this surface may never print
-            # (a record id, and a path nobody typed). Dropped, not
-            # summarised: everything it says that a resident needs is
-            # already on screen — the "about:" line above carries the
-            # errand in the resident's own words.
             continue
+        kept.append(line)
+    # Searched only in the tail, because that is where the harness
+    # writes it — restricting the search is what keeps a tenant's own
+    # prose, or a line of a file it is changing, from being promoted
+    # into a sentence this surface presents as the mechanism's.
+    for line in after:
         if not where and line.strip().startswith("This diff targets the "):
             where = line.strip()
             continue
@@ -849,7 +901,7 @@ def _render_proposal(castle, question, records: dict, out) -> None:
         result = records.get(question.refs[1]) or castle.load_journal_record(
             question.refs[1]
         )
-    where, diagnosis, diff = _split_proposal_body(castle, result.body if result else "")
+    where, diagnosis, diff = _split_proposal_body(castle, result)
 
     print(question.body.strip() or "(no text)", file=out)
     about = _about_line(castle, records, question)
@@ -1110,6 +1162,19 @@ def _answer_refusal_for_missing(question) -> str:
     return "castle-modal: that is not a question, nothing filed."
 
 
+def _stamp_of(record_id: str) -> str:
+    """The UTC timestamp a record id begins with, and nothing else.
+
+    Ids are `<stamp>-<type>-<random suffix>`, so comparing two of them
+    whole compares the type name whenever the stamps tie — which makes
+    `...-answer-...` older than a `...-result-...` written in the same
+    second, by alphabet rather than by time. Callers that mean "which
+    happened later" want this; callers that only need a deterministic
+    total order (the picker) are right to use the whole id.
+    """
+    return record_id.split("-", 1)[0]
+
+
 def _started_at(castle, claim) -> str:
     """A claim's start time as local wall-clock `HH:MM`.
 
@@ -1270,9 +1335,17 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     )
 
     base = None
+    # The id of the record `base` was derived from, and whether a turn
+    # is running right now. Both exist for the decision overlay below,
+    # which must not describe an errand by something older than its
+    # newest turn (finding 4 of docs/tasks/0025's code review).
+    base_source_id = ""
+    turn_is_live = False
     if claims:
         newest_claim = claims[-1]
         if castle.lease_is_held(request_id):
+            turn_is_live = True
+            base_source_id = newest_claim.id
             base = f"in progress (started {_started_at(castle, newest_claim)})"
         else:
             # The result that closes *this* turn, not merely the newest
@@ -1284,15 +1357,18 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # "interrupted" the reaper was about to contradict.
             closing = castle.closing_result(newest_claim, results, claims)
             if closing is not None:
+                base_source_id = closing.id
                 base = _outcome_label(closing.fields.get("outcome", ""), request_id)
             else:
                 # The window between "the lease died" and "the next
                 # dispatch sweep reaps it into a result". Nothing is
                 # running, so "interrupted" is the honest label.
+                base_source_id = newest_claim.id
                 base = f"interrupted — castle work {request_id} to retry"
     elif results:
         # No claim records anywhere on this errand: a journal from
         # before docs/tasks/0021, where nothing recorded turns at all.
+        base_source_id = results[-1].id
         base = _outcome_label(results[-1].fields.get("outcome", ""), request_id)
     elif any(
         rec.type == "decision"
@@ -1327,32 +1403,62 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # (docs/tasks/0025-approval.md §H). Without this the base label
     # underneath is still the newest turn's outcome — "done" — which is
     # precisely the word that must never describe a change the resident
-    # REJECTED. The overlay above already clears itself once the
+    # REJECTED. The overlay below already clears itself once the
     # proposal is decided (an answer names it, so it is not waiting),
     # and that is the whole problem: clearing the overlay leaves "done"
     # standing alone as the account of an errand whose proposal the
     # resident declined.
     #
-    # Newest proposal only, and no attempt to summarise several: an
-    # errand with two proposals is possible only through a resident's
-    # own manual retry after a decision, and the label describes the
-    # errand's current state, which is the state of the newest thing
-    # that happened to it — the same rule the turn state above follows.
+    # **Keyed to this request, like `results` and `claims` above and
+    # for the identical reason.** `_collect_downstream` is transitive
+    # over `refs`, so a follow-up filed with `castle ask --refs R1`
+    # drags its own proposal into R1's fold — and without the key, a
+    # verdict the resident gave on the FOLLOW-UP's change relabelled
+    # its parent: `[R1] requested — you declined this`, about an errand
+    # the resident declined nothing on. `refs[0]` is the test because
+    # that is the lineage edge a proposal question carries its errand
+    # on, the same edge `claims` is keyed by (finding 3 of this task's
+    # code review).
     proposals = sorted(
         (
             rec
             for rec in downstream
-            if rec.type == "question" and rec.fields.get(castle.PROPOSAL_SHA256_FIELD)
+            if rec.type == "question"
+            and rec.fields.get(castle.PROPOSAL_SHA256_FIELD)
+            and rec.refs
+            and rec.refs[0] == request_id
         ),
         key=lambda rec: rec.id,
     )
-    if proposals:
+    if proposals and not turn_is_live:
+        # **Never over a live turn**, and never over anything newer
+        # than the decision itself. This block's own stated rule is
+        # that an errand's state is the state of its newest turn, and
+        # an unconditional override broke it in two ways: a decision
+        # would have described an errand whose next turn is running
+        # right now, and — approve, then `castle work` again, then have
+        # that turn fail — it would have gone on reading "approved —
+        # nothing applied yet" while the failure and its retry command
+        # vanished from the surface that exists to show them.
+        #
+        # Compared on the TIMESTAMP half of the id, not the whole of
+        # it, and ties go to the decision. Comparing whole ids read
+        # correctly and behaved wrongly: a full id is
+        # `<stamp>-<type>-<suffix>`, so within one second the type name
+        # decides, `answer` sorts before `result`, and a decision made
+        # in the same second as the result it is about looked older
+        # than it. That is not a rare case — it is what a scripted
+        # caller does every time, and what a resident who approves
+        # straight off the notification does too. A tie going to the
+        # decision is right on its own terms as well: a decision can
+        # only exist after the change it decides, so when the two share
+        # a second, the decision is the later event.
         newest_proposal = proposals[-1]
         for rec in sorted(records.values(), key=lambda r: r.id):
             if rec.type != "answer" or newest_proposal.id not in rec.refs:
                 continue
             verdict = rec.fields.get("decision", "").strip()
-            if not verdict:
+            if not verdict or _stamp_of(rec.id) < _stamp_of(base_source_id):
                 continue
             # "approved — nothing applied yet" and not "approved"
             # alone. The same discipline the review surface states to

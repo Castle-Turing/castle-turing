@@ -131,12 +131,20 @@ castle show ID
   `--outcome failed` when an errand failed**, because no surface may
   read failure out of prose: a result with no `outcome` field reads as
   done, forever (see "The claim record, and the `outcome` field").
+  `--outcome` is **enforced at write time too**, refused on any
+  `--type` but `result` — since `docs/tasks/0025-approval.md` gave the
+  validator that same scoping, and a validator stricter than the writer
+  it backstops is the worse half of the asymmetry it was fixing: the
+  record would be written, print an id, exit 0, and be condemned
+  afterwards by an advisory command nothing runs automatically, in a
+  journal whose only remedy is editing history the design says is never
+  edited.
   `--target` names which checkout a result's diff is against
   (`private` or `mechanism`) — the automatic path fills it in from what
   the tenant wrote to `$CASTLE_TARGET_FILE`, and this flag is the same
   lever for a human holding the seat by hand or a fixture building a
   result directly. It is **enforced at write time**, like `--blocking`
-  and unlike `--fact`/`--outcome`: refused on any `--type` but
+  and unlike `--fact`: refused on any `--type` but
   `result`, and refused blank. Not because it carries `--blocking`'s
   dangling-reference hazard — it does not — but for the reason stated
   just below about that flag, running the other way. `cmd_validate`
@@ -148,7 +156,7 @@ castle show ID
   nothing — would later call it malformed. What is deliberately *not*
   enforced is the vocabulary: a third checkout role should not need a
   schema migration (`docs/tasks/0024-config-target.md`).
-  `--blocking` is **not** convention-only like those two — it is
+  `--blocking` is **not** convention-only like `--fact` — it is
   enforced at write time, and the refusals are listed below — and it
   says that this question stopped the errand — the one thing no later
   reader could reconstruct, since a question filed *alongside* a result
@@ -1143,6 +1151,51 @@ something to approve **must check for an open blocking question before
 concluding it produced nothing** — `docs/tasks/0025` in particular. A
 consumer that skips that check silently discards exactly the errands
 this shape exists to turn into real proposals later.
+
+### Where a result's diff starts and stops: `diff-boundary`
+
+From `docs/tasks/0025-approval.md`. A `result` record embeds the diff
+its turn produced, and something has to be able to say where that diff
+ends — the review surface shows the diff as its own section, last and
+whole, and shows everything else as the machine's reasoning.
+
+**A markdown fence cannot be that boundary.** The diff is arbitrary
+bytes a tenant produced, and a unified diff of a file that itself
+contains a fenced code block carries context lines that strip to
+exactly ```` ``` ```` and ```` ```diff ````. A reader scanning for a
+fence finds one *inside* the diff, closes the block early, and prints
+the remainder — real `-`/`+` lines included — as prose. That is not a
+rendering wobble on the approval surface: the resident is shown less
+than the change they are approving, with the missing part relabelled as
+reasoning, on the one screen in this system where authority is granted.
+
+So the boundary is a **nonce**, the same answer `render_continuation_
+packet` gives to the same problem (`docs/tasks/0023-resume-cold.md`:
+section boundaries are unforgeable, body text is not trusted to be
+structure). Eight random bytes, generated when the result is written —
+which is *after* the tenant has finished producing every byte of that
+diff — so no diff content can contain, spell, move or close it. The
+diff is wrapped in `CASTLE-DIFF-<nonce> BEGIN` / `... END` lines and the
+nonce is stamped in the frontmatter, where a body cannot reach. The
+frontmatter's copy is the only thing that makes a line in the body a
+boundary.
+
+The difference from the packet's nonce is that this one has to be
+**stored**: the packet is a stream rendered and consumed in one
+process, while a record is written once and read months later, so the
+token must travel with it.
+
+The markdown fence stays, *inside* the boundary, so the record still
+renders as a diff wherever a journal is read as markdown. It is
+decoration now, not structure: nothing keys on it.
+
+Validated **when present**, result-only, and shape-checked as sixteen
+lowercase hex characters — `blocking`'s and `target`'s treatment, for
+the same reasons. Absent means "this result embeds no diff", which is
+true of every turn that proposed nothing and of every result written
+before the field existed. A reader that meets a proposal whose result
+carries no boundary **shows that body whole** rather than guessing:
+nothing is hidden, and what is given up is the split, not the content.
 
 ### Proposing a change, and deciding it: `proposal-sha256` and `decision`
 

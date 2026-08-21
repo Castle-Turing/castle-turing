@@ -1220,16 +1220,28 @@ mkdir -p "$CASTLE_STATE_DIR/journal" "$XDG_RUNTIME_DIR"
 
 REVIEW_REQ="$("$CASTLE" ask "REVIEW-FIXTURE: an invented complaint about something being hard to see.")"
 plant_proposal() {
-  # Usage: plant_proposal <stamp> <account-line>; echoes the question id
-  # Writes a result whose body has the exact three-part shape
-  # run_worker_turn produces — the harness's own turn header, the
-  # tenant's account, a fenced diff, the resolved-path sentence and the
-  # worker-proposes note — then a question stamped with that result
-  # file's real hash, computed with sha256sum rather than with the tool
-  # under test.
-  local stamp="$1" account="$2"
+  # Usage: plant_proposal <stamp> <account-line> <diff-file|-> [no-boundary]
+  # Echoes the question id.
+  #
+  # Writes a result whose body has the exact shape run_worker_turn
+  # produces — the harness's own turn header, the tenant's account, the
+  # diff wrapped in this record's own boundary lines, the resolved-path
+  # sentence and the worker-proposes note — then a question stamped
+  # with that result file's real hash, computed with sha256sum rather
+  # than with the tool under test.
+  #
+  # A fourth argument suppresses the `diff-boundary` field (while still
+  # writing the boundary lines), which is how the no-boundary
+  # degradation is exercised: that is every result written before the
+  # field existed, and it must show its body whole rather than guess.
+  local stamp="$1" account="$2" diff_file="$3" no_boundary="${4:-}"
   local result_id="$stamp-result-r${stamp: -7}"
   local question_id="$stamp-question-q${stamp: -7}"
+  # Sixteen hex characters, derived from the stamp so a failing
+  # assertion names a fixture a reader can find — the real one is eight
+  # random bytes from os.urandom.
+  local boundary
+  boundary="$(printf '%s' "$stamp" | sha256sum | cut -c1-16)"
   {
     echo "---"
     echo "id: $result_id"
@@ -1240,19 +1252,26 @@ plant_proposal() {
     echo "created: 2026-02-01T00:00:00Z"
     echo "outcome: completed"
     echo "target: private"
+    [ -n "$no_boundary" ] || echo "diff-boundary: $boundary"
     echo "---"
     echo
     echo "Errand \`$REVIEW_REQ\` completed by worker tenant \`/nix/store/invented-hash-not-a-real-path/bin/tenant\`."
     echo
     echo "$account"
     echo
+    echo "CASTLE-DIFF-$boundary BEGIN"
     echo '```diff'
-    echo "--- a/invented.nix"
-    echo "+++ b/invented.nix"
-    echo "@@ -1 +1 @@"
-    echo "-INVENTED-DIFF-BEFORE"
-    echo "+INVENTED-DIFF-AFTER"
+    if [ "$diff_file" = "-" ]; then
+      echo "--- a/invented.nix"
+      echo "+++ b/invented.nix"
+      echo "@@ -1 +1 @@"
+      echo "-INVENTED-DIFF-BEFORE"
+      echo "+INVENTED-DIFF-AFTER"
+    else
+      cat "$diff_file"
+    fi
     echo '```'
+    echo "CASTLE-DIFF-$boundary END"
     echo
     echo "This diff targets the **private** checkout, which on this host resolved to \`/invented/checkout\`."
     echo
@@ -1274,7 +1293,7 @@ plant_proposal() {
   echo "$question_id"
 }
 
-REVIEW_Q="$(plant_proposal 20260301T000100Z "The value it uses now is too small to read at arm's length, so this raises it.")"
+REVIEW_Q="$(plant_proposal 20260301T000100Z "The value it uses now is too small to read at arm's length, so this raises it." -)"
 "$CASTLE" validate || fail "the planted proposal fixture does not validate"
 
 log "review mode: a change picked out of the ANSWER picker branches into review, not into free text"
@@ -1411,5 +1430,104 @@ fi
 grep -q "not a proposed change" "$WORKDIR/review-ordinary.err" \
   || fail "review mode's not-a-change refusal said something else: $(cat "$WORKDIR/review-ordinary.err")"
 "$CASTLE" validate || fail "the journal does not validate after review mode's refusals"
+
+# Each of the two cases below needs a fold it fully controls: an
+# interactive review ignores --question and chooses for itself, exactly
+# as answer mode does, so a change left pending by an earlier case
+# would put a picker in front of a rendering assertion. Deferring is
+# the honest way to clear one — a real decision a resident can make.
+clear_pending_changes() {
+  local path id
+  for path in $(grep -l '^proposal-sha256: ' "$CASTLE_STATE_DIR"/journal/*-question-*.md 2>/dev/null || true); do
+    id="$(basename "$path" .md)"
+    grep -lq "^refs: $id[,$]" "$CASTLE_STATE_DIR"/journal/*-answer-*.md 2>/dev/null \
+      || "$CASTLE" answer --decision defer "$id" </dev/null >/dev/null \
+      || fail "could not clear pending change $id"
+  done
+}
+clear_pending_changes
+
+log "review mode: a diff that contains markdown fences is shown WHOLE, not truncated at one"
+# ---------------------------------------------------------------------
+# The defect this boundary exists for, in the shape a resident actually
+# meets it: a change to a file that itself contains a fenced code block.
+# Every context line of such a diff carries a leading space, so a
+# reader scanning for "```" finds one inside the diff, closes the block
+# early, and prints the rest — real `-`/`+` lines included — under
+# "Castle's own account of why". On this screen that is not a
+# rendering wobble: the resident is shown less than the change they
+# are approving, with the missing half relabelled as the machine's
+# reasoning.
+#
+# Both hostile lines are here, and the second is the worse one: a
+# context line spelling ```diff would have moved the START of the
+# block, not merely its end.
+ADVERSARIAL_DIFF="$WORKDIR/adversarial.diff"
+cat > "$ADVERSARIAL_DIFF" <<'DIFF'
+--- a/README.md
++++ b/README.md
+@@ -1,9 +1,9 @@
+ Some prose above a fenced block.
+ 
+ ```diff
+ an example the file itself contains
+-ADVERSARIAL-BEFORE-INSIDE-FENCE
++ADVERSARIAL-AFTER-INSIDE-FENCE
+ ```
+ 
+-ADVERSARIAL-BEFORE-AFTER-FENCE
++ADVERSARIAL-AFTER-AFTER-FENCE
+DIFF
+ADVERSARIAL_Q="$(plant_proposal 20260301T000200Z "This change touches a file that contains a fenced code block." "$ADVERSARIAL_DIFF")"
+"$CASTLE" validate || fail "the adversarial-diff fixture does not validate"
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-adversarial.txt" \
+  --mode review --question "$ADVERSARIAL_Q" -- "wait:any other key closes this" "key:x"
+ADV_OUT="$(tr -d '\r' < "$WORKDIR/review-adversarial.txt")"
+[ "$(transcript_rc "$WORKDIR/review-adversarial.txt")" = "0" ] || fail "the adversarial review did not exit 0"
+
+# Every line of the diff is present...
+for NEEDLE in ADVERSARIAL-BEFORE-INSIDE-FENCE ADVERSARIAL-AFTER-INSIDE-FENCE \
+              ADVERSARIAL-BEFORE-AFTER-FENCE ADVERSARIAL-AFTER-AFTER-FENCE; do
+  printf '%s\n' "$ADV_OUT" | grep -q -- "$NEEDLE" \
+    || fail "the diff was truncated: $NEEDLE is missing from what the resident saw"
+done
+# ...and every one of them is BELOW the attribution label, which is
+# where the diff is, rather than above it, which is where the machine's
+# account is. This is the assertion that would have caught the original
+# defect: the lines were all still on screen, in the wrong section.
+ADV_ACCOUNT_AT="$(printf '%s\n' "$ADV_OUT" | grep -n 'its words, not verified by a person' | head -1 | cut -d: -f1)"
+[ -n "$ADV_ACCOUNT_AT" ] || fail "the attribution label is missing from the adversarial review"
+for NEEDLE in ADVERSARIAL-BEFORE-INSIDE-FENCE ADVERSARIAL-AFTER-AFTER-FENCE; do
+  LINE_AT="$(printf '%s\n' "$ADV_OUT" | grep -n -- "$NEEDLE" | head -1 | cut -d: -f1)"
+  [ "$LINE_AT" -gt "$ADV_ACCOUNT_AT" ] \
+    || fail "$NEEDLE was printed as the machine's own account instead of as part of the diff"
+done
+# And the boundary lines themselves are never shown to the resident:
+# they are the record's structure, not its content.
+refute "$ADV_OUT" "CASTLE-DIFF-" "the review printed its own boundary marker at the resident"
+printf 'Every line of the adversarial diff rendered below the attribution label.\n'
+
+clear_pending_changes
+
+log "review mode: a result with no boundary stamped shows its body whole rather than guessing"
+# Every result written before this field existed, in an append-only
+# journal that cannot be backfilled. Nothing may be hidden; what is
+# given up is the split, not the content.
+LEGACY_Q="$(plant_proposal 20260301T000300Z "A legacy result, from before the boundary field existed." - no-boundary)"
+"$CASTLE" validate || fail "the legacy-result fixture does not validate"
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-legacy.txt" \
+  --mode review --question "$LEGACY_Q" -- "wait:any other key closes this" "key:x"
+LEGACY_OUT="$(tr -d '\r' < "$WORKDIR/review-legacy.txt")"
+[ "$(transcript_rc "$WORKDIR/review-legacy.txt")" = "0" ] || fail "the legacy review did not exit 0"
+printf '%s\n' "$LEGACY_OUT" | grep -q -- "+INVENTED-DIFF-AFTER" \
+  || fail "a result with no boundary lost its diff entirely — nothing may be hidden"
+printf '%s\n' "$LEGACY_OUT" | grep -q "A legacy result, from before" \
+  || fail "a result with no boundary lost its account"
+printf '%s\n' "$LEGACY_OUT" | grep -q "Where this applies:" \
+  && fail "a result with no boundary had a sentence lifted out of a body this cannot safely split"
+printf '%s\n' "$LEGACY_OUT" | grep -q "NOTHING ON THIS MACHINE IS EDITED" \
+  || fail "the boundary statement is missing from a legacy review — it is never optional"
+
+clear_pending_changes
 
 log "all assertions passed"
