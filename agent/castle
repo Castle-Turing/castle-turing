@@ -20,7 +20,11 @@ Subcommands:
             the question carries a resident-model `fact` (or one is
             passed with --fact) — the resident-model entry that answer
             elicits (docs/tasks/0009-ambient-intake.md, Proposal 05's
-            only write path).
+            only write path). With --decision, the resident's verdict
+            on a proposed configuration change: approve, reject or
+            defer, bound to that exact proposal by refs and by a
+            byte-hash re-derived at write time. Nothing is applied by
+            any of the three (docs/tasks/0025-approval.md).
   correct   intake: write a `correction` record — the resident speaking
             unbidden about how the system is doing, not asking for
             anything — stamped with filing-time context, plus the
@@ -50,6 +54,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
 import os
 import pathlib
 import shlex
@@ -214,6 +219,40 @@ MECHANISM_ROOT_INVALID_ENV = "CASTLE_MECHANISM_ROOT_INVALID"
 # the body carries the reasoning, never the machine-readable signal.
 OUTCOME_VALUES = ("completed", "failed", "timeout", "interrupted")
 
+# The resident's decision on a proposed configuration change
+# (docs/tasks/0025-approval.md). Written by a keypress on
+# `castle-modal --mode review` or the `castle answer --decision` CLI
+# flag, never parsed out of prose — the body still carries whatever
+# the resident typed, verbatim, unparsed, and no authorization path
+# ever consults it. `defer` is deliberately the third value: the
+# attributable form of "not now," argued in the task brief's
+# considered-and-rejected section against the alternative of two
+# buttons.
+DECISION_VALUES = ("approve", "reject", "defer")
+
+# The field name a proposal's byte-hash is stamped under, on both the
+# question that proposes it and the answer that decides it. Named for
+# the algorithm, not `hash`, so a future migration to a different
+# digest is legible in the field name itself rather than requiring a
+# comment to disambiguate which hash a bare `hash:` ever meant
+# (docs/tasks/0025-approval.md).
+PROPOSAL_SHA256_FIELD = "proposal-sha256"
+
+# The one sentence a proposal question's body ever carries. Harness-
+# authored, never tenant prose and never model-generated, for two
+# reasons that both matter (docs/tasks/0025-approval.md §B, §I): it is
+# the picker's first-line preview, which is what makes a proposal
+# visually distinct from an ordinary elicited question with no extra
+# code; and it is the first line `_fire_notification` takes, so the
+# notification a resident actually receives says what this is and what
+# it has not done, rather than leaking a store path or a model's
+# opening sentence onto the one surface bound hardest by "no internal
+# vocabulary."
+PROPOSAL_QUESTION_BODY = (
+    "This errand produced a proposed change to your {target} configuration. "
+    "Nothing has been applied. Review it to approve, reject, or set it aside."
+)
+
 # The router's channel vocabulary (docs/architecture.md's Router
 # section). Named once, here, so `cmd_route` and the `considered` field
 # it writes can't drift apart — "considered" is defined as "the channels
@@ -279,6 +318,15 @@ FIELD_ORDER = (
     # about resumption depends on `blocking` sitting here rather than
     # falling out in the sorted remainder the way `channel` does.
     "blocking",
+    # Answer-only and question-or-answer respectively
+    # (docs/tasks/0025-approval.md §A), placed together and for the
+    # same presentation-only reason as everything above them: on the
+    # answer that decides a proposal, `decision` and the hash it is
+    # bound to are what the record says about itself before any prose,
+    # and a reader skimming one should meet the verdict before the
+    # comment the resident may or may not have typed.
+    "decision",
+    "proposal-sha256",
     "surface",
     "context-local-created",
     "context-last-notify",
@@ -1228,13 +1276,23 @@ class AnswerRefused(Exception):
     a discriminant is the smaller surface for that.
 
     `kind` is one of "empty_body", "no_such_record", "wrong_type",
-    "already_answered", "unreadable_answer". The extra attributes carry
+    "already_answered", "unreadable_answer", and — from
+    docs/tasks/0025-approval.md §C — "not_a_proposal",
+    "proposal_carries_fact", "proposal_unresolvable", "proposal_stale",
+    "proposal_needs_decision". The extra attributes carry
     whatever detail a kind needs — `record_type` for "wrong_type",
     `existing_answer_id` for "already_answered", `path` for
     "unreadable_answer" — and are empty strings otherwise. No wording
     lives here or in `file_answer`: `cmd_answer` prints ids and the CLI's
     long-standing spellings, castle-modal's answer mode prints plain
     language with no ids at all, and both render from the same `kind`.
+
+    The five 0025 kinds stay on this one class rather than gaining a
+    `DecisionRefused` sibling for the same reason the first five share
+    it: every caller's dispatch is identical (map kind to wording), and
+    the two surfaces that render them already have exactly one
+    `except AnswerRefused` each. A second exception type would be a
+    second thing for both of them to forget to catch.
     """
 
     def __init__(
@@ -1255,11 +1313,23 @@ class AnswerRefused(Exception):
 
 
 def file_answer(
-    *, question_id: str, body: str, fact: str | None = None
+    *, question_id: str, body: str, fact: str | None = None,
+    decision: str | None = None,
 ) -> tuple[str, str | None]:
     """The answer write path (docs/tasks/0022-answer-in-ui.md scope 1) —
     the `answer` record plus, when the question elicited a fact, the
     resident-model entry Proposal 05 allows only here.
+
+    Since docs/tasks/0025-approval.md it is also the path a resident's
+    **decision** on a proposed configuration change takes: `decision`
+    is one of DECISION_VALUES, and the answer it produces is bound to
+    the exact proposal by `refs` and by a byte-hash re-derived here,
+    at write time, from the result file as it stands on disk right
+    now. Extended rather than routed around, deliberately: the
+    already-answered guard, the type check and the resident-model rule
+    below are exactly the checks an authorization must not be able to
+    skip, and a second write path would be a second place to forget
+    them (which is why `cmd_record` refuses `--decision` outright).
 
     Extracted from `cmd_answer` for the same reason `file_correction`
     was extracted from `cmd_correct`: a second caller now exists
@@ -1276,7 +1346,31 @@ def file_answer(
 
     Returns `(answer_id, recorded_fact_or_None)`.
     """
-    if not body.strip():
+    if decision is not None and decision not in DECISION_VALUES:
+        # Not an AnswerRefused: both doors onto this parameter close
+        # the vocabulary already (`castle answer --decision` through
+        # argparse `choices=`, castle-modal's review mode through its
+        # own keypress map), so a value arriving here from outside the
+        # set is a caller bug rather than a resident's mistake, and it
+        # has no resident-facing wording to render. It is refused
+        # rather than written for the reason `cmd_record`'s `--target`
+        # guard already states: `cmd_validate` rejects a `decision`
+        # outside this set, the journal is append-only, and a writer
+        # must not be able to produce a record its own validator
+        # condemns. RecordError, because `main` already funnels every
+        # write-path fault of that shape into one clean message and
+        # both castle-modal write paths already catch it.
+        raise RecordError(
+            f"refusing to write an answer carrying decision {decision!r}, which is not "
+            f"one of {', '.join(DECISION_VALUES)} (docs/tasks/0025-approval.md)"
+        )
+    # The one exception to the empty-body refusal, and the only one
+    # (docs/tasks/0025 §C.1): a decision is a complete, meaningful
+    # answer on its own, and demanding prose alongside it would train a
+    # resident to type "ok" before every approval — exactly the
+    # click-through habituation Proposal 06 warns against. Whatever
+    # they did type is still stored verbatim, empty or not.
+    if not body.strip() and decision is None:
         raise AnswerRefused("empty_body", question_id=question_id)
     # Resolve and type-check the question *before* writing the answer
     # (finding 3, 0009 review pass): the journal is append-only, so an
@@ -1350,6 +1444,86 @@ def file_answer(
                 "already_answered", question_id=question_id, existing_answer_id=rec.id
             )
 
+    # ---------------------------------------------------------------
+    # The proposal half (docs/tasks/0025-approval.md §C). Everything
+    # above ran first and unchanged, because a decision is an answer
+    # before it is anything else.
+    # ---------------------------------------------------------------
+    proposal_hash = question.fields.get(PROPOSAL_SHA256_FIELD, "").strip()
+    answer_refs = [question_id]
+    extra: dict[str, str] = {}
+
+    if decision is None:
+        # The mirror guard, and the one that keeps a proposal from
+        # dead-ending: an *ordinary* answer against a proposal question
+        # would close it — the already-answered check above treats any
+        # answer as closure — while recording no decision at all. The
+        # question stops being pending on every surface, nothing was
+        # approved, rejected or deferred, and no fold anywhere can say
+        # so. Refused, and the surfaces name the way to close it
+        # properly. This is the write-side half of the same discipline
+        # the read side applies by branching a proposal out of the
+        # free-text grammar (castle-modal's run_answer).
+        if proposal_hash:
+            raise AnswerRefused("proposal_needs_decision", question_id=question_id)
+    else:
+        # A decision can only ever be about a change this mechanism
+        # itself proposed. Without the stamp there is no proposal here
+        # to authorize, whatever the question says in prose.
+        if not proposal_hash:
+            raise AnswerRefused("not_a_proposal", question_id=question_id)
+        # Defense in depth beyond "the harness never writes one"
+        # (§B): a question carrying both a proposal hash and a `fact`
+        # would launder every approve and reject into a durable
+        # resident-model entry through the perfectly ordinary path
+        # below. Hand-written, restored from a backup, or a future
+        # bug — it does not matter which; this refuses rather than
+        # writing a stated preference the resident never stated.
+        #
+        # Tested against exactly the expression the resident-model
+        # path below computes, `fact or question.fields.get("fact")`,
+        # rather than against the question's field alone. The brief
+        # (§C guard 3) checks only the field, on the argument that the
+        # parameter "can only ever see None for a proposal question" —
+        # which is not true: `castle answer --fact NAME --decision
+        # approve` supplies one from the command line, and the door
+        # this guard exists to shut would have stayed open on the
+        # likelier of the two routes. Deviation recorded in the brief.
+        if (fact or question.fields.get("fact") or "").strip():
+            raise AnswerRefused("proposal_carries_fact", question_id=question_id)
+        # `refs[1]` is the proposal, by the "first ref is lineage,
+        # later refs are context" convention claims and results
+        # already use (§A). It has to be there, and it has to be a
+        # result, for this decision to bind to anything.
+        result_id = question.refs[1] if len(question.refs) > 1 else ""
+        proposal = load_journal_record(result_id) if result_id else None
+        if proposal is None or proposal.type != "result":
+            raise AnswerRefused(
+                "proposal_unresolvable",
+                question_id=question_id,
+                record_type=(proposal.type if proposal is not None else ""),
+            )
+        # Re-derived from disk right now, and compared against the
+        # question's OWN stamp rather than against anything a caller
+        # passed in: the question's field is the one value nothing
+        # after proposal time can have legitimately changed. This is
+        # what makes the check hold with no state carried between the
+        # process that displayed the proposal and the process that
+        # writes the decision — both re-read the same bytes. A
+        # mismatch means the result file was altered since it was
+        # proposed, and since nothing in this system ever rewrites a
+        # record, there is no version to prefer: it refuses.
+        try:
+            current_hash = hashlib.sha256(proposal.path.read_bytes()).hexdigest()
+        except OSError:
+            raise AnswerRefused(
+                "proposal_unresolvable", question_id=question_id
+            ) from None
+        if current_hash != proposal_hash:
+            raise AnswerRefused("proposal_stale", question_id=question_id)
+        answer_refs = [question_id, result_id]
+        extra = {"decision": decision, PROPOSAL_SHA256_FIELD: proposal_hash}
+
     # Answering is also intake: a resident's word entering the system
     # through one of its surfaces, same as `ask` — see architecture.md's
     # description of intake as "no judgment, just capture."
@@ -1358,8 +1532,9 @@ def file_answer(
         type="answer",
         provenance="requested",
         seat="intake",
-        refs=[question_id],
+        refs=answer_refs,
         body=body,
+        extra=extra or None,
     )
 
     # Proposal 05's write path: an explicit resident answer, and only
@@ -1606,6 +1781,33 @@ def cmd_record(args: argparse.Namespace) -> int:
             "stamps filing-time context and the resident-model entry a "
             "correction requires (docs/tasks/0010-correction-record.md); "
             "`castle record` bypasses both.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # And the same posture for a `decision` field
+    # (docs/tasks/0025-approval.md §E), refused before anything else is
+    # read for the same reason the correction refusal is: what makes an
+    # approval mean anything is the set of checks `file_answer` runs
+    # before it writes one — the question really is a proposal, it
+    # elicits no fact, its second ref really resolves to the result,
+    # and that result's bytes still hash to what the proposal recorded.
+    # This writer runs none of them.
+    #
+    # Stated as what it is rather than implied: not a security boundary
+    # — a tenant running as the resident could write the file directly
+    # — but the difference between a decision made through the one path
+    # that verifies what it is deciding and one that does not. The same
+    # "make the honest path the only easy path" argument the refusal
+    # above already makes for itself.
+    if getattr(args, "decision", None):
+        print(
+            "castle record: refusing to write an answer record carrying a "
+            "decision field. Approving, rejecting, or deferring a proposal "
+            "must go through `castle answer --decision` or castle-modal's "
+            "review mode — the one path with the byte-hash and staleness "
+            "checks an authorization requires (docs/tasks/0025-approval.md). "
+            "`castle record` bypasses all of them.",
             file=sys.stderr,
         )
         return 1
@@ -1862,6 +2064,43 @@ def _answer_refusal_message(exc: AnswerRefused) -> str:
             f"castle answer: cannot verify {exc.question_id} is still open — "
             f"{exc.path} does not parse; run `castle validate`"
         )
+    # The five from docs/tasks/0025-approval.md §C. Ids named freely,
+    # like the four above, for the same reason: a CLI diagnostic is not
+    # the resident-facing surface castle-modal's vocabulary rule binds.
+    if exc.kind == "not_a_proposal":
+        return (
+            f"castle answer: --decision is only for a proposed change, and "
+            f"{exc.question_id} does not carry one (no '{PROPOSAL_SHA256_FIELD}' "
+            "field). A decision can only be about a change this system proposed"
+        )
+    if exc.kind == "proposal_carries_fact":
+        return (
+            f"castle answer: refusing to decide {exc.question_id} — it is a proposal "
+            "and it also elicits a 'fact', so deciding it would write into the "
+            "resident model. Nothing this system proposes may record a stated "
+            "preference as a side effect of being approved or rejected"
+        )
+    if exc.kind == "proposal_unresolvable":
+        return (
+            f"castle answer: {exc.question_id}'s second refs entry does not resolve "
+            "to a result record, so there is no proposal for this decision to bind "
+            "to"
+        )
+    if exc.kind == "proposal_stale":
+        return (
+            f"castle answer: the result {exc.question_id} proposed has changed on "
+            "disk since it was proposed — its bytes no longer match the recorded "
+            "hash. Nothing here rewrites a record, so this file was hand-edited or "
+            "corrupted; refusing rather than guessing which version you meant to "
+            "authorize"
+        )
+    if exc.kind == "proposal_needs_decision":
+        return (
+            f"castle answer: {exc.question_id} is a proposed change, and an ordinary "
+            "answer would close it with no decision recorded. Use `castle answer "
+            f"--decision {{{','.join(DECISION_VALUES)}}} {exc.question_id}`, or "
+            "castle-modal's review mode"
+        )
     return (
         f"castle answer: {exc.question_id} was already answered by "
         f"{exc.existing_answer_id} — a second answer would leave two records "
@@ -1878,7 +2117,10 @@ def cmd_answer(args: argparse.Namespace) -> int:
     body = " ".join(args.text) if args.text else (sys.stdin.read() if not sys.stdin.isatty() else "")
     try:
         record_id, recorded_fact = file_answer(
-            question_id=args.question_id, body=body, fact=args.fact
+            question_id=args.question_id,
+            body=body,
+            fact=args.fact,
+            decision=getattr(args, "decision", None),
         )
     except AnswerRefused as exc:
         print(_answer_refusal_message(exc), file=sys.stderr)
@@ -2919,6 +3161,80 @@ def _write_worker_result(
     )
 
 
+def _file_proposal_question(request: Record, result_id: str, target: str) -> None:
+    """The second record a completed, targeted turn writes: the question
+    that asks the resident to decide about the proposal the result
+    carries (docs/tasks/0025-approval.md §B).
+
+    **The harness writes this, never the tenant.** A model asked to
+    honour "never blocking, never carrying a fact" is a convention, and
+    this is the first mechanism that gives Castle's proposals standing
+    to be acted on later — the two properties below have to be
+    guarantees. `write_record` already refuses an `answer` or a
+    `correction` from inside a worker turn for the same reason
+    (Proposal 05). A tenant also could not compute this hash if it
+    wanted to: the bytes it covers do not exist until the result is
+    written, which only this function's caller can sequence.
+
+    **Never `blocking`.** `_resumable_answers` builds its
+    `blocking_questions` list by filtering on `_is_blocking(rec)`
+    alone, so a question that never carries the field can never enter
+    it, so no answer to it can ever spend against `_eligible_requests`'
+    resumption clause. Approving therefore cannot re-run the worker and
+    produce a second, unauthorized proposal — structurally, with no
+    runtime guard to forget. Verified the other way round too: with the
+    field set, answering the proposal question does start another turn.
+
+    **Never `fact`.** `file_answer`'s `resolved_fact` can then only ever
+    be None here, so no approve or reject writes into the resident
+    model through the ordinary path. `file_answer` re-checks it anyway.
+
+    **`seat: worker`.** The claim and the result for this same turn are
+    both `seat: worker`, written by the harness rather than the tenant,
+    per Proposal 03's framing: a seat is defined by what it reads and
+    writes, not by whether a human, a rule or a model produced this
+    particular record. A mechanical observation the harness makes about
+    its own completed turn is exactly that shape.
+
+    The hash covers the result file's exact bytes as just written — no
+    canonicalization and no field selection, because `render_record`'s
+    ordering is stable and records are never rewritten, so there are no
+    normalization rules here to get wrong. It buys tamper-evidence and
+    nothing more: under append-only semantics the id alone already
+    identifies the proposal, and what the hash adds is that "this
+    journal is append-only in spirit" becomes something a machine can
+    check at the one moment it will matter — 0026 reading these bytes
+    to mutate a configuration.
+    """
+    try:
+        result_bytes = (journal_dir() / f"{result_id}.md").read_bytes()
+        write_record(
+            journal_dir(),
+            type="question",
+            provenance=request.fields.get("provenance", "requested"),
+            seat="worker",
+            refs=[request.id, result_id],
+            body=PROPOSAL_QUESTION_BODY.format(target=target),
+            extra={PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest()},
+        )
+    except OSError as exc:
+        # Printed, never raised. The result is already durable by the
+        # time this runs — the turn's actual, hard-won output — and a
+        # failure writing the *second* record must not look like the
+        # whole turn failed, nor throw away the first to satisfy a
+        # rollback an append-only journal was never built to support.
+        # Same posture `file_answer` takes when a resident-model write
+        # fails after its answer record is already on disk: say plainly
+        # what is and is not lost, and carry on.
+        print(
+            f"castle work: result {result_id} was written, but its proposal "
+            f"question could not be filed ({exc}). The diff is durable in the "
+            "journal; nothing will prompt you to review it until this is "
+            "investigated.",
+            file=sys.stderr,
+        )
+
+
 def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tuple[str, str]:
     """One worker turn: take the lease, record the claim, run the
     tenant, write the result. Returns `(result_record_id, outcome)`.
@@ -3915,16 +4231,16 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 "output stream."
             )
         body_lines += mechanism_note
-        return (
-            _write_worker_result(
-                request,
-                outcome=outcome,
-                body_lines=body_lines,
-                claim_id=claim_id,
-                target=stamped_target,
-            ),
-            outcome,
+        result_id = _write_worker_result(
+            request,
+            outcome=outcome,
+            body_lines=body_lines,
+            claim_id=claim_id,
+            target=stamped_target,
         )
+        if stamped_target:
+            _file_proposal_question(request, result_id, stamped_target)
+        return (result_id, outcome)
     finally:
         # Releasing the lease is closing the handle — the kernel would
         # do it anyway when this process exits, including if it dies.
@@ -5068,6 +5384,13 @@ def cmd_digest(args: argparse.Namespace) -> int:
             # live.
             if rec.type == "result" and rec.fields.get("outcome"):
                 print(f"- outcome: {rec.fields['outcome']}")
+            # And `target` beside it (docs/tasks/0025-approval.md §J),
+            # presentation only: `castle validate` already checks the
+            # field's shape, and this fold was simply hiding it from a
+            # resident reading a period's account cold — on the one
+            # field 0026 will route an apply step on.
+            if rec.type == "result" and rec.fields.get(TARGET_FIELD):
+                print(f"- target: {rec.fields[TARGET_FIELD]}")
             if rec.body.strip():
                 print()
                 print(rec.body.strip())
@@ -5153,8 +5476,25 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # permanent in an append-only journal, and a validator that
         # suddenly demanded a field no writer at the time could supply
         # would fail the entire pre-existing journal retroactively.
+        #
+        # Scoped to results as well as checked for membership, and that
+        # scoping is a correction made by docs/tasks/0025-approval.md
+        # §F rather than something this block always had. `blocking`
+        # (0023) and `target` (0024) each closed this same asymmetry for
+        # themselves; `outcome` is the one instance that kept it, so an
+        # `answer` record carrying `outcome: completed` wrote, exited 0
+        # and validated clean. Nothing reads the field off any other
+        # type, so such a record would validate, read as meaningful and
+        # do nothing — and leaving the gap open invites the next reader
+        # copying this family of checks to copy the one that forgot.
         outcome_raw = rec.fields.get("outcome")
-        if outcome_raw is not None and outcome_raw not in OUTCOME_VALUES:
+        if outcome_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: 'outcome' is a result-record field and this is a "
+                f"{rtype!r} record. Nothing reads it here, so it would validate, "
+                "read as meaningful, and do nothing (docs/tasks/0021-auto-dispatch.md)."
+            )
+        elif outcome_raw is not None and outcome_raw not in OUTCOME_VALUES:
             errors.append(
                 f"{path.name}: 'outcome' ({outcome_raw!r}) is not one of "
                 f"{', '.join(OUTCOME_VALUES)}"
@@ -5242,6 +5582,84 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "stamped, and there is no empty spelling of one."
             )
 
+        # `decision` and `proposal-sha256`
+        # (docs/tasks/0025-approval.md §F), same "well-formed if
+        # present, never required" treatment as everything above, for
+        # the same append-only reason. Both are type-scoped as well as
+        # value-checked, following `blocking` and `target` rather than
+        # the gap `outcome` had until this task.
+        decision_raw = rec.fields.get("decision")
+        if decision_raw is not None and rtype != "answer":
+            # A `decision` on any other type is a fabricated
+            # authorization: nothing reads it there, so it would
+            # validate and read as one to a human skimming the journal
+            # cold, which is worse than inert.
+            errors.append(
+                f"{path.name}: 'decision' is an answer-record field and this is a "
+                f"{rtype!r} record. A decision on any other type is a fabricated "
+                "authorization (docs/tasks/0025-approval.md)."
+            )
+        elif decision_raw is not None and decision_raw not in DECISION_VALUES:
+            errors.append(
+                f"{path.name}: 'decision' ({decision_raw!r}) is not one of "
+                f"{', '.join(DECISION_VALUES)}"
+            )
+
+        hash_raw = rec.fields.get(PROPOSAL_SHA256_FIELD)
+        if hash_raw is not None and rtype not in ("question", "answer"):
+            errors.append(
+                f"{path.name}: '{PROPOSAL_SHA256_FIELD}' belongs on the question that "
+                f"proposes a change or the answer that decides it, and this is a "
+                f"{rtype!r} record. Nothing reads it here, so it would validate, read "
+                "as meaningful, and do nothing (docs/tasks/0025-approval.md)."
+            )
+        # Explicit membership rather than a regex or `str.isalnum()`,
+        # the same reasoning castle-modal's picker gives for not using
+        # `str.isdigit()`: the unicode-aware helpers are true of
+        # characters no digest ever contains.
+        elif hash_raw is not None and (
+            len(hash_raw) != 64
+            or any(char not in "0123456789abcdef" for char in hash_raw)
+        ):
+            errors.append(
+                f"{path.name}: '{PROPOSAL_SHA256_FIELD}' ({hash_raw!r}) is not 64 "
+                "lowercase hex characters — the only shape a SHA-256 digest has."
+            )
+
+        # A question carrying a proposal must not also elicit a fact:
+        # the permanent-schema-gate form of `file_answer`'s own guard,
+        # so the invariant does not depend solely on one write path
+        # catching it. What it prevents is an approval laundered into a
+        # durable stated preference the resident never stated.
+        if rtype == "question" and hash_raw is not None and rec.fields.get("fact", "").strip():
+            errors.append(
+                f"{path.name}: a question carrying '{PROPOSAL_SHA256_FIELD}' also "
+                "carries 'fact'. Deciding it would write a resident-model entry as a "
+                "side effect of approving or rejecting a change "
+                "(docs/tasks/0025-approval.md)."
+            )
+
+        # And the two shape rules `refs` is now responsible for on a
+        # decision-bearing answer. Identifying the proposal by `refs`
+        # rather than by a named field (§A) is only cold-readable if
+        # something checks the shape refs took on: existence of the
+        # refs is already checked below, but "the second one is the
+        # result this decision is about" is not a property any existing
+        # pass asks about.
+        if decision_raw is not None and rtype == "answer":
+            if hash_raw is None:
+                errors.append(
+                    f"{path.name}: 'decision' is present with no "
+                    f"'{PROPOSAL_SHA256_FIELD}'. A decision names which exact bytes "
+                    "it authorized, or it authorizes nothing checkable."
+                )
+            if len(rec.refs) < 2:
+                errors.append(
+                    f"{path.name}: 'decision' is present but refs names fewer than two "
+                    "records. A decision's second ref is the result it decides "
+                    "(docs/tasks/0025-approval.md)."
+                )
+
         considered_raw = rec.fields.get("considered")
         considered_list: list[str] | None = None
         if considered_raw is not None:
@@ -5292,6 +5710,44 @@ def cmd_validate(args: argparse.Namespace) -> int:
         for ref in rec.refs:
             if ref not in records:
                 errors.append(f"{rec.path.name}: refs unknown record '{ref}'")
+
+    # The two cross-record halves of docs/tasks/0025-approval.md §F,
+    # here rather than in the per-file pass above because both need the
+    # whole journal resolved.
+    decided: dict[str, str] = {}
+    for rec in sorted(records.values(), key=lambda r: r.id):
+        if rec.type != "answer" or rec.fields.get("decision") is None:
+            continue
+        # Shape, not mere existence. The ref-existence pass above says
+        # every ref points at *something*; this says the second one
+        # points at the kind of thing a decision can be about. Without
+        # it, "identify the proposal by refs rather than a field" is an
+        # unchecked convention.
+        if len(rec.refs) > 1:
+            proposal = records.get(rec.refs[1])
+            if proposal is not None and proposal.type != "result":
+                errors.append(
+                    f"{rec.path.name}: a decision's second ref must be the result it "
+                    f"decides, and {rec.refs[1]} is a {proposal.type!r} record."
+                )
+        # At most one decision per question, and stated as exactly what
+        # it is: a backstop, not a prevention. `file_answer`'s
+        # already-answered scan closes this at write time for its own
+        # callers and `cmd_record` refuses to write a decision at all,
+        # but that scan is documented in its own comment as a
+        # scan-then-write rather than a lock — so two concurrent review
+        # sessions can both pass it before either writes. This is what
+        # catches that narrow window afterwards.
+        if rec.refs:
+            first = rec.refs[0]
+            if first in decided:
+                errors.append(
+                    f"{rec.path.name}: a second decision on {first}, already decided "
+                    f"by {decided[first]}. Two decisions on one proposal leave nothing "
+                    "able to say which one authorized it."
+                )
+            else:
+                decided[first] = rec.id
 
     # Unconditionally, and outside the pass/fail branch below: an unsafe
     # state layout is a fact about the environment, not a malformed
@@ -5356,6 +5812,18 @@ def build_parser() -> argparse.ArgumentParser:
             "resident-model fact name this answer elicits (Proposal 05's write path). "
             "Normally read from the question record's own 'fact' field; pass this to "
             "override, or to supply one for a question that didn't carry it."
+        ),
+    )
+    p_answer.add_argument(
+        "--decision",
+        choices=DECISION_VALUES,
+        default=None,
+        help=(
+            "answering a proposed configuration change: approve it, reject it, or "
+            "defer it (docs/tasks/0025-approval.md). Only valid against a question "
+            "this system filed to propose a change, and nothing is applied by any of "
+            "the three — the decision is recorded and that is all. The body stays "
+            "optional here, and is stored verbatim whatever it says."
         ),
     )
     p_answer.add_argument("text", nargs="*", help="the answer body (or piped on stdin)")
@@ -5430,6 +5898,20 @@ def build_parser() -> argparse.ArgumentParser:
             "record. The first ref is the whole test — resumption follows "
             "refs[0] and ignores the rest — so a correct id in second place is "
             "refused exactly like no id at all."
+        ),
+    )
+    p_record.add_argument(
+        "--decision",
+        default=None,
+        choices=DECISION_VALUES,
+        help=(
+            "accepted so this writer can refuse it by name rather than writing an "
+            "unverified authorization: `castle record` never writes a decision "
+            "field. Approving, rejecting or deferring a proposed change goes "
+            "through `castle answer --decision` or castle-modal's review mode, the "
+            "one path that checks the question really is a proposal, elicits no "
+            "fact, and still hashes to the bytes it was filed against "
+            "(docs/tasks/0025-approval.md)."
         ),
     )
     p_record.add_argument("--body", default=None, help="record body text")

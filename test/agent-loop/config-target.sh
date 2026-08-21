@@ -808,14 +808,29 @@ STATUS_WAITING="$("$MODAL" --mode status --limit 40)"
 printf '%s\n' "$STATUS_WAITING" | grep -F "$REQP" | grep -q 'waiting on you' \
   || fail "the ask-first errand does not read as waiting on the resident: $(printf '%s\n' "$STATUS_WAITING" | grep -F "$REQP")"
 # The contrast case, from the same fold in the same breath: an errand
-# that finished with a real diff and no open question must NOT read as
-# waiting, or the assertion above would be satisfied by everything.
-# Its presence in the listing is checked first — a contrast case the
-# fold never rendered would pass this vacuously.
-printf '%s\n' "$STATUS_WAITING" | grep -qF "$REQ1" \
-  || fail "the contrast errand $REQ1 is not in the status listing at all, so the check below proves nothing"
-printf '%s\n' "$STATUS_WAITING" | grep -F "$REQ1" | grep -q 'waiting on you' \
+# that finished with no open question must NOT read as waiting, or the
+# assertion above would be satisfied by everything. Its presence in the
+# listing is checked first — a contrast case the fold never rendered
+# would pass this vacuously.
+#
+# $REQ_NOMECH rather than $REQ1, and the swap is this task's doing
+# rather than tidying: since docs/tasks/0025-approval.md a turn that
+# finishes with a real diff and a resolved target files a proposal
+# question of its own, so $REQ1 — the completed, targeted, diffed
+# errand this line used to contrast against — now genuinely IS waiting
+# on the resident, and correctly says so. $REQ_NOMECH is the errand
+# that completed and proposed nothing: no diff, no target, no proposal
+# question, no question of any kind. It is the shape this assertion
+# was always about.
+printf '%s\n' "$STATUS_WAITING" | grep -qF "$REQ_NOMECH" \
+  || fail "the contrast errand $REQ_NOMECH is not in the status listing at all, so the check below proves nothing"
+printf '%s\n' "$STATUS_WAITING" | grep -F "$REQ_NOMECH" | grep -q 'waiting on you' \
   && fail "a completed errand with no open question reads as waiting on the resident"
+# And the other half of the same swap, asserted rather than left
+# implied: the completed errand that DID propose something is waiting,
+# because a proposal nobody has decided is exactly that.
+printf '%s\n' "$STATUS_WAITING" | grep -F "$REQ1" | grep -q 'waiting on you' \
+  || fail "a completed errand carrying an undecided proposal does not read as waiting on the resident: $(printf '%s\n' "$STATUS_WAITING" | grep -F "$REQ1")"
 
 log "  -- an unanswered blocking question resumes nothing, however many sweeps run"
 "$CASTLE" dispatch >/dev/null
