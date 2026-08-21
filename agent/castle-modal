@@ -905,22 +905,31 @@ def _render_proposal(castle, question, records: dict, out) -> None:
         print(file=out)
 
 
-def _read_decision_key(interactive: bool) -> str:
-    """One keypress, cbreak-before-print for the interactive case.
+def _render_and_read(castle, question, records: dict, out, *, interactive: bool) -> str:
+    """Print the whole review and read the one keypress that decides it.
 
-    `_render_proposal` has already printed by the time this runs, so
-    unlike `_show_picker` this cannot engage cbreak before its own
-    output — the diff is far too long to hold behind a mode switch, and
-    a resident reading it takes seconds anyway. What the discipline
-    actually protects against is a keypress landing in the microsecond
-    gap between a prompt and the mode switch, and the gap here is on
-    the far side of a human reading a diff.
+    The two are one function because cbreak is engaged **before**
+    anything is printed and left on until the key arrives — the same
+    discipline `_show_picker` keeps across its own redraws, and for the
+    same two reasons, both of which bite harder here. A keypress
+    landing between the last print and the mode switch would be held
+    by the still-canonical line discipline until a newline that a bare
+    keypress never sends, hanging the read forever. And
+    `tty.setcbreak` defaults to TCSAFLUSH, which *discards* whatever is
+    already queued — so a resident who read the diff and pressed a key
+    before this got around to switching modes would have that keypress
+    thrown away rather than merely mistimed. This render is long, which
+    makes both windows wide rather than microscopic.
+
+    cbreak changes how input is line-buffered and nothing about how
+    output is rendered, so holding it across the print costs nothing.
 
     A piped caller reads the same single character from stdin with no
     tty involved: `--question ID` is the scripted contract, and it
     decides with the same grammar rather than a second one.
     """
     if not interactive:
+        _render_proposal(castle, question, records, out)
         return sys.stdin.read(1)
     import termios
     import tty
@@ -929,6 +938,7 @@ def _read_decision_key(interactive: bool) -> str:
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
+        _render_proposal(castle, question, records, out)
         return sys.stdin.read(1)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -958,9 +968,7 @@ def run_review_for(castle, question, records: dict, out=sys.stdout, *, interacti
     """
     if interactive:
         _resize_for_review()
-    _render_proposal(castle, question, records, out)
-
-    key = _read_decision_key(interactive)
+    key = _render_and_read(castle, question, records, out, interactive=interactive)
     decision = REVIEW_KEYS.get(key.lower()) if len(key) == 1 else None
     if decision is None:
         # Dismissal. Nothing written, no second "are you sure", no

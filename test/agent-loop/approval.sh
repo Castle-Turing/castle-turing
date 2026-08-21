@@ -550,11 +550,22 @@ log "multiple pending: each is decided on its own, and deciding one leaves the o
 clear_pending_proposals
 REQ_M1="$("$CASTLE" ask "APPROVAL-FIXTURE-MULTI-A: the first of two invented complaints.")"
 "$CASTLE" work "$REQ_M1" >/dev/null
+# A whole second between the two turns, because record ids carry a
+# one-second timestamp and a random suffix: two changes filed inside
+# the same second sort by that suffix, which is exactly the coin flip a
+# test about "press 1 and get the older one" must not contain. Observed
+# flaking before this line existed, not theorised.
+sleep 1
 REQ_M2="$("$CASTLE" ask "APPROVAL-FIXTURE-MULTI-B: the second of two invented complaints.")"
 "$CASTLE" work "$REQ_M2" >/dev/null
 Q_M1="$(proposal_question_for "$REQ_M1")"
 Q_M2="$(proposal_question_for "$REQ_M2")"
 [ -n "$Q_M1" ] && [ -n "$Q_M2" ] || fail "the two-change fixture did not produce two changes"
+# And the ordering asserted before it is relied on, so a shift in the
+# picker's sort fails here with a sentence rather than by silently
+# deciding the wrong change two lines below.
+[ "$(pending_proposals | head -1)" = "$Q_M1" ] \
+  || fail "the older change is not first in the pending order: $(pending_proposals | tr '\n' ' ')"
 
 log "  -- both are offered, oldest first, and the surface says how many are left"
 drive_modal "$WORKDIR/review-multi.txt" --mode review -- \
@@ -564,7 +575,7 @@ MULTI_OUT="$(cat "$WORKDIR/review-multi.txt")"
 [ "$(transcript_rc "$WORKDIR/review-multi.txt")" = "0" ] || fail "deciding one of two changes did not exit 0"
 printf '%s\n' "$MULTI_OUT" | grep -q '1 more proposed change waiting' \
   || fail "the surface did not say another change is still waiting: $MULTI_OUT"
-[ -n "$(answers_naming "$Q_M1")" ] || fail "pressing 1 did not decide the older change"
+[ -n "$(answers_naming "$Q_M1")" ] || fail "pressing 1 did not decide the older change: $MULTI_OUT"
 [ -z "$(answers_naming "$Q_M2")" ] \
   || fail "deciding one change decided the other as well — one invocation must decide exactly one"
 grep -q '^decision: defer$' "$(answers_naming "$Q_M1" | head -1)" \

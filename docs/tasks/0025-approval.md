@@ -333,12 +333,26 @@ already answered). Then, only when `decision is not None`:
    a question this mechanism ever proposed, and `--decision` on it is
    refused (`AnswerRefused("not_a_proposal", ...)`) — a decision can
    only ever be about a change the harness itself filed.
-3. **The question must not carry `fact`.** Defense in depth against
-   N4/V2 beyond "the harness never writes one": if some other writer
-   ever produces a `question` carrying both `proposal-sha256` and
-   `fact` — hand-written, restored, a future bug — this refuses rather
-   than silently laundering an approval into a resident-model write
-   (`AnswerRefused("proposal_carries_fact", ...)`).
+3. **No `fact` may reach the resident-model path.** Defense in depth
+   against N4/V2 beyond "the harness never writes one": if some other
+   writer ever produces a `question` carrying both `proposal-sha256`
+   and `fact` — hand-written, restored, a future bug — this refuses
+   rather than silently laundering an approval into a resident-model
+   write (`AnswerRefused("proposal_carries_fact", ...)`).
+
+   **Corrected during implementation.** This item originally said the
+   check was on the question's own field alone, on the grounds that
+   `file_answer`'s `resolved_fact = fact or question.fields.get("fact")`
+   "can only ever see `None` for a proposal question." That is false:
+   the `fact` *parameter* is supplied from the command line by
+   `castle answer --fact NAME`, so `--fact NAME --decision approve`
+   would have walked straight past a question-field-only check and
+   written exactly the resident-model entry this guard exists to
+   prevent — the likelier of the two routes, and the only one
+   reachable without a corrupted journal. The implemented check tests
+   the whole expression the resident-model path computes,
+   `fact or question.fields.get("fact")`, so both doors close. Both
+   are covered in `test/agent-loop/approval.sh`.
 4. **The referenced result must resolve.** `question.refs[1]` must
    exist and be `type: result` (`AnswerRefused("proposal_unresolvable",
    ...)`) — the proposal this decision would bind to has to actually
@@ -532,20 +546,44 @@ already uses, for the identical reason: a piped caller has no window
 to resize — shells out, best-effort and non-fatal, to resize itself:
 
 ```python
+REVIEW_RESIZE_ARGV = [
+    "swaymsg",
+    '[app_id="castle-modal"] resize set 1100 760, move position center',
+]
+
+
 def _resize_for_review() -> None:
-    raw = os.environ.get("CASTLE_REVIEW_RESIZE_COMMAND")
-    if raw is None:
-        raw = '[app_id="castle-modal"] resize set 1100 760, move position center'
-    if not raw.strip():
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return
+    raw = os.environ.get(REVIEW_RESIZE_ENV)
+    if raw is None:
+        argv = list(REVIEW_RESIZE_ARGV)
+    elif not raw.strip():
+        return
+    else:
+        argv = shlex.split(raw)          # ... guarded, see the code
     try:
         subprocess.run(
-            ["swaymsg", raw], check=False, timeout=5,
+            argv, check=False, timeout=5,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         pass
 ```
+
+**Corrected during implementation.** An earlier draft of this snippet
+made the environment variable the *argument to `swaymsg`* rather than
+the whole command line — which contradicted this brief's own
+verification plan two sections down, where the test is specified as
+pointing `CASTLE_REVIEW_RESIZE_COMMAND` at a stub script. A variable
+that can only ever be a swaymsg argument cannot be pointed at a stub
+without also stubbing `swaymsg` on `$PATH`, so the test as specified
+could not have been written. The implemented form is
+`_fire_notification`'s idiom properly: the variable is a whole command
+line, `shlex.split` like `CASTLE_NOTIFY_COMMAND`, and the *default* is
+a literal argv rather than a string to be split, so the criteria's
+quoting reaches swaymsg exactly as written instead of surviving a
+shlex round-trip.
 
 **Scoped by `app_id` criteria, not "whatever Sway has focused right
 now."** An earlier version of this design used a bare `resize set …`
@@ -682,6 +720,21 @@ What survives, mechanically available without inventing any parsing:
    direct extension of docs/tasks/0010's "no seat paraphrases,"
    applied to a read rather than a write: summarizing it here would be
    exactly the paraphrase that rule forbids, one surface over.
+
+   **Two more exclusions, added during implementation, both for the
+   same reason as the target sentence: they are the *harness's* prose,
+   not the tenant's account, so quoting them under a label that says
+   "its words" misattributes them.** The first is `run_worker_turn`'s
+   own opening line — *"Errand `<id>` completed by worker tenant
+   `<command>`"* — which additionally carries the two things this
+   surface may never print: a record id, and on a real host a
+   `/nix/store` path nobody typed. The second is
+   `WORKER_PROPOSES_NOTE`, whose content ("the worker proposes; it
+   does not deploy") the boundary statement above now says in this
+   surface's own words and without the internal vocabulary. Nothing
+   tenant-authored is touched by either; both are matched against
+   `agent/castle`'s own constants and shapes, never against a heading
+   a tenant was never told to write.
 4. **The diff, last, verbatim, never truncated.** Immediately before
    it, one line: *"Full diff below — scroll up in this window
    (Shift+Page Up in `foot`) if it runs past what's on screen."* This
@@ -782,10 +835,19 @@ will be false for this question by construction once it is answered,
 so the two paths never fight over the same line):
 
 ```python
-"approved": "approved — nothing applied yet",
-"reject":   "you declined this",
-"defer":    "you deferred this",
+"approve": "approved — nothing applied yet",
+"reject":  "you declined this",
+"defer":   "you set this aside",
 ```
+
+(The keys are `DECISION_VALUES`, so the first one is `approve`; this
+brief wrote `approved`, which would have matched nothing. `defer`'s
+label reads "set this aside" rather than "deferred" so that the status
+surface and the review surface's own confirmation use one word for one
+act — the resident-facing vocabulary rule §G states, applied to itself.
+An unrecognised value renders verbatim rather than collapsing into any
+of the three, the same way `_outcome_label` treats an outcome from
+outside its own vocabulary.)
 
 `"approved — nothing applied yet"` is deliberately not `"approved"`
 alone — the same discipline V9/§G.2's boundary statement states to the
@@ -1033,7 +1095,7 @@ task's actual shape rather than the assumed one:
     (presentation only).
   - `_answer_refusal_message`: five new branches.
 - **`agent/castle-modal`**
-  - `import subprocess` added.
+  - `import os`, `import shlex`, `import subprocess` added.
   - New `--mode review` and its `--question` flag on `build_parser`.
   - `run_review_for` (new): rendering (§G), keypress contract,
     `_resize_for_review` (new).
@@ -1043,6 +1105,12 @@ task's actual shape rather than the assumed one:
   - `_answer_refusal`: five new branches, plain language, no ids.
   - `_errand_state`: the decision-override addition (§H).
   - `main`: dispatch `--mode review`.
+  - `_show_picker`: one new `action` parameter, defaulting to
+    `"answer"`, which review mode passes as `"review"`. Not in this
+    brief's original list and small, but not cosmetic: the picker is
+    reused verbatim when more than one change is pending, and "press a
+    number to answer" names the wrong act on a surface whose whole
+    subject is keeping the resident exact about what they are doing.
 - **`docs/backlog/approval-channel-has-no-transfer-of-control-
   strategy.md`** (new) — §L.
 - **`agent/README.md`** — new subsections for the `decision`/
@@ -1061,6 +1129,100 @@ task's actual shape rather than the assumed one:
   worker is needed.
 - **`docs/tasks/0025-approval.md`** — this brief, committed on this
   branch per the tasks convention.
+
+### Files this brief did not list, and had to change anyway
+
+Every one of these is a *premise* an existing harness stated that this
+task made false. None is a relaxed assertion; each is the same claim
+made against the shape the journal now has.
+
+- **`test/agent-loop/config-target.sh`** contrasted "waiting on you"
+  against `$REQ1` — a completed errand with a real diff and a resolved
+  target — to prove the overlay is not satisfied by everything. Since
+  §B that errand genuinely *is* waiting on the resident, and correctly
+  says so. The contrast moved to the errand that completed and
+  proposed nothing, and `$REQ1` gained the opposite assertion.
+- **`test/agent-loop/dispatch-test.sh`** counted notifications in a
+  window to prove a raced record was not notified twice. A targeted
+  turn now produces two routable records and notifies twice by design,
+  so the count is per record — once for the result, once for the
+  change — asserted from both sides.
+- **`test/agent-loop/pty-drive.py`** (new) is
+  `modal-headless-test.sh`'s inline pty driver, extracted because
+  `approval.sh` needed the same one. Two copies would be two places
+  for a timing subtlety to be fixed once, and every subtlety in it was
+  found the hard way. It gains a `run:` step, which is what lets a
+  harness change a file while the program under test sits at a prompt
+  — the "altered mid-review" case cannot be written without it.
+- **`test/desktop-loop/test.nix`** needed more than "one end-to-end
+  approve path." Three of its existing assertions `ls`'d a
+  single-element glob and sliced the result as a path, which a second
+  question per turn turns into a Python exception rather than a
+  legible failure; its picker index was a literal `2` that now means a
+  different record; and its "exactly two questions" assertion counted
+  a category that has legitimately grown. All are now selected by
+  `refs` shape or by the presence of the stamp, and the picker index
+  is computed from the same pendingness fold the picker itself
+  applies and asserted before it is pressed. Its `dispatchWorker`
+  fixture also gains a one-second sleep, so that the question it files
+  and the change the turn proposes sort in a knowable order — record
+  ids carry a one-second timestamp and a random suffix, and a picker
+  driven by pressing a number must mean the same thing on every run.
+
+### Smaller decisions the implementation had to make
+
+- **An out-of-vocabulary `decision` reaching `file_answer` raises
+  `RecordError`, not a sixth `AnswerRefused` kind.** Both doors onto
+  the parameter close the set already — argparse `choices=` on the
+  CLI, a literal keypress map in the modal — so a value from outside
+  it is a caller bug with no resident-facing wording to render. It is
+  refused rather than written for the reason `cmd_record`'s `--target`
+  guard already states: the validator rejects it, the journal is
+  append-only, and a writer must not be able to produce a record its
+  own validator condemns. `RecordError` because `main` already funnels
+  write-path faults of that shape into one clean message and both
+  castle-modal write paths already catch it.
+- **`run_review`'s branch order mirrors answer mode's exactly**: a
+  scripted caller naming a change goes straight to it whatever the
+  fold says (0022's review-round-1 finding 2 — an empty fold is
+  precisely when a script hits a documented refusal, and letting the
+  friendly "nothing waiting" exit come first turns every one of them
+  into exit 0 with prose), *then* the empty-fold line, *then* the
+  refusal for a piped caller with changes pending and no `--question`.
+- **An interactive review ignores `--question`**, which this brief did
+  not state either way. Answer mode's rule and its reasoning apply
+  unchanged, and the stakes are higher: a preselected guess here would
+  be an authorization. With exactly one change pending there is
+  nothing to choose between, so it is shown directly; with more, the
+  picker.
+- **cbreak is held across the whole render, not just the keypress.**
+  §G says to reuse `_show_picker`'s cbreak-before-print discipline
+  verbatim, and this is what that means for a render this long: both
+  hazards the discipline exists for — a keypress swallowed by the
+  still-canonical line discipline, and `tty.setcbreak`'s default
+  TCSAFLUSH *discarding* what is already queued — have wide windows
+  here rather than microscopic ones, because a resident reading a diff
+  is exactly the person who presses a key before the program asks.
+- **§G's vocabulary list is stricter than the merged code it extends.**
+  It adds `question`, `answer` and `proposal` to answer mode's seven
+  banned words, but `_answer_refusal`'s four pre-existing spellings
+  already say "question" and "answered" on interactive paths. The five
+  new refusals honour the fuller list; the four existing ones are left
+  exactly as they are, since rewording load-bearing habit for no
+  functional reason is what 0022 already declined to do.
+- **`test/agent-loop/approval.sh` carries two proofs beyond the ones
+  this brief specified**, both because the specified ones are
+  structural where the risk is behavioural. After an approval it runs
+  two full dispatch sweeps and requires that no further turn happened
+  — asserting the *absence* of `blocking:` on the question record
+  would not notice a future change that made answers to it resumable
+  some other way. And one decision runs under a `$PATH` where
+  `nixos-rebuild`, `switch-to-configuration`, `systemctl`, `sudo`,
+  `git`, `nix` and `patch` are stubs that log their own invocation:
+  nothing may be *reached for*, not merely nothing moved. A grep over
+  the two source files was written first and deleted — both are full
+  of those commands named in comments explaining why they are never
+  run, which is exactly what a grep cannot tell apart from a call.
 
 ## Non-goals
 

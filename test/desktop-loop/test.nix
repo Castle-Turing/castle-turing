@@ -19,6 +19,17 @@
 # a second turn, with a fresh tenant handed the errand's own records and
 # the resident's own words, still with no command typed anywhere.
 #
+# And since docs/tasks/0025-approval.md it carries one representative
+# path of that task too: the resident opens the same list, picks a
+# proposed configuration change out of it, reads it in a window that
+# resizes itself for the diff, and approves it with one keypress —
+# after which this test asserts the thing that task is actually about,
+# which is that the checkout and the running system are exactly as they
+# were. The verdict matrix and every refusal live in
+# test/agent-loop/approval.sh, which needs no VM; what only this
+# harness can show is the real chord, the real window, and the real
+# key.
+#
 # Uses the `nixosTest`/`pkgs.testers.runNixOSTest` framework (a Python
 # driver: `wait_for_unit`, `send_key`, `swaymsg`-over-IPC, `screenshot`,
 # OCR) rather than extending test/vm-install/'s shell-driven QEMU
@@ -138,6 +149,15 @@ let
         --blocking \
         --body "Scripted posture question for $CASTLE_REQUEST_ID: fix it and tell you, or explain first?" \
         >/dev/null
+      # A whole second before the turn's own output, so that this
+      # question and the proposed change `castle work` files after the
+      # result sort in a known order. Record ids carry a one-second
+      # timestamp and a random suffix, so two records written inside
+      # the same second sort by that suffix — and the answer picker
+      # below is driven by pressing a number, which must mean the same
+      # thing on every run (docs/tasks/0025-approval.md gave this turn
+      # a second pending question; before it there was only one).
+      sleep 1
     else
       echo "castle-dispatch-test-worker: resumed with $CASTLE_RESUME_ANSWER_IDS"
       # The whole claim this VM exists to make about resumption, checked
@@ -595,14 +615,50 @@ in
 
     # The question the tenant raised mid-errand, and the router's
     # decision about it — the path nothing else in this VM exercises.
+    #
+    # Selected by `refs: <request>` with nothing after it, not by an
+    # `ls` of every question in the journal. Since
+    # docs/tasks/0025-approval.md a turn that finishes with a resolved
+    # target files a SECOND question of its own — the change it wants
+    # the resident to decide — whose refs carry a comma and a result id
+    # after the request. An `ls` here would return two paths and
+    # `.rsplit("/")` would slice the pair as though it were one, which
+    # is a Python exception rather than a legible assertion failure.
     question_path = machine.wait_until_succeeds(
-        "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md'",
+        "su - resident -c \"grep -l '^refs: " + request_id + "$' ${testStateDir}/journal/*-question-*.md\"",
         timeout=dt.timedelta(minutes=5),
     ).strip()
+    assert "\n" not in question_path, question_path
     question_id = question_path.rsplit("/", 1)[-1][: -len(".md")]
     question_record = machine.succeed(f"su - resident -c 'cat {question_path}'")
     assert f"refs: {request_id}" in question_record, question_record
     assert "seat: worker" in question_record, question_record
+
+    # And the proposed change that same turn filed, which is this
+    # task's own handoff proven in a booted session rather than only in
+    # the plain-bash harness: the harness — not the tenant — wrote it,
+    # it is bound to the result by its second ref, it is NOT blocking
+    # (so approving it can never re-run the worker), and it elicits no
+    # fact (so rejecting it can never write into the resident model).
+    proposal_path = machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '^proposal-sha256: ' ${testStateDir}/journal/*-question-*.md\"",
+        timeout=dt.timedelta(minutes=5),
+    ).strip()
+    assert "\n" not in proposal_path, proposal_path
+    proposal_id = proposal_path.rsplit("/", 1)[-1][: -len(".md")]
+    proposal_record = machine.succeed(f"su - resident -c 'cat {proposal_path}'")
+    result_id = result_path.rsplit("/", 1)[-1][: -len(".md")]
+    assert f"\nrefs: {request_id},{result_id}\n" in proposal_record, proposal_record
+    assert "seat: worker" in proposal_record, proposal_record
+    assert "blocking:" not in proposal_record, proposal_record
+    assert "\nfact:" not in proposal_record, proposal_record
+    # The stamp, checked against a hash this VM computes for itself
+    # rather than against the one the tool wrote.
+    expected_hash = machine.succeed(
+        f"su - resident -c 'sha256sum {result_path}'"
+    ).split()[0]
+    assert f"proposal-sha256: {expected_hash}" in proposal_record, proposal_record
+    print(f"OK: the same turn filed {proposal_id} — a change to decide, bound to the result's exact bytes")
     question_decision = machine.wait_until_succeeds(
         "su - resident -c \"grep -l '^refs: " + question_id + "$' ${testStateDir}/journal/*-decision-*.md\"",
         timeout=dt.timedelta(minutes=5),
@@ -770,11 +826,43 @@ in
     # actually looks like on screen.
     machine.screenshot("08-modal-answer-picker")
 
-    # Oldest first, so the first errand's question is [1] and this one
-    # is [2]. Pressing 2 is the whole assertion — a resident choosing
-    # one question out of several by a number they can see, never by a
-    # record id they had to find first.
-    machine.send_key("2")
+    # Oldest first, so four things are waiting by now and this errand's
+    # own question is the third of them: the first errand's question,
+    # the change that errand's turn proposed, this errand's question,
+    # and the change this errand's turn proposed. Pressing a number is
+    # the whole assertion — a resident choosing one thing out of
+    # several by a number they can see, never by a record id they had
+    # to find first.
+    #
+    # Computed rather than hardcoded, and asserted before it is
+    # pressed. The index used to be a literal `2`, back when a turn
+    # filed one question; docs/tasks/0025-approval.md gave every
+    # targeted turn a second, and a literal that silently means a
+    # different record after a future change would answer the wrong
+    # one rather than fail. This fails with a sentence instead.
+    #
+    # The same fold the picker itself applies, re-derived here rather
+    # than imported: a question is pending iff no answer's refs names
+    # it, ordered by full record id.
+    all_questions = machine.succeed(
+        "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md'"
+    ).split()
+    answered_refs = machine.succeed(
+        "su - resident -c \"cat ${testStateDir}/journal/*-answer-*.md 2>/dev/null "
+        "| grep '^refs: ' || true\""
+    )
+    pending_order = sorted(
+        path.rsplit("/", 1)[-1][: -len(".md")]
+        for path in all_questions
+        if path.rsplit("/", 1)[-1][: -len(".md")] not in answered_refs
+    )
+    assert second_question_id in pending_order, pending_order
+    picker_index = pending_order.index(second_question_id) + 1
+    assert picker_index == 3, (
+        f"expected this errand's question to be third in the picker, got "
+        f"{picker_index} of {pending_order}"
+    )
+    machine.send_key(str(picker_index))
     # The sleeps below stay: once the keypress is read, the tty is
     # restored with TCSADRAIN, which preserves anything queued rather
     # than discarding it — so from here on a small timing miss costs
@@ -884,16 +972,35 @@ in
         "anywhere"
     )
 
-    # Exactly two questions in this whole run: one per first turn, and
+    # Exactly two questions the TENANT raised: one per first turn, and
     # none from the resumed one. A third would mean this segment left
     # the journal holding a question nobody answered at the moment the
     # test declares success.
-    question_count = int(
+    #
+    # Counted by the absence of a proposal stamp, not by an `ls`, since
+    # docs/tasks/0025-approval.md: three of the questions in this
+    # journal are changes the harness filed about its own turns, and
+    # those are *supposed* to be pending — a change nobody has decided
+    # is the normal resting state of this mechanism, not a leak. The
+    # separate count below is what keeps that honest.
+    tenant_questions = int(
         machine.succeed(
-            "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md | wc -l'"
+            "su - resident -c \"grep -L '^proposal-sha256: ' "
+            "${testStateDir}/journal/*-question-*.md | grep -c . || true\""
         ).strip()
     )
-    assert question_count == 2, f"expected exactly 2 questions, found {question_count}"
+    assert tenant_questions == 2, f"expected exactly 2 tenant questions, found {tenant_questions}"
+    proposals = int(
+        machine.succeed(
+            "su - resident -c \"grep -l '^proposal-sha256: ' "
+            "${testStateDir}/journal/*-question-*.md | grep -c . || true\""
+        ).strip()
+    )
+    # One per completed, targeted turn, and this run has run three:
+    # the two first turns and the resumed one. Asserted exactly rather
+    # than as "at least one", because a turn filing two changes for one
+    # result would be this task's own duplicate-proposal failure.
+    assert proposals == 3, f"expected exactly 3 proposed changes, found {proposals}"
 
     # And the resumed result is routed like any other — waited for, not
     # assumed, since check_assertions.py below requires it.
@@ -904,6 +1011,107 @@ in
         timeout=dt.timedelta(minutes=5),
     )
     print("OK: the resumed turn's result was routed like a first turn's, by the same sweep")
+
+    # --- The resident approves a proposed change, through the real
+    # compositor (docs/tasks/0025-approval.md) --------------------------
+    #
+    # One representative path, not the matrix: test/agent-loop/
+    # approval.sh drives every verdict and every refusal with no VM at
+    # all, and what this harness adds that no headless one can is the
+    # real chord, the real `foot` window, the real Sway resize, and the
+    # real keypress. Deliberately last, after every assertion above
+    # that holds only while this journal has exactly one answer record.
+    #
+    # Recorded before the checkouts are checked afterwards: the whole
+    # claim being made here is that approving changes nothing on disk.
+    # `git rev-parse HEAD` is tolerated failing rather than asserted:
+    # this fixture checkout is `git init`-ed with no commit, so HEAD
+    # legitimately does not resolve. What matters is that whatever the
+    # two commands print is the same before and after.
+    checkout_probe = (
+        "su - resident -c 'cd ${testRepoRoot} && git status --porcelain; "
+        "git rev-parse HEAD 2>/dev/null || echo no-commits-yet'"
+    )
+    checkout_state_before = machine.succeed(checkout_probe)
+    generation_before = machine.succeed("readlink -f /run/current-system")
+
+    machine.send_key("meta_l-shift-a")
+    retry(lambda last: has_modal())
+    machine.wait_for_text("aiting on you")
+    machine.screenshot("10-modal-picker-with-changes")
+
+    # Four things are waiting now: the first errand's question, which
+    # this run deliberately never answered, and the three changes the
+    # three completed turns proposed. Re-derived rather than assumed,
+    # the same way the index above is.
+    all_questions = machine.succeed(
+        "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md'"
+    ).split()
+    answered_refs = machine.succeed(
+        "su - resident -c \"cat ${testStateDir}/journal/*-answer-*.md 2>/dev/null "
+        "| grep '^refs: ' || true\""
+    )
+    still_pending = sorted(
+        path.rsplit("/", 1)[-1][: -len(".md")]
+        for path in all_questions
+        if path.rsplit("/", 1)[-1][: -len(".md")] not in answered_refs
+    )
+    assert len(still_pending) == 4, still_pending
+    assert proposal_id in still_pending, (still_pending, proposal_id)
+    review_index = still_pending.index(proposal_id) + 1
+    assert review_index == 2, (
+        f"expected the first errand's change to be second in the picker, got "
+        f"{review_index} of {still_pending}"
+    )
+    machine.send_key(str(review_index))
+
+    # The review renders — a long window, which is why it asks Sway to
+    # resize itself first. Waited for on screen rather than slept past:
+    # `castle-modal` engages cbreak BEFORE printing the review, exactly
+    # as it does for the picker, so any of the review's text being
+    # visible proves the flush has already happened and the keypress
+    # below cannot be eaten. The needle is the diff's own added line
+    # because the diff is printed LAST — waiting for something earlier
+    # would be waiting for text the rest of the render may have already
+    # scrolled past. That the boundary statement is printed at all, and
+    # printed before the keys, is asserted by
+    # test/agent-loop/modal-headless-test.sh, where it can be checked
+    # against a transcript instead of against pixels.
+    machine.wait_for_text("placeholder")
+    machine.screenshot("11-modal-review-of-a-change")
+
+    machine.send_key("a")
+    machine.sleep(2)
+    machine.send_chars(".\n")  # the optional comment, deliberately left empty
+    machine.sleep(2)
+    machine.screenshot("12-modal-change-approved")
+    machine.send_key("ret")  # dismiss ("Press Enter to close.")
+    retry(lambda last: not has_modal())
+
+    decision_path = machine.wait_until_succeeds(
+        "su - resident -c \"grep -l '^decision: ' ${testStateDir}/journal/*-answer-*.md\"",
+        timeout=dt.timedelta(minutes=2),
+    ).strip()
+    assert "\n" not in decision_path, decision_path
+    decision_record = machine.succeed(f"su - resident -c 'cat {decision_path}'")
+    assert "decision: approve" in decision_record, decision_record
+    assert f"\nrefs: {proposal_id},{result_id}\n" in decision_record, decision_record
+    assert "seat: intake" in decision_record, decision_record
+    # The same stamp the change was filed with, re-derived at write
+    # time from the result's bytes on disk.
+    assert f"proposal-sha256: {expected_hash}" in decision_record, decision_record
+    print("OK: a change was approved through the real modal, with no record id typed anywhere")
+
+    # And the point of the whole task: approving applied nothing.
+    checkout_state_after = machine.succeed(checkout_probe)
+    assert checkout_state_after == checkout_state_before, (
+        f"approving a change moved the checkout: {checkout_state_before!r} -> "
+        f"{checkout_state_after!r}"
+    )
+    assert machine.succeed("readlink -f /run/current-system") == generation_before, (
+        "approving a change activated a new system generation"
+    )
+    print("OK: nothing was edited, committed, or activated by approving it")
 
     # --- The notify channel, checked for silence rather than for a
     # popup. `castle route` deliberately never lets a failed
