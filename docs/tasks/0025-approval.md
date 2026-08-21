@@ -51,8 +51,8 @@ are explicit non-goals below.
 
 ### Where this task starts from, and why it differs from the exhaustion pass
 
-`/home/wesley/castle-sprint/exhaustion/0025-decisions.md` (referred to
-below as "the decision pass") did a thorough NOW/CONTINGENT/stop-
+`~/castle-sprint/exhaustion/0025-decisions.md` (outside this repo, and
+referred to below as "the decision pass") did a thorough NOW/CONTINGENT/stop-
 condition exhaustion against this problem on 2026-08-17, one day
 before 0021–0024 merged. Its reasoning is carried forward through this
 brief wherever it still applies — its arguments for reusing `question`
