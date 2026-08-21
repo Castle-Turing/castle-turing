@@ -1040,19 +1040,13 @@ def run_review(castle, out=sys.stdout, question_id: str | None = None) -> int:
     pending = _pending_proposals(castle, records)
     interactive = sys.stdin.isatty()
 
-    if not interactive:
-        if not question_id:
-            # Guessing in a script context is the silent wrong-record
-            # path `--question` exists to prevent, and it is worse here
-            # than in answer mode: the wrong guess would be an
-            # authorization.
-            print(
-                "castle-modal: this session has no terminal to choose a change at — "
-                "pass --question ID (scripts and CI only), or open the modal and "
-                "review it there.",
-                file=sys.stderr,
-            )
-            return 1
+    # A scripted caller naming one goes straight to it, whatever the
+    # fold says — the same ordering answer mode settled on (review
+    # round 1, finding 2) and for the same reason: an empty fold is
+    # exactly when a script is most likely to hit a documented
+    # refusal, and letting the friendly "nothing waiting" exit come
+    # first would turn every one of them into exit 0 with prose.
+    if question_id and not interactive:
         question = castle.load_journal_record(question_id)
         if question is None or question.type != "question":
             print(_answer_refusal_for_missing(question), file=sys.stderr)
@@ -1070,6 +1064,19 @@ def run_review(castle, out=sys.stdout, question_id: str | None = None) -> int:
         print("No changes are waiting for your decision.", file=out)
         _pause_for_dismissal(out)
         return 0
+
+    if not interactive:
+        # Guessing in a script context is the silent wrong-record path
+        # `--question` exists to prevent, and the stakes are higher
+        # here than in answer mode: the wrong guess would be an
+        # authorization.
+        print(
+            "castle-modal: this session has no terminal to choose a change at — "
+            "pass --question ID (scripts and CI only), or open the modal and "
+            "review it there.",
+            file=sys.stderr,
+        )
+        return 1
 
     # An interactive session ignores --question and chooses for itself,
     # the same rule answer mode already applies and for the same

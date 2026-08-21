@@ -130,6 +130,16 @@ jobs:
       # worker contract, which is exactly what this job already exists
       # to cover, and the two share every helper and convention.
       - run: test/agent-loop/config-target.sh
+      # The resident's decision on a proposed change
+      # (docs/tasks/0025-approval.md): the question a completed,
+      # targeted turn files, the three verdicts, every refusal that
+      # keeps an unverified authorization out of the journal, and —
+      # after every one of them — the proof that neither checkout
+      # moved. In this job for the same reason config-target.sh is: it
+      # drives `castle work` and `castle dispatch` against the real
+      # worker contract and reuses that harness's own fixture shape,
+      # git prerequisite included.
+      - run: test/agent-loop/approval.sh
 
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and

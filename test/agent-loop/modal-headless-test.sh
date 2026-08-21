@@ -11,6 +11,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODAL="$REPO_ROOT/agent/castle-modal"
 CASTLE="$REPO_ROOT/agent/castle"
+PTY_DRIVE="$REPO_ROOT/test/agent-loop/pty-drive.py"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-modal-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -724,113 +725,17 @@ model_byte_count() {
 answers_naming() { grep -l "^refs: $1\$" "$CASTLE_STATE_DIR"/journal/*-answer-*.md 2>/dev/null || true; }
 
 # One reusable pty driver for every interactive assertion below, rather
-# than a fresh inline PYEOF block per test. Same technique the two
-# drivers above already use (pty.openpty() plus a needle-based wait,
-# never a quiet-gap heuristic: a keypress is echoed by the pty's own tty
-# driver long before the program has finished acting on it), factored
-# out because this section drives eight interactions rather than one.
-# Steps are given after `--`:
-#
-#   wait:TEXT    block until TEXT appears in the transcript
-#   key:C        sleep past the cbreak gap, then send C
-#   send:TEXT    write TEXT verbatim ('\n' understood)
-#   sleep:N      wait N seconds
-#
-# The whole transcript goes to stdout followed by a final RC=<n> line
-# carrying the child's exit status, so a caller can grep the one and
-# read the other. The driver exits 2 if a `wait` step times out, which
-# is distinguishable from every exit code castle-modal itself produces.
-cat > "$WORKDIR/pty-drive.py" <<'PYEOF'
-import os
-import pty
-import select
-import subprocess
-import sys
-import time
-
-argv = sys.argv[1:]
-separator = argv.index("--")
-command, steps = argv[:separator], argv[separator + 1:]
-
-main_fd, sub_fd = pty.openpty()
-proc = subprocess.Popen(command, stdin=sub_fd, stdout=sub_fd, stderr=sub_fd, close_fds=True)
-os.close(sub_fd)
-transcript = b""
-
-
-def pump(timeout=0.2):
-    global transcript
-    ready, _, _ = select.select([main_fd], [], [], timeout)
-    if main_fd not in ready:
-        return True
-    try:
-        chunk = os.read(main_fd, 4096)
-    except OSError:
-        return False
-    if not chunk:
-        return False
-    transcript += chunk
-    return True
-
-
-def wait_for(needle: bytes, timeout=15.0) -> bool:
-    deadline = time.time() + timeout
-    while needle not in transcript and time.time() < deadline:
-        if not pump():
-            break
-    return needle in transcript
-
-
-def die(message: str) -> None:
-    sys.stderr.write(f"pty-drive: {message}\n")
-    sys.stderr.write(transcript.decode(errors="replace") + "\n")
-    proc.kill()
-    sys.exit(2)
-
-
-for step in steps:
-    kind, _, value = step.partition(":")
-    value = value.replace("\\n", "\n")
-    if kind == "wait":
-        if not wait_for(value.encode()):
-            die(f"timed out waiting for {value!r}")
-    elif kind == "key":
-        # The documented 0.2s gap before a single keypress: printing the
-        # prompt and switching the tty into cbreak mode are two separate
-        # statements, and a keypress landing between them is held by the
-        # kernel's still-canonical line discipline until a newline
-        # arrives — which a bare keypress never sends. This sleeps past
-        # that window. It is a property of simulating a keystroke at an
-        # instant no human types at, not of castle-modal.
-        time.sleep(0.2)
-        os.write(main_fd, value.encode())
-    elif kind == "send":
-        os.write(main_fd, value.encode())
-    elif kind == "sleep":
-        time.sleep(float(value))
-    else:
-        die(f"unknown step {step!r}")
-
-deadline = time.time() + 15
-while proc.poll() is None and time.time() < deadline:
-    if not pump():
-        break
-while pump(0.05):
-    pass
-try:
-    returncode = proc.wait(timeout=5)
-except subprocess.TimeoutExpired:
-    proc.kill()
-    die("castle-modal never exited")
-
-sys.stdout.write(transcript.decode(errors="replace"))
-sys.stdout.write(f"\nRC={returncode}\n")
-PYEOF
+# than a fresh inline PYEOF block per test. It lives in its own file —
+# test/agent-loop/pty-drive.py — since docs/tasks/0025-approval.md gave
+# it a second caller (approval.sh drives review mode the same way): two
+# copies of a pty driver would be two places for a timing subtlety to
+# be fixed once, and every subtlety in it was found the hard way. See
+# that file's header for the step vocabulary.
 
 drive_modal() {
   # Usage: drive_modal <transcript-path> <modal-arg>... -- <step>...
   local transcript="$1"; shift
-  python3 "$WORKDIR/pty-drive.py" "$MODAL" "$@" > "$transcript" || {
+  python3 "$PTY_DRIVE" "$MODAL" "$@" > "$transcript" || {
     cat "$transcript" >&2
     fail "pty driver failed (see the transcript above)"
   }
@@ -1168,7 +1073,7 @@ grep -q "waiting on you — press Mod4+Shift+a to answer" "$WORKDIR/status-pause
   || fail "the status overlay does not name the chord that answers the question it is reporting"
 EMPTY_STATUS_STATE="$WORKDIR/empty-status-state"
 mkdir -p "$EMPTY_STATUS_STATE"
-CASTLE_STATE_DIR="$EMPTY_STATUS_STATE" python3 "$WORKDIR/pty-drive.py" "$MODAL" --mode status -- \
+CASTLE_STATE_DIR="$EMPTY_STATUS_STATE" python3 "$PTY_DRIVE" "$MODAL" --mode status -- \
   "wait:Press Enter to close" "send:\n" > "$WORKDIR/status-empty.txt" \
   || { cat "$WORKDIR/status-empty.txt" >&2; fail "status mode's empty-journal path did not hold its window open"; }
 grep -q "No errands yet" "$WORKDIR/status-empty.txt" \
@@ -1291,5 +1196,220 @@ rm -f "$CORRUPT_ANSWER"
 # refusal was about the unreadable file, not about this question.
 "$CASTLE" answer "$Q_CORRUPT" "Now it works." >/dev/null \
   || fail "the answer was still refused after the unparseable record was removed"
+
+# ---------------------------------------------------------------------
+# docs/tasks/0025-approval.md — review mode.
+# ---------------------------------------------------------------------
+#
+# A fresh state dir again, for the reason the answer-mode section gives
+# for its own: these assertions are about what a resident sees on
+# screen and which entry the picker offers, so they cannot be made
+# against the journal every section above accumulated.
+#
+# The result record below is planted by hand rather than produced by a
+# worker turn, which is the opposite of what approval.sh does and is
+# deliberate. approval.sh drives the real mechanism end to end; this
+# section is about the *rendering*, and rendering assertions need a
+# body whose every line is known — including the vocabulary check,
+# which cannot mean anything against a real tenant's stdout or a real
+# diff, since neither is bound by this surface's rules (a diff of
+# modules/ legitimately contains the word "record").
+export CASTLE_STATE_DIR="$WORKDIR/review-state"
+export XDG_RUNTIME_DIR="$WORKDIR/review-runtime"
+mkdir -p "$CASTLE_STATE_DIR/journal" "$XDG_RUNTIME_DIR"
+
+REVIEW_REQ="$("$CASTLE" ask "REVIEW-FIXTURE: an invented complaint about something being hard to see.")"
+plant_proposal() {
+  # Usage: plant_proposal <stamp> <account-line>; echoes the question id
+  # Writes a result whose body has the exact three-part shape
+  # run_worker_turn produces — the harness's own turn header, the
+  # tenant's account, a fenced diff, the resolved-path sentence and the
+  # worker-proposes note — then a question stamped with that result
+  # file's real hash, computed with sha256sum rather than with the tool
+  # under test.
+  local stamp="$1" account="$2"
+  local result_id="$stamp-result-r${stamp: -7}"
+  local question_id="$stamp-question-q${stamp: -7}"
+  {
+    echo "---"
+    echo "id: $result_id"
+    echo "type: result"
+    echo "provenance: requested"
+    echo "refs: $REVIEW_REQ"
+    echo "seat: worker"
+    echo "created: 2026-02-01T00:00:00Z"
+    echo "outcome: completed"
+    echo "target: private"
+    echo "---"
+    echo
+    echo "Errand \`$REVIEW_REQ\` completed by worker tenant \`/nix/store/invented-hash-not-a-real-path/bin/tenant\`."
+    echo
+    echo "$account"
+    echo
+    echo '```diff'
+    echo "--- a/invented.nix"
+    echo "+++ b/invented.nix"
+    echo "@@ -1 +1 @@"
+    echo "-INVENTED-DIFF-BEFORE"
+    echo "+INVENTED-DIFF-AFTER"
+    echo '```'
+    echo
+    echo "This diff targets the **private** checkout, which on this host resolved to \`/invented/checkout\`."
+    echo
+    echo "This result was produced by the worker seat. Per docs/tasks/0009-ambient-intake.md's non-goals, the worker proposes; it does not deploy — nothing above was applied to any running system or committed to any repo by this seat."
+  } > "$CASTLE_STATE_DIR/journal/$result_id.md"
+  {
+    echo "---"
+    echo "id: $question_id"
+    echo "type: question"
+    echo "provenance: requested"
+    echo "refs: $REVIEW_REQ,$result_id"
+    echo "seat: worker"
+    echo "created: 2026-02-01T00:00:00Z"
+    echo "proposal-sha256: $(sha256sum "$CASTLE_STATE_DIR/journal/$result_id.md" | cut -d' ' -f1)"
+    echo "---"
+    echo
+    echo "This errand produced a proposed change to your private configuration. Nothing has been applied. Review it to approve, reject, or set it aside."
+  } > "$CASTLE_STATE_DIR/journal/$question_id.md"
+  echo "$question_id"
+}
+
+REVIEW_Q="$(plant_proposal 20260301T000100Z "The value it uses now is too small to read at arm's length, so this raises it.")"
+"$CASTLE" validate || fail "the planted proposal fixture does not validate"
+
+log "review mode: a change picked out of the ANSWER picker branches into review, not into free text"
+# The path a resident actually takes: the same chord, the same list,
+# and no advance knowledge of which of two kinds of waiting this was.
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-branch.txt" --mode answer -- \
+  "wait:any other key to close" "key:1" "wait:any other key closes this" "key:x"
+BRANCH_OUT="$(cat "$WORKDIR/review-branch.txt")"
+[ "$(transcript_rc "$WORKDIR/review-branch.txt")" = "0" ] || fail "the answer picker's review branch did not exit 0"
+echo "$BRANCH_OUT" | grep -q "\[a\]pprove" \
+  || fail "picking a proposed change dropped into the free-text grammar instead of review: $BRANCH_OUT"
+echo "$BRANCH_OUT" | grep -q "Answer in your own words." \
+  && fail "picking a proposed change offered the ordinary answer grammar"
+
+log "review mode: what the resident sees, in the order it has to be in"
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-render.txt" --mode review -- \
+  "wait:any other key closes this" "key:x"
+RENDER_OUT="$(tr -d '\r' < "$WORKDIR/review-render.txt")"
+echo "$RENDER_OUT"
+[ "$(transcript_rc "$WORKDIR/review-render.txt")" = "0" ] || fail "a dismissed review did not exit 0"
+
+# Each of the four sections, present.
+echo "$RENDER_OUT" | grep -q "Where this applies:" || fail "the review does not say where the change applies"
+echo "$RENDER_OUT" | grep -qF 'resolved to `/invented/checkout`' \
+  || fail "the review does not quote the harness's own resolved-path sentence"
+echo "$RENDER_OUT" | grep -q "NOTHING ON THIS MACHINE IS EDITED, COMMITTED, OR APPLIED" \
+  || fail "the review does not say plainly that approving applies nothing"
+echo "$RENDER_OUT" | grep -q "its words, not verified by a person" \
+  || fail "the machine's own account is not attributed as machine-authored"
+echo "$RENDER_OUT" | grep -q "The value it uses now is too small to read" \
+  || fail "the account itself is missing"
+echo "$RENDER_OUT" | grep -q '^+INVENTED-DIFF-AFTER$' || fail "the diff is missing"
+echo "$RENDER_OUT" | grep -q "Shift+Page Up" \
+  || fail "nothing tells the resident the window has scrollback for a long diff"
+
+# And in that order, checked by line number rather than by presence —
+# "evidence before reasoning, the diff always available and always
+# last" is the whole ordering claim, and five greps in any order prove
+# none of it.
+line_of() { printf '%s\n' "$RENDER_OUT" | grep -n -- "$1" | head -1 | cut -d: -f1; }
+WHERE_AT="$(line_of 'Where this applies:')"
+BOUNDARY_AT="$(line_of 'NOTHING ON THIS MACHINE IS EDITED')"
+KEYS_AT="$(line_of '\[a\]pprove')"
+ACCOUNT_AT="$(line_of 'its words, not verified by a person')"
+DIFF_AT="$(line_of '^+INVENTED-DIFF-AFTER$')"
+[ "$WHERE_AT" -lt "$BOUNDARY_AT" ] || fail "the boundary statement comes before where the change applies"
+[ "$BOUNDARY_AT" -lt "$KEYS_AT" ] || fail "the keys are offered before the sentence saying what they do"
+[ "$KEYS_AT" -lt "$ACCOUNT_AT" ] || fail "the keys are not beside the boundary statement"
+[ "$ACCOUNT_AT" -lt "$DIFF_AT" ] || fail "the diff is not last"
+
+log "review mode: no record id, and none of the internal vocabulary, in what the tool itself says"
+# Scoped to the text this surface ADDS, which is what the rule binds:
+# everything below the attribution label is the result body, shown
+# verbatim, and is no more bound by this than a question body is. The
+# label itself is the boundary, so everything above it is the tool's
+# own words.
+TOOL_SAYS="$(printf '%s\n' "$RENDER_OUT" | sed -n "1,$((ACCOUNT_AT - 1))p")"
+for LEAKED in "$REVIEW_Q" "$REVIEW_REQ"; do
+  refute "$TOOL_SAYS" "$LEAKED" "review mode printed the record id $LEAKED"
+done
+for LEAKED in seat provenance refs journal record channel evidence proposal; do
+  refute "$TOOL_SAYS" "$LEAKED" "review mode printed the internal word '$LEAKED'"
+done
+# And the two things the result body's own harness-written header
+# carries, which this surface may not repeat at all — a record id and a
+# store path — checked over the WHOLE transcript, not just the tool's
+# half, because dropping that header is exactly how they stay out.
+refute "$RENDER_OUT" "/nix/store/invented-hash" \
+  "the review printed the tenant's store path — the turn header must not be quoted"
+refute "$RENDER_OUT" "docs/tasks/0009-ambient-intake" \
+  "the review quoted the harness's worker-proposes note under the machine's own account"
+
+log "review mode: the resize shell-out IS attempted on the interactive path"
+# The double-tty gate does not exclude a pty-driven test, on purpose:
+# this driver puts a real tty on both ends to exercise the real
+# interactive code path. What makes that safe on a developer's own Sway
+# session is the app_id criteria, which match zero windows when no
+# castle-modal `foot` window exists. Here the whole command is replaced
+# by a stub, so nothing needs swaymsg installed at all — exactly how
+# CASTLE_NOTIFY_COMMAND lets these harnesses assert routing with no
+# notification daemon.
+RESIZE_MARKER="$WORKDIR/resize-marker"
+RESIZE_STUB="$WORKDIR/resize-stub.sh"
+cat > "$RESIZE_STUB" <<STUB
+#!/usr/bin/env bash
+printf 'hit\n' >> "$RESIZE_MARKER"
+STUB
+chmod +x "$RESIZE_STUB"
+: > "$RESIZE_MARKER"
+CASTLE_REVIEW_RESIZE_COMMAND="$RESIZE_STUB" drive_modal "$WORKDIR/review-resize.txt" --mode review -- \
+  "wait:any other key closes this" "key:x"
+[ -s "$RESIZE_MARKER" ] \
+  || fail "the interactive review never attempted to resize its own window — the claim that it does is unbacked"
+
+log "review mode: and it is NOT attempted on a piped path, which has no window to resize"
+: > "$RESIZE_MARKER"
+printf 'x\n' | CASTLE_REVIEW_RESIZE_COMMAND="$RESIZE_STUB" \
+  "$MODAL" --mode review --question "$REVIEW_Q" >/dev/null
+[ ! -s "$RESIZE_MARKER" ] \
+  || fail "a piped review tried to resize a window it does not have — the double-tty gate is not doing its job"
+
+log "review mode: the empty spelling opts out entirely"
+: > "$RESIZE_MARKER"
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-noresize.txt" --mode review -- \
+  "wait:any other key closes this" "key:x"
+[ ! -s "$RESIZE_MARKER" ] || fail "an explicitly empty resize command still ran something"
+
+log "review mode: with nothing to decide, it says so and exits 0"
+NOTHING_STATE="$(mktemp -d)"
+CASTLE_STATE_DIR="$NOTHING_STATE" "$MODAL" --mode review </dev/null >"$WORKDIR/review-none.txt" \
+  || fail "review mode with nothing pending should exit 0"
+grep -q "No changes are waiting for your decision." "$WORKDIR/review-none.txt" \
+  || fail "review mode with nothing pending said something else: $(cat "$WORKDIR/review-none.txt")"
+rm -rf "$NOTHING_STATE"
+
+log "review mode: a piped session with no --question refuses rather than guessing an authorization"
+if "$MODAL" --mode review </dev/null 2>"$WORKDIR/review-noflag.err"; then
+  fail "a piped review with a change pending guessed one instead of refusing"
+fi
+grep -q "no terminal" "$WORKDIR/review-noflag.err" \
+  || fail "the piped-without---question refusal did not explain itself: $(cat "$WORKDIR/review-noflag.err")"
+
+log "review mode: --question naming something that is not a proposed change is refused"
+if printf 'a\n' | "$MODAL" --mode review --question "$REVIEW_REQ" 2>"$WORKDIR/review-wrongtype.err"; then
+  fail "review mode accepted a request id"
+fi
+grep -q "not a question, nothing filed." "$WORKDIR/review-wrongtype.err" \
+  || fail "review mode's wrong-type refusal said something else: $(cat "$WORKDIR/review-wrongtype.err")"
+ORDINARY_Q="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REVIEW_REQ" --body "An ordinary question, not a change.")"
+if printf 'a\n' | "$MODAL" --mode review --question "$ORDINARY_Q" 2>"$WORKDIR/review-ordinary.err"; then
+  fail "review mode accepted an ordinary question"
+fi
+grep -q "not a proposed change" "$WORKDIR/review-ordinary.err" \
+  || fail "review mode's not-a-change refusal said something else: $(cat "$WORKDIR/review-ordinary.err")"
+"$CASTLE" validate || fail "the journal does not validate after review mode's refusals"
 
 log "all assertions passed"
