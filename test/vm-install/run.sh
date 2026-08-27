@@ -16,7 +16,10 @@
 #      that same boot a secret encrypted before the install decrypted
 #      itself into /run/secrets — the whole sops-nix pipeline, key
 #      planted by --extra-files and all
-#      (docs/tasks/0031-secrets-tooling.md);
+#      (docs/tasks/0031-secrets-tooling.md) — and a second such secret
+#      reached /etc/shadow, proving it decrypted *before* the admin
+#      account was created rather than merely at some point during
+#      activation (docs/tasks/0032-password-hash.md);
 #   4. survives a power-cycle (hard stop + restart);
 #   5. survives an NVRAM wipe, forcing the firmware down the ESP fallback
 #      path EFI/BOOT/BOOTX64.EFI (finding #2/#5, the dead-CMOS lesson).
@@ -80,7 +83,8 @@ cleanup() {
     # nothing worth keeping and goes wholesale; when the logs live
     # inside it (the local default), keep the directory.
     rm -f "$DISK" "$OVMF_VARS" "$ADMIN_KEY" "$ADMIN_PUB" \
-      "$AGE_KEY" "$SECRETS_FILE" "$WORKDIR/expected-secret" "$WORKDIR/actual-secret"
+      "$AGE_KEY" "$SECRETS_FILE" "$WORKDIR/expected-secret" "$WORKDIR/actual-secret" \
+      "$WORKDIR/expected-shadow" "$WORKDIR/actual-shadow"
     rm -rf "$EXTRA_FILES"
     case "$LOG_DIR/" in
       "$WORKDIR"/*) ;;
@@ -163,12 +167,22 @@ ADMIN_PUB="$ADMIN_KEY.pub"
 #   * inside the VM, at /run/secrets/harness-fixture, which is the
 #     whole point.
 #
-# That is acceptable for *this* fixture and only because of what it is:
-# a marker string this script invented moments earlier, for a keypair
-# that is deleted when the run ends, meaning nothing about it is a
-# credential anywhere. **If you ever put a realistic value here, those
-# three places are what you have to fix first** — the CI artifact
-# especially, since a red run publishes it.
+# The second fixture (docs/tasks/0032-password-hash.md, the admin
+# password hash) adds four more of the same shape:
+# $WORKDIR/expected-shadow, $WORKDIR/actual-shadow,
+# $LOG_DIR/phase2d-shadow-actual.od / -expected.od, and, inside the VM,
+# /run/secrets-for-users/harness-admin-password-hash *and*
+# /etc/shadow. Everything below about why that is acceptable applies to
+# it identically, and one thing more: it is deliberately not shaped like
+# a crypt hash, so it could not be mistaken for a credential even by
+# someone who found it out of context.
+#
+# That is acceptable for *these* fixtures and only because of what they
+# are: marker strings this script invented moments earlier, for a
+# keypair that is deleted when the run ends, meaning nothing about them
+# is a credential anywhere. **If you ever put a realistic value here,
+# those places are what you have to fix first** — the CI artifacts
+# especially, since a red run publishes them.
 #
 # There is deliberately no permanent example keypair anywhere in this
 # repo; see nixosConfigurations.example's own comment in flake.nix for
@@ -183,6 +197,17 @@ log "Generating a throwaway age key and encrypting the fixture secret for this r
 AGE_KEY="$WORKDIR/age-key.txt"
 SECRETS_FILE="$WORKDIR/harness-secrets.yaml"
 FIXTURE_SECRET="castle-turing-vm-install-harness-fixture"
+# The second fixture (docs/tasks/0032-password-hash.md): the value
+# castle.admin.hashedPasswordFile points at, which NixOS writes into
+# /etc/shadow when it creates the `harness` account. Deliberately **not**
+# shaped like a crypt hash — no `$6$`, no MCF structure — so nobody can
+# mistake it for one, and so no plaintext password exists anywhere in
+# this process to have produced it. Nothing here ever authenticates with
+# it: phase 2d asserts on its exact bytes, which is a claim about the
+# pipeline, not about login. An opaque marker is strictly better for
+# that than a real hash would be, because a real hash would tempt a
+# future reader into believing a password lives here.
+FIXTURE_PASSWORD_HASH="castle-turing-vm-install-harness-not-a-real-hash"
 "$AGE_KEYGEN_BIN" -o "$AGE_KEY" 2>"$LOG_DIR/age-keygen.log" ||
   fail "could not generate the throwaway age key (see $LOG_DIR/age-keygen.log)"
 chmod 600 "$AGE_KEY"
@@ -193,7 +218,8 @@ AGE_RECIPIENT=$("$AGE_KEYGEN_BIN" -y "$AGE_KEY")
 # the whole story and must not be read as one.
 # --filename-override tells sops which format to parse stdin as, since
 # there is no filename to infer it from.
-if ! printf 'harness-fixture: %s\n' "$FIXTURE_SECRET" |
+if ! printf 'harness-fixture: %s\nharness-admin-password-hash: %s\n' \
+  "$FIXTURE_SECRET" "$FIXTURE_PASSWORD_HASH" |
   "$SOPS_BIN" --encrypt --age "$AGE_RECIPIENT" \
     --input-type yaml --output-type yaml \
     --filename-override harness-secrets.yaml /dev/stdin \
@@ -568,6 +594,45 @@ if ! cmp -s "$WORKDIR/expected-secret" "$WORKDIR/actual-secret"; then
   fail "assertion failed: /run/secrets/harness-fixture did not decrypt to the exact fixture value this run encrypted (byte dump: $LOG_DIR/phase2c-secret-actual.od)"
 fi
 log "[phase2c] PASS: the fixture secret decrypted byte-for-byte, with nobody at any keyboard."
+
+# --- Phase 2d: the admin account was seeded from an encrypted secret ------
+# docs/tasks/0032-password-hash.md. Still the same booted VM as phase 2,
+# and a strictly stronger claim than phase 2c's: 2c proves a secret
+# decrypted at *some* point during activation, which is all a plain
+# sops.secrets entry promises. This proves one decrypted *before the
+# admin account was created* — the ordering `neededForUsers` and
+# sops-nix's `users.deps = [ "setupSecretsForUsers" ]` exist to
+# guarantee, and the one that cannot be checked after the fact by
+# looking at /run alone. If it had decrypted a moment too late,
+# update-users-groups.pl would have created `harness` with a locked
+# ("!") password and nothing else about this run would look different.
+#
+# It is also the assertion that makes the whole task safe to ship: get
+# this wrong on real hardware and the failure mode is a machine nobody
+# can log into. Nothing here is a password. The value under test is the
+# opaque marker $FIXTURE_PASSWORD_HASH, invented by this script minutes
+# ago and deliberately not shaped like a crypt hash.
+#
+# Reads /etc/shadow directly rather than via `getent shadow`: the claim
+# is literally about that file's second field, and going through NSS
+# would add a way for this assertion to fail (or, worse, pass) for
+# reasons that have nothing to do with the pipeline under test. It is
+# also exactly the read modules/base's own password-reminder check does.
+# `tr -d '\n'` strips only the line terminator `cut` emits, so what
+# `cmp` sees on both sides is the field's own bytes and nothing else.
+log "[phase2d] Asserting the admin account's shadow entry came from the encrypted secret..."
+printf '%s' "$FIXTURE_PASSWORD_HASH" >"$WORKDIR/expected-shadow"
+if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+    "grep -m1 '^harness:' /etc/shadow | cut -d: -f2 | tr -d '\n'" \
+    >"$WORKDIR/actual-shadow" 2>"$LOG_DIR/phase2d-shadow.log"; then
+  fail "assertion failed: could not read the harness account's /etc/shadow entry on the installed system (see $LOG_DIR/phase2d-shadow.log)"
+fi
+if ! cmp -s "$WORKDIR/expected-shadow" "$WORKDIR/actual-shadow"; then
+  od -c "$WORKDIR/expected-shadow" >"$LOG_DIR/phase2d-shadow-expected.od" 2>&1 || true
+  od -c "$WORKDIR/actual-shadow" >"$LOG_DIR/phase2d-shadow-actual.od" 2>&1 || true
+  fail "assertion failed: the harness account's /etc/shadow password field is not the fixture value this run encrypted — castle.admin.hashedPasswordFile did not reach account creation (docs/tasks/0032-password-hash.md). A field of '!' means the secret had not decrypted when update-users-groups.pl ran, i.e. the neededForUsers ordering broke; anything else means something rewrote it. Byte dumps: $LOG_DIR/phase2d-shadow-expected.od and $LOG_DIR/phase2d-shadow-actual.od; check $LOG_DIR/phase2-first-boot.serial.log and $LOG_DIR/phase1-nixos-anywhere.log for sops-install-secrets"
+fi
+log "[phase2d] PASS: the admin account's password came from the encrypted secret, byte-for-byte, with nobody at any keyboard."
 
 # --- Phase 3: power-cycle (hard stop + restart), NVRAM intact -------------
 log "[phase3] Power-cycling (hard stop, then restart with NVRAM intact)..."
