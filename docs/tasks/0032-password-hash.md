@@ -210,10 +210,15 @@ hashedPasswordFile = lib.mkOption {
     docs/private-layer.md's "Secrets" section.
 
     Optional at this layer for the same reason the option it replaces
-    was: a host with no interactive console (the vm-test harness, a
-    headless server with SSH-key-only admin) has no use for one. A
-    host with a login prompt does — see modules/desktop, which
-    asserts this is set.
+    was: a host with no interactive console (a headless server with
+    SSH-key-only admin) has no use for one. A host with a login
+    prompt does — see modules/desktop, which asserts this is set.
+
+    (As shipped, this parenthetical no longer cites the vm-test
+    harness as an example of a host with no use for one: since the
+    §-Verification-plan phase-2d assertion, that harness sets this
+    option with a real fixture secret behind it, and citing it here
+    would have been immediately falsified by the same PR.)
 
     **Read this before setting it.** Because this project leaves
     `users.mutableUsers` at its NixOS default (`true`), this option —
@@ -519,8 +524,12 @@ both cited above), not assumed.
 $u->{hashedPasswordFile}`. If the file does not exist, it prints a
 warning (`warn "warning: password file '...' does not exist\n"`) and
 leaves `$u->{hashedPassword}` undefined. This is **not fatal** — the
-script has exactly one `die` in it (a `chown` failure elsewhere,
-unrelated), so activation continues past this warning regardless.
+script has two `die`s in it (out of free UIDs/GIDs, at line 66; a
+`chown` failure, at line 322), neither on this path, so activation
+continues past this warning regardless. (This brief originally said
+"exactly one"; corrected against the pinned source during
+implementation. The conclusion is unchanged — the point was that
+nothing on the password path aborts, and nothing does.)
 - For an account **created fresh at this activation** (a brand-new
   install, or a wipe): the account's shadow entry becomes `"!"` —
   locked, no password-based login possible for that account, but the
@@ -838,6 +847,25 @@ not want to break:
   accounts exist, not after — and different observable symptom — a
   locked account, not a missing network profile) rather than adding a
   disconnected new section.
+
+  **One edit this list did not foresee, and it is a real design
+  consequence rather than a wording fix.** That document's "The
+  installer image" section tells a resident to split `castle.admin`
+  into its own `admin.nix`, imported by both the installed system and
+  the installer image — and its example put the password line in that
+  shared file. Under the old option that worked, because
+  `modules/base` defines the option and the installer imports
+  `modules/base`. Under the new one it does not: the value a resident
+  is told to use is `config.sops.secrets."…".path`, and the installer
+  image imports `nixosModules.base` but **not** `nixosModules.secrets`,
+  so that line fails evaluation with the same "option does not exist"
+  error the section already warns about for `castle.person`. It would
+  also have nothing to point at — the installer runs before there is a
+  partitioned disk to have planted an age key onto. So the password
+  line moves out of `admin.nix` and into `resident.nix`, with the
+  reasoning stated where a reader hits it. Verified against
+  `nixosConfigurations.installer-example`, which sets only `username`
+  and `sshKeys` and asserts nothing about a password.
 - `docs/backlog/initial-password-is-seed-only.md` — small in-place
   edit (not deleted, not resolved by this task): note that the same
   seed-only behavior, verified in `docs/tasks/0032-password-hash.md`,
@@ -855,10 +883,39 @@ not want to break:
   for someday setting `users.mutableUsers = false`, not the "fix a
   revert bug" framing this task's own premise started from and
   corrected.
-- `hosts/xps9370/README.md` — checked, no change required: the file
-  never names `initialHashedPassword` directly, and its "no password on
-  the admin account" prose (step 6) describes a symptom, not the
-  mechanism, so it stays accurate unchanged.
+- `hosts/xps9370/README.md` — **corrected during implementation.** The
+  original claim ("checked, no change required") was defensible but
+  incomplete: the file never names `initialHashedPassword`, and its "no
+  password on the admin account" prose (step 6) does describe a symptom
+  rather than a mechanism, so nothing there became *false*. What became
+  true is more specific than what it says. Before this task, "no Wi-Fi
+  profile" and "no password" were two independent omissions a resident
+  could make separately; after it, a single missing age key produces
+  both, and the recovery path (SSH as root, which never consults
+  `/etc/shadow`) is worth naming right where a reader is about to
+  attempt a from-scratch install on a portless chassis. Three sentences
+  added to step 6, no restructuring.
+- `test/desktop-loop/test.nix` — **missing from this list entirely, and
+  found by grep during implementation.** It sets
+  `castle.admin.initialHashedPassword = testPasswordHash` (line ~284)
+  and it is not a decorative consumer the way `test/vm-install`'s old
+  `"!"` was: this VM types `testPassword` at a real, unmodified
+  tuigreet prompt (line ~464), so the hash has to genuinely reach the
+  account or the whole desktop-loop test fails at login. Migrated to
+  `hashedPasswordFile` pointed at a `pkgs.writeText` store path holding
+  the same already-committed fixture hash. A store path is the right
+  answer *here specifically* and would be the wrong answer in a private
+  layer — the file says so out loud, since a reader who copies the
+  pattern without that caveat reintroduces exactly what this task
+  removes. The value is a published fixture whose plaintext sits three
+  lines above it in the same file, so nothing about putting it in the
+  store discloses anything the repo does not already commit.
+
+  Worth noting for whoever writes the next brief of this kind: the
+  option-consumer list in "Before starting" was assembled from
+  `modules/`, `flake.nix`, `docs/`, and `test/vm-install/` — a plausible
+  set that happened to omit the one consumer with a *functional*
+  dependency on the value rather than a structural one.
 - `test/vm-install/vm-test-system.nix` — replace
   `castle.admin.initialHashedPassword = "!";` with a real (fixture)
   `hashedPasswordFile`, wired to a new `sops.secrets."harness-admin-password-hash"`
@@ -913,8 +970,16 @@ not want to break:
   a working crypt hash, only an opaque marker whose exact bytes are
   checkable.
   - Retrieve the shadow field over the same SSH connection every other
-    phase-2 assertion uses: `ssh ... 'getent shadow harness | cut -d:
-    -f2'`.
+    phase-2 assertion uses. **Implemented as a direct read of
+    `/etc/shadow`** (`grep -m1 '^harness:' /etc/shadow | cut -d: -f2 |
+    tr -d '\n'`) rather than this brief's originally-specified `getent
+    shadow harness`: the claim under test is literally about that file's
+    second field, and routing it through NSS adds a way for the
+    assertion to fail — or, worse, to pass — for reasons unrelated to
+    the pipeline. It is also exactly the read `modules/base`'s own
+    reminder check performs. The `tr -d '\n'` strips only the line
+    terminator `cut` emits, so `cmp` compares the field's own bytes and
+    nothing else.
   - Compare against the exact fixture string `run.sh` encrypted,
     written to a workdir file the same way `expected-secret` /
     `actual-secret` already work for phase2c, so the comparison is
@@ -922,6 +987,24 @@ not want to break:
   - On mismatch, dump both values to the log directory the same way
     phase2c's `phase2c-secret-actual.od` does, so a red CI run publishes
     the diagnostic as an artifact.
+  - **One thing this brief did not anticipate about *when* the
+    assertion is satisfied**, recorded because it is the mechanism the
+    whole phase depends on and it is not the obvious one. The `harness`
+    account is not created on the installed system's first boot: it is
+    created earlier, inside `nixos-enter` during `nixos-install`, in
+    phase 1. So the secret has to decrypt *there*, in a chroot on
+    `/mnt`, for phase 2d to pass — and if it did not, phase 2d fails
+    with a locked `"!"` even though the boot itself and every other
+    assertion look perfectly healthy, because by first boot the account
+    already exists and §1's write-to-shadow gate leaves it alone
+    forever. That is the same seed-only property this task documents,
+    seen from an angle that makes it a hazard rather than a
+    reassurance. It works (the age key is planted by `--extra-files`
+    before `nixos-install` runs, and `sops-install-secrets` mounts its
+    ramfs happily inside `nixos-enter`'s private mount namespace), and
+    the harness is what proves it works rather than the reasoning
+    above. `test/vm-install/README.md`'s phase-2d entry sends a reader
+    to `phase1-nixos-anywhere.log` first for this reason.
 - **What a wrong or missing key produces is described, not additionally
   proven in the harness** — see "Considered and rejected" for why a
   second, negative-path VM install was weighed and set aside. The

@@ -168,13 +168,23 @@ ADMIN_PUB="$ADMIN_KEY.pub"
 #     whole point.
 #
 # The second fixture (docs/tasks/0032-password-hash.md, the admin
-# password hash) adds four more of the same shape:
-# $WORKDIR/expected-shadow, $WORKDIR/actual-shadow,
-# $LOG_DIR/phase2d-shadow-actual.od / -expected.od, and, inside the VM,
-# /run/secrets-for-users/harness-admin-password-hash *and*
-# /etc/shadow. Everything below about why that is acceptable applies to
-# it identically, and one thing more: it is deliberately not shaped like
-# a crypt hash, so it could not be mistaken for a credential even by
+# password hash) reaches disk in the same three kinds of place, plus one
+# the first one does not:
+#
+#   * $WORKDIR/expected-shadow and $WORKDIR/actual-shadow, phase 2d's
+#     equivalents of the two files above;
+#   * $LOG_DIR/phase2d-shadow-expected.od and
+#     $LOG_DIR/phase2d-shadow-actual.od, written only on a mismatch and
+#     uploaded by CI the same way;
+#   * inside the VM at /run/secrets-for-users/harness-admin-password-hash
+#     — a different runtime directory, because neededForUsers moves it;
+#   * and, unlike any other secret here, inside the VM at /etc/shadow,
+#     which is the whole point of phase 2d and the one place that
+#     survives a reboot.
+#
+# Everything below about why that is acceptable applies to it
+# identically, and one thing more: it is deliberately not shaped like a
+# crypt hash, so it could not be mistaken for a credential even by
 # someone who found it out of context.
 #
 # That is acceptable for *these* fixtures and only because of what they
