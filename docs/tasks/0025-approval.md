@@ -1390,6 +1390,19 @@ made against the shape the journal now has.
   the two source files was written first and deleted — both are full
   of those commands named in comments explaining why they are never
   run, which is exactly what a grep cannot tell apart from a call.
+- **Half of `assert_checkouts_untouched` could not fail.** The fixture
+  built a full `git archive` copy of this repo and `git init`'d it as a
+  mechanism checkout, and asserted it unmutated after every scenario —
+  but only `CASTLE_PRIVATE_ROOT` was exported, so `castle` never
+  learned that path and no code under test could have touched it.
+  `CASTLE_MECHANISM_ROOT` is exported now, which makes the existing
+  assertion real and costs nothing (a valid checkout produces no
+  mechanism-unavailable note, so no result body changes). It also
+  made a gap visible: every scenario in the file proposed against the
+  private layer, so the `target: mechanism` route — the one that would
+  change this framework itself — was covered nowhere. A tenant fixture
+  that stamps `mechanism` now proposes one, it is approved through the
+  ordinary path, and the checkout is asserted untouched afterwards.
 - **`render_continuation_packet` had to learn about decisions, which
   this brief never considered.** The packet is rendered on every turn,
   so any later turn of a decided errand carries the proposal question

@@ -116,6 +116,15 @@ export CASTLE_NOTIFY_COMMAND="$REPO_ROOT/test/agent-loop/notify-stub.sh"
 export CASTLE_WORKER_COMMAND="$WORKER"
 export CASTLE_TEST_CASTLE_BIN="$CASTLE"
 export CASTLE_PRIVATE_ROOT="$PRIVATE"
+# Exported, which it was not before: `assert_checkouts_untouched` asserts
+# the mechanism checkout is unmutated after every scenario, and with this
+# unset `castle` never learned the path, so no code under test could have
+# touched it and half that assertion had no failure mode at all — a
+# whole-repo `git archive` per run buying nothing. Exporting it makes the
+# assertion real, and it is what lets the `target: mechanism` scenario
+# below exist: until it did, nothing anywhere covered a proposal against
+# the framework checkout.
+export CASTLE_MECHANISM_ROOT="$MECHANISM"
 
 referencing() {
   local rtype="$1" id="$2"
@@ -738,6 +747,57 @@ for NEEDLE in FENCED-BEFORE-INSIDE FENCED-AFTER-INSIDE FENCED-BEFORE-AFTER FENCE
   printf '%s\n' "$FENCED_SECTION" | grep -q -- "$NEEDLE" \
     || fail "$NEEDLE is missing from the digest — stripping the boundary must not touch the diff itself"
 done
+
+# ---------------------------------------------------------------------
+log "a change proposed against the MECHANISM checkout is decided the same way"
+# ---------------------------------------------------------------------
+# Every scenario above proposes against the private layer, so the whole
+# `target: mechanism` route — the one that would edit this framework
+# itself — was uncovered. It is also the half of
+# `assert_checkouts_untouched` that could not fail until
+# CASTLE_MECHANISM_ROOT was exported: now `castle` knows the path, a
+# tenant is handed it, a change is proposed against it, and the
+# assertion that nothing moved is a claim about a checkout the code
+# under test can actually reach.
+MECHANISM_TENANT="$WORKDIR/mechanism-tenant.sh"
+cat > "$MECHANISM_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+# Asserted, not assumed: a tenant that tolerated a missing mechanism
+# root would let this whole scenario pass while proving nothing.
+: "${CASTLE_MECHANISM_ROOT:?mechanism-tenant.sh: CASTLE_MECHANISM_ROOT must be set}"
+printf 'mechanism tenant: this one belongs in the framework checkout, not the private layer\n'
+cat > "$CASTLE_DIFF_FILE" <<'DIFF'
+--- a/modules/example (synthetic, harness fixture only)
++++ b/modules/example (synthetic, harness fixture only)
+@@ -1 +1 @@
+-MECHANISM-PLACEHOLDER-BEFORE
++MECHANISM-PLACEHOLDER-AFTER
+DIFF
+printf 'mechanism\n' > "$CASTLE_TARGET_FILE"
+TENANT
+chmod +x "$MECHANISM_TENANT"
+REQ_MECH="$("$CASTLE" ask "APPROVAL-FIXTURE-MECHANISM: an invented complaint whose fix belongs in the framework, not the private layer.")"
+CASTLE_WORKER_COMMAND="$MECHANISM_TENANT" "$CASTLE" work "$REQ_MECH" >/dev/null
+R_MECH="$(newest_result_for "$REQ_MECH")"
+grep -q '^outcome: completed$' "$R_MECH" || fail "the mechanism-target turn did not complete"
+grep -q '^target: mechanism$' "$R_MECH" \
+  || fail "the mechanism-target turn did not stamp target: mechanism: $(grep '^target:' "$R_MECH" || true)"
+# The proof that the export is real rather than decorative: the resolved
+# path in the body is the fixture checkout this harness built.
+grep -qF "This diff targets the **mechanism** checkout, which on this host resolved to \`$MECHANISM\`." "$R_MECH" \
+  || fail "the result does not name the resolved mechanism path — castle never learned it"
+Q_MECH="$(proposal_question_for "$REQ_MECH")"
+[ -n "$Q_MECH" ] || fail "a completed turn targeting the mechanism checkout filed no change to decide"
+A_MECH="$("$CASTLE" answer --decision approve "$Q_MECH" </dev/null)"
+grep -q '^decision: approve$' "$JOURNAL/$A_MECH.md" \
+  || fail "approving a mechanism-targeted change did not record an approval"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after a mechanism-targeted decision"
+# The whole point of the section, and of the fixture the export makes
+# meaningful: approving a change against this framework's own checkout
+# still applies nothing to it.
+assert_checkouts_untouched "after approving a change targeting the mechanism checkout"
 
 # ---------------------------------------------------------------------
 log "castle record refuses an --outcome it would then fail to validate"
