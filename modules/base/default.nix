@@ -293,42 +293,76 @@ in
         current="$(${pkgs.gnugrep}/bin/grep -m1 -E ${
           lib.escapeShellArg ("^" + cfg.username + ":")
         } /etc/shadow | ${pkgs.coreutils}/bin/cut -d: -f2)"
-        case "$current" in
-          '!' | '!!' | '*' | "")
-            # The account has NO usable password: these are the shadow
-            # values update-users-groups.pl writes when the seed did not
-            # resolve at account creation, plus the conventional
-            # no-password markers. Say nothing, exactly as the
-            # unreadable-seed branch above does.
+        # Two guards, and they answer different questions. Neither is
+        # redundant; a future simplifier that removes either reopens a
+        # different bug, so both are spelled out.
+        #
+        # FIRST, the lock prefix, because it is not part of any hash.
+        # shadow(5): "If the password field begins with an exclamation
+        # mark !, the password is locked. The remaining characters on
+        # the line represent the password hash." So `!` is a *prefix on
+        # a hash*, and comparing a prefixed field against an unprefixed
+        # seed makes the `!` itself look like a password change. That is
+        # the bug this strip fixes: a resident who ran `passwd -l`
+        # without ever changing their password had shadow read
+        # `!$6$seed` against a seed of `$6$seed`, which "differs", so
+        # the marker was touched and the banner went quiet while they
+        # were still on the shipped seed -- and `passwd -u` would put
+        # them straight back on it with nothing ever having said so.
+        #
+        # Stripping TWO is load-bearing, not defensive, and the second
+        # one is the whole reason this is not a one-liner: `!!` (what
+        # some tools write for "locked, never had a password") strips
+        # once to `!`, which is not empty, so with a single strip it
+        # falls past the guard below and compares `!` against the seed
+        # -- differs, marker touched, banner silenced. Exactly the class
+        # of bug being fixed, reintroduced for one value. Two strips
+        # take `!!` to empty, where the guard below catches it.
+        stripped=$current
+        stripped=''${stripped#!}
+        stripped=''${stripped#!}
+        case "$stripped" in
+          "" | '*')
+            # SECOND, and only now that any lock prefix is gone: is
+            # there a password behind the lock at all? Empty means no
+            # hash (either the field was empty, or it was `!`/`!!` and
+            # the strip above emptied it); `*` means password access is
+            # disallowed outright, per shadow(5) -- "no password can
+            # produce a hash like this". These are what
+            # update-users-groups.pl leaves when the seed did not
+            # resolve at account creation.
             #
-            # Without this branch the check reads that state as "the
-            # resident changed their password" -- the shadow field is
-            # readable, the seed is readable, and they differ -- and
-            # touches the marker, silencing the banner forever. That
-            # inference was sound only while the seed was a build-time
-            # string, where shadow always equalled it at creation. It
-            # stopped being sound the moment the seed became a runtime
-            # file that can fail to decrypt: a first install with a
-            # missing or wrong age key creates the account locked, and
-            # (because mutableUsers leaves an existing account's shadow
-            # entry alone) fixing the key and rebuilding never repairs
-            # it. See docs/tasks/0032-password-hash.md "The lockout
-            # story", whose SSH-and-passwd recovery is exactly the path
-            # a resident needs to be told about here.
+            # Say nothing, exactly as the unreadable-seed branch above
+            # does. Without this the check reads "no password" as "the
+            # resident changed their password" -- the field is
+            # readable, the seed is readable, they differ -- and
+            # silences the banner forever on the one machine that most
+            # needs it. That inference was sound only while the seed was
+            # a build-time string, where shadow always equalled it at
+            # creation. It stopped being sound the moment the seed
+            # became a runtime file that can fail to decrypt: a first
+            # install with a missing or wrong age key creates the
+            # account locked, and (because mutableUsers leaves an
+            # existing account's shadow entry alone) fixing the key and
+            # rebuilding never repairs it. See
+            # docs/tasks/0032-password-hash.md "The lockout story",
+            # whose SSH-and-passwd recovery is the path a resident here
+            # actually needs.
             #
-            # The consequence, stated rather than glossed: on a fresh
-            # failed install the marker is absent, so the banner claims
-            # the account "is still using its seeded initial password"
-            # when in truth it has none. That is imprecise, and it is
-            # the right trade -- it points at `passwd`, which is the
-            # actual remedy. Asserting "password changed" from the
-            # absence of evidence is the failure shape
+            # The consequence, stated rather than glossed: the marker is
+            # left alone, so the banner claims the account "is still
+            # using its seeded initial password" when in truth it has
+            # none. That is imprecise and it is the right trade -- it
+            # points at `passwd`, the actual remedy. Asserting "password
+            # changed" from the absence of evidence is the failure shape
             # docs/tasks/0015-filed-not-in-progress.md names: a label
-            # that causes the inaction it describes.
+            # that causes the inaction it describes. The residual
+            # wording problem is filed as
+            # docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md.
             exit 0
             ;;
         esac
-        if [ "$current" = "$seed" ]; then
+        if [ "$stripped" = "$seed" ]; then
           rm -f "$marker"
         else
           touch "$marker"
