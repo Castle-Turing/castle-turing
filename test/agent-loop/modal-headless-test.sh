@@ -1530,4 +1530,60 @@ printf '%s\n' "$LEGACY_OUT" | grep -q "NOTHING ON THIS MACHINE IS EDITED" \
 
 clear_pending_changes
 
+log "status overlay: the verb names what is actually waiting, not always 'answer'"
+# _errand_state's ", waiting on you" overlay used to say "press
+# Mod4+Shift+a to answer" unconditionally, but a proposal is not
+# answered, it is decided (docs/tasks/0025-approval.md §G) — the same
+# wrong-verb defect `_show_picker`'s own `action` parameter exists to
+# avoid one screen over ("press a number to answer" would name the
+# wrong act there too). Three isolated errands, one fixture each, so
+# none of them can be left half-decided by a `clear_pending_changes`
+# call written for a different section: all proposals says "review"
+# (the picker's own word for it); no proposals is already covered by
+# REQ_TWOQ earlier in this file and must go on saying "answer",
+# unchanged; a mix of both kinds is neither, so it falls back to the
+# same kind-agnostic wording this file already reaches for elsewhere
+# ("to see what is waiting on them", above run_answer's branch into
+# review mode).
+plant_bare_proposal() {
+  # Usage: plant_bare_proposal <request-id>; echoes the question id.
+  # A minimal, `castle validate`-clean question carrying a
+  # syntactically valid proposal-sha256 stamp and no result at all —
+  # enough for `_is_proposal`'s own check (the stamp, not a matching
+  # result) since this only exercises overlay wording, never review
+  # mode's rendering.
+  local req="$1"
+  local qid="${req}-bareprop"
+  {
+    echo "---"
+    echo "id: $qid"
+    echo "type: question"
+    echo "provenance: requested"
+    echo "refs: $req"
+    echo "seat: worker"
+    echo "created: 2026-02-01T00:00:00Z"
+    echo "proposal-sha256: $(printf '%s' "$qid" | sha256sum | cut -d' ' -f1)"
+    echo "---"
+    echo
+    echo "A bare proposal fixture, only for overlay-wording assertions."
+  } > "$CASTLE_STATE_DIR/journal/$qid.md"
+  echo "$qid"
+}
+
+REQ_ALLPROP="$("$CASTLE" ask "ALLPROP-FIXTURE: an errand whose only unanswered question is a proposed change.")"
+plant_bare_proposal "$REQ_ALLPROP" >/dev/null
+"$CASTLE" validate || fail "the all-proposal overlay fixture does not validate"
+STATUS_ALLPROP="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_ALLPROP" | grep -q "^\[$REQ_ALLPROP\] requested — waiting on you — press Mod4+Shift+a to review\$" \
+  || fail "an errand waiting on a proposal alone did not say 'review': $(echo "$STATUS_ALLPROP" | grep "$REQ_ALLPROP" || true)"
+
+REQ_MIXED="$("$CASTLE" ask "MIXED-FIXTURE: an errand waiting on both a proposal and an ordinary question.")"
+"$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ_MIXED" --body "An ordinary question, not a change." >/dev/null
+plant_bare_proposal "$REQ_MIXED" >/dev/null
+"$CASTLE" validate || fail "the mixed overlay fixture does not validate"
+STATUS_MIXED="$("$MODAL" --mode status --limit 40)"
+echo "$STATUS_MIXED" | grep -q "^\[$REQ_MIXED\] requested — waiting on you — press Mod4+Shift+a to see what's waiting\$" \
+  || fail "an errand waiting on both a proposal and an ordinary question did not use the neutral wording: $(echo "$STATUS_MIXED" | grep "$REQ_MIXED" || true)"
+
 log "all assertions passed"

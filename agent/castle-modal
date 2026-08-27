@@ -1304,9 +1304,10 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     answered = {
         ref for rec in records.values() if rec.type == "answer" for ref in rec.refs
     }
-    waiting = any(
-        rec.type == "question" and rec.id not in answered for rec in downstream
-    )
+    waiting_questions = [
+        rec for rec in downstream if rec.type == "question" and rec.id not in answered
+    ]
+    waiting = bool(waiting_questions)
 
     # `_collect_downstream` is transitive over `refs` with no keying by
     # type or by errand, which is right for the fold as a whole and
@@ -1490,7 +1491,29 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # chord's own mentions went stale exactly this way once already,
     # docs/tasks/0019).
     if waiting:
-        hint = "waiting on you — press Mod4+Shift+a to answer"
+        # "answer" names the wrong act on a proposal: `_show_picker`
+        # grew an `action` parameter for exactly this reason
+        # (docs/tasks/0025-approval.md §G, called with `action="review"`
+        # where a proposal branches out of answer mode's picker), and
+        # this overlay used to say "answer" regardless — the same
+        # defect the comment above this method already guards against,
+        # for a different reason. Pick the verb from what is actually
+        # waiting: all proposals says "review" (the same word the
+        # picker itself uses, "Press a number to review"); no proposals
+        # keeps the original, unchanged "answer"; a mix of both kinds
+        # means neither verb is honest for everything waiting, so this
+        # falls back to the kind-agnostic phrasing already used where
+        # a resident reaches this picker not knowing in advance which
+        # kind of waiting it is ("to see what is waiting on them",
+        # above `run_answer`'s branch into review mode).
+        proposal_flags = [_is_proposal(castle, rec) for rec in waiting_questions]
+        if all(proposal_flags):
+            verb = "review"
+        elif not any(proposal_flags):
+            verb = "answer"
+        else:
+            verb = "see what's waiting"
+        hint = f"waiting on you — press Mod4+Shift+a to {verb}"
         return f"{base}, {hint}" if base else hint
     return base or "awaiting a worker"
 
