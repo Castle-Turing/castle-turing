@@ -17,6 +17,19 @@ private-repo history's worth of credentials rather than one machine's
 worth. `600` and root ownership are protections against other *logged-in
 users*; they are worth nothing against physical possession.
 
+**And as of `docs/tasks/0032-password-hash.md` that same key opens the
+admin account's login password too**, not only the Wi-Fi PSK. The
+sentence below about the login password being decoration was already
+true; that task makes it circular as well as true. The password that
+guards the console is now seeded from a secret whose key sits, in the
+clear, on the disk the console is guarding — so an attacker holding the
+machine does not have to defeat the login at all, and would not bother
+trying. This is one more reason the stakes named here keep growing:
+0032 was a real improvement (the hash no longer lands in the
+world-readable Nix store, where every account and process on a *running*
+machine could read it), and it moves nothing at all against physical
+possession.
+
 That is a deliberate, argued trade — see that task's "The honest
 limitation" and `docs/private-layer.md`'s section of the same name —
 not an oversight, and it is the correct trade only for as long as this
