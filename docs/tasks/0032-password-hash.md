@@ -506,6 +506,43 @@ tracking the option replacement in §1/§2 — deliberately not called a
 "rename" here either, per §2's own argument); the path unit and the
 banner text are otherwise unchanged from what exists today.
 
+**The `script` above is the specced version, and the shipped one has two
+more guards.** Read `modules/base/default.nix` for what actually runs;
+this block is kept as written because the reasoning that produced the
+two additions only makes sense against it. Both came from review, both
+are in the comparison, and both were bugs this brief introduced by
+treating "the shadow hash differs from the seed" as equivalent to "the
+resident ran `passwd`" — an equivalence that held while the seed was a
+build-time string and stopped holding the moment it became a runtime
+file:
+
+- **No password at all.** If the seed never decrypted at account
+  creation, `update-users-groups.pl` writes `!` (or the field is `!!`,
+  `*`, or empty). The seed file may later become perfectly readable —
+  fixing the key and rebuilding does not repair an account that already
+  exists, per §6 — so the check reads a good seed against a locked
+  field, calls it "changed", and silences the banner forever on the one
+  machine that most needs it. Those four values now leave the marker
+  alone, exactly as the unreadable-seed branch does.
+- **A lock prefix is not a password change.** `shadow(5)`: "If the
+  password field begins with an exclamation mark `!`, the password is
+  locked. The remaining characters on the line represent the password
+  hash." So `!$6$seed` is *the seed, locked* — and comparing it against
+  an unprefixed `$6$seed` makes the `!` itself look like a change. A
+  resident who ran `passwd -l` without ever changing their password got
+  the banner silenced, and `passwd -u` would put them back on the
+  shipped seed with nothing ever having said so. The shipped script
+  strips leading `!` before comparing, twice — `!!` strips once to `!`,
+  which is not empty, and would otherwise walk past the no-password
+  guard into exactly the comparison it must not reach.
+
+Neither is reachable by `test/vm-install/`, whose fixture secret always
+decrypts, so both are verified by table-testing the *generated* unit
+across every shadow-field shape rather than by CI. The residual — that
+the banner's wording still describes a seeded password when the account
+has none — is filed as
+`docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md`.
+
 Nothing else needs editing as a consequence of keeping this machinery.
 `modules/agent/default.nix`'s comment citing `castle-password-reminder-check`
 as a design analogy, and `docs/tasks/0021-auto-dispatch.md`'s references
