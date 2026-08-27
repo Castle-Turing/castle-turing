@@ -1118,8 +1118,8 @@ Implementation order:
 
 Before opening a PR: run `nix flake check`; run `test/vm-install/run.sh`
 locally if a KVM-capable machine is available, or via `gh workflow run
-vm-install-test.yml` otherwise; re-verify the two claims named above one
-more time against whatever actually got locked; if a private layer or
+vm-install-test.yml` otherwise; re-verify the three claims named above
+one more time against whatever actually got locked; if a private layer or
 the reference host's own config needs the §7 migration run for real,
 flag that as the one step in the Verification plan that needs human
 hands rather than attempting it from this worktree. Then run
