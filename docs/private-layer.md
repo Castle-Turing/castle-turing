@@ -1391,6 +1391,24 @@ into the new option**: it takes a path, and NixOS would go looking for
 a file by that name, not find one, and leave the next freshly created
 account locked.
 
+Removing the option and rebuilding does not erase the old hash: it
+only stops the *next* generation from embedding one.
+`initialHashedPassword` put that string in the world-readable store by
+two routes (`docs/tasks/0032-password-hash.md`'s "Why" names both), and
+every earlier generation that still boots is a GC root keeping its own
+copy of both — as world-readable as everything else under
+`/nix/store`. This project's automatic GC (`modules/base`'s
+`nix.gc`) only deletes generations older than 30 days, so the string
+you just removed from `resident.nix` can legitimately still be sitting
+on disk a month from now. If that exposure window matters to you more
+than the rollback it buys you, delete the old generations yourself
+(`nix-env --delete-generations old --profile /nix/var/nix/profiles/system`
+as root, or `nix-collect-garbage -d` to also drop generations from
+other profiles) and collect garbage before you consider the migration
+done — the same tradeoff between rollback history and store exposure
+that the agent-state move above asks you to make explicitly, not one
+this project can make for you.
+
 ### When the key is missing or wrong
 
 Both failures are loud, which is exactly why a Wi-Fi PSK went first
