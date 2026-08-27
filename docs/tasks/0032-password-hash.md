@@ -523,13 +523,32 @@ both cited above), not assumed.
 `update-users-groups.pl` (lines 241–247) checks `-e
 $u->{hashedPasswordFile}`. If the file does not exist, it prints a
 warning (`warn "warning: password file '...' does not exist\n"`) and
-leaves `$u->{hashedPassword}` undefined. This is **not fatal** — the
-script has two `die`s in it (out of free UIDs/GIDs, at line 66; a
-`chown` failure, at line 322), neither on this path, so activation
-continues past this warning regardless. (This brief originally said
-"exactly one"; corrected against the pinned source during
-implementation. The conclusion is unchanged — the point was that
-nothing on the password path aborts, and nothing does.)
+leaves `$u->{hashedPassword}` undefined. This is **not fatal**:
+`warn` does not abort a Perl program, and none of the script's four
+`die`s can be reached by a password file that failed to resolve. Each,
+at the pinned rev, and why not:
+
+| Line | `die` | Why the password path cannot reach it |
+|---|---|---|
+| 23 | `write_file(...) or die` | inside `updateFile`, which writes `/etc/passwd`, `/etc/shadow` and the declarative-users list. Reached only by an I/O failure on those writes — a different fault entirely, and one that fires whatever the password resolved to. |
+| 66 | `die "$0: out of free UIDs or GIDs\n"` | `allocUid`, exhausted uid space. Independent of any password option. |
+| 209 | `$u->{gid} = $groupsOut{$u->{group}}->{gid} // die` | the user names a group that does not exist. Independent of any password option. |
+| 322 | `chown(...) || die "Failed to change ownership..."` | the block immediately after `updateFile("/etc/shadow", ...)`, handing `/etc/shadow` to `root:shadow`. The *nearest* `die` to this task's subject, and still not on its path: it fires on a failed `chown` of a file that has by then already been written, whatever the password field in it says. |
+
+So the claim this section rests on is not "there are few `die`s" — the
+count is not what makes it safe, and stating a count was the wrong
+argument to make. It is that **the missing-password-file branch's only
+effect is a `warn` and an undefined `$u->{hashedPassword}`**, which the
+shadow-writing code further down already has a defined behaviour for
+(`"!"` on creation, untouched otherwise). Activation continues, and the
+account exists.
+
+(Successive drafts of this brief said "exactly one" `die`, then "two".
+Both were wrong; there are four. That this sits inside the section the
+Hard constraints below single out as traced against pinned source
+rather than assumed is exactly why the argument has been rewritten to
+name them individually — a count is a claim nobody can check without
+recounting, and recounting is what caught it twice.)
 - For an account **created fresh at this activation** (a brand-new
   install, or a wipe): the account's shadow entry becomes `"!"` —
   locked, no password-based login possible for that account, but the
