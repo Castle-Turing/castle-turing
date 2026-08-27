@@ -23,7 +23,7 @@
 # #1) hit: no config layer supplied one, so console login was
 # impossible on a Wi-Fi-only machine that also couldn't be reached over
 # SSH yet. The assertion below closes that loop — see
-# castle.admin.initialHashedPassword in modules/base.
+# castle.admin.hashedPasswordFile in modules/base.
 { config, lib, pkgs, ... }:
 
 let
@@ -347,15 +347,16 @@ in
 
     assertions = [
       {
-        assertion = config.castle.admin.initialHashedPassword != null;
+        assertion = config.castle.admin.hashedPasswordFile != null;
         message = ''
-          modules/desktop requires castle.admin.initialHashedPassword to
-          be set: this module deliberately configures no auto-login (see
+          modules/desktop requires castle.admin.hashedPasswordFile to be
+          set: this module deliberately configures no auto-login (see
           the module's header comment), so a login prompt with no
           password behind it is the exact console lockout
-          docs/tasks/0003-findings.md finding #1 describes. Generate a
-          hash with `mkpasswd -m sha-512`; it belongs in the private
-          layer, never this repo — see docs/private-layer.md.
+          docs/tasks/0003-findings.md finding #1 describes. Point it at
+          a decrypted secret's runtime path — see docs/private-layer.md's
+          "Secrets" section and docs/tasks/0032-password-hash.md. This
+          is a *file path*, read at activation, never the hash itself.
         '';
       }
       {

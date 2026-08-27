@@ -14,6 +14,33 @@ let
   cfg = config.castle.admin;
 in
 {
+  # Deliberately a *removal*, not a rename, even though
+  # modules/agent/default.nix's mkRenamedOptionModule is the precedent a
+  # reader arrives here expecting. A rename copies the old value onto
+  # the new name unmodified, and these two options take differently
+  # *shaped* values: the old one a hash string, the new one a path to a
+  # file holding that string. See docs/tasks/0032-password-hash.md §2.
+  imports = [
+    (lib.mkRemovedOptionModule [ "castle" "admin" "initialHashedPassword" ] ''
+      Replaced by castle.admin.hashedPasswordFile
+      (docs/tasks/0032-password-hash.md). This is not a rename: the old
+      option took a hash STRING; the new one takes a FILE PATH, read at
+      every activation (wired to NixOS's own
+      users.users.<name>.hashedPasswordFile). Pasting your old hash
+      string in verbatim will not work — NixOS will try to open a file
+      literally named by that string, fail to find it, and (per
+      update-users-groups.pl) leave the account locked ("!") the next
+      time it is created fresh, rather than seeded with what you meant.
+
+      Point the new option at a *path* instead: the documented pattern
+      is an sops-nix secret's own `.path`, with `neededForUsers = true`
+      so it decrypts before accounts are created. See
+      docs/private-layer.md's "Secrets" section and
+      docs/tasks/0032-password-hash.md's migration steps before you
+      touch this on a machine you don't want to break.
+    '')
+  ];
+
   options.castle.admin = {
     username = lib.mkOption {
       type = lib.types.str;
@@ -33,27 +60,47 @@ in
         docs/private-layer.md.
       '';
     };
-    initialHashedPassword = lib.mkOption {
+    hashedPasswordFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Hashed (never plaintext) password for the admin account,
-        generated with e.g. `mkpasswd -m sha-512`. Wired into
-        `users.users.<name>.initialHashedPassword`, so it only seeds the
-        account at first creation and is never overwritten by later
-        rebuilds — a resident who changes their password with `passwd`
-        keeps that change.
+        Path, on THIS machine, to a file holding the admin account's
+        hashed password (`mkpasswd -m sha-512` generates the hash; the
+        file holds exactly that one line). Wired to
+        `users.users.<name>.hashedPasswordFile`, which NixOS reads at
+        every activation — verified against this flake's pinned nixpkgs,
+        `nixos/modules/config/users-groups.nix` and
+        `update-users-groups.pl`.
 
-        Optional at this layer: a host with no interactive console (the
-        vm-test harness, a headless server with SSH-key-only admin) has
-        no use for one. A host with a login prompt does — see
-        modules/desktop, which asserts this is set, and
-        docs/tasks/0003-findings.md finding #1 for why (an unset
-        password and a login prompt is a chicken-and-egg console
-        lockout). Secret-adjacent data — supplied by the private layer,
-        never this repo. See docs/private-layer.md.
+        A Nix *string*, not a path, deliberately — the same reasoning
+        `castle.secrets.ageKeyFile` uses (modules/secrets.nix): this
+        names a location on the target's own disk, resolved at runtime,
+        never a file this repo's own evaluation should read, copy into
+        the store, or even require to exist. The documented pattern
+        points this at an sops-nix secret's own `.path` — see
+        docs/private-layer.md's "Secrets" section.
 
-        Whatever value is seeded here, a resident who wants a real
+        Optional at this layer for the same reason the option it
+        replaces was: a host with no interactive console (a headless
+        server with SSH-key-only admin) has no use for one. A host with
+        a login prompt does — see modules/desktop, which asserts this is
+        set, and docs/tasks/0003-findings.md finding #1 for why (an
+        unset password and a login prompt is a chicken-and-egg console
+        lockout).
+
+        **Read this before setting it.** Because this project leaves
+        `users.mutableUsers` at its NixOS default (`true`), this option —
+        like the one it replaces — only takes effect the moment the
+        account is *first created*. Editing the file (or the secret
+        behind it) and rebuilding does **not** change an
+        already-existing account's password; a resident who wants their
+        live password to track this file has to run `passwd` by hand,
+        exactly as before. See docs/tasks/0032-password-hash.md's
+        "mutableUsers" and "The lockout story" sections for the full
+        reasoning and the recovery path if a wrong or missing secret
+        locks a fresh account out of password login.
+
+        Whatever value seeds the account, a resident who wants a real
         password should change it with `passwd` after first login — see
         the login-reminder mechanism below, which nags exactly until
         that happens and never locks the account to force it (no
@@ -167,7 +214,7 @@ in
         "networkmanager"
       ];
       openssh.authorizedKeys.keys = cfg.sshKeys;
-      initialHashedPassword = cfg.initialHashedPassword;
+      hashedPasswordFile = cfg.hashedPasswordFile;
     };
     users.users.root.openssh.authorizedKeys.keys = cfg.sshKeys;
     # Remote `nixos-rebuild --target-host` needs non-interactive sudo.
@@ -194,7 +241,7 @@ in
     # keeps the seeded password.
     #
     # Mechanism: a root-run check compares the account's *current*
-    # shadow hash against the configured `initialHashedPassword` — root
+    # shadow hash against the seed in `hashedPasswordFile` — root
     # already needs to read /etc/shadow for this, so it runs as a
     # systemd service rather than in each interactive shell (which runs
     # as the resident, with no shadow access). It leaves a marker file
@@ -205,24 +252,51 @@ in
     # (via the path unit below) immediately whenever /etc/shadow is
     # touched, so it catches a same-session `passwd` too, not just the
     # next reboot.
-    systemd.services.castle-password-reminder-check = lib.mkIf (cfg.initialHashedPassword != null) {
+    #
+    # The seed is *dereferenced at check time*, never embedded: this
+    # script used to interpolate the hash itself
+    # (`lib.escapeShellArg cfg.initialHashedPassword`), which put it in
+    # the world-readable store by a second route independent of
+    # users.users.<name> — docs/tasks/0032-password-hash.md's "Why".
+    # Embedding the *path* is not the same thing and not a regression:
+    # only a location is disclosed, and the contents are read at runtime
+    # by a root-run service, never by the Nix evaluator.
+    #
+    # Ordering is a guarantee rather than a hope, traced through this
+    # project's own boot path (0032 §4): stage-2-init.sh runs
+    # `$systemConfig/activate` to completion — including sops-nix's
+    # `setupSecretsForUsers`, which `users.deps` puts ahead of account
+    # creation — before it execs systemd at all, so multi-user.target
+    # cannot be reached until the secret has resolved one way or the
+    # other.
+    systemd.services.castle-password-reminder-check = lib.mkIf (cfg.hashedPasswordFile != null) {
       description = "Note whether the admin account still has its seeded initial password";
       wantedBy = [ "multi-user.target" ];
       serviceConfig.Type = "oneshot";
       script = ''
         marker=/var/lib/castle-turing/password-changed
         mkdir -p "$(dirname "$marker")"
+        seed_file=${lib.escapeShellArg cfg.hashedPasswordFile}
+        if [ ! -r "$seed_file" ]; then
+          # The seed hasn't decrypted -- yet, or ever, per this task's
+          # missing/wrong-key case (docs/tasks/0032-password-hash.md,
+          # "The lockout story"). Say nothing rather than guess: leave
+          # the marker exactly as it was, so the banner keeps whatever
+          # state it last had.
+          exit 0
+        fi
+        seed="$(${pkgs.coreutils}/bin/cat "$seed_file")"
         current="$(${pkgs.gnugrep}/bin/grep -m1 -E ${
           lib.escapeShellArg ("^" + cfg.username + ":")
         } /etc/shadow | ${pkgs.coreutils}/bin/cut -d: -f2)"
-        if [ "$current" = ${lib.escapeShellArg cfg.initialHashedPassword} ]; then
+        if [ "$current" = "$seed" ]; then
           rm -f "$marker"
         else
           touch "$marker"
         fi
       '';
     };
-    systemd.paths.castle-password-reminder-check = lib.mkIf (cfg.initialHashedPassword != null) {
+    systemd.paths.castle-password-reminder-check = lib.mkIf (cfg.hashedPasswordFile != null) {
       description = "Re-run the password-reminder check whenever /etc/shadow changes";
       wantedBy = [ "multi-user.target" ];
       pathConfig.PathModified = "/etc/shadow";
@@ -233,7 +307,7 @@ in
     # NixOS sources `environment.interactiveShellInit` for bash and zsh;
     # a private layer that swaps in a different shell needs to wire this
     # itself.
-    environment.interactiveShellInit = lib.mkIf (cfg.initialHashedPassword != null) ''
+    environment.interactiveShellInit = lib.mkIf (cfg.hashedPasswordFile != null) ''
       if [ ! -e /var/lib/castle-turing/password-changed ]; then
         printf '\n\033[1;33mNote:\033[0m this account is still using its seeded initial password. Run \033[1mpasswd\033[0m to set your own.\n\n'
       fi
