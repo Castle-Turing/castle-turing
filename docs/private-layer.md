@@ -73,7 +73,7 @@ The exported modules:
   channel) + libnotify, a cursor theme package, and greetd + tuigreet
   for login. Also declares the `castle.display.*` options — see "The
   display-preference slot" below. Deliberately no auto-login — see the
-  module's own comments for why. Asserts `castle.admin.initialHashedPassword`
+  module's own comments for why. Asserts `castle.admin.hashedPasswordFile`
   is set, since a login prompt with no password behind it is a lockout,
   not security. Optional: skip it on a headless host.
 - `nixosModules.dev` — this project's own development tools (Emacs, git,
@@ -140,9 +140,12 @@ The values this repo may never contain:
     username = "<your-login>";
     sshKeys = [ "<your-openssh-public-key>" ];
     # Optional — only needed if you use nixosModules.desktop (or any
-    # other host with an interactive console). Generate with
-    # `mkpasswd -m sha-512`; never a plaintext password.
-    initialHashedPassword = "<your-password-hash>";
+    # other host with an interactive console). Deliberately not shown
+    # here: it takes a *path on the machine*, not a hash, and the path
+    # worth using is an encrypted secret's — which needs this file's
+    # header to be `{ config, ... }:` rather than `{ ... }:`. See the
+    # worked example under "Secrets" below and copy it whole.
+    # hashedPasswordFile = ...;
   };
 
   # Optional — only needed if you use nixosModules.home.
@@ -222,16 +225,45 @@ The values this repo may never contain:
   access (both to your user and to root, for remote rebuilds). Public
   keys are not secrets, but they identify a person — that is why they
   live here.
-- `castle.admin.initialHashedPassword` — hashed (never plaintext)
-  password seeded at first account creation only; later `passwd` changes
-  are never overwritten by a rebuild. Only required if you import
-  `nixosModules.desktop`, which asserts it is set — see that module for
-  why (`docs/tasks/0003-findings.md` finding #1, the first-boot console
-  lockout). Whatever you seed here — even a deliberately weak,
+- `castle.admin.hashedPasswordFile` — **a path on the machine**, not a
+  hash. It names a file holding one line: the hashed (never plaintext)
+  password, as `mkpasswd -m sha-512` produces it. The documented way to
+  put a file there is the encrypted-secret example under "Secrets"
+  below; nothing in this repo, and nothing your flake evaluates, ever
+  reads that file — NixOS does, at activation, on the machine itself.
+  That is the whole point (`docs/tasks/0032-password-hash.md`): the hash
+  used to be a string in this option, which meant a copy of it in the
+  world-readable Nix store on every rebuild.
+
+  Only required if you import `nixosModules.desktop`, which asserts it
+  is set — see that module for why
+  (`docs/tasks/0003-findings.md` finding #1, the first-boot console
+  lockout).
+
+  **It seeds, it does not rotate.** Because this project leaves
+  `users.mutableUsers` at its NixOS default (`true`), the file's
+  contents are applied only at the moment the account is *first
+  created*. Editing the secret and rebuilding changes nothing about an
+  account that already exists — no error, no warning, no change. If you
+  want your live password to match the file, run `passwd` yourself. The
+  same property is what makes a `passwd` change permanent: no rebuild
+  will ever revert it. (This is not new with the option's change of
+  shape; it was equally true of the hash-string option this replaces,
+  and `docs/backlog/initial-password-is-seed-only.md` is the record of
+  it surprising someone.)
+
+  Whatever seeds the account — even a deliberately weak,
   known-to-you-only default — `nixosModules.base` nags an interactive
-  shell to run `passwd` until the hash actually changes, and stops the
-  moment it does. It never forces the change (no PAM-level expiry): that
-  risks a tuigreet/greetd lockout of its own.
+  shell to run `passwd` until the live hash actually differs from the
+  file's, and stops the moment it does. It never forces the change (no
+  PAM-level expiry): that risks a tuigreet/greetd lockout of its own.
+  If the file cannot be read at all, the nag says nothing rather than
+  guessing, and leaves whatever it last said standing.
+
+  The option is typed as a plain string rather than a Nix path on
+  purpose, the same as `castle.secrets.ageKeyFile` below: it names a
+  place on the target's disk, and nothing about evaluating your flake
+  should require that place to exist, let alone copy what is in it.
 - `castle.person.gitUserName` / `castle.person.gitUserEmail` — your git
   commit identity, wired into home-manager's `programs.git`. Only
   required if you import `nixosModules.home`, which asserts both are
@@ -1017,17 +1049,30 @@ file containing `castle.person` fails evaluation with an unhelpful
   castle.admin = {
     username = "<your-login>";
     sshKeys = [ "<your-openssh-public-key>" ];
-    initialHashedPassword = "<your-password-hash>";
   };
 }
 
 # resident.nix — everything an installed system needs
-{ ... }:
+{ config, ... }:
 {
   imports = [ ./admin.nix ];
   castle.person = { ... };
+  # Not in admin.nix, on purpose — see below.
+  castle.admin.hashedPasswordFile =
+    config.sops.secrets."admin-password-hash".path;
 }
 ```
+
+**Keep `castle.admin.hashedPasswordFile` out of `admin.nix`**, for the
+same reason `castle.person` is out of it and one more. The installer
+image imports `nixosModules.base` but not `nixosModules.secrets`, so a
+line reading `config.sops.secrets."…"` in a file the installer imports
+fails evaluation with an "option does not exist" error, exactly as
+`castle.person` does. And it would have nothing to point at anyway: the
+installer is running before there is a partitioned disk to have planted
+an age key onto. An installer needs a key to accept and an account name;
+it never needs a password, and `nixosModules.installer` asserts nothing
+about one.
 
 Then add a second `nixosConfiguration` to your private flake, importing
 `admin.nix` rather than `resident.nix`:
@@ -1280,12 +1325,111 @@ reboot and never on disk. Your SSID *is* in your private repo in
 plaintext here, which is a deliberate line: a network name is not a
 credential, and the framework repo never sees either one.
 
+### Using the secret: your login password
+
+`castle.admin.hashedPasswordFile` (`docs/tasks/0032-password-hash.md`)
+is the second thing this mechanism carries, and the one with the most
+at stake — get it wrong and the machine's *next* fresh install has no
+console login. It needs one thing the Wi-Fi PSK does not:
+`neededForUsers`.
+
+```nix
+{ config, ... }:
+{
+  castle.secrets.sopsFile = ./secrets.yaml;
+
+  # neededForUsers decrypts this *before* users.users.<name> is
+  # created — the ordering the admin password specifically needs,
+  # since an ordinary sops.secrets entry (no neededForUsers) decrypts
+  # *after* accounts already exist, too late to seed one.
+  sops.secrets."admin-password-hash".neededForUsers = true;
+
+  # /run/secrets-for-users/admin-password-hash at activation — a
+  # different runtime directory than every other secret in this file,
+  # because neededForUsers moves it there.
+  castle.admin.hashedPasswordFile =
+    config.sops.secrets."admin-password-hash".path;
+}
+```
+
+The value that goes into `secrets.yaml` under that key is what
+`mkpasswd -m sha-512` prints, exactly as before this option existed —
+nothing changes about how the hash is produced, only about where it
+lives before it reaches the machine:
+
+```yaml
+wifi-psk: "<your-network-password>"
+admin-password-hash: "<the output of mkpasswd -m sha-512>"
+```
+
+Two things about this are worth knowing before you rely on it, and
+both are consequences of `users.mutableUsers` being left at its NixOS
+default of `true`:
+
+- **This seeds an account; it does not rotate a password.** Changing
+  the secret and rebuilding does nothing to an account that already
+  exists — see the option's own entry under `resident.nix` above. So
+  adopting this on a machine you already run is *safe by
+  construction*: it cannot change the password you are currently
+  logged in with. What it changes is what the next fresh install gets.
+- **Which means you should verify the mechanism, not the password.**
+  After rebuilding, `sudo cat
+  /run/secrets-for-users/admin-password-hash` and check it matches what
+  you put in `secrets.yaml`. If it is missing or wrong, fix it now —
+  you are not locked out while you do, because nothing about your
+  working login depends on that file yet. That is the entire migration
+  check, and it is the honest one; "I can still log in" proves nothing
+  either way.
+
+If you are moving from the older `castle.admin.initialHashedPassword`,
+remove that line in the same change. Leaving it fails the build the
+moment you bump your `flake.lock` past
+`docs/tasks/0032-password-hash.md`, with a message naming the fix —
+which is deliberate, and much better than a machine that builds fine
+and locks itself on the next wipe. **Do not paste your old hash string
+into the new option**: it takes a path, and NixOS would go looking for
+a file by that name, not find one, and leave the next freshly created
+account locked.
+
 ### When the key is missing or wrong
 
 Both failures are loud, which is exactly why a Wi-Fi PSK went first
 rather than a password hash. The symptom is **no network** — obvious
 within seconds, and recoverable by plugging in Ethernet or joining by
 hand with `nmtui`, the way you did before any of this existed.
+
+Since `docs/tasks/0032-password-hash.md` the same key also opens your
+login password, and that case reads differently enough to state
+separately — different ordering, different symptom, different urgency:
+
+- **It fails earlier.** `neededForUsers` puts this secret's decryption
+  ahead of account creation (sops-nix sets
+  `users.deps = [ "setupSecretsForUsers" ]`), so by the time NixOS
+  writes `/etc/shadow` the answer is already yes or no.
+- **The symptom is a locked account, not a missing file.**
+  `update-users-groups.pl` warns that the password file does not exist
+  and carries on — this is not fatal, and nothing else about the
+  account is affected: the uid, home directory, groups, and SSH
+  `authorizedKeys` are all set up normally. What you get is a shadow
+  entry of `!`: no password login for that account.
+- **Only a *fresh* account is affected.** An account that already
+  exists keeps whatever password it already had; a failed decryption
+  cannot take a working login away from you. This bites a new install
+  or a wipe.
+- **You are not actually locked out**, and this is worth knowing before
+  it happens rather than after. Key-based SSH does not consult
+  `/etc/shadow` at all, and `nixosModules.base` installs your
+  `castle.admin.sshKeys` into both your account and `root`'s. So
+  `ssh root@<host>` still works. Run `passwd <your-login>` there and
+  you have a real password back immediately and permanently — `passwd`
+  is exactly what `users.mutableUsers = true` protects from any future
+  rebuild. Then diagnose the secret at your leisure: `ls -l
+  /var/lib/sops-nix/key.txt`, `ls -l
+  /run/secrets-for-users/admin-password-hash`, `journalctl -b | grep -i
+  sops`. Fixing it changes nothing about the account you just
+  recovered; it matters for the *next* account creation.
+
+The two causes below apply to both secrets identically.
 
 - **Key file absent.** `sops-install-secrets` fails at activation,
   naming the path it could not read. That is on the console during
@@ -1338,8 +1482,17 @@ This mechanism protects against disclosure of your private repo and
 against store exposure — both are ciphertext. It protects against
 **nothing** if someone has the laptop and can read its disk. That is
 not a new weakness introduced here; it is the one that backlog entry
-already describes, now true of one more file. Closing it is that
-entry's job.
+already describes, now true of one more file.
+
+`docs/tasks/0032-password-hash.md` sharpens it rather than changing it:
+that one key now also opens your login password. There is a circularity
+worth naming plainly — the login password is what a stolen laptop's
+console asks for, and the key that seeds it is on the same unencrypted
+disk. Someone with the machine does not need to defeat the password;
+they can read the disk directly. Nothing about moving the hash out of
+the Nix store claims otherwise: that move closes disclosure to *other
+accounts and processes on a running machine*, which is a real boundary
+and not this one. Closing this one is the backlog entry's job.
 
 ## `flake.lock`
 

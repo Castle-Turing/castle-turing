@@ -269,6 +269,15 @@ survive:
    #1. Plan for a human at the keyboard for exactly this one step, on
    this one chassis, on a from-scratch install.
 
+   Since `docs/tasks/0032-password-hash.md` those two are the *same*
+   missing step rather than two coincidental ones: the admin password
+   is now seeded from an encrypted secret too, so a machine installed
+   without the age key in place gets no Wi-Fi profile **and** a locked
+   admin password, from one cause. Nothing about that is silent, and
+   nothing about it is a lockout — see `docs/private-layer.md`'s "When
+   the key is missing or wrong" for the SSH-as-root recovery, which
+   works because key-based SSH never consults `/etc/shadow`.
+
    Either way, an already-installed machine keeps its NetworkManager
    Wi-Fi profile across ordinary reboots — this only ever bites a fresh
    wipe.
