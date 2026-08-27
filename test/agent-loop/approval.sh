@@ -383,6 +383,30 @@ printf '%s\n' "$STATUS_DECIDED" | grep -F "$REQ_REJ" | grep -q 'you declined thi
 printf '%s\n' "$STATUS_DECIDED" | grep -F "$REQ_DEF" | grep -q 'you set this aside' \
   || fail "a deferred change reads as something else: $(printf '%s\n' "$STATUS_DECIDED" | grep -F "$REQ_DEF")"
 
+log "  -- and castle digest renders which decision it was, not a blank record"
+# A decision answer's body is usually empty (defer never invites a
+# comment, approve/reject only make one optional), so without a
+# 'decision:' line the digest for the one record type that carries an
+# authorization prints a bare '### answer <id> (seat: intake)' and
+# nothing else — a resident reading a period's account cold cannot
+# tell an approval from a rejection from a deferral.
+DIGEST_DECIDED="$("$CASTLE" digest)"
+errand_section() {
+  # Everything from "## Errand <id>" up to (not including) the next
+  # "## " heading.
+  awk -v id="$1" '
+    $0 == "## Errand " id { found=1; print; next }
+    found && /^## / { exit }
+    found { print }
+  ' <<<"$DIGEST_DECIDED"
+}
+printf '%s\n' "$(errand_section "$REQ1")" | grep -q '^- decision: approve$' \
+  || fail "the digest does not render 'decision: approve' for the approved change: $(errand_section "$REQ1")"
+printf '%s\n' "$(errand_section "$REQ_REJ")" | grep -q '^- decision: reject$' \
+  || fail "the digest does not render 'decision: reject' for the rejected change: $(errand_section "$REQ_REJ")"
+printf '%s\n' "$(errand_section "$REQ_DEF")" | grep -q '^- decision: defer$' \
+  || fail "the digest does not render 'decision: defer' for the deferred change: $(errand_section "$REQ_DEF")"
+
 # ---------------------------------------------------------------------
 log "stale: a change altered since it was proposed is refused, not guessed at"
 # ---------------------------------------------------------------------

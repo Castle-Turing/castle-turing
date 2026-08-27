@@ -5495,6 +5495,18 @@ def cmd_digest(args: argparse.Namespace) -> int:
             # field 0026 will route an apply step on.
             if rec.type == "result" and rec.fields.get(TARGET_FIELD):
                 print(f"- target: {rec.fields[TARGET_FIELD]}")
+            # And `decision` beside those (docs/tasks/0025-approval.md
+            # §G), presentation only in the same sense: `castle
+            # validate` already checks the field's shape and its
+            # vocabulary, this just stops hiding it. `defer` never
+            # invites a comment and approve/reject only make one
+            # optional, so a decision answer's body is usually empty —
+            # without this line the digest for the one record type
+            # that carries an authorization renders as a bare heading,
+            # and a resident reading a period's account cold cannot
+            # tell an approval from a rejection from a deferral.
+            if rec.type == "answer" and rec.fields.get("decision"):
+                print(f"- decision: {rec.fields['decision']}")
             if rec.body.strip():
                 print()
                 print(rec.body.strip())
