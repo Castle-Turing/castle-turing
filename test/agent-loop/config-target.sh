@@ -25,6 +25,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CASTLE="$REPO_ROOT/agent/castle"
 MODAL="$REPO_ROOT/agent/castle-modal"
 WORKER="$REPO_ROOT/test/agent-loop/scripted-worker-config-target.sh"
+BYTE_WORKER="$REPO_ROOT/test/agent-loop/scripted-worker-byte-fidelity.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-config-target.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -201,6 +202,36 @@ blocking_question_for() {
 # that exclusion and strengthens the assertion: nothing whatsoever
 # legitimately writes inside either checkout now, so any change at all
 # is a failure.
+# Extracts the diff a record's body renders, using the SAME logic a
+# real reader uses rather than a second, hand-rolled re-implementation
+# of it: agent/castle-modal's own `_split_proposal_body`, imported and
+# called directly (docs/tasks/0033-byte-exact-proposal.md's
+# verification plan). This is deliberately how a resident's own review
+# screen sees the diff, splitlines()-round-trip and all — the exact
+# transform this task's sidecar exists to route around.
+extract_record_diff() {
+  local record="$1" out="$2"
+  python3 - "$CASTLE" "$MODAL" "$record" "$out" <<'EXTRACT'
+import importlib.machinery, importlib.util, pathlib, sys
+
+def load_module(path, name):
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_file_location(name, path, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+castle_path, modal_path, record_path, out_path = sys.argv[1:5]
+castle = load_module(castle_path, "castle_lib_bf")
+modal = load_module(modal_path, "castle_modal_lib_bf")
+
+rec = castle.parse_record(pathlib.Path(record_path))
+_where, _diagnosis, diff = modal._split_proposal_body(castle, rec)
+with open(out_path, "wb") as f:
+    f.write(diff.encode("utf-8"))
+EXTRACT
+}
+
 assert_checkouts_untouched() {
   local where="$1"
   [ -z "$(git -C "$PRIVATE" status --porcelain)" ] \
@@ -851,13 +882,193 @@ assert_checkouts_untouched "after the resumption"
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
+log "byte fidelity: the sidecar carries the tenant's exact bytes (docs/tasks/0033-byte-exact-proposal.md)"
+# ---------------------------------------------------------------------
+# The fixture bytes are built exactly once, here, with printf — never
+# pasted as literal characters in this file — so this harness's own
+# source stays plain, valid UTF-8 even for the invalid-UTF-8 case
+# below. scripted-worker-byte-fidelity.sh only `cp`s from this
+# directory; it never constructs a byte sequence itself, so there is
+# one spelling of each adversarial case, not two that could drift.
+BYTE_FIDELITY_DIR="$WORKDIR/byte-fidelity"
+mkdir -p "$BYTE_FIDELITY_DIR"
+
+# CRLF line endings: a unified diff adding a new file whose content
+# lines end \r\n. A "new file" diff so applying it needs no matching
+# context in the checkout it targets.
+printf -- '--- /dev/null\n+++ b/byte-fidelity-crlf.txt\n@@ -0,0 +1,3 @@\n+line one\r\n+line two\r\n+line three\r\n' \
+  > "$BYTE_FIDELITY_DIR/crlf.diff"
+
+# A form feed (\f) inside a content line, not at either end — so
+# str.splitlines()'s treatment of \f as a line break (not str.strip()'s
+# whitespace trimming at the ends) is what this case isolates.
+printf -- '--- /dev/null\n+++ b/byte-fidelity-formfeed.txt\n@@ -0,0 +1,1 @@\n+before\fafter\n' \
+  > "$BYTE_FIDELITY_DIR/formfeed.diff"
+
+# U+2028 LINE SEPARATOR (UTF-8: e2 80 a8), also inside a content line.
+# Valid UTF-8, so the lenient decode (transform 1) does not touch it —
+# only the splitlines() round trip (transform 4) can lose it.
+printf -- '--- /dev/null\n+++ b/byte-fidelity-u2028.txt\n@@ -0,0 +1,1 @@\n+before\xe2\x80\xa8after\n' \
+  > "$BYTE_FIDELITY_DIR/u2028.diff"
+
+# One byte that is not valid UTF-8 on its own (a lone continuation
+# byte). Generated with printf, never pasted, per the same rule as the
+# rest of this block.
+printf -- '--- /dev/null\n+++ b/byte-fidelity-invalid.txt\n@@ -0,0 +1,1 @@\n+before\x80after\n' \
+  > "$BYTE_FIDELITY_DIR/invalid-utf8.diff"
+
+# No trailing newline at all — the last byte of the file is the last
+# character of the patch, not a newline.
+printf -- '--- /dev/null\n+++ b/byte-fidelity-notrail.txt\n@@ -0,0 +1,2 @@\n+line one\n+line two' \
+  > "$BYTE_FIDELITY_DIR/no-trailing-newline.diff"
+
+export CASTLE_BYTE_FIDELITY_DIR="$BYTE_FIDELITY_DIR"
+
+# One helper, reused by every case below: dispatch the errand, find its
+# result, confirm the sidecar exists and byte-matches exactly what the
+# tenant copied from — the harness's own fixture file, not a second
+# hand-typed copy of it.
+run_byte_fidelity_case() {
+  local marker="$1" fixture="$2"
+  local req result sidecar
+  req="$("$CASTLE" ask "$marker: an invented probe exercising one byte-fidelity case.")"
+  CASTLE_WORKER_COMMAND="$BYTE_WORKER" "$CASTLE" work "$req" >/dev/null
+  result="$(newest_result_for "$req")"
+  [ -n "$result" ] || fail "$marker: no result written"
+  grep -q '^outcome: completed$' "$result" || fail "$marker: the turn did not complete"
+  grep -q "^${PATCH_SHA256_FIELD}: " "$result" \
+    || fail "$marker: the result carries no patch-sha256 field"
+  sidecar="${result%.md}.patch"
+  [ -f "$sidecar" ] || fail "$marker: no sidecar file was written beside the result"
+  cmp -s "$sidecar" "$BYTE_FIDELITY_DIR/$fixture" \
+    || fail "$marker: the sidecar is not byte-identical to what the tenant wrote"
+  printf '%s\n' "$result"
+}
+
+PATCH_SHA256_FIELD="patch-sha256"
+
+log "  -- CRLF: sidecar applies cleanly; the record body's copy does not, or applies to different content"
+R_CRLF="$(run_byte_fidelity_case BYTE-FIDELITY-FIXTURE-CRLF crlf.diff)"
+SIDECAR_CRLF="${R_CRLF%.md}.patch"
+extract_record_diff "$R_CRLF" "$WORKDIR/crlf-extracted.diff"
+cmp -s "$WORKDIR/crlf-extracted.diff" "$BYTE_FIDELITY_DIR/crlf.diff" \
+  && fail "CRLF: the record body's copy is byte-identical to the raw bytes — the contrast this task exists to prove did not happen"
+
+CRLF_CLONE_SIDECAR="$WORKDIR/crlf-clone-sidecar"
+CRLF_CLONE_BODY="$WORKDIR/crlf-clone-body"
+git clone -q "$PRIVATE" "$CRLF_CLONE_SIDECAR"
+git clone -q "$PRIVATE" "$CRLF_CLONE_BODY"
+(cd "$CRLF_CLONE_SIDECAR" && git apply --check "$SIDECAR_CRLF") \
+  || fail "CRLF: git apply --check rejected the sidecar's own bytes against a fresh clone"
+(cd "$CRLF_CLONE_SIDECAR" && git apply "$SIDECAR_CRLF") 2>/dev/null \
+  || fail "CRLF: git apply (not --check) rejected the sidecar's own bytes"
+if (cd "$CRLF_CLONE_BODY" && git apply --check "$WORKDIR/crlf-extracted.diff") 2>/dev/null; then
+  # It applied — the weaker of the two outcomes the brief allows. What
+  # must still be true is that it produced DIFFERENT file content than
+  # the sidecar's real apply did, or CRLF fidelity was not actually
+  # lost anywhere observable.
+  (cd "$CRLF_CLONE_BODY" && git apply "$WORKDIR/crlf-extracted.diff") \
+    || fail "CRLF: the record body's copy passed --check but failed a real apply"
+  cmp -s "$CRLF_CLONE_SIDECAR/byte-fidelity-crlf.txt" "$CRLF_CLONE_BODY/byte-fidelity-crlf.txt" \
+    && fail "CRLF: both the sidecar and the record body's copy applied to IDENTICAL file content — CRLF fidelity was not actually lost"
+  log "  -- record body's copy applied, but to different (CRLF-stripped) content — confirmed"
+else
+  log "  -- record body's copy correctly refused by git apply --check"
+fi
+"$CASTLE" validate >/dev/null
+
+log "  -- form feed: sidecar exact, record body's copy diverges (splitlines() treats \\f as a line break)"
+R_FF="$(run_byte_fidelity_case BYTE-FIDELITY-FIXTURE-FORMFEED formfeed.diff)"
+extract_record_diff "$R_FF" "$WORKDIR/formfeed-extracted.diff"
+cmp -s "$WORKDIR/formfeed-extracted.diff" "$BYTE_FIDELITY_DIR/formfeed.diff" \
+  && fail "form feed: the record body's copy is byte-identical to the raw bytes — expected the splitlines() divergence to be observable"
+
+log "  -- U+2028 LINE SEPARATOR: sidecar exact, record body's copy diverges"
+R_U2028="$(run_byte_fidelity_case BYTE-FIDELITY-FIXTURE-U2028 u2028.diff)"
+extract_record_diff "$R_U2028" "$WORKDIR/u2028-extracted.diff"
+cmp -s "$WORKDIR/u2028-extracted.diff" "$BYTE_FIDELITY_DIR/u2028.diff" \
+  && fail "U+2028: the record body's copy is byte-identical to the raw bytes — expected the splitlines() divergence to be observable"
+
+log "  -- invalid UTF-8 byte: sidecar exact, record body's copy substitutes U+FFFD"
+R_BADUTF8="$(run_byte_fidelity_case BYTE-FIDELITY-FIXTURE-INVALIDUTF8 invalid-utf8.diff)"
+extract_record_diff "$R_BADUTF8" "$WORKDIR/invalid-utf8-extracted.diff"
+cmp -s "$WORKDIR/invalid-utf8-extracted.diff" "$BYTE_FIDELITY_DIR/invalid-utf8.diff" \
+  && fail "invalid UTF-8: the record body's copy is byte-identical to the raw bytes — errors=\"replace\" should have substituted the invalid byte"
+grep -qF $'\xef\xbf\xbd' "$R_BADUTF8" \
+  || fail "invalid UTF-8: the record body does not contain a U+FFFD replacement character where the invalid byte was"
+
+log "  -- no trailing newline: the sidecar preserves the missing final newline exactly"
+R_NOTRAIL="$(run_byte_fidelity_case BYTE-FIDELITY-FIXTURE-NONEWLINE no-trailing-newline.diff)"
+# The cmp inside run_byte_fidelity_case is the assertion that matters
+# here: the sidecar's last byte is 'o', not a newline, exactly as the
+# tenant wrote it.
+
+assert_checkouts_untouched "after the byte-fidelity cases"
+"$CASTLE" validate >/dev/null
+
+# ---------------------------------------------------------------------
+log "castle validate red/green matrix: patch-sha256"
+# ---------------------------------------------------------------------
+# Reuses the CRLF case's already-completed, already-valid turn as the
+# green baseline, mutating and restoring it once per red case so a
+# later assertion never sees a case this block itself left broken.
+#
+# Output is captured to a file and grepped separately from the
+# validate call, deliberately not `validate 2>&1 | grep -q ...`: under
+# `set -o pipefail` (this file's own setting) a pipeline reports the
+# last NON-ZERO stage, not the last stage — so with `castle validate`
+# expected to fail and `grep -q` expected to succeed, that pattern
+# reports the pipeline as failed even when the grep matched exactly
+# what it was looking for. Caught by this harness failing on its own
+# correct output the first time this block was written.
+validate_output="$WORKDIR/validate-output.log"
+
+log "  -- red: a tampered sidecar"
+cp "$SIDECAR_CRLF" "$WORKDIR/sidecar-backup.patch"
+printf 'x' >> "$SIDECAR_CRLF"
+"$CASTLE" validate >/dev/null 2>&1 && fail "castle validate passed with a tampered sidecar"
+"$CASTLE" validate > "$validate_output" 2>&1 || true
+grep -q "does not match the sidecar" "$validate_output" \
+  || fail "the tampered-sidecar error does not name the mismatch"
+cp "$WORKDIR/sidecar-backup.patch" "$SIDECAR_CRLF"
+"$CASTLE" validate >/dev/null || fail "castle validate did not recover once the sidecar was restored"
+
+log "  -- red: a deleted sidecar"
+mv "$SIDECAR_CRLF" "$WORKDIR/sidecar-moved.patch"
+"$CASTLE" validate >/dev/null 2>&1 && fail "castle validate passed with a deleted sidecar"
+"$CASTLE" validate > "$validate_output" 2>&1 || true
+grep -q "no sidecar file exists" "$validate_output" \
+  || fail "the deleted-sidecar error does not say a sidecar is missing"
+mv "$WORKDIR/sidecar-moved.patch" "$SIDECAR_CRLF"
+"$CASTLE" validate >/dev/null || fail "castle validate did not recover once the sidecar was restored"
+
+log "  -- red: a malformed patch-sha256"
+cp "$R_CRLF" "$WORKDIR/record-backup.md"
+sed -i 's/^patch-sha256: .*/patch-sha256: not-a-hex-value/' "$R_CRLF"
+"$CASTLE" validate >/dev/null 2>&1 && fail "castle validate passed with a malformed patch-sha256"
+"$CASTLE" validate > "$validate_output" 2>&1 || true
+grep -q "is not 64 lowercase hex characters" "$validate_output" \
+  || fail "the malformed-field error does not name the hex-shape problem"
+cp "$WORKDIR/record-backup.md" "$R_CRLF"
+"$CASTLE" validate >/dev/null || fail "castle validate did not recover once the record was restored"
+
+log "  -- green: a result with neither diff-boundary nor patch-sha256 at all"
+# $R_NOMECH, from the mechanism block above: a completed turn that
+# proposed nothing. Absent means absent — no sidecar expected.
+grep -q "^${PATCH_SHA256_FIELD}:" "$R_NOMECH" \
+  && fail "the no-proposal result unexpectedly carries a patch-sha256 field"
+[ ! -f "${R_NOMECH%.md}.patch" ] \
+  || fail "a sidecar exists beside a result that stamped no patch-sha256"
+"$CASTLE" validate >/dev/null || fail "castle validate is not green on a journal with no mutations left in it"
+
+# ---------------------------------------------------------------------
 log "assertion 11: no home-shaped path in anything this fixture commits to the repo"
 # ---------------------------------------------------------------------
 # CLAUDE.md's hard rule, checked mechanically rather than trusted. Every
 # path used at runtime above is $WORKDIR-derived; the only home-shaped
 # literal permitted in a committed file is the /home/resident/...
 # placeholder this repo already publishes elsewhere.
-LEAKS="$(grep -nE '(/home/|\$HOME)' "$WORKER" "${BASH_SOURCE[0]}" | grep -v '/home/resident' || true)"
+LEAKS="$(grep -nE '(/home/|\$HOME)' "$WORKER" "$BYTE_WORKER" "${BASH_SOURCE[0]}" | grep -v '/home/resident' || true)"
 [ -z "$LEAKS" ] || fail "a home-shaped path leaked into a committed fixture file:
 $LEAKS"
 
