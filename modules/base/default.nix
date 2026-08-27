@@ -245,10 +245,14 @@ in
     # already needs to read /etc/shadow for this, so it runs as a
     # systemd service rather than in each interactive shell (which runs
     # as the resident, with no shadow access). It leaves a marker file
-    # behind once they differ, i.e. once `passwd` has actually been run;
-    # the marker (not the hash) is what the unprivileged shell-startup
-    # banner checks, so nagging genuinely stops the moment the password
-    # changes rather than running forever. The check re-runs at boot and
+    # behind once they differ *and the account actually has a password*
+    # — i.e. once `passwd` has genuinely been run; the marker (not the
+    # hash) is what the unprivileged shell-startup banner checks, so
+    # nagging genuinely stops the moment the password changes rather
+    # than running forever. "Differ" alone is not enough to conclude
+    # that, and the `case` in the script below is where that is
+    # enforced — read its comment before simplifying it away.
+    # The check re-runs at boot and
     # (via the path unit below) immediately whenever /etc/shadow is
     # touched, so it catches a same-session `passwd` too, not just the
     # next reboot.
@@ -289,6 +293,41 @@ in
         current="$(${pkgs.gnugrep}/bin/grep -m1 -E ${
           lib.escapeShellArg ("^" + cfg.username + ":")
         } /etc/shadow | ${pkgs.coreutils}/bin/cut -d: -f2)"
+        case "$current" in
+          '!' | '!!' | '*' | "")
+            # The account has NO usable password: these are the shadow
+            # values update-users-groups.pl writes when the seed did not
+            # resolve at account creation, plus the conventional
+            # no-password markers. Say nothing, exactly as the
+            # unreadable-seed branch above does.
+            #
+            # Without this branch the check reads that state as "the
+            # resident changed their password" -- the shadow field is
+            # readable, the seed is readable, and they differ -- and
+            # touches the marker, silencing the banner forever. That
+            # inference was sound only while the seed was a build-time
+            # string, where shadow always equalled it at creation. It
+            # stopped being sound the moment the seed became a runtime
+            # file that can fail to decrypt: a first install with a
+            # missing or wrong age key creates the account locked, and
+            # (because mutableUsers leaves an existing account's shadow
+            # entry alone) fixing the key and rebuilding never repairs
+            # it. See docs/tasks/0032-password-hash.md "The lockout
+            # story", whose SSH-and-passwd recovery is exactly the path
+            # a resident needs to be told about here.
+            #
+            # The consequence, stated rather than glossed: on a fresh
+            # failed install the marker is absent, so the banner claims
+            # the account "is still using its seeded initial password"
+            # when in truth it has none. That is imprecise, and it is
+            # the right trade -- it points at `passwd`, which is the
+            # actual remedy. Asserting "password changed" from the
+            # absence of evidence is the failure shape
+            # docs/tasks/0015-filed-not-in-progress.md names: a label
+            # that causes the inaction it describes.
+            exit 0
+            ;;
+        esac
         if [ "$current" = "$seed" ]; then
           rm -f "$marker"
         else
