@@ -258,8 +258,17 @@ STAMP="$(sed -n 's/^proposal-sha256: //p' "$JOURNAL/$Q1.md")"
 log "  -- the notification a resident receives says what it is and that nothing was applied"
 grep -q 'Nothing has been applied' "$CASTLE_NOTIFY_LOG" \
   || fail "no notification carried the proposal's own first line: $(cat "$CASTLE_NOTIFY_LOG")"
+# "answer" names the wrong act on a proposed change, on the only push
+# channel this system has and the one surface bound hardest by "no
+# internal vocabulary" — the same defect `_show_picker`'s `action`
+# parameter and `_errand_state`'s three-way verb already fix one screen
+# over. The chord itself is unchanged and must stay unchanged:
+# `Mod4+Shift+a` is a real binding in the `modules/home` keybindings
+# attrset — CHORD COUPLING, same as the two in `agent/castle`.
+grep -q 'Press Mod4+Shift+a to review' "$CASTLE_NOTIFY_LOG" \
+  || fail "the proposal notification does not tell the resident how to reach it, in the right verb: $(cat "$CASTLE_NOTIFY_LOG")"
 grep -q 'Press Mod4+Shift+a to answer' "$CASTLE_NOTIFY_LOG" \
-  || fail "the proposal notification does not tell the resident how to reach it"
+  && fail "the proposal notification still tells the resident to ANSWER a change: $(cat "$CASTLE_NOTIFY_LOG")"
 
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after a proposal is filed"
 assert_checkouts_untouched "after the first proposal was filed"
@@ -329,6 +338,21 @@ BEFORE_RESULTS="$(count_referencing result "$REQ1")"
 [ "$(count_referencing result "$REQ1")" -eq "$BEFORE_RESULTS" ] \
   || fail "approving a change started another worker turn — the proposal question is resumable after all"
 assert_checkouts_untouched "after two sweeps following an approval"
+
+log "  -- the control for the notification's verb: an ORDINARY question still says 'answer'"
+# Without this, the "review" assertion above is satisfied by a change
+# that says "review" on every question in the system, including the
+# ones this task never touched. Filed here, after the last sweep of the
+# run, and on an errand of its own: nothing else in this file asserts
+# anything about it, and no dispatch follows to give it a worker turn
+# and a change of its own.
+REQ_ORDINARY="$("$CASTLE" ask "APPROVAL-FIXTURE-ORDINARY: an invented complaint whose question is an ordinary one.")"
+ORDINARY_Q="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$REQ_ORDINARY" --body "APPROVAL-FIXTURE-ORDINARY-QUESTION: an invented ordinary question, not a change.")"
+"$CASTLE" route >/dev/null
+grep -q 'APPROVAL-FIXTURE-ORDINARY-QUESTION.*Press Mod4+Shift+a to answer' "$CASTLE_NOTIFY_LOG" \
+  || fail "an ordinary question's notification no longer names answering: $(cat "$CASTLE_NOTIFY_LOG")"
+"$CASTLE" answer "$ORDINARY_Q" "An invented reply." >/dev/null
 
 log "  -- the status surface says approved, and says nothing was applied"
 STATUS_APPROVED="$("$MODAL" --mode status --limit 40)"

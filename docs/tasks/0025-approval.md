@@ -971,6 +971,23 @@ reject, or set it aside."* with no code change to `_fire_notification`
 or `cmd_route` — stated here as a fix earned for free by writing the
 question the way §B specifies, not as separate work.
 
+**Corrected after the second review pass: the *hint* did need a code
+change, and this section's "no code change" claim was wrong about it.**
+`cmd_route` appends `" Press Mod4+Shift+a to answer."` to every
+`question` record it notifies, proposals included — so the first line
+said "approve, reject, or set it aside" and the sentence after it told
+the resident to go and *answer*. That is the wrong verb, on the only
+push channel this system has, and this task had already grown
+`_show_picker`'s `action` parameter and `_errand_state`'s three-way
+verb for exactly the same reason two surfaces over. The verb is now
+selected from `PROPOSAL_SHA256_FIELD`, the same predicate every other
+surface uses; two-way rather than three-way, because a notification
+fires per record and there is no mixed case to fall back for. The
+chord is unchanged — `Mod4+Shift+a` is a real binding in
+`modules/home/default.nix` and the CHORD COUPLING comments still hold.
+`approval.sh` asserts the proposal's "review" and, as its control, an
+ordinary question's unchanged "answer".
+
 ### J. `castle digest` learns to print `target`
 
 `cmd_digest`'s errand fold currently never surfaces a result's

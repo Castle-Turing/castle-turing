@@ -2524,7 +2524,28 @@ def _route_journal_locked() -> int:
                 # notification body is wrapped by the daemon anyway, so
                 # the newline bought nothing and cost a false failure in
                 # a harness this task does not otherwise touch.
-                hint = " Press Mod4+Shift+a to answer."
+                #
+                # **The verb names the act, and a proposal is not
+                # answered.** Selected from `PROPOSAL_SHA256_FIELD`, the
+                # same predicate `_errand_state`'s three-way overlay
+                # and castle-modal's picker use — never from the
+                # wording. This is the surface `PROPOSAL_QUESTION_BODY`
+                # calls "bound hardest by no internal vocabulary", and
+                # it is the only push channel this system has, so
+                # telling a resident to go and *answer* a change they
+                # are being asked to approve, reject or set aside is
+                # the wrong instruction on the one line they may read
+                # without opening anything.
+                #
+                # Two-way here, not three-way: a notification is fired
+                # per record, so there is exactly one question in view
+                # and no mixed case to fall back for.
+                verb = (
+                    "review"
+                    if rec.fields.get(PROPOSAL_SHA256_FIELD, "").strip()
+                    else "answer"
+                )
+                hint = f" Press Mod4+Shift+a to {verb}."
                 notification_body = summary[: 200 - len(hint)] + hint
             _fire_notification(f"Castle Turing — {rec.type}", notification_body)
 
