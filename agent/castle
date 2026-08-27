@@ -502,7 +502,7 @@ def parse_record(path: pathlib.Path) -> Record:
     keeps `grep '^type: decision'` a valid way to query the journal.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RecordError(f"cannot read {path}: {exc}") from exc
 
@@ -1275,7 +1275,7 @@ def write_record(
     _reject_line_breaking_fields(fields, what="record")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{record_id}.md"
-    path.write_text(render_record(fields, body))
+    path.write_text(render_record(fields, body), encoding="utf-8")
     return record_id
 
 

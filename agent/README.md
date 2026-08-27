@@ -658,6 +658,13 @@ to query the journal without running any tool at all. The cost is real:
 nobody is putting a paragraph of structured metadata in a frontmatter
 field. That trade is intentional — prose belongs in the body.
 
+**Records are UTF-8 by definition.** `parse_record` and `write_record`
+both pass `encoding="utf-8"` explicitly (docs/tasks/0033-byte-exact-
+proposal.md) — not a new constraint, but the assumption every fixture,
+example and piece of hand-written prose in this repo already made,
+now enforced at the one call site each direction passes through
+instead of left to whatever the host's locale happened to be.
+
 ### Required fields (every record)
 
 | Field        | Meaning                                                              |
@@ -1189,6 +1196,17 @@ The markdown fence stays, *inside* the boundary, so the record still
 renders as a diff wherever a journal is read as markdown. It is
 decoration now, not structure: nothing keys on it.
 
+**As of `docs/tasks/0033-byte-exact-proposal.md`, that "decoration, not
+structure" status extends to the entire body copy of the diff, not
+only the fence around it.** The body is read through a lenient decode
+(`errors="replace"`) and a `splitlines()`-based round trip that both
+lose information a real patch can depend on: a stray non-UTF-8 byte, a
+CRLF line ending, a form feed, a Unicode line separator, or a missing
+trailing newline. None of that matters for what the body is *for* —
+showing a human what changed — but it means the body must never be
+read back for fidelity. The byte-exact copy is a sidecar file next to
+the record; see "The byte-exact sidecar" below.
+
 Validated **when present**, result-only, and shape-checked as sixteen
 lowercase hex characters — `blocking`'s and `target`'s treatment, for
 the same reasons. Absent means "this result embeds no diff", which is
@@ -1290,6 +1308,48 @@ reversible by design — and it is a posture rather than a strategy;
 see `docs/backlog/approval-channel-has-no-transfer-of-control-
 strategy.md` before copying it anywhere a third party is on the other
 end.
+
+### The byte-exact sidecar: `patch-sha256`
+
+From `docs/tasks/0033-byte-exact-proposal.md`. A result's body embeds
+the tenant's diff for a human to read, but getting there costs four
+lossy transforms — a lenient UTF-8 decode with `errors="replace"`, a
+`.strip()` that drops a trailing newline, and a `splitlines()`-based
+round trip that treats CR, form feed and the Unicode line separators
+as line breaks the same way `\n` is. None of that is a defect in what
+the body is *for*; it is a defect in trusting the body for anything
+else. Once an applier exists (`docs/tasks/0026`), "anything else" is
+exactly what it needs: the tenant's exact bytes, undisturbed.
+
+So a completed, targeted turn writes a second file beside the record,
+`<result-id>.patch`, holding the tenant's diff exactly as it wrote it
+to `$CASTLE_DIFF_FILE` — read once, before the lenient decode ever
+runs, and never modified afterward. `patch-sha256`, stamped on the
+result alongside `diff-boundary`, is that sidecar's SHA-256. `castle
+validate` checks it: the sidecar a stamped record names must exist and
+must hash to the stamped value. Absent means "this result embeds no
+diff," the same reading `diff-boundary` already gives absence, and
+`castle validate` does not go looking for a sidecar nothing names.
+
+The sidecar lives inside the journal directory, so `docs/tasks/0030`'s
+state-layout rules already cover it with no separate check, and it is
+invisible to every existing reader: `load_all` and `cmd_validate` both
+glob `*.md` only, so a `.patch` file is never fed to `parse_record` by
+anything that walks the journal today.
+
+**The one-sentence distinction from `proposal-sha256`:**
+`proposal-sha256` is record-tamper evidence — has this exact record
+file changed since the proposal was filed? `patch-sha256` is
+byte-fidelity evidence — are these the exact bytes the tenant
+produced, unmangled by anything this record format's own transforms do
+to a body? A result can carry one, the other, both (the normal case
+for a completed, targeted turn), or neither.
+
+Like `proposal-sha256`, this is tamper/fidelity evidence only — not a
+signature, not an attestation of authorship, and not anything that
+applies a change. Nothing reads it yet: `docs/tasks/0026` is named
+throughout the task that added it as the sidecar's first real
+consumer.
 
 ### Corrections and filing-time context
 
