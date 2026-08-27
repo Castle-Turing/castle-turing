@@ -906,6 +906,32 @@ def _split_proposal_body(castle, result) -> tuple[str, str, str]:
     return where, "\n".join(kept).strip(), "\n".join(diff_lines)
 
 
+def _proposal_result(castle, question, records: dict):
+    """The result record a proposal question is about, or None.
+
+    `refs[1]` is the proposal, by the "first ref is lineage, later refs
+    are context" convention (docs/tasks/0025-approval.md §A) — and the
+    type is checked, not assumed, so this is the same predicate
+    `file_answer` refuses on as `proposal_unresolvable`. One function,
+    because the render and the pre-flight that decides whether to
+    render at all must not be able to disagree about whether a proposal
+    resolves.
+
+    The fold is consulted first and the journal only as a fallback, the
+    order the render has always used: a caller that already loaded the
+    journal should not pay for a second read, and a question reached by
+    id alone still resolves.
+    """
+    if len(question.refs) < 2:
+        return None
+    result = records.get(question.refs[1]) or castle.load_journal_record(
+        question.refs[1]
+    )
+    if result is None or result.type != "result":
+        return None
+    return result
+
+
 def _pending_proposals(castle, records: dict) -> list:
     """Every unanswered proposal, oldest first — `_pending_questions`
     narrowed to the ones this mode decides, with the same fold and the
@@ -926,12 +952,9 @@ def _render_proposal(castle, question, records: dict, out) -> None:
     here checked (Hodges et al., on checklists inverting the expertise
     ordering — docs/backlog/legible-history-calibrated-trust.md).
     """
-    result = None
-    if len(question.refs) > 1:
-        result = records.get(question.refs[1]) or castle.load_journal_record(
-            question.refs[1]
-        )
-    where, diagnosis, diff = _split_proposal_body(castle, result)
+    where, diagnosis, diff = _split_proposal_body(
+        castle, _proposal_result(castle, question, records)
+    )
 
     print(question.body.strip() or "(no text)", file=out)
     about = _about_line(castle, records, question)
@@ -1047,7 +1070,33 @@ def run_review_for(castle, question, records: dict, out=sys.stdout, *, interacti
     Returns 0 for a decision and for a dismissal alike — looking and
     choosing not to decide is a successful use of this surface, and it
     writes nothing at all.
+
+    **A proposal that resolves to nothing is refused before the keys
+    are offered, not after they are pressed.** `file_answer` refuses it
+    either way and nothing is ever written, so this is not a
+    data-integrity fix; it is that a screen granting authority must not
+    print the boundary statement, offer `[a]pprove [r]eject [d]efer`,
+    and take a comment for a change it has already established it
+    cannot show. With no result to split, `where`, the diagnosis and
+    the diff were all empty — the resident was asked to authorize a
+    blank. Reachable through the picker: a question carrying the stamp
+    is pending whatever its `refs` say, which is the shape
+    `modal-headless-test.sh`'s own `plant_bare_proposal` creates.
+
+    The refusal is `file_answer`'s own `proposal_unresolvable`, raised
+    here and rendered by `_answer_refusal`, so this pre-flight cannot
+    come to say something different from the write path it is
+    pre-empting.
     """
+    if _proposal_result(castle, question, records) is None:
+        print(
+            _answer_refusal(
+                castle.AnswerRefused("proposal_unresolvable", question_id=question.id)
+            ),
+            file=sys.stderr,
+        )
+        _pause_for_dismissal(out)
+        return 1
     if interactive:
         _resize_for_review()
     key = _render_and_read(castle, question, records, out, interactive=interactive)

@@ -1313,6 +1313,33 @@ plant_proposal() {
   echo "$question_id"
 }
 
+plant_bare_proposal() {
+  # Usage: plant_bare_proposal <request-id>; echoes the question id.
+  # A minimal, `castle validate`-clean question carrying a
+  # syntactically valid proposal-sha256 stamp and no result at all —
+  # enough for `_is_proposal`'s own check, which is the stamp and not a
+  # matching result. Two callers now: the overlay-wording assertions at
+  # the end of this file, and the refusal case below, where a proposal
+  # naming no result is exactly the shape review mode must decline to
+  # offer keys for.
+  local req="$1"
+  local qid="${req}-bareprop"
+  {
+    echo "---"
+    echo "id: $qid"
+    echo "type: question"
+    echo "provenance: requested"
+    echo "refs: $req"
+    echo "seat: worker"
+    echo "created: 2026-02-01T00:00:00Z"
+    echo "proposal-sha256: $(printf '%s' "$qid" | sha256sum | cut -d' ' -f1)"
+    echo "---"
+    echo
+    echo "A bare proposal fixture, only for overlay-wording assertions."
+  } > "$CASTLE_STATE_DIR/journal/$qid.md"
+  echo "$qid"
+}
+
 REVIEW_Q="$(plant_proposal 20260301T000100Z "The value it uses now is too small to read at arm's length, so this raises it." -)"
 "$CASTLE" validate || fail "the planted proposal fixture does not validate"
 
@@ -1449,6 +1476,34 @@ if printf 'a\n' | "$MODAL" --mode review --question "$ORDINARY_Q" 2>"$WORKDIR/re
 fi
 grep -q "not a proposed change" "$WORKDIR/review-ordinary.err" \
   || fail "review mode's not-a-change refusal said something else: $(cat "$WORKDIR/review-ordinary.err")"
+
+log "review mode: a change that resolves to nothing is refused BEFORE the keys are offered"
+# `file_answer` refuses this either way and nothing is written, so this
+# is not about data integrity. It is that the boundary statement, the
+# three keys and the optional-comment prompt were all printed for a
+# change the surface had already established it could not show: `where`,
+# the account and the diff were every one of them empty, and the
+# resident was asked to authorize a blank screen. On the one screen
+# where authority is granted, the refusal comes first.
+BARE_Q="$(plant_bare_proposal "$REVIEW_REQ")"
+"$CASTLE" validate || fail "the bare-proposal fixture does not validate"
+if printf 'a\n' | "$MODAL" --mode review --question "$BARE_Q" \
+  >"$WORKDIR/review-bare.txt" 2>"$WORKDIR/review-bare.err"; then
+  fail "review mode offered a decision on a change it cannot resolve"
+fi
+grep -q "can't find the change that was proposed, nothing filed." "$WORKDIR/review-bare.err" \
+  || fail "the unresolvable-change refusal said something else: $(cat "$WORKDIR/review-bare.err")"
+BARE_OUT="$(tr -d '\r' < "$WORKDIR/review-bare.txt")"
+refute "$BARE_OUT" '\[a\]pprove' \
+  "the keys were offered for a change the surface could not resolve"
+refute "$BARE_OUT" "NOTHING ON THIS MACHINE IS EDITED" \
+  "the boundary statement was printed for a change the surface could not resolve"
+refute "$BARE_OUT" "Anything you want to say about it" \
+  "the comment prompt ran for a change the surface could not resolve"
+# Removed rather than decided: `clear_pending_changes` below closes
+# every pending change with a real `castle answer --decision defer`,
+# which this one — by construction — is refused for.
+rm -f "$CASTLE_STATE_DIR/journal/$BARE_Q.md"
 "$CASTLE" validate || fail "the journal does not validate after review mode's refusals"
 
 # Each of the two cases below needs a fold it fully controls: an
@@ -1624,31 +1679,6 @@ log "status overlay: the verb names what is actually waiting, not always 'answer
 # same kind-agnostic wording this file already reaches for elsewhere
 # ("to see what is waiting on them", above run_answer's branch into
 # review mode).
-plant_bare_proposal() {
-  # Usage: plant_bare_proposal <request-id>; echoes the question id.
-  # A minimal, `castle validate`-clean question carrying a
-  # syntactically valid proposal-sha256 stamp and no result at all —
-  # enough for `_is_proposal`'s own check (the stamp, not a matching
-  # result) since this only exercises overlay wording, never review
-  # mode's rendering.
-  local req="$1"
-  local qid="${req}-bareprop"
-  {
-    echo "---"
-    echo "id: $qid"
-    echo "type: question"
-    echo "provenance: requested"
-    echo "refs: $req"
-    echo "seat: worker"
-    echo "created: 2026-02-01T00:00:00Z"
-    echo "proposal-sha256: $(printf '%s' "$qid" | sha256sum | cut -d' ' -f1)"
-    echo "---"
-    echo
-    echo "A bare proposal fixture, only for overlay-wording assertions."
-  } > "$CASTLE_STATE_DIR/journal/$qid.md"
-  echo "$qid"
-}
-
 REQ_ALLPROP="$("$CASTLE" ask "ALLPROP-FIXTURE: an errand whose only unanswered question is a proposed change.")"
 plant_bare_proposal "$REQ_ALLPROP" >/dev/null
 "$CASTLE" validate || fail "the all-proposal overlay fixture does not validate"

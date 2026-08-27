@@ -1290,6 +1290,20 @@ made against the shape the journal now has.
   friendly "nothing waiting" exit come first turns every one of them
   into exit 0 with prose), *then* the empty-fold line, *then* the
   refusal for a piped caller with changes pending and no `--question`.
+- **A proposal that resolves to no result is refused before the keys
+  are offered.** Added in the second review pass. `run_review_for` ran
+  the whole render first — boundary statement, `[a]pprove [r]eject
+  [d]efer`, and the optional-comment prompt — and only then let
+  `file_answer` refuse with `proposal_unresolvable`. Nothing was ever
+  written, so this was not a data-integrity hole; it is that with no
+  result to split, `where`, the diagnosis and the diff are all empty,
+  and the resident was asked to authorize a blank screen. Reachable
+  through the picker, since pendingness keys on the stamp and not on
+  whether `refs[1]` resolves. The pre-flight raises `file_answer`'s own
+  `proposal_unresolvable` and renders it through `_answer_refusal`, so
+  it cannot come to say something different from the write path it
+  pre-empts, and the resolution itself moved into one `_proposal_result`
+  helper the render and the pre-flight share.
 - **An interactive review ignores `--question`**, which this brief did
   not state either way. Answer mode's rule and its reasoning apply
   unchanged, and the stakes are higher: a preselected guess here would
