@@ -742,11 +742,22 @@ printf '%s\n' "$REVIEW_OUT" | tr -d '\r' | grep -qx 'Approved.' \
   || fail "the confirmation is not a bare 'Approved.': $REVIEW_OUT"
 # The boundary statement's own account of what "setting it aside" does
 # must not promise a way back to it — defer is as terminal as reject,
-# and the two used to read as opposites here (finding: the false
-# promise "you can come back to it" survived three reviewers before
-# a resident's own reading of the word caught it).
-printf '%s\n' "$REVIEW_OUT" | grep -q 'Rejecting ends this one, and so does setting it aside' \
+# and this text used to say the opposite outright ("Setting it aside
+# leaves it exactly as it is... if you never come back to it"), drawing
+# the contrast against "Rejecting ends this one" that made the promise
+# explicit. Three independent reviewers found it and the task's own
+# verification did not, which is why the assertion is here rather than
+# left to reading.
+#
+# Both halves are asserted, because each fixes a different defect. That
+# setting aside is final is the correction itself. That the two words
+# still mean different things — reject is a verdict, setting aside is a
+# refusal to reach one — is what keeps a third option from collapsing
+# into a synonym for the second now that both are terminal.
+printf '%s\n' "$REVIEW_OUT" | grep -q 'Both close it for good' \
   || fail "the boundary statement no longer says setting a change aside also ends it: $REVIEW_OUT"
+printf '%s\n' "$REVIEW_OUT" | grep -q 'Setting it aside says you are not' \
+  || fail "the boundary statement no longer distinguishes setting aside from rejecting: $REVIEW_OUT"
 printf '%s\n' "$REVIEW_OUT" | grep -qi 'come back' \
   && fail "the boundary statement still promises a way back to a deferred change: $REVIEW_OUT"
 A_PTY="$(basename "$(answers_naming "$Q_PTY" | head -1)" .md)"

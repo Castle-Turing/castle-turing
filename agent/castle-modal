@@ -699,8 +699,9 @@ NOTHING ON THIS MACHINE IS EDITED, COMMITTED, OR APPLIED BY APPROVING
 IT — no file changes, no `git commit`, no rebuild, no new generation.
 That is true for every change shown here today.
 
-Rejecting ends this one, and so does setting it aside — both close it
-for good. Nothing expires, and nothing decides on your behalf."""
+Rejecting says this change is wrong. Setting it aside says you are not
+deciding it now. Both close it for good — nothing expires, and nothing
+decides on your behalf."""
 
 # The window this mode runs in opens at 720x480 (the fixed geometry
 # modules/home's `window.commands` gives every castle-modal window),

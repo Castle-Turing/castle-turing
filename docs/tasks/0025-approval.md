@@ -713,9 +713,9 @@ What survives, mechanically available without inventing any parsing:
    > **Nothing on this machine is edited, committed, or applied by
    > approving it** — no file changes, no `git commit`, no rebuild, no
    > new generation. That is true for every proposal shown here today.
-   > Rejecting ends this one, and so does setting it aside — both close
-   > it for good. Nothing expires, and nothing decides on your
-   > behalf.*
+   > Rejecting says this change is wrong. Setting it aside says you are
+   > not deciding it now. Both close it for good — nothing expires, and
+   > nothing decides on your behalf.*
 
    This is Proposal 06's "the system may grade its own delivery, never
    its own judgment" and the decision pass's N7 given code: the same
