@@ -393,12 +393,15 @@ log "  -- and castle digest renders which decision it was, not a blank record"
 DIGEST_DECIDED="$("$CASTLE" digest)"
 errand_section() {
   # Everything from "## Errand <id>" up to (not including) the next
-  # "## " heading.
+  # "## " heading. Second arg selects which digest output to read;
+  # defaults to $DIGEST_DECIDED for the callers above that never pass
+  # one.
+  local digest="${2:-$DIGEST_DECIDED}"
   awk -v id="$1" '
     $0 == "## Errand " id { found=1; print; next }
     found && /^## / { exit }
     found { print }
-  ' <<<"$DIGEST_DECIDED"
+  ' <<<"$digest"
 }
 printf '%s\n' "$(errand_section "$REQ1")" | grep -q '^- decision: approve$' \
   || fail "the digest does not render 'decision: approve' for the approved change: $(errand_section "$REQ1")"
@@ -554,6 +557,24 @@ grep -qF "$BOUNDARY" "$WORKDIR/fenced-tenant.sh" \
   && fail "the fixture tenant contains the boundary — this run proves nothing about forgeability"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after a fenced diff"
 assert_checkouts_untouched "after the fenced-diff turn"
+
+log "  -- castle digest strips the nonce boundary lines but keeps the deliberate diff fence"
+# Review mode strips CASTLE-DIFF-<nonce> BEGIN/END before showing a
+# resident anything (_split_proposal_body); the digest printed
+# rec.body.strip() verbatim instead, so a resident's digest carried a
+# bare sixteen-hex-character token twice per proposal.
+DIGEST_FENCED="$("$CASTLE" digest)"
+FENCED_SECTION="$(errand_section "$REQ_FENCED" "$DIGEST_FENCED")"
+printf '%s\n' "$FENCED_SECTION" | grep -qF "CASTLE-DIFF-$BOUNDARY BEGIN" \
+  && fail "the digest leaked the diff's nonce BEGIN line: $FENCED_SECTION"
+printf '%s\n' "$FENCED_SECTION" | grep -qF "CASTLE-DIFF-$BOUNDARY END" \
+  && fail "the digest leaked the diff's nonce END line: $FENCED_SECTION"
+printf '%s\n' "$FENCED_SECTION" | grep -qF '```diff' \
+  || fail "the digest dropped the deliberate diff fence along with the boundary: $FENCED_SECTION"
+for NEEDLE in FENCED-BEFORE-INSIDE FENCED-AFTER-INSIDE FENCED-BEFORE-AFTER FENCED-AFTER-AFTER; do
+  printf '%s\n' "$FENCED_SECTION" | grep -q -- "$NEEDLE" \
+    || fail "$NEEDLE is missing from the digest — stripping the boundary must not touch the diff itself"
+done
 
 # ---------------------------------------------------------------------
 log "castle record refuses an --outcome it would then fail to validate"

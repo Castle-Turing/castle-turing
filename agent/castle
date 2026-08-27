@@ -5411,6 +5411,46 @@ def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record
     return collected
 
 
+def _digest_body(rec: Record) -> str:
+    """A record's body, stripped of its diff's nonce boundary lines if
+    it has any.
+
+    `run_worker_turn` wraps a proposed diff in `CASTLE-DIFF-<nonce>
+    BEGIN` / `END` lines and stamps the nonce in `DIFF_BOUNDARY_FIELD`
+    so review mode can find the diff's exact edges without trusting
+    body content as structure (see `diff_boundary_lines`). Review mode
+    strips those two lines before showing a resident anything; this
+    digest used to print the body verbatim instead, so a resident's
+    digest carried a bare sixteen-hex-character token twice per
+    proposal — meaningless to read and no part of the record's actual
+    content. Reuses `diff_boundary_lines` rather than re-deriving the
+    marker shape, the same way review mode's `_split_proposal_body`
+    does, so the two readers cannot drift apart on what the boundary
+    looks like.
+
+    The ```diff fence stays: it is *inside* the boundary and is
+    deliberate decoration (`diff_boundary_lines`'s own comment), not
+    part of what this strips.
+
+    A record with no `diff-boundary` field, or one whose stamped lines
+    cannot be found (a truncated or hand-edited record), renders whole
+    and unchanged — the documented meaning of "absent" every other
+    reader of this field already gives it.
+    """
+    body = rec.body.strip()
+    boundary = rec.fields.get(DIFF_BOUNDARY_FIELD, "").strip()
+    if not boundary:
+        return body
+    begin, end = diff_boundary_lines(boundary)
+    lines = body.splitlines()
+    try:
+        lines.remove(begin)
+        lines.remove(end)
+    except ValueError:
+        return body
+    return "\n".join(lines).strip()
+
+
 def cmd_digest(args: argparse.Namespace) -> int:
     """Fold the journal into "what happened, and why" (architecture.md's
     digest surface). Invoked by hand — no scheduling in this skeleton.
@@ -5507,9 +5547,10 @@ def cmd_digest(args: argparse.Namespace) -> int:
             # tell an approval from a rejection from a deferral.
             if rec.type == "answer" and rec.fields.get("decision"):
                 print(f"- decision: {rec.fields['decision']}")
-            if rec.body.strip():
+            body = _digest_body(rec)
+            if body:
                 print()
-                print(rec.body.strip())
+                print(body)
             print()
 
     if corrections:
