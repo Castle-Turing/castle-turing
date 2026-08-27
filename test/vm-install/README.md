@@ -255,11 +255,17 @@ image):
     *path* belongs, the exact mistake
     `docs/tasks/0032-password-hash.md` §2 refuses to let
     `mkRenamedOptionModule` make.
+  - **Empty** (a zero-byte `phase2d-shadow-actual.od`) — the `harness`
+    account has no line in `/etc/shadow` at all, which is a larger
+    problem than a password one. This should be unreachable here:
+    phase 2 already SSH'd in as `harness`, so the account exists by the
+    time this runs.
   - **Anything else** — a value did arrive, but not the one this run
     encrypted; treat it like a phase 2c decryption mismatch.
-  - **The read itself failing** (`phase2d-shadow.log`) — the account
-    is missing from `/etc/shadow` entirely, which is a different and
-    larger problem than a password one.
+
+  `phase2d-shadow.log` holds the remote command's stderr, and is only
+  interesting if the SSH invocation itself failed rather than the
+  comparison.
 - `phase3-power-cycle` — the system didn't come back cleanly after a
   hard stop (a filesystem that won't mount without an interactive fsck
   prompt is the classic cause — check the serial log for an `fsck`
