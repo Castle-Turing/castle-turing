@@ -699,9 +699,8 @@ NOTHING ON THIS MACHINE IS EDITED, COMMITTED, OR APPLIED BY APPROVING
 IT — no file changes, no `git commit`, no rebuild, no new generation.
 That is true for every change shown here today.
 
-Rejecting ends this one. Setting it aside leaves it exactly as it is —
-nothing expires, and nothing decides on your behalf if you never come
-back to it."""
+Rejecting ends this one, and so does setting it aside — both close it
+for good. Nothing expires, and nothing decides on your behalf."""
 
 # The window this mode runs in opens at 720x480 (the fixed geometry
 # modules/home's `window.commands` gives every castle-modal window),
@@ -1004,7 +1003,7 @@ REVIEW_KEYS = {"a": "approve", "r": "reject", "d": "defer"}
 REVIEW_CONFIRMATIONS = {
     "approve": "Approved.",
     "reject": "Declined.",
-    "defer": "Set aside — you can come back to it from the same list later.",
+    "defer": "Set aside — it will not be offered again.",
 }
 
 

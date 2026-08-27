@@ -695,6 +695,15 @@ REVIEW_OUT="$(cat "$WORKDIR/review-approve.txt")"
 [ "$(transcript_rc "$WORKDIR/review-approve.txt")" = "0" ] || fail "approving through the window did not exit 0"
 printf '%s\n' "$REVIEW_OUT" | tr -d '\r' | grep -qx 'Approved.' \
   || fail "the confirmation is not a bare 'Approved.': $REVIEW_OUT"
+# The boundary statement's own account of what "setting it aside" does
+# must not promise a way back to it — defer is as terminal as reject,
+# and the two used to read as opposites here (finding: the false
+# promise "you can come back to it" survived three reviewers before
+# a resident's own reading of the word caught it).
+printf '%s\n' "$REVIEW_OUT" | grep -q 'Rejecting ends this one, and so does setting it aside' \
+  || fail "the boundary statement no longer says setting a change aside also ends it: $REVIEW_OUT"
+printf '%s\n' "$REVIEW_OUT" | grep -qi 'come back' \
+  && fail "the boundary statement still promises a way back to a deferred change: $REVIEW_OUT"
 A_PTY="$(basename "$(answers_naming "$Q_PTY" | head -1)" .md)"
 [ -n "$A_PTY" ] || fail "approving through the window wrote no decision"
 grep -q '^decision: approve$' "$JOURNAL/$A_PTY.md" || fail "the window's decision is not an approval"
@@ -742,6 +751,13 @@ printf '%s\n' "$MULTI_OUT" | grep -q '1 more proposed change waiting' \
   || fail "deciding one change decided the other as well — one invocation must decide exactly one"
 grep -q '^decision: defer$' "$(answers_naming "$Q_M1" | head -1)" \
   || fail "the older change was not deferred"
+# Same false-promise check as the approval case above, against the
+# actual confirmation a resident sees after pressing 'd': it must say
+# the change is closed, not that it can be revisited from the list.
+printf '%s\n' "$MULTI_OUT" | tr -d '\r' | grep -qx 'Set aside — it will not be offered again.' \
+  || fail "the defer confirmation is not the honest one: $MULTI_OUT"
+printf '%s\n' "$MULTI_OUT" | grep -qi 'come back' \
+  && fail "the defer confirmation still promises a way back to the deferred change: $MULTI_OUT"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate with one of two changes decided"
 
 log "  -- and the one left is still offered afterwards, on its own"

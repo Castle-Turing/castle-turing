@@ -713,9 +713,9 @@ What survives, mechanically available without inventing any parsing:
    > **Nothing on this machine is edited, committed, or applied by
    > approving it** — no file changes, no `git commit`, no rebuild, no
    > new generation. That is true for every proposal shown here today.
-   > Rejecting ends this proposal. Deferring leaves it exactly as it
-   > is — nothing expires, and nothing decides on your behalf if you
-   > never come back to it.*
+   > Rejecting ends this one, and so does setting it aside — both close
+   > it for good. Nothing expires, and nothing decides on your
+   > behalf.*
 
    This is Proposal 06's "the system may grade its own delivery, never
    its own judgment" and the decision pass's N7 given code: the same
@@ -875,8 +875,8 @@ mode prints to an interactive resident — the tenant's own prose and
 the diff are shown verbatim and are not bound by this rule, exactly
 as `castle-modal`'s existing doc comment already carves out for
 question and request bodies. Confirmations: *"Approved."* /
-*"Declined."* / *"Set aside — you can come back to it from the same
-list later."* — nothing more, in either direction, matching
+*"Declined."* / *"Set aside — it will not be offered again."* —
+nothing more, in either direction, matching
 `castle-modal`'s existing bare `"Filed."` precedent.
 
 ### H. Errand state after a decision (N15)
