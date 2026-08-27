@@ -1328,6 +1328,33 @@ made against the shape the journal now has.
   the two source files was written first and deleted — both are full
   of those commands named in comments explaining why they are never
   run, which is exactly what a grep cannot tell apart from a call.
+- **`render_continuation_packet` had to learn about decisions, which
+  this brief never considered.** The packet is rendered on every turn,
+  so any later turn of a decided errand carries the proposal question
+  and the answer that decided it — and the packet rendered an answer as
+  `section(label, answer.body)`. A decision answer's body is normally
+  empty, by §C.1's own design, so a resumed tenant was handed a blank
+  section labelled *"the resident's answer to that question,
+  verbatim"* directly under a question asking the resident to approve,
+  reject or set aside: readable as assent, or as no answer at all, on
+  the authority path. The verdict now goes in the section's **label**,
+  never in its body, which is the only place it can go: that function's
+  boundary lines carry a per-turn nonce no record can spell, and its
+  preamble tells the tenant that only a boundary says who wrote a
+  passage and that everything between two boundaries is a quotation.
+  Stating a verdict in a body would be the harness forging a
+  quotation. `approve` carries §H's applied/authorized distinction for
+  the same reason §H gives, one audience over — a tenant reading a bare
+  "APPROVED" could reasonably work on the assumption the change is
+  already in place. The comment a resident did type still appears below
+  the boundary, verbatim, as theirs. And the *question's* label was
+  corrected in the same pass: "a question this errand raised" is false
+  for a proposal, which §B's `_file_proposal_question` writes on the
+  harness's behalf, so a proposal is now labelled as machine-authored —
+  identified by `PROPOSAL_SHA256_FIELD`, the predicate every other
+  surface uses, never by the wording. The blocking/answered
+  parenthetical is unchanged on both spellings: it is the part the
+  packet promises matches how resumption treated the question.
 
 ## Non-goals
 

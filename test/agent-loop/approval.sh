@@ -411,6 +411,111 @@ printf '%s\n' "$(errand_section "$REQ_DEF")" | grep -q '^- decision: defer$' \
   || fail "the digest does not render 'decision: defer' for the deferred change: $(errand_section "$REQ_DEF")"
 
 # ---------------------------------------------------------------------
+log "and a resumed tenant's packet says which decision it was, and who asked"
+# ---------------------------------------------------------------------
+# The same defect as the digest one above, one surface further in and
+# with far more at stake. `render_continuation_packet` rendered an
+# answer as `section(label, answer.body)`, and a decision answer's body
+# is normally empty by design — so a tenant on any later turn of a
+# decided errand was handed a blank section labelled "the resident's
+# answer to that question, verbatim", directly under a question asking
+# the resident to approve, reject or set aside. Readable as assent, or
+# as no answer at all, on the authority path.
+#
+# And the question's own label said "a question this errand raised",
+# which is false for a proposal: the harness raised it
+# (`_file_proposal_question`), not the errand's tenant. That function
+# refuses to let machine-authored text be presented as the resident
+# speaking everywhere else, and this was the one place it did.
+#
+# Asserted against the real packet bytes a real tenant really receives
+# — a fixture that dumps its whole stdin — rather than against the
+# renderer's source, which is what makes it a claim about what a model
+# reads.
+PACKET_TENANT="$WORKDIR/packet-tenant.sh"
+cat > "$PACKET_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > "$CASTLE_PACKET_DUMP"
+printf 'packet tenant: wrote the packet it was handed out to disk\n'
+TENANT
+chmod +x "$PACKET_TENANT"
+# A further turn on an already-decided errand, which is exactly how a
+# decision reaches a tenant: the packet is rendered on every turn, and a
+# proposal question is never blocking, so nothing about this resumes on
+# the strength of the approval (asserted separately above).
+packet_for() {
+  local request="$1" dump="$WORKDIR/packet-$2.txt"
+  CASTLE_WORKER_COMMAND="$PACKET_TENANT" CASTLE_PACKET_DUMP="$dump" \
+    "$CASTLE" work "$request" >/dev/null
+  cat "$dump"
+}
+# The section between a named BEGIN boundary and the END that follows
+# it, found by this packet's own nonce — the same rule the packet's
+# preamble tells a tenant to read it by, so this harness cannot be
+# fooled by a body that spells a boundary either.
+packet_section() {
+  local packet="$1" needle="$2" nonce
+  nonce="$(printf '%s\n' "$packet" | sed -n 's/^\(CASTLE-PACKET-[0-9a-f]*\) BEGIN .*/\1/p' | head -1)"
+  [ -n "$nonce" ] || fail "the packet carries no boundary nonce at all"
+  printf '%s\n' "$packet" | awk -v n="$nonce" -v needle="$needle" '
+    index($0, n " BEGIN") == 1 && index($0, needle) > 0 { found = 1; next }
+    found && $0 == n " END" { exit }
+    found { print }
+  '
+}
+packet_label() {
+  printf '%s\n' "$1" | grep -F "BEGIN" | grep -F "$2" | head -1
+}
+
+PACKET_APPROVE="$(packet_for "$REQ1" approve)"
+PACKET_REJECT="$(packet_for "$REQ_REJ" reject)"
+PACKET_DEFER="$(packet_for "$REQ_DEF" defer)"
+
+log "  -- each verdict is stated on the boundary line, where no record body can reach"
+printf '%s\n' "$PACKET_APPROVE" | grep -q "BEGIN the resident's decision on that proposed change: APPROVED" \
+  || fail "an approved proposal is not stated as APPROVED in the packet: $(packet_label "$PACKET_APPROVE" 'decision on that proposed change')"
+printf '%s\n' "$PACKET_REJECT" | grep -q "BEGIN the resident's decision on that proposed change: REJECTED" \
+  || fail "a rejected proposal is not stated as REJECTED in the packet: $(packet_label "$PACKET_REJECT" 'decision on that proposed change')"
+printf '%s\n' "$PACKET_DEFER" | grep -q "BEGIN the resident's decision on that proposed change: SET ASIDE" \
+  || fail "a deferred proposal is not stated as SET ASIDE in the packet: $(packet_label "$PACKET_DEFER" 'decision on that proposed change')"
+
+log "  -- an approval does not read as an application: the packet says nothing was applied"
+printf '%s\n' "$PACKET_APPROVE" | grep -q 'nothing has been applied on the strength of that authorization' \
+  || fail "the packet lets APPROVED read as already applied: $(packet_label "$PACKET_APPROVE" 'decision on that proposed change')"
+
+log "  -- the two decisions whose bodies are empty still say what they were"
+# The whole point. Without a verdict on the boundary line these two
+# sections are blank, and a model reading only the packet has nothing
+# at all to distinguish a rejection from a deferral from silence.
+[ -z "$(packet_section "$PACKET_REJECT" 'decision on that proposed change' | tr -d '[:space:]')" ] \
+  || fail "the rejection fixture typed a comment, so the empty-body case is not being tested"
+[ -z "$(packet_section "$PACKET_DEFER" 'decision on that proposed change' | tr -d '[:space:]')" ] \
+  || fail "the deferral fixture typed a comment, so the empty-body case is not being tested"
+
+log "  -- and a comment the resident DID type is still there, verbatim, as their words"
+packet_section "$PACKET_APPROVE" 'decision on that proposed change' \
+  | grep -q 'Yes, that is the right shape.' \
+  || fail "the resident's own comment is missing from the packet's decision section"
+
+log "  -- the proposal question is not presented as something the errand's tenant asked"
+for PACKET_NAME in APPROVE REJECT DEFER; do
+  PACKET_VAR="PACKET_$PACKET_NAME"
+  PACKET="${!PACKET_VAR}"
+  printf '%s\n' "$PACKET" | grep -q 'BEGIN a proposed change this system filed for the resident to decide' \
+    || fail "the $PACKET_NAME packet does not label the proposal as machine-authored: $(printf '%s\n' "$PACKET" | grep -F 'BEGIN' || true)"
+  printf '%s\n' "$PACKET" | grep -q 'BEGIN a question this errand raised' \
+    && fail "the $PACKET_NAME packet still attributes a harness-written proposal question to the errand"
+  # The invariant the label's parenthetical carries, unchanged: the
+  # packet never describes a question differently from how resumption
+  # treated it, and a proposal question is never blocking.
+  printf '%s\n' "$PACKET" | grep -q 'the resident to decide — machine-authored by the harness, not the errand.s tenant speaking (not blocking, answered below)' \
+    || fail "the $PACKET_NAME packet lost the blocking/answered parenthetical: $(printf '%s\n' "$PACKET" | grep -F 'BEGIN' || true)"
+done
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the packet turns"
+assert_checkouts_untouched "after the packet-rendering turns"
+
+# ---------------------------------------------------------------------
 log "stale: a change altered since it was proposed is refused, not guessed at"
 # ---------------------------------------------------------------------
 REQ_STALE="$("$CASTLE" ask "APPROVAL-FIXTURE-STALE: an invented complaint whose result will be tampered with.")"

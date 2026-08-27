@@ -230,6 +230,61 @@ OUTCOME_VALUES = ("completed", "failed", "timeout", "interrupted")
 # buttons.
 DECISION_VALUES = ("approve", "reject", "defer")
 
+# How each decision is said to a *model* reading a continuation packet
+# (`render_continuation_packet`). Not resident-facing: this is the one
+# audience that never sees the review screen, never pressed the key, and
+# has nothing but this text to go on.
+#
+# It exists because a decision's meaning lives entirely in its
+# `decision:` field and its body is normally empty — `file_answer`
+# exempts a decision from the empty-body refusal on purpose, so a
+# resident is never trained to type "ok" before an approval. A packet
+# that rendered only the body therefore handed a resumed tenant a blank
+# section under a question asking the resident to approve, reject or set
+# aside: readable as assent, or as no answer at all, on the one path
+# where authority is granted.
+#
+# Rendered into the section's LABEL rather than into its body, which is
+# the whole reason this is legible at all. That function's boundary
+# lines carry a per-turn nonce no record can spell, and its preamble
+# tells the tenant that only a boundary says who wrote a passage and
+# that everything between two boundaries is a quotation. A verdict
+# stated in the body would be the harness forging a quotation; stated
+# in the label it is the harness speaking where the harness is the only
+# thing that can speak.
+#
+# Unhedged, one clause each, because a model reading this with no other
+# context has to come away stating the right verdict every time —
+# including, especially, when the section below is empty. Naming no
+# actor: who decided is the label's prefix to say, and only one of the
+# two branches there may say "the resident".
+#
+# `approve` carries the applied/authorized distinction the status
+# surface already makes ("approved — nothing applied yet"), for the
+# same reason and one audience over: a resumed tenant reading a bare
+# "APPROVED" could reasonably work on the assumption the change is
+# already in place, and it is not. docs/tasks/0026 is what applies one.
+DECISION_PACKET_WORDING = {
+    "approve": (
+        "APPROVED — authorized, and nothing has been applied on the strength of "
+        "that authorization"
+    ),
+    "reject": "REJECTED — refused",
+    "defer": (
+        "SET ASIDE — neither authorized nor refused, and it will not be offered "
+        "again"
+    ),
+}
+
+# The sentence that follows every one of the above, so no reader can
+# take an empty section as the answer. Split out because both the
+# resident-filed and the not-through-intake branch need it verbatim.
+DECISION_PACKET_CAVEAT = (
+    "The decision is this boundary line, not the section below: below is only "
+    "whatever comment was typed alongside it, quoted exactly, and it is empty "
+    "whenever none was typed"
+)
+
 # The field name a proposal's byte-hash is stamped under, on both the
 # question that proposes it and the answer that decides it. Named for
 # the algorithm, not `hash`, so a future migration to a different
@@ -2983,7 +3038,32 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
         # differently from the way resumption treated it.
         blocking = "blocking" if _is_blocking(question) else "not blocking"
         answered = "answered below" if answers else "not answered yet"
-        section(f"a question this errand raised ({blocking}, {answered})", question.body)
+        # **Who raised this question is a fact the record carries, and a
+        # proposal question was not raised by the errand.** The stamp is
+        # written by `_file_proposal_question` — the harness, observing
+        # its own completed turn — with a body that is a constant in
+        # this file. "A question this errand raised" says the errand's
+        # tenant asked it, which for a proposal is false, and this
+        # function is meticulous about exactly that everywhere else (see
+        # the answer-label branch below, and the request heading above).
+        # Identified by `PROPOSAL_SHA256_FIELD`, the same predicate the
+        # picker, the status overlay and `file_answer` all use — never
+        # by the wording, which is what keeps the surfaces from
+        # disagreeing about what a proposal is.
+        #
+        # The blocking/answered parenthetical is unchanged and stays on
+        # both spellings: it is the one part of this label the packet
+        # promises matches how resumption treated the question, and a
+        # proposal must go on being described by the same fold.
+        if question.fields.get(PROPOSAL_SHA256_FIELD, "").strip():
+            label = (
+                "a proposed change this system filed for the resident to decide — "
+                "machine-authored by the harness, not the errand's tenant speaking "
+                f"({blocking}, {answered})"
+            )
+        else:
+            label = f"a question this errand raised ({blocking}, {answered})"
+        section(label, question.body)
         for answer in answers:
             # Attributed off the record, exactly as the request heading
             # above is, and for the same reason: this function must
@@ -3002,18 +3082,54 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
             # hand-planted record, or a future writer, must not inherit
             # a claim about its author that this function never
             # checked.
+            #
+            # **A decision is rendered from its field, never from its
+            # body.** See DECISION_PACKET_WORDING: a decision answer's
+            # body is normally empty by design, so a label reading "the
+            # resident's answer, verbatim" over nothing at all was the
+            # packet's account of an approval, a rejection and a
+            # deferral alike. An unrecognised value is quoted rather
+            # than collapsed into one of the three, the same rule
+            # castle-modal's `_errand_state` applies to a verdict from
+            # outside its vocabulary and `_outcome_label` to an outcome:
+            # a surface that quietly reports a state because it did not
+            # understand what it was told is the failure a closed
+            # vocabulary exists to prevent.
+            decision = answer.fields.get("decision", "").strip()
+            verdict = (
+                DECISION_PACKET_WORDING.get(
+                    decision,
+                    f"recorded as {decision!r}, which is not one of "
+                    f"{', '.join(DECISION_VALUES)} and is quoted here rather than "
+                    "read as any of them",
+                )
+                if decision
+                else ""
+            )
             if (
                 answer.fields.get("provenance") == "requested"
                 and answer.fields.get("seat") == "intake"
             ):
-                label = "the resident's answer to that question, verbatim"
+                if verdict:
+                    label = (
+                        "the resident's decision on that proposed change: "
+                        f"{verdict}. {DECISION_PACKET_CAVEAT}"
+                    )
+                else:
+                    label = "the resident's answer to that question, verbatim"
             else:
-                label = (
-                    "an answer to that question, verbatim — NOT filed through the "
-                    "resident's own intake path (seat: "
+                origin = (
+                    "NOT filed through the resident's own intake path (seat: "
                     f"{answer.fields.get('seat', 'unrecorded')}, provenance: "
                     f"{answer.fields.get('provenance', 'unrecorded')})"
                 )
+                if verdict:
+                    label = (
+                        f"a decision on that proposed change: {verdict} — {origin}. "
+                        f"{DECISION_PACKET_CAVEAT}"
+                    )
+                else:
+                    label = f"an answer to that question, verbatim — {origin}"
             section(label, answer.body)
 
     return "".join(parts)
