@@ -2,7 +2,7 @@
 
 **Before starting:** read `CLAUDE.md` in full; `docs/tasks/0031-secrets-tooling.md`
 in full, especially its "Non-goals" entry on the password hash (it names
-this task as its successor and gives the two reasons it was deferred —
+this task as its successor and gives the three reasons it was deferred —
 cited, not re-derived, below) and its "Verified against nixos-anywhere"
 / "Enrollment" sections, whose facts about `--extra-files` and the age
 key this task depends on without re-proving; `docs/private-layer.md` in
