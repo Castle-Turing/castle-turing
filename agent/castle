@@ -343,6 +343,16 @@ PROPOSAL_QUESTION_BODY = (
 # decoration now, not structure: nothing keys on it.
 DIFF_BOUNDARY_FIELD = "diff-boundary"
 
+# The field name a proposal's sidecar digest is stamped under
+# (docs/tasks/0033-byte-exact-proposal.md). Distinct from
+# PROPOSAL_SHA256_FIELD by what each proves: proposal-sha256 is
+# record-tamper evidence (has this record changed since the proposal
+# was filed?); patch-sha256 is byte-fidelity evidence (are these the
+# exact bytes the tenant produced, undisturbed by anything this
+# format's own transforms do to a body?). A record can carry one,
+# the other, both, or neither.
+PATCH_SHA256_FIELD = "patch-sha256"
+
 
 def diff_boundary_lines(boundary: str) -> tuple[str, str]:
     """The two literal lines that delimit an embedded diff. One
@@ -409,6 +419,12 @@ FIELD_ORDER = (
     # reason: it is machine-readable structure about the body below,
     # not prose (docs/tasks/0025-approval.md).
     "diff-boundary",
+    # Result-only, beside `diff-boundary` for the same presentation-only
+    # reason and the same append-only append site: the sidecar digest is
+    # machine-readable structure about the body, stamped at the same
+    # call site as the boundary nonce (docs/tasks/0033-byte-exact-
+    # proposal.md).
+    "patch-sha256",
     # Request-only, and next to `outcome` for the same reason: it is
     # the machine-readable half of what the record says about its own
     # circumstances, and a reader skimming a request should meet it
@@ -3338,6 +3354,7 @@ def _write_worker_result(
     claim_id: str,
     target: str | None = None,
     diff_boundary: str | None = None,
+    patch_sha256: str | None = None,
 ) -> str:
     """Every result `run_worker_turn` writes goes through here, so the
     `outcome` field cannot be forgotten on one branch and remembered on
@@ -3374,6 +3391,14 @@ def _write_worker_result(
     # journal that cannot be backfilled.
     if diff_boundary:
         extra[DIFF_BOUNDARY_FIELD] = diff_boundary
+    # Stamped alongside `diff-boundary`, on the same gate (a real diff
+    # was produced) — the digest of the exact bytes the tenant wrote to
+    # $CASTLE_DIFF_FILE, taken before `run_worker_turn`'s lenient decode
+    # ever touches them (docs/tasks/0033-byte-exact-proposal.md). The
+    # sidecar those bytes are also written to is what this field lets
+    # `castle validate` check.
+    if patch_sha256:
+        extra[PATCH_SHA256_FIELD] = patch_sha256
     return write_record(
         journal_dir(),
         type="result",
@@ -4219,6 +4244,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 _restore_sigterm(previous_sigterm)
 
             diff_text = ""
+            diff_bytes = b""
             try:
                 # Bytes, then a lenient decode, for the same reason the
                 # Popen above passes errors="replace": `read_text()`
@@ -4226,9 +4252,22 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 # stray byte, and that exception is not caught by the
                 # OSError below — it escapes with the whole turn's
                 # account, including the parts that decoded fine.
-                diff_text = diff_path.read_bytes().decode("utf-8", errors="replace").strip()
+                #
+                # `diff_bytes` is kept as well as the lenient decode —
+                # this is the one copy of the tenant's exact output that
+                # exists anywhere, taken before `.decode(errors=
+                # "replace")` can destroy a stray non-UTF-8 byte and
+                # before `.strip()` can drop a trailing newline `git
+                # apply` needs on the last hunk
+                # (docs/tasks/0033-byte-exact-proposal.md). `diff_text`
+                # remains the existing proposal predicate, unchanged;
+                # `diff_bytes` exists only to be hashed and sidecared
+                # below, never read for meaning.
+                diff_bytes = diff_path.read_bytes()
+                diff_text = diff_bytes.decode("utf-8", errors="replace").strip()
             except OSError:
                 diff_text = ""
+                diff_bytes = b""
 
             # Read exactly as leniently as the diff, and for the same
             # reason: a tenant's output encoding is not part of the
@@ -4297,6 +4336,14 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # which that diff could contain this token. See
         # DIFF_BOUNDARY_FIELD.
         diff_boundary = os.urandom(8).hex() if diff_text else ""
+        # Hashed from `diff_bytes`, not from `diff_text` or from
+        # anything the body copy will later hold — the whole point is a
+        # digest of what the tenant actually wrote, taken before the
+        # lossy decode and before the record's own `splitlines()` round
+        # trip ever runs (docs/tasks/0033-byte-exact-proposal.md). Same
+        # gate as `diff_boundary`: a turn that produced no diff stamps
+        # neither.
+        patch_sha256 = hashlib.sha256(diff_bytes).hexdigest() if diff_text else None
         if diff_text:
             begin, end = diff_boundary_lines(diff_boundary)
             body_lines += [begin, "```diff", diff_text, "```", end]
@@ -4478,7 +4525,23 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             claim_id=claim_id,
             target=stamped_target,
             diff_boundary=diff_boundary,
+            patch_sha256=patch_sha256,
         )
+        # After the record, not before: this needs `result_id`, which
+        # `write_record` assigns internally (`make_id`), and writing the
+        # record first costs no more than a legible `castle validate`
+        # failure if the process dies before the next line runs — see
+        # docs/tasks/0033-byte-exact-proposal.md, "Smaller decisions",
+        # for why that ordering was chosen over pre-generating the id.
+        #
+        # A single, plain `write_bytes`: `write_record` itself has no
+        # atomic-write idiom (no temp file, no fsync, no rename), so
+        # giving only the sidecar one would promise a durability
+        # guarantee the record right next to it does not have. Matching
+        # what `write_record` actually does, not inventing something
+        # better for one half of the pair.
+        if patch_sha256:
+            (journal_dir() / f"{result_id}.patch").write_bytes(diff_bytes)
         if stamped_target:
             _file_proposal_question(request, result_id, stamped_target)
         return (result_id, outcome)
