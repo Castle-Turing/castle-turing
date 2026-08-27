@@ -799,6 +799,37 @@ What survives, mechanically available without inventing any parsing:
    tenant-authored is touched by either; both are matched against
    `agent/castle`'s own constants and shapes, never against a heading
    a tenant was never told to write.
+
+   **Corrected again after the second review pass: the two exclusions
+   above were an enumeration, and it leaked.** `run_worker_turn`
+   appends more than those two lines after the closing boundary — the
+   "declared no target" notes, the undrained-output note, and the
+   mechanism-unavailable note — and everything not named survived into
+   the diagnosis. The worst of it was the last: *"Note:
+   `castle.agent.repo.mechanism` is configured (`<path>`) but …"*,
+   which is an internal option name and a configured filesystem path,
+   printed under a label saying these are the machine's own words, on
+   the one screen where authority is granted. Exactly the two things
+   the opening line is excluded for.
+
+   The rule that replaces the list is about provenance, not about
+   spelling: the tenant's stdout is written **before** the boundary, so
+   everything after it is harness prose by construction and none of it
+   is the tenant's account of why. The tail therefore contributes
+   nothing to the diagnosis. The resolved-checkout sentence is lifted
+   out of it as before and shown under its own label as the harness's,
+   which is the one thing this surface wants from the tail at all. A
+   list of known appended lines grows every time `run_worker_turn`
+   learns to say something new, and the cost of forgetting to extend it
+   is a leak here; a rule about where a line came from does not go
+   stale. What it gives up is named rather than hidden: on a turn whose
+   output could not be collected, the harness's note explaining the
+   silence no longer reaches this screen — and that turn has no tenant
+   reasoning either, so the honest rendering is a change with no
+   account of why, rather than the harness's explanation dressed as
+   one. `modal-headless-test.sh` asserts the property rather than the
+   line list: no home-shaped path and no internal option name may reach
+   that section.
 4. **The diff, last, verbatim, never truncated.** Immediately before
    it, one line: *"Full diff below — scroll up in this window
    (Shift+Page Up in `foot`) if it runs past what's on screen."* This

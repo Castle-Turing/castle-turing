@@ -1234,7 +1234,12 @@ plant_proposal() {
   # writing the boundary lines), which is how the no-boundary
   # degradation is exercised: that is every result written before the
   # field existed, and it must show its body whole rather than guess.
-  local stamp="$1" account="$2" diff_file="$3" no_boundary="${4:-}"
+  #
+  # A fifth appends the OTHER prose `run_worker_turn` can write after
+  # the diff — the mechanism-unavailable note and the undrained-output
+  # note, quoted from `agent/castle` — which is what the tail-dropping
+  # rule is asserted against.
+  local stamp="$1" account="$2" diff_file="$3" no_boundary="${4:-}" harness_tail="${5:-}"
   local result_id="$stamp-result-r${stamp: -7}"
   local question_id="$stamp-question-q${stamp: -7}"
   # Sixteen hex characters, derived from the stamp so a failing
@@ -1274,6 +1279,21 @@ plant_proposal() {
     echo "CASTLE-DIFF-$boundary END"
     echo
     echo "This diff targets the **private** checkout, which on this host resolved to \`/invented/checkout\`."
+    if [ -n "$harness_tail" ]; then
+      # Both quoted from `run_worker_turn`, which appends them after
+      # the diff on a turn that completed: the undrained-output note (a
+      # setsid grandchild can hold the pipes open on a turn that still
+      # exits 0) and the mechanism-unavailable note. The second is the
+      # one that matters — it carries an internal option name and a
+      # configured filesystem path, and it landed in the section
+      # labelled as the machine's own reasoning. The username is this
+      # repo's own published placeholder, the same one
+      # nixosConfigurations.example uses; nothing here is a real path.
+      echo
+      echo "The tenant's own stdout and stderr could not be collected. This turn killed the tenant's whole process group and the pipes were still held 5s later, which narrows what is holding them to one thing: a descendant that called setsid() and so is outside the group this turn can reach. It is still running, and this turn cannot end it. Nothing above came from the tenant's output stream."
+      echo
+      echo "Note: \`castle.agent.repo.mechanism\` is configured (\`/home/resident/invented-checkout\`) but it is not a git checkout, so this turn treated the mechanism checkout as unavailable. Nothing else about the turn was refused on that account."
+    fi
     echo
     echo "This result was produced by the worker seat. Per docs/tasks/0009-ambient-intake.md's non-goals, the worker proposes; it does not deploy — nothing above was applied to any running system or committed to any repo by this seat."
   } > "$CASTLE_STATE_DIR/journal/$result_id.md"
@@ -1527,6 +1547,65 @@ printf '%s\n' "$LEGACY_OUT" | grep -q "Where this applies:" \
   && fail "a result with no boundary had a sentence lifted out of a body this cannot safely split"
 printf '%s\n' "$LEGACY_OUT" | grep -q "NOTHING ON THIS MACHINE IS EDITED" \
   || fail "the boundary statement is missing from a legacy review — it is never optional"
+
+clear_pending_changes
+
+log "review mode: nothing the harness appended after the diff is quoted as the machine's own reasoning"
+# ---------------------------------------------------------------------
+# `_split_proposal_body` used to drop two named lines from the tail and
+# let everything else through into the section labelled "Castle's own
+# account of why (its words, not verified by a person)". Everything
+# `run_worker_turn` writes after the closing boundary is harness prose
+# by construction — the tenant's stdout goes in before it — so that
+# enumeration leaked by default, and the worst of what it leaked was
+# the mechanism-unavailable note: an internal option name and a
+# configured filesystem path, on the one screen where a resident grants
+# authority.
+#
+# Asserted as a property of the SECTION, not as a list of lines: what
+# may never appear there is a home-shaped path or an internal option
+# name, however a future `run_worker_turn` comes to phrase them.
+# `approval.sh` has a home-shaped-path check of its own, but that one
+# is about what this repo commits; this one is about what the surface
+# prints, which is a different claim and could not be made there.
+TAIL_Q="$(plant_proposal 20260301T000400Z "TAIL-FIXTURE-ACCOUNT: the reasoning the tenant itself wrote, above the diff." - "" harness-tail)"
+"$CASTLE" validate || fail "the harness-tail fixture does not validate"
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-tail.txt" \
+  --mode review --question "$TAIL_Q" -- "wait:any other key closes this" "key:x"
+TAIL_OUT="$(tr -d '\r' < "$WORKDIR/review-tail.txt")"
+[ "$(transcript_rc "$WORKDIR/review-tail.txt")" = "0" ] || fail "the harness-tail review did not exit 0"
+
+TAIL_ACCOUNT_AT="$(printf '%s\n' "$TAIL_OUT" | grep -n 'its words, not verified by a person' | head -1 | cut -d: -f1)"
+[ -n "$TAIL_ACCOUNT_AT" ] || fail "the attribution label is missing, so there is no section to make this claim about"
+TAIL_DIFF_AT="$(printf '%s\n' "$TAIL_OUT" | grep -n 'Full diff below' | head -1 | cut -d: -f1)"
+[ -n "$TAIL_DIFF_AT" ] || fail "the diff heading is missing, so the account section has no end to find"
+TAIL_ACCOUNT="$(printf '%s\n' "$TAIL_OUT" | sed -n "$((TAIL_ACCOUNT_AT + 1)),$((TAIL_DIFF_AT - 1))p")"
+
+# The control first: without the tenant's own words in it, every
+# refutation below is satisfied by an empty section.
+printf '%s\n' "$TAIL_ACCOUNT" | grep -q 'TAIL-FIXTURE-ACCOUNT' \
+  || fail "the tenant's own reasoning is missing from the account section: $TAIL_ACCOUNT"
+
+refute "$TAIL_ACCOUNT" "/home/" \
+  "a home-shaped path was printed under the label that says these are the machine's own words"
+refute "$TAIL_ACCOUNT" "castle.agent.repo" \
+  "an internal option name was printed under the label that says these are the machine's own words"
+refute "$TAIL_ACCOUNT" "setsid" \
+  "the harness's undrained-output note was quoted as the machine's reasoning about the change"
+refute "$TAIL_ACCOUNT" "docs/tasks/0009-ambient-intake" \
+  "the harness's worker-proposes note was quoted as the machine's reasoning about the change"
+# And the same two, over the whole render rather than one section: the
+# tail is dropped outright, so neither reaches the resident at all.
+refute "$TAIL_OUT" "/home/resident" "the review printed a home-shaped path anywhere on screen"
+refute "$TAIL_OUT" "castle.agent.repo" "the review printed an internal option name anywhere on screen"
+
+# The one line the tail still contributes, so this is a rule about
+# where a line came from rather than a blanket refusal to read the
+# tail at all.
+printf '%s\n' "$TAIL_OUT" | grep -q 'Where this applies:' \
+  || fail "dropping the tail also lost the resolved-checkout sentence, which is lifted out of it deliberately"
+printf '%s\n' "$TAIL_OUT" | grep -qF 'resolved to `/invented/checkout`' \
+  || fail "the resolved-checkout sentence is no longer quoted in the harness's own words"
 
 clear_pending_changes
 

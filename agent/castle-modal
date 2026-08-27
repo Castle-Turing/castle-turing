@@ -808,12 +808,41 @@ def _split_proposal_body(castle, result) -> tuple[str, str, str]:
     headings, and a parser built against headings nobody promised would
     work today and break silently later.
 
-    `WORKER_PROPOSES_NOTE` and the turn's opening line are dropped
-    rather than shown under Castle's account: both are harness prose,
-    not the tenant's account of why, so quoting them under that label
-    misattributes them — and the opening line additionally carries a
-    record id and the tenant's store path, the two things this surface
-    may never print.
+    **The whole tail is dropped, not an enumeration of known lines.**
+    `run_worker_turn` writes the tenant's own stdout *before* the
+    boundary and appends only its own prose after it — the resolved-
+    checkout sentence, the "no target was declared" notes, the
+    undrained-output note, the mechanism-unavailable note, and
+    `WORKER_PROPOSES_NOTE`. So everything after the closing boundary is
+    harness-written by construction, and quoting any of it under
+    "Castle's own account of why (its words, not verified by a person)"
+    misattributes it by definition.
+
+    An earlier version dropped exactly two of those lines by name and
+    let the rest through, which is the enumeration this rule replaces:
+    the mechanism-unavailable note reached the diagnosis carrying
+    `castle.agent.repo.mechanism` and the configured filesystem path,
+    an internal option name and a home-shaped path on a resident
+    surface — the two things this surface may never print, the same two
+    the opening line is dropped for. A list of known appended lines
+    grows every time `run_worker_turn` learns to say something new, and
+    the failure mode of forgetting to extend it is a leak on the one
+    screen where authority is granted. A rule about where a line came
+    from does not go stale.
+
+    The resolved-checkout sentence is the single exception, lifted out
+    as `where` rather than kept: it is shown under its own label, in
+    the harness's own words, as the harness's — see `_render_proposal`.
+
+    What this gives up is real and is named rather than hidden: on a
+    turn whose output could not be collected (a setsid grandchild
+    holding the pipes — rare, but possible on a `completed` turn), the
+    harness's note saying so no longer reaches this screen, and since
+    that same turn has no tenant reasoning either, the resident is
+    shown a change with no account of why at all. That is the honest
+    rendering of a turn that produced none. What must not happen is the
+    resident reading the harness's explanation of the silence as the
+    machine's reasoning about the change.
 
     **A result with no boundary stamped shows its body whole.** That is
     every result written before this field existed, and any a hand
@@ -862,6 +891,10 @@ def _split_proposal_body(castle, result) -> tuple[str, str, str]:
         if index == 0 and line.startswith("Errand `"):
             continue
         kept.append(line)
+    # The tail contributes exactly one thing and discards the rest: see
+    # the docstring's "the whole tail is dropped" paragraph for why a
+    # rule about provenance replaced a list of known lines here.
+    #
     # Searched only in the tail, because that is where the harness
     # writes it — restricting the search is what keeps a tenant's own
     # prose, or a line of a file it is changing, from being promoted
@@ -869,10 +902,7 @@ def _split_proposal_body(castle, result) -> tuple[str, str, str]:
     for line in after:
         if not where and line.strip().startswith("This diff targets the "):
             where = line.strip()
-            continue
-        if line.strip() == castle.WORKER_PROPOSES_NOTE:
-            continue
-        kept.append(line)
+            break
     return where, "\n".join(kept).strip(), "\n".join(diff_lines)
 
 
