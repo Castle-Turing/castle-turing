@@ -31,23 +31,25 @@ docstring spells out that the test is "a round trip through
 as a boundary. That guard is applied to **frontmatter fields only**. The
 body — which is where the diff lives — never goes through it.
 
-**`proposal-sha256` does not close this.** It hashes the *result record
-file's whole bytes*, not the diff, and the code names 0026 as its
-intended consumer. What it proves is "this record has not changed since
-the proposal was filed." What it cannot prove is "these are the bytes
-the tenant produced", because the mangling happened **before** the
-record existed, and the hash was taken after. A tamper-evidence seal
-over an already-corrupted artifact is still a valid seal.
+**Hashing the record after the fact would not close this.** No such
+mechanism exists today — there is no checksum field on `result`
+records anywhere in `agent/castle` — but it is worth naming why one
+would not help if added: it would prove "this record has not changed
+since the proposal was filed," not "these are the bytes the tenant
+produced," because the mangling described above happens **before** a
+record exists. A tamper-evidence seal over an already-corrupted
+artifact is still a valid seal.
 
 **Why it matters.** Nothing applies a diff today, so nothing is broken
 right now — this is a latent defect, filed before the task that would
-trip over it. `docs/tasks/0026` is specified to turn an approved
-proposal into a real edit in the private layer, and an applier is
-exactly the consumer that needs byte fidelity. The failure mode is
-quiet and bad: a diff that applies cleanly in the common case and
-corrupts, or refuses, on a file with CRLF line endings or a form feed —
-which is to say, on someone else's configuration rather than ours. The
-"docs are written for strangers" rule has an analogue here.
+trip over it. `docs/tasks/0026`, not yet specced, is expected to turn
+an approved proposal into a real edit in the private layer, and an
+applier would be exactly the consumer that needs byte fidelity. The
+failure mode is quiet and bad: a diff that applies cleanly in the
+common case and corrupts, or refuses, on a file with CRLF line
+endings or a form feed — which is to say, on someone else's
+configuration rather than ours. The "docs are written for strangers"
+rule has an analogue here.
 
 It is also the kind of defect that gets discovered as "the applier is
 buggy". The applier will be fine. The artifact it was handed was already
