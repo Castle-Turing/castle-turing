@@ -583,12 +583,46 @@ grep -q 'resident model' "$WORKDIR/fact.err" \
 
 log "  -- and so is --fact supplied on the command line beside a decision"
 # The other half of the same door, and the likelier one: the question's
-# own field is not the only way a fact reaches the write path.
-if "$CASTLE" answer --decision approve --fact "invented-preference-key" "$Q_DEF" \
+# own field is not the only way a fact reaches the write path. This is
+# the guard the implementation deviated from the brief to write (§C
+# guard 3 checks the question's field alone, which `castle answer
+# --fact NAME --decision approve` walks straight past), so it is the
+# one that most needs a test that can fail.
+#
+# A FRESH, UNDECIDED change, and the exact refusal asserted by name.
+# This case used to target an already-decided question, so
+# `file_answer`'s already-answered scan refused it before the proposal
+# half ever ran — and the assertions, a non-zero exit and an unchanged
+# resident-model byte count, were both satisfied by the wrong refusal.
+# The guard had no coverage at all.
+REQ_FACT_FLAG="$("$CASTLE" ask "APPROVAL-FIXTURE-FACT-FLAG: an invented complaint decided with a fact name pushed in from the command line.")"
+"$CASTLE" work "$REQ_FACT_FLAG" >/dev/null
+Q_FACT_FLAG="$(proposal_question_for "$REQ_FACT_FLAG")"
+[ -n "$Q_FACT_FLAG" ] || fail "the --fact-flag case's turn filed no change to decide"
+[ -z "$(answers_naming "$Q_FACT_FLAG")" ] \
+  || fail "the --fact-flag case's change is already decided, so this proves nothing about the guard"
+grep -q '^fact:' "$JOURNAL/$Q_FACT_FLAG.md" \
+  && fail "the --fact-flag case's question carries its own fact, so the flag is not what is being tested"
+FILES_BEFORE="$(journal_file_count)"
+if "$CASTLE" answer --decision approve --fact "invented-preference-key" "$Q_FACT_FLAG" \
   </dev/null >/dev/null 2>"$WORKDIR/fact-flag.err"; then
   fail "--fact beside --decision wrote a resident-model entry as a side effect of a decision"
 fi
+grep -q "it is a proposal and it also elicits a 'fact', so deciding it would write into the resident model" \
+  "$WORKDIR/fact-flag.err" \
+  || fail "--fact beside --decision was refused by something other than the fact guard: $(cat "$WORKDIR/fact-flag.err")"
+grep -q 'already answered' "$WORKDIR/fact-flag.err" \
+  && fail "the --fact-flag case is being refused as already answered, which tests the wrong guard"
 [ "$(model_byte_count)" = "$MODEL_BEFORE" ] || fail "--fact beside --decision wrote into the resident model"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "the --fact-flag refusal wrote a record anyway"
+[ -z "$(answers_naming "$Q_FACT_FLAG")" ] || fail "the --fact-flag refusal closed the change anyway"
+
+log "  -- and the control: the same change, decided with no --fact, goes through"
+# Without this the refusal above is satisfied by a guard that simply
+# never lets a decision through once a fact name has been near it.
+"$CASTLE" answer --decision approve "$Q_FACT_FLAG" </dev/null >/dev/null \
+  || fail "the same change is refused even with no --fact, so the guard is refusing the wrong thing"
+[ "$(model_byte_count)" = "$MODEL_BEFORE" ] || fail "an ordinary approval wrote into the resident model"
 
 # `castle validate` is asked separately here: the planted record is
 # exactly what the validator's own permanent gate must catch.
