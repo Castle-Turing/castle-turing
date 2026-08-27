@@ -1664,6 +1664,46 @@ printf '%s\n' "$TAIL_OUT" | grep -qF 'resolved to `/invented/checkout`' \
 
 clear_pending_changes
 
+log "review mode: control bytes in a tenant diff or account cannot repaint the boundary or the keys (0025 review pass, escape-sequence finding)"
+# This surface reads an approve/reject/defer keypress moments after
+# printing the tenant's diagnosis and diff verbatim. A clear-screen or
+# cursor-reposition escape sequence in either — reachable via a changed
+# file's own bytes on the diff side, or the tenant's own stdout on the
+# account side — would repaint over the boundary statement and the key
+# list an instant before the keypress is read, so the resident
+# authorizes whatever was left on screen rather than what was actually
+# shown. `_defang_for_terminal` drops every control byte but newline
+# and tab before either reaches print().
+ESCAPE_DIFF="$WORKDIR/escape.diff"
+printf -- '--- a/evil.txt\n+++ b/evil.txt\n@@ -1 +1 @@\n-before\n+after\033[2J\033[HFAKE-DIFF-PAYLOAD\n' \
+  > "$ESCAPE_DIFF"
+ESCAPE_ACCOUNT="$(printf 'An account that also tries a screen clear.\033[2JFAKE-ACCOUNT-PAYLOAD')"
+ESCAPE_Q="$(plant_proposal 20260301T000500Z "$ESCAPE_ACCOUNT" "$ESCAPE_DIFF")"
+"$CASTLE" validate || fail "the escape-sequence fixture does not validate"
+CASTLE_REVIEW_RESIZE_COMMAND="" drive_modal "$WORKDIR/review-escape.txt" \
+  --mode review --question "$ESCAPE_Q" -- "wait:any other key closes this" "key:x"
+[ "$(transcript_rc "$WORKDIR/review-escape.txt")" = "0" ] || fail "the escape-sequence review did not exit 0"
+
+# No raw ESC byte reaches the transcript at all, checked over the whole
+# file rather than one section: a control byte that repaints the
+# screen does not respect section boundaries either.
+ESC_BYTE="$(printf '\033')"
+if grep -qF -- "$ESC_BYTE" "$WORKDIR/review-escape.txt"; then
+  fail "a raw ESC byte from the tenant's diff or account reached the review transcript"
+fi
+
+# And the surrounding text is still there — this is defanging, not
+# deletion. Losing either payload string here would mean the fix
+# over-corrected into hiding part of the change instead of just the
+# control byte.
+ESCAPE_OUT="$(tr -d '\r' < "$WORKDIR/review-escape.txt")"
+printf '%s\n' "$ESCAPE_OUT" | grep -q "FAKE-DIFF-PAYLOAD" \
+  || fail "defanging the diff also deleted its content instead of just the control byte"
+printf '%s\n' "$ESCAPE_OUT" | grep -q "FAKE-ACCOUNT-PAYLOAD" \
+  || fail "defanging the account also deleted its content instead of just the control byte"
+
+clear_pending_changes
+
 log "status overlay: the verb names what is actually waiting, not always 'answer'"
 # _errand_state's ", waiting on you" overlay used to say "press
 # Mod4+Shift+a to answer" unconditionally, but a proposal is not

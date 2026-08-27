@@ -71,6 +71,7 @@ import importlib.machinery
 import importlib.util
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -940,6 +941,35 @@ def _pending_proposals(castle, records: dict) -> list:
     return [q for q in _pending_questions(records) if _is_proposal(castle, q)]
 
 
+# Every C0/C1 control byte except newline and tab, including the ESC
+# (0x1b) that starts every ANSI escape sequence. Newline and tab are
+# the only control bytes this surface's own layout relies on; nothing
+# it prints itself needs the rest, so the class is "everything but
+# those two" rather than a denylist of specific sequences a future
+# terminal could grow a new way to spell.
+_UNSAFE_TERMINAL_CHARS_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _defang_for_terminal(text: str) -> str:
+    """Strip control bytes from tenant-authored text before it reaches the
+    terminal a keypress is about to be read from.
+
+    `_split_proposal_body` hands back the tenant's diagnosis and diff
+    verbatim, by design — but "verbatim" cannot mean "byte for byte" on
+    a surface that reads an approve/reject/defer keypress moments after
+    printing them, in the same terminal. A changed file (or a model's
+    own prose) containing a clear-screen or cursor-reposition escape
+    sequence would repaint over the boundary statement and the key list
+    an instant before the keypress is read, and the resident would be
+    authorizing whatever was left on screen rather than what this
+    function actually printed. Dropping every control byte but newline
+    and tab leaves a sequence's parameter bytes as inert text — the
+    ESC that would have made them live is gone — without touching how
+    the diff or diagnosis reads.
+    """
+    return _UNSAFE_TERMINAL_CHARS_RE.sub("", text)
+
+
 def _render_proposal(castle, question, records: dict, out) -> None:
     """What the resident reads before deciding, in the one order that
     survives having no structure to parse: evidence first, then what
@@ -990,7 +1020,7 @@ def _render_proposal(castle, question, records: dict, out) -> None:
         # know which of the words in front of them are a machine's.
         print("Castle's own account of why (its words, not verified by a person):", file=out)
         print(file=out)
-        print(diagnosis, file=out)
+        print(_defang_for_terminal(diagnosis), file=out)
         print(file=out)
 
     if diff:
@@ -1006,7 +1036,7 @@ def _render_proposal(castle, question, records: dict, out) -> None:
             file=out,
         )
         print(file=out)
-        print(diff, file=out)
+        print(_defang_for_terminal(diff), file=out)
         print(file=out)
 
 
