@@ -1510,6 +1510,30 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
         ),
         key=lambda rec: rec.id,
     )
+    # ACCEPTED LIMIT, and the reason it is not fixed here.
+    # `proposals[-1]` below is "newest" only across seconds: ids carry a
+    # one-second stamp and a random suffix, so two proposals filed on one
+    # errand inside the same second sort arbitrarily, and this can label
+    # the errand with the verdict belonging to the other one. Found by
+    # the cross-model review, round 3.
+    #
+    # Not patched, because the bug is the id format rather than this
+    # line — see docs/backlog/record-ids-are-only-second-resolution.md,
+    # which records that this same hazard has now produced a defect in
+    # four separate tasks, including twelve lines below, where the
+    # decision-versus-result comparison deliberately compares only the
+    # timestamp half to dodge it. Patching one more call site would make
+    # the fifth local workaround and still leave the next fold to
+    # rediscover it.
+    #
+    # What bounds the damage: the `waiting` branch at the end of this
+    # function is computed independently of this selection, so an errand
+    # with an undecided proposal still says "waiting on you — press
+    # Mod4+Shift+a to review" whichever proposal got picked. The
+    # resident is never left without the remedy; the verdict half of the
+    # label can name the wrong one of two changes decided in the same
+    # second. Two turns finishing on one errand within one second is a
+    # scripted caller or a fast retry, not an ordinary use.
     if proposals and not turn_is_live:
         # **Never over a live turn**, and never over anything newer
         # than the decision itself. This block's own stated rule is

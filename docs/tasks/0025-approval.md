@@ -1089,6 +1089,22 @@ task's actual shape rather than the assumed one:
   ones except which checkout the result names — that symmetry already
   existed in 0024 and this task does not add or remove it.
 - **Any change to `CLAUDE.md`.** None made.
+- **Ordering two proposals filed on one errand in the same second.**
+  Accepted as a documented limit rather than fixed. `_errand_state`
+  picks the newest of an errand's proposals by sorting ids, and an id
+  is second-resolution plus a random suffix, so two turns finishing on
+  one errand inside a second sort arbitrarily and the overlay can show
+  the verdict belonging to the other proposal. Found by the cross-model
+  review, round 3, and left in place because the defect is the id
+  format: the same hazard has now produced a defect in four separate
+  tasks, and this function already contains a correct hand-rolled
+  workaround for it twelve lines further down. Filed as
+  `docs/backlog/record-ids-are-only-second-resolution.md`, which is
+  where a fix belongs — one that every fold inherits instead of each
+  one rediscovering the problem. What bounds it: the "waiting on you"
+  half of the label is computed independently, so a resident with an
+  undecided proposal is still told to go and decide it whichever
+  proposal was picked.
 
 ## Considered and rejected
 
