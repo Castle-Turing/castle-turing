@@ -6940,147 +6940,177 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         return result_id, ""
 
     # ---------------------------------------------------------------
-    # C.6 — the resident's own uncommitted work, under these paths only.
+    # C.5b — freeze the verified bytes.
     # ---------------------------------------------------------------
-    paths, why_paths = _patch_paths(root, sidecar)
-    if paths is None:
-        return refuse(
-            "refused-patch-stale",
-            [
-                "Git could not even read the change as a patch, so it certainly "
-                "cannot be made:",
-                "",
-                "```",
-                why_paths,
-                "```",
-            ],
-        )
-    if not paths:
-        return refuse(
-            "refused-no-patch",
-            ["The kept copy of the change touches no files at all."],
-        )
-    dirty, why_dirty = _dirty_under(root, paths)
-    if dirty is None:
-        return refuse(
-            "refused-tree-dirty",
-            [
-                "Whether you have uncommitted work under those files could not be "
-                f"established ({why_dirty}), and this will not write over work it "
-                "cannot see."
-            ],
-        )
-    if dirty:
-        return refuse(
-            "refused-tree-dirty",
-            [
-                f"You have uncommitted edits under the files it touches ({dirty}), and "
-                "it will not write over them. Your own `git status` will say which "
-                "files — they are deliberately not named here, because this record is "
-                "durable and your file names are yours. Commit or set aside that work "
-                f"and run `castle apply {answer.id}` again.",
-            ],
-        )
+    # `sidecar_bytes` was hashed and checked against `patch-sha256`
+    # above, but every git invocation from here on named `sidecar` —
+    # the mutable path in the journal directory — rather than those
+    # verified bytes. A sync or an edit landing in the window between
+    # that check and `git apply` could substitute different bytes
+    # under the same digest: a replacement patch touching the same
+    # paths would then commit successfully under a commit message
+    # still asserting the OLD patch's digest (Codex review on this PR,
+    # finding 1). Snapshotting the verified bytes into a private temp
+    # file — read by nothing else, never resynced — closes that
+    # window: everything below reads only the copy this just wrote.
+    snapshot_fd, snapshot_path_str = tempfile.mkstemp(
+        prefix="castle-apply-patch-", suffix=".patch"
+    )
+    try:
+        with os.fdopen(snapshot_fd, "wb") as fh:
+            fh.write(sidecar_bytes)
+        snapshot = pathlib.Path(snapshot_path_str)
 
-    # ---------------------------------------------------------------
-    # C.7 — does it still fit? Exactly, or not at all.
-    # ---------------------------------------------------------------
-    # No fuzz, ever: no `-3`, no `--recount`, no `patch(1)` fallback. A
-    # patch that does not apply exactly is not the change you approved,
-    # and a three-way merge would produce a change nobody authorized.
-    # This also stands in for the absent proposal-time revision stamp:
-    # "has the tree moved since approval" is answerable only by asking
-    # git whether the patch still fits, which is a more precise question
-    # than comparing revisions anyway, since a revision that moved for
-    # unrelated reasons is not staleness.
-    check, check_fault = _run_git(root, ["apply", "--check", "--", str(sidecar)])
-    if check is None:
-        # git never answered, so nothing is known about the patch and
-        # nothing was written. An environment fault, not a property of
-        # the change — the same shape §C.1 takes, and it aborts the
-        # sweep for the same reason: the next approval would meet the
-        # identical broken machine.
-        result_id = _write_apply_result(
-            answer,
-            question,
-            outcome="failed",
-            apply_outcome="",
-            detail_lines=detail_lines
-            + [
-                "",
-                f"Castle could not ask git whether the change still fits: "
-                f"{check_fault}. Nothing was written anywhere.",
-            ],
-        )
-        raise ApplyEnvironmentFault(check_fault, result_id)
-    if check.returncode != 0:
-        return refuse(
-            "refused-patch-stale",
-            [
-                "It no longer fits your configuration repository — the files it "
-                "changes are not in the state they were in when it was proposed. It "
-                "is applied exactly or not at all; nothing here merges, fuzzes or "
-                "guesses, because the result of that would be a change you never saw. "
-                "Git's own account:",
-                "",
-                "```",
-                (check.stderr or check.stdout or "").strip(),
-                "```",
-            ],
-        )
+        # -----------------------------------------------------------
+        # C.6 — the resident's own uncommitted work, under these paths only.
+        # -----------------------------------------------------------
+        paths, why_paths = _patch_paths(root, snapshot)
+        if paths is None:
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "Git could not even read the change as a patch, so it certainly "
+                    "cannot be made:",
+                    "",
+                    "```",
+                    why_paths,
+                    "```",
+                ],
+            )
+        if not paths:
+            return refuse(
+                "refused-no-patch",
+                ["The kept copy of the change touches no files at all."],
+            )
+        dirty, why_dirty = _dirty_under(root, paths)
+        if dirty is None:
+            return refuse(
+                "refused-tree-dirty",
+                [
+                    "Whether you have uncommitted work under those files could not be "
+                    f"established ({why_dirty}), and this will not write over work it "
+                    "cannot see."
+                ],
+            )
+        if dirty:
+            return refuse(
+                "refused-tree-dirty",
+                [
+                    f"You have uncommitted edits under the files it touches ({dirty}), and "
+                    "it will not write over them. Your own `git status` will say which "
+                    "files — they are deliberately not named here, because this record is "
+                    "durable and your file names are yours. Commit or set aside that work "
+                    f"and run `castle apply {answer.id}` again.",
+                ],
+            )
 
-    # ---------------------------------------------------------------
-    # D — the working tree, then exactly one commit. No push, ever.
-    # ---------------------------------------------------------------
-    # Asked before anything is written, because afterwards it is
-    # unanswerable: which of these paths the change CREATED decides
-    # which recovery command the `applied-uncommitted` record prints,
-    # and the two are not interchangeable. A failure here is carried
-    # rather than fatal — it only costs the recovery wording.
-    tracked_before, _why_tracked = _tracked_subset(root, paths)
-    applied, applied_fault = _run_git(root, ["apply", "--", str(sidecar)])
-    if applied is None:
-        # git was killed or never ran partway through the one step that
-        # writes files, so what is in the tree is genuinely unknown —
-        # `git apply` validates the whole patch before writing any of
-        # it, but nothing here can promise it got that far. Recorded as
-        # `outcome: failed` with NO `apply-outcome`, which is exactly
-        # what that shape means: the applier did not reach a conclusion
-        # about the change. Naming it `applied-uncommitted` would claim
-        # the change IS in the tree, which is the overclaim the whole
-        # vocabulary exists to prevent.
-        result_id = _write_apply_result(
-            answer,
-            question,
-            outcome="failed",
-            apply_outcome="",
-            detail_lines=detail_lines
-            + [
-                "",
-                f"Castle started making the change and git did not finish: "
-                f"{applied_fault}. Whether anything reached your files is not "
-                "something this can honestly say — look at "
-                "`git status` in your configuration repository before doing "
-                "anything else. Nothing was committed, and nothing was activated.",
-            ],
-        )
-        raise ApplyEnvironmentFault(applied_fault, result_id)
-    if applied.returncode != 0:
-        # `--check` passed a moment ago, so this is a race or a
-        # filesystem fault rather than a stale patch. Named as the
-        # nearest true thing rather than given a tenth outcome for a
-        # case that has no distinct remedy.
-        return refuse(
-            "refused-patch-stale",
-            [
-                "It passed a dry run and then would not apply, which means the "
-                "repository moved underneath this attempt. Git's own account:",
-                "",
-                "```",
-                (applied.stderr or applied.stdout or "").strip(),
-                "```",
-            ],
-        )
+        # -----------------------------------------------------------
+        # C.7 — does it still fit? Exactly, or not at all.
+        # -----------------------------------------------------------
+        # No fuzz, ever: no `-3`, no `--recount`, no `patch(1)` fallback. A
+        # patch that does not apply exactly is not the change you approved,
+        # and a three-way merge would produce a change nobody authorized.
+        # This also stands in for the absent proposal-time revision stamp:
+        # "has the tree moved since approval" is answerable only by asking
+        # git whether the patch still fits, which is a more precise question
+        # than comparing revisions anyway, since a revision that moved for
+        # unrelated reasons is not staleness.
+        check, check_fault = _run_git(root, ["apply", "--check", "--", str(snapshot)])
+        if check is None:
+            # git never answered, so nothing is known about the patch and
+            # nothing was written. An environment fault, not a property of
+            # the change — the same shape §C.1 takes, and it aborts the
+            # sweep for the same reason: the next approval would meet the
+            # identical broken machine.
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail_lines
+                + [
+                    "",
+                    f"Castle could not ask git whether the change still fits: "
+                    f"{check_fault}. Nothing was written anywhere.",
+                ],
+            )
+            raise ApplyEnvironmentFault(check_fault, result_id)
+        if check.returncode != 0:
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "It no longer fits your configuration repository — the files it "
+                    "changes are not in the state they were in when it was proposed. It "
+                    "is applied exactly or not at all; nothing here merges, fuzzes or "
+                    "guesses, because the result of that would be a change you never saw. "
+                    "Git's own account:",
+                    "",
+                    "```",
+                    (check.stderr or check.stdout or "").strip(),
+                    "```",
+                ],
+            )
+
+        # -----------------------------------------------------------
+        # D — the working tree, then exactly one commit. No push, ever.
+        # -----------------------------------------------------------
+        # Asked before anything is written, because afterwards it is
+        # unanswerable: which of these paths the change CREATED decides
+        # which recovery command the `applied-uncommitted` record prints,
+        # and the two are not interchangeable. A failure here is carried
+        # rather than fatal — it only costs the recovery wording.
+        tracked_before, _why_tracked = _tracked_subset(root, paths)
+        applied, applied_fault = _run_git(root, ["apply", "--", str(snapshot)])
+        if applied is None:
+            # git was killed or never ran partway through the one step that
+            # writes files, so what is in the tree is genuinely unknown —
+            # `git apply` validates the whole patch before writing any of
+            # it, but nothing here can promise it got that far. Recorded as
+            # `outcome: failed` with NO `apply-outcome`, which is exactly
+            # what that shape means: the applier did not reach a conclusion
+            # about the change. Naming it `applied-uncommitted` would claim
+            # the change IS in the tree, which is the overclaim the whole
+            # vocabulary exists to prevent.
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail_lines
+                + [
+                    "",
+                    f"Castle started making the change and git did not finish: "
+                    f"{applied_fault}. Whether anything reached your files is not "
+                    "something this can honestly say — look at "
+                    "`git status` in your configuration repository before doing "
+                    "anything else. Nothing was committed, and nothing was activated.",
+                ],
+            )
+            raise ApplyEnvironmentFault(applied_fault, result_id)
+        if applied.returncode != 0:
+            # `--check` passed a moment ago, so this is a race or a
+            # filesystem fault rather than a stale patch. Named as the
+            # nearest true thing rather than given a tenth outcome for a
+            # case that has no distinct remedy.
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "It passed a dry run and then would not apply, which means the "
+                    "repository moved underneath this attempt. Git's own account:",
+                    "",
+                    "```",
+                    (applied.stderr or applied.stdout or "").strip(),
+                    "```",
+                ],
+            )
+    finally:
+        # Best-effort: the checkout is already committed to or refused
+        # by the time this runs, and a leftover temp file is a cleanup
+        # nit, never a correctness question.
+        try:
+            pathlib.Path(snapshot_path_str).unlink()
+        except OSError:
+            pass
 
     # An empty string is a legitimate answer here: a repository with no
     # commits yet has no HEAD, and a patch that only creates files
