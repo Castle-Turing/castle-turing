@@ -1400,9 +1400,9 @@ def append_model_entry(
     if stated is not None:
         fields["stated"] = stated
     entry = render_model_entry(fields, body)
-    existing = path.read_text() if path.exists() else ""
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
     separator = "\n" if existing.strip() else ""
-    with path.open("a") as f:
+    with path.open("a", encoding="utf-8") as f:
         f.write(separator + entry)
 
 
@@ -2139,7 +2139,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     body = args.body
     if args.body_file:
-        body = pathlib.Path(args.body_file).read_text()
+        body = pathlib.Path(args.body_file).read_text(encoding="utf-8")
     elif body is None and not sys.stdin.isatty():
         body = sys.stdin.read()
     target = spool_dir() if args.spool else journal_dir()
@@ -6250,7 +6250,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     for directory in (journal_dir(), spool_dir()):
         path = directory / f"{args.id}.md"
         if path.exists():
-            print(path.read_text(), end="")
+            print(path.read_text(encoding="utf-8"), end="")
             return 0
     print(f"castle show: no such record: {args.id}", file=sys.stderr)
     return 1
