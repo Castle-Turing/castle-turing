@@ -48,11 +48,17 @@ exactly like `castle ask`/`castle digest` add none (Proposal 03):
            the surface's own words what approving does and does not
            do, quotes Castle's account of why, prints the diff last
            and whole, and reads one keypress — approve, reject, or
-           defer. **Nothing is applied by any of the three.** Applying
-           is docs/tasks/0026 and activating is 0027; until they
-           exist, a decision made here is a decision and nothing else,
-           and this surface says so where the keys are rather than in
-           a footnote.
+           defer. **Nothing is activated by any of the three**, and
+           nothing at all is done by rejecting or setting aside.
+           Approving a change offered since
+           docs/tasks/0026-apply-validate.md authorizes Castle to make
+           it in the resident's own configuration repository and commit
+           it there — no rebuild, no new generation, nothing pushed.
+           A change offered before that task authorizes nothing but the
+           record, permanently, and this surface says which of the two
+           it is where the keys are rather than in a footnote.
+           Activating is still 0027, and still nobody's but the
+           resident's.
 
 Headless by construction, not by special-casing: every mode reads
 stdin and writes stdout/stderr with no dependency on a terminal at all.
@@ -331,6 +337,26 @@ def _is_proposal(castle, question) -> bool:
     "did this turn fail," applied to "is this a change to decide."
     """
     return bool(question.fields.get(castle.PROPOSAL_SHA256_FIELD, "").strip())
+
+
+def _authorizes_apply(castle, question) -> bool:
+    """Does approving this proposal authorize applying it
+    (docs/tasks/0026-apply-validate.md §A)?
+
+    A second predicate beside `_is_proposal`, never a widening of it.
+    `_is_proposal` decides pendingness, picker routing and whether the
+    review branch is taken at all, and none of that may change: a
+    proposal filed before docs/tasks/0026 is still a proposal and still
+    gets decided. This one decides only which two sentences the surface
+    says — the boundary statement and the confirmation — because those
+    are what the resident's authority *means*, and it means something
+    different for the two.
+
+    Exact match on the one spelling, matching agent/castle's own
+    `AUTHORIZES_APPLY_FIELD` rule and its fold: absence means no, an
+    unrecognised value means no, and the safe direction is the default.
+    """
+    return question.fields.get(castle.AUTHORIZES_APPLY_FIELD, "").strip() == "true"
 
 
 def _about_line(castle, records: dict, question) -> str:
@@ -683,16 +709,62 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
 # assert what approving it does. And the direct fix for the defect this
 # project keeps rediscovering — a label that causes the inaction it
 # describes (docs/tasks/0015) — in its sharpest available form: an
-# "Approve" that silently has no effect. As of this task the honest
-# answer to "does approving edit configuration or activate a
-# generation" is neither, and that belongs in the same breath as the
-# keypress.
+# "Approve" that silently has no effect.
 #
-# When docs/tasks/0026 can apply an approved change, this constant is
-# one of exactly two places that must stop saying so — the other is
-# `_errand_state`'s "approved — nothing applied yet". Both are wrong to
-# leave true by accident.
+# **Two statements since docs/tasks/0026-apply-validate.md §A, selected
+# by whether the question carries `authorizes-apply`, and the split is
+# the whole mechanism rather than a presentation choice.** An applier
+# that spent an approval granted under the older statement would be
+# spending an authorization whose stated scope was "nothing is edited",
+# and changing the wording afterwards does not reach backwards. So the
+# old text is preserved verbatim below, used for a proposal filed
+# before that task, because for those it remains exactly true; the new
+# text is used for a proposal whose question says approving carries
+# apply authority. Three surfaces changed in that task and this comment
+# used to say two — the third is `_review_confirmation` below.
+#
+# Four decisions inside the new text, each deliberate:
+#
+#   * "authorizes Castle to make", not "makes". Whether the change is
+#     applied promptly depends on `castle.agent.apply.enable`, which is
+#     off by default. A screen that predicted an application that never
+#     happens would be docs/tasks/0015's defect again; one that
+#     predicted it correctly on some hosts and not others would be
+#     worse. What approving *is* does not vary: it is the
+#     authorization. What then happened is the applier's own record to
+#     report.
+#   * It does not promise a check. Validation is gated by a second
+#     option that is also off by default, so "and then checks it
+#     builds" would be the same overclaim in a smaller font.
+#   * "without asking again", because there is no second confirmation
+#     keypress. A resident should learn that from the screen rather
+#     than from the consequence.
+#   * "It pushes nothing anywhere", because "commit" is the word most
+#     likely to be read as "publish", and pushing is an open authority
+#     question nothing here touches (docs/architecture.md).
 REVIEW_BOUNDARY_STATEMENT = """\
+Approving this is you authorizing this exact change, and that
+authorization is kept.
+
+APPROVING IT AUTHORIZES CASTLE TO MAKE THIS CHANGE IN YOUR
+CONFIGURATION REPOSITORY — to edit those files and commit them there,
+on your say-so, without asking again. It pushes nothing anywhere.
+
+NOTHING IS ACTIVATED AND NOTHING IS REBUILT: no new generation, and no
+change to the machine you are using right now. Switching to the new
+configuration stays yours to do, by hand.
+
+Rejecting says this change is wrong. Setting it aside says you are not
+deciding it now. Both close it for good — nothing expires, and nothing
+decides on your behalf."""
+
+# The statement every proposal filed before
+# docs/tasks/0026-apply-validate.md was offered under, kept verbatim and
+# used for exactly those. It is not legacy text to be retired on a
+# schedule: it is what a resident was told, and for a question with no
+# `authorizes-apply` stamp it stays true forever — the applier's fold
+# will never touch one.
+REVIEW_BOUNDARY_STATEMENT_PRE_APPLY = """\
 Approving this is you authorizing this exact change, and that
 authorization is kept.
 
@@ -1001,7 +1073,16 @@ def _render_proposal(castle, question, records: dict, out) -> None:
         print(f"  {where}", file=out)
         print(file=out)
 
-    print(REVIEW_BOUNDARY_STATEMENT, file=out)
+    # Selected by the question's own stamp, never by a date and never
+    # by which text reads better: a proposal offered under the older,
+    # narrower statement is decided under that statement, forever
+    # (docs/tasks/0026-apply-validate.md §A).
+    print(
+        REVIEW_BOUNDARY_STATEMENT
+        if _authorizes_apply(castle, question)
+        else REVIEW_BOUNDARY_STATEMENT_PRE_APPLY,
+        file=out,
+    )
     print(file=out)
     # Three distinct, labelled, non-adjacent keys, printed here rather
     # than under the diff so that no resident can meet the keys without
@@ -1090,6 +1171,29 @@ REVIEW_CONFIRMATIONS = {
     "defer": "Set aside — it will not be offered again.",
 }
 
+# What `approve` confirms when the change carries apply authority. Only
+# that one verdict has a second spelling: rejecting and setting aside
+# mean exactly what they always meant, and giving them a second wording
+# too would be churn dressed as symmetry.
+REVIEW_CONFIRMATION_APPROVE_APPLYABLE = (
+    "Approved. Castle will make this change in your configuration "
+    "repository. Nothing will be activated."
+)
+
+
+def _review_confirmation(decision: str, *, authorizes_apply: bool) -> str:
+    """The one line printed after a decision is written
+    (docs/tasks/0026-apply-validate.md §A.2).
+
+    A helper rather than a second dict, so the predicate that selects
+    between the two approve wordings is spelled once, in the same place
+    as the strings it selects between — the review surface's own third
+    place that had to stop saying nothing is applied.
+    """
+    if decision == "approve" and authorizes_apply:
+        return REVIEW_CONFIRMATION_APPROVE_APPLYABLE
+    return REVIEW_CONFIRMATIONS[decision]
+
 
 def run_review_for(castle, question, records: dict, out=sys.stdout, *, interactive: bool) -> int:
     """Decide exactly one proposed change, and never more than one per
@@ -1171,7 +1275,12 @@ def run_review_for(castle, question, records: dict, out=sys.stdout, *, interacti
         return 1
 
     print(file=out)
-    print(REVIEW_CONFIRMATIONS[decision], file=out)
+    print(
+        _review_confirmation(
+            decision, authorizes_apply=_authorizes_apply(castle, question)
+        ),
+        file=out,
+    )
 
     # Re-read rather than reasoned about: another window may have
     # decided something while this one was open, and the count a
@@ -1333,6 +1442,49 @@ def _outcome_label(outcome: str, request_id: str) -> str:
         # and unchanged.
         return f"{outcome} — castle work {request_id} to retry"
     return "done"
+
+
+# Why the applier declined, in the resident's own vocabulary, for the
+# one label shape that needs a clause rather than a phrase. Kept beside
+# the labels below rather than derived from the record's body: a body is
+# prose written for reading, and a status line is a fold.
+_APPLY_REFUSAL_REASONS = {
+    "refused-target-mechanism": (
+        "it changes the Castle Turing framework, not your own configuration"
+    ),
+    "refused-artifact-changed": "what is on disk is no longer what you approved",
+    "refused-no-patch": "no exact copy of the change was kept",
+    "refused-patch-stale": "it no longer fits your configuration repository",
+    "refused-tree-dirty": "you have uncommitted edits to the same files",
+}
+
+
+def _apply_outcome_label(apply_outcome: str) -> str:
+    """What happened to an approved change, as a resident-facing label
+    (docs/tasks/0026-apply-validate.md §H).
+
+    "not activated" appears in four of these on purpose. It is the one
+    fact the whole task turns on, and a status line is exactly where a
+    resident would otherwise assume otherwise.
+
+    An unrecognised value renders verbatim rather than collapsing into
+    any of the nine, following `_outcome_label`'s own rule above and for
+    the reason it gives: a surface quietly reporting a state because it
+    did not understand what it was told is the failure both closed
+    vocabularies exist to prevent.
+    """
+    fixed = {
+        "applied-validated": "applied and checked — not activated",
+        "applied-unvalidated": "applied, not checked — not activated",
+        "validation-failed": "applied, and the check failed — not activated",
+        "applied-uncommitted": "partly applied — see your configuration repository",
+    }.get(apply_outcome)
+    if fixed:
+        return fixed
+    reason = _APPLY_REFUSAL_REASONS.get(apply_outcome)
+    if reason:
+        return f"approved, but not applied — {reason}"
+    return apply_outcome
 
 
 def _errand_state(castle, request, downstream: list, records: dict) -> str:
@@ -1608,11 +1760,55 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # vocabulary: a surface quietly reporting a state because
             # it did not understand what it was told is the failure
             # both closed vocabularies exist to prevent.
-            base = {
-                "approve": "approved — nothing applied yet",
-                "reject": "you declined this",
-                "defer": "you set this aside",
-            }.get(verdict, f"{verdict} — nothing applied yet")
+            #
+            # **"nothing applied yet" is now true only for a change
+            # offered before docs/tasks/0026-apply-validate.md.** One
+            # carrying `authorizes-apply` is waiting for an applier that
+            # exists, so it says so; one without it will never be
+            # applied by anything, so the older sentence stays exactly
+            # right for it and is kept.
+            if verdict == "approve":
+                base = (
+                    "approved — waiting to be applied"
+                    if _authorizes_apply(castle, newest_proposal)
+                    else "approved — nothing applied yet"
+                )
+            else:
+                base = {
+                    "reject": "you declined this",
+                    "defer": "you set this aside",
+                }.get(verdict, f"{verdict} — nothing applied yet")
+
+            # **The fourth stage: what then happened to the change.**
+            # An apply result closes no claim — it deliberately does not
+            # name the request at all (docs/tasks/0026 §F), so
+            # `closing_result` and the `results` selection above both
+            # correctly ignore it — which means without this, an errand
+            # whose apply FAILED would read "approved — waiting to be
+            # applied" forever. That is precisely the journal claiming
+            # success where validation failed.
+            #
+            # Inside the enclosing block, so it inherits both of that
+            # block's guards for free: never over a live turn, never
+            # over anything newer than the decision. It needs no new
+            # keying rule either — `_collect_downstream` reaches an
+            # apply result through the same `refs[0]` chain that reaches
+            # the answer.
+            applies = sorted(
+                (
+                    other
+                    for other in downstream
+                    if other.type == "result"
+                    and other.refs
+                    and other.refs[0] == rec.id
+                    and other.fields.get(castle.APPLY_OUTCOME_FIELD, "").strip()
+                ),
+                key=lambda other: other.id,
+            )
+            if applies:
+                base = _apply_outcome_label(
+                    applies[-1].fields.get(castle.APPLY_OUTCOME_FIELD, "").strip()
+                )
 
     # Naming the remedy, the same way every outcome label above does:
     # docs/tasks/0015's rule is that a label must not cause the inaction

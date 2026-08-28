@@ -1239,7 +1239,14 @@ plant_proposal() {
   # the diff — the mechanism-unavailable note and the undrained-output
   # note, quoted from `agent/castle` — which is what the tail-dropping
   # rule is asserted against.
+  # A sixth stamps `authorizes-apply: true` on the question
+  # (docs/tasks/0026-apply-validate.md §A). Absent by default, and that
+  # default is the point: every fixture in this file predates the
+  # applier the way every proposal in a real journal did, so the
+  # pre-apply boundary statement is what they all render, and the one
+  # case below that passes it is the mirror.
   local stamp="$1" account="$2" diff_file="$3" no_boundary="${4:-}" harness_tail="${5:-}"
+  local authorizes_apply="${6:-}"
   local result_id="$stamp-result-r${stamp: -7}"
   local question_id="$stamp-question-q${stamp: -7}"
   # Sixteen hex characters, derived from the stamp so a failing
@@ -1306,6 +1313,7 @@ plant_proposal() {
     echo "seat: worker"
     echo "created: 2026-02-01T00:00:00Z"
     echo "proposal-sha256: $(sha256sum "$CASTLE_STATE_DIR/journal/$result_id.md" | cut -d' ' -f1)"
+    [ -z "$authorizes_apply" ] || echo "authorizes-apply: true"
     echo "---"
     echo
     echo "This errand produced a proposed change to your private configuration. Nothing has been applied. Review it to approve, reject, or set it aside."
@@ -1366,8 +1374,16 @@ echo "$RENDER_OUT"
 echo "$RENDER_OUT" | grep -q "Where this applies:" || fail "the review does not say where the change applies"
 echo "$RENDER_OUT" | grep -qF 'resolved to `/invented/checkout`' \
   || fail "the review does not quote the harness's own resolved-path sentence"
+# The PRE-APPLY branch (docs/tasks/0026-apply-validate.md §A): this
+# fixture's question carries no `authorizes-apply`, so nothing will ever
+# apply it and the older, narrower statement is what a resident decides
+# it under — forever, because the field travels with the record that was
+# shown and no migration can reach backwards. The other branch is
+# asserted in its own section further down.
 echo "$RENDER_OUT" | grep -q "NOTHING ON THIS MACHINE IS EDITED, COMMITTED, OR APPLIED" \
   || fail "the review does not say plainly that approving applies nothing"
+refute "$RENDER_OUT" "APPROVING IT AUTHORIZES CASTLE TO MAKE THIS CHANGE" \
+  "a change offered before the applier existed was shown as one an apply follows"
 echo "$RENDER_OUT" | grep -q "its words, not verified by a person" \
   || fail "the machine's own account is not attributed as machine-authored"
 echo "$RENDER_OUT" | grep -q "The value it uses now is too small to read" \
@@ -1412,6 +1428,65 @@ refute "$RENDER_OUT" "/nix/store/invented-hash" \
   "the review printed the tenant's store path — the turn header must not be quoted"
 refute "$RENDER_OUT" "docs/tasks/0009-ambient-intake" \
   "the review quoted the harness's worker-proposes note under the machine's own account"
+
+log "review mode: a change that DOES carry apply authority says so, and confirms differently"
+# The mirror of the pre-apply assertions above
+# (docs/tasks/0026-apply-validate.md §A). Two surfaces change with the
+# stamp and no others: the boundary statement the resident decides
+# under, and the line printed after they decide. Both are asserted here
+# against the same fixture shape the pre-apply case uses, so the only
+# difference between the two runs is the one field.
+#
+# Scripted rather than pty-driven: `--question` is honoured on the piped
+# path, which is what lets this pick its own fixture instead of whatever
+# an interactive picker would choose, and the two wordings are text
+# either way.
+APPLY_Q="$(plant_proposal 20260301T000800Z "A change offered under the statement that an apply follows approving it." - "" "" yes)"
+"$CASTLE" validate || fail "the apply-authorizing proposal fixture does not validate"
+grep -q '^authorizes-apply: true$' "$CASTLE_STATE_DIR/journal/$APPLY_Q.md" \
+  || fail "the apply-authorizing fixture did not stamp the field, so this section proves nothing"
+printf 'a\n.\n' | "$MODAL" --mode review --question "$APPLY_Q" >"$WORKDIR/review-applyable.txt" 2>&1 \
+  || fail "approving an apply-authorizing change failed: $(cat "$WORKDIR/review-applyable.txt")"
+APPLYABLE_OUT="$(tr -d '\r' < "$WORKDIR/review-applyable.txt")"
+printf '%s\n' "$APPLYABLE_OUT" | grep -q "APPROVING IT AUTHORIZES CASTLE TO MAKE THIS CHANGE IN YOUR" \
+  || fail "the review does not say approving authorizes the change to be made: $APPLYABLE_OUT"
+printf '%s\n' "$APPLYABLE_OUT" | grep -q "NOTHING IS ACTIVATED AND NOTHING IS REBUILT" \
+  || fail "the review no longer says nothing is activated: $APPLYABLE_OUT"
+refute "$APPLYABLE_OUT" "NOTHING ON THIS MACHINE IS EDITED" \
+  "an apply-authorizing change was decided under the retired statement"
+printf '%s\n' "$APPLYABLE_OUT" \
+  | grep -qF "Approved. Castle will make this change in your configuration repository. Nothing will be activated." \
+  || fail "the confirmation does not say what approving an applyable change does: $APPLYABLE_OUT"
+
+log "  -- and the pre-apply change confirms with the bare 'Approved.', so the two really differ"
+# The control. Without it the assertion above is satisfied by a
+# confirmation that says the same thing on every change in the system,
+# including the ones nothing will ever apply.
+PREAPPLY_Q="$(plant_proposal 20260301T000700Z "A change offered before the applier existed." -)"
+"$CASTLE" validate || fail "the pre-apply proposal fixture does not validate"
+printf 'a\n.\n' | "$MODAL" --mode review --question "$PREAPPLY_Q" >"$WORKDIR/review-preapply.txt" 2>&1 \
+  || fail "approving a pre-apply change failed: $(cat "$WORKDIR/review-preapply.txt")"
+PREAPPLY_OUT="$(tr -d '\r' < "$WORKDIR/review-preapply.txt")"
+printf '%s\n' "$PREAPPLY_OUT" | grep -qx 'Approved.' \
+  || fail "the pre-apply confirmation is not a bare 'Approved.': $PREAPPLY_OUT"
+printf '%s\n' "$PREAPPLY_OUT" | grep -q "NOTHING ON THIS MACHINE IS EDITED" \
+  || fail "the pre-apply review lost its own statement: $PREAPPLY_OUT"
+
+log "  -- the status surface distinguishes the two approvals it now has to distinguish"
+# "approved — nothing applied yet" stays exactly true for a change
+# nothing will ever apply, and becomes a lie for one waiting on an
+# applier that exists. Both fixtures hang off the same request, and the
+# overlay describes the newest proposal on an errand — which is the
+# apply-authorizing one, deliberately: its stamp is the later of the
+# two.
+STATUS_TWO_APPROVALS="$("$MODAL" --mode status --limit 40)"
+printf '%s\n' "$STATUS_TWO_APPROVALS" | grep -F "$REVIEW_REQ" | grep -q 'approved — waiting to be applied' \
+  || fail "the newest approval, which authorizes an apply, does not say it is waiting to be applied: $(printf '%s\n' "$STATUS_TWO_APPROVALS" | grep -F "$REVIEW_REQ")"
+
+# No `clear_pending_changes` here: both fixtures this section planted
+# were decided by it, so it leaves the fold exactly as it found it —
+# which is what lets it sit above the interactive sections that need a
+# fold they control.
 
 log "review mode: the resize shell-out IS attempted on the interactive path"
 # The double-tty gate does not exclude a pty-driven test, on purpose:
