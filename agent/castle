@@ -6028,7 +6028,7 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
         return None, "`git` is not on this session's PATH"
     try:
         probe = subprocess.run(
-            [git, "-C", root, "apply", "--numstat", "-z", "--", str(sidecar)],
+            [git, "-C", root, *NO_HOOKS_ARGS, "apply", "--numstat", "-z", "--", str(sidecar)],
             capture_output=True,
             timeout=CHECKOUT_PROBE_SECONDS,
             env=_git_stripped_env(),
@@ -6082,6 +6082,84 @@ def _displayable(value: str) -> str:
     """
     return value.encode("utf-8", "backslashreplace").decode("utf-8")
 
+def _verify_single_commit(
+    root: str, head_before: str, paths: list[str]
+) -> tuple[str, str]:
+    """The sha of the one commit the applier just made, or `("", why)`
+    if the repository is not in the state a successful commit implies.
+
+    Three questions, and each one caught a real shape in review:
+
+    * **Does `HEAD` have the parent we started from?** A `post-commit`
+      hook can commit again, or amend; then `rev-parse HEAD` names a
+      commit the applier did not make and the record's own
+      `git revert <sha>` reverts the *hook's* work while leaving the
+      approved change in place.
+    * **Is it exactly one commit?** Same hazard, counted from the other
+      end, and it catches a hook that committed without moving the
+      parent chain the way the first test expects.
+    * **Is the tree clean under the patch's paths?** A hook that stages
+      or writes leaves the change half-committed, which the record would
+      otherwise report as a clean apply.
+
+    An empty `head_before` means the repository had no commits at all
+    before this, which is a legitimate state — a patch that only creates
+    files applies to a fresh `git init` perfectly well. There the commit
+    is the root commit, so it has no parent and the count is measured
+    from the beginning of history instead.
+
+    Returns the sha only when all three hold, so a caller cannot print
+    an unverified one beside a `git revert`.
+    """
+    head_probe, fault = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    if head_probe is None or head_probe.returncode != 0:
+        return "", (
+            fault
+            or "the repository has no HEAD after a commit that reported success"
+        )
+    commit_sha = (head_probe.stdout or "").strip()
+    if not commit_sha:
+        return "", "git named no commit after a commit that reported success"
+
+    if head_before:
+        parent_probe, fault = _run_git(
+            root, ["rev-parse", f"{commit_sha}^"], timeout=CHECKOUT_PROBE_SECONDS
+        )
+        parent = (
+            (parent_probe.stdout or "").strip()
+            if parent_probe is not None and parent_probe.returncode == 0
+            else ""
+        )
+        if parent != head_before:
+            return "", (
+                "the new commit's parent is not where this started, so something "
+                "other than this applier has committed here as well"
+            )
+        span = [f"{head_before}..{commit_sha}"]
+    else:
+        span = [commit_sha]
+    count_probe, fault = _run_git(
+        root, ["rev-list", "--count", *span], timeout=CHECKOUT_PROBE_SECONDS
+    )
+    if count_probe is None or count_probe.returncode != 0:
+        return "", fault or "git could not count the commits this made"
+    count = (count_probe.stdout or "").strip()
+    if count != "1":
+        return "", f"{count} commits landed where exactly one was expected"
+
+    dirty, why_dirty = _dirty_under(root, paths)
+    if dirty is None:
+        return "", (
+            f"whether anything was left uncommitted could not be established "
+            f"({why_dirty})"
+        )
+    if dirty:
+        return "", (
+            f"the files it touched are not clean afterwards ({dirty}), so part of "
+            "the change is not in that commit"
+        )
+    return commit_sha, ""
+
 def _literal(paths: list[str]) -> list[str]:
     """Repository paths as **literal** pathspecs.
 
@@ -6131,7 +6209,7 @@ def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
             # newline in it would otherwise split one line into two and
             # inflate the count it reports.
             [
-                git, "-C", root,
+                git, "-C", root, *NO_HOOKS_ARGS,
                 "status", "--porcelain", "-z", "--", *_literal(paths),
             ],
             capture_output=True,
@@ -6167,9 +6245,60 @@ def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
 # indistinguishable from one that is working.
 APPLY_GIT_SECONDS = 120
 
+# **The resident's git hooks do not run on the applier's commit**, and
+# this is a correctness property rather than tidiness (code review on
+# docs/tasks/0026-apply-validate.md, finding 1, reproduced).
+#
+# The whole design rides on a digest chain: the resident approved exact
+# bytes, `patch-sha256` proves the bytes on disk are those bytes, and
+# the commit message records that digest so the commit is checkable
+# against the journal years later with no tooling. An ordinary
+# formatting `pre-commit` hook breaks that chain silently — reproduced:
+# the committed content was the patch's bytes plus the hook's, under a
+# commit message asserting a digest that no longer described it. A
+# `post-commit` hook is worse in a different direction: it can create or
+# commit anything at all, so `rev-parse HEAD` afterwards names a commit
+# the applier did not make, and the record's `git revert <sha>` then
+# reverts the hook's work while leaving the approved change in place.
+#
+# It also closes a hole `_run_git`'s timeout cannot: `subprocess.run`'s
+# timeout kills the direct child, so a hook that daemonises outlives it.
+# A hook that never runs cannot.
+#
+# **Two mechanisms, because one is not enough.** `--no-verify` skips
+# `pre-commit` and `commit-msg` and nothing else; `core.hooksPath` is
+# what stops `post-commit`, `post-index-change` and the rest.
+#
+# `/dev/null` is the hooks path deliberately. Any real directory has to
+# exist and has to be trusted — `/var/empty` is neither guaranteed
+# present nor guaranteed unwritable everywhere this runs, and a
+# directory under the runtime dir would be world-writable on the `/tmp`
+# fallback, which would replace the resident's own hooks with an
+# attacker's. `/dev/null` can never be a directory on any Unix, so
+# `access("/dev/null/pre-commit", X_OK)` fails with ENOTDIR and there is
+# nowhere for anything to be planted. Verified against git 2.55: no
+# warning, no hook, clean exit.
+#
+# None of this touches how the resident's own commits behave. Their
+# hooks are their policy for their own work, and they still run on it.
+NO_HOOKS_ARGS = ["-c", "core.hooksPath=/dev/null"]
 
-def _run_git(root: str, args: list[str], *, timeout: int = APPLY_GIT_SECONDS):
-    """One `git` in the resident's checkout, with `GIT_*` stripped.
+
+def _run_git(
+    root: str,
+    args: list[str],
+    *,
+    config: list[str] | None = None,
+    timeout: int = APPLY_GIT_SECONDS,
+):
+    """One `git` in the resident's checkout, with `GIT_*` stripped and
+    the resident's hooks disabled (see `NO_HOOKS_ARGS`).
+
+    `config` is per-invocation `-c key=value` settings. A parameter
+    rather than something the caller splices into `args`, so `args[0]`
+    is always the subcommand and the two error messages below can name
+    it — and so nothing can accidentally land a `-c` before the hook
+    suppression and shadow it.
 
     Returns `(CompletedProcess, "")`, or `(None, why)` when git could
     not be run to completion at all — not on disk, would not exec, or
@@ -6183,14 +6312,20 @@ def _run_git(root: str, args: list[str], *, timeout: int = APPLY_GIT_SECONDS):
     because they mean different things: git speaking and refusing is a
     fact about the patch, while git never answering is a fact about the
     machine, and §F gives those two different records.
+
+    The hook suppression is here, at the one choke point, rather than on
+    the two invocations that run hooks today: a future call site added
+    without it would reintroduce exactly the defect this closes, and
+    `-c core.hooksPath=` costs nothing on a `rev-parse`.
     """
     git = shutil.which("git")
     if git is None:
         return None, "`git` is not on this session's PATH"
+    settings = [item for value in (config or []) for item in ("-c", value)]
     try:
         return (
             subprocess.run(
-                [git, "-C", root, *args],
+                [git, "-C", root, *NO_HOOKS_ARGS, *settings, *args],
                 capture_output=True,
                 text=True,
                 errors="replace",
@@ -6805,7 +6940,16 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
             ],
         )
 
-    head_before, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    # An empty string is a legitimate answer here: a repository with no
+    # commits yet has no HEAD, and a patch that only creates files
+    # applies to one perfectly well. `_verify_single_commit` below reads
+    # it as "the commit this makes is the root commit".
+    head_probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    head_before = (
+        (head_probe.stdout or "").strip()
+        if head_probe is not None and head_probe.returncode == 0
+        else ""
+    )
     # Ids only, and never a path or a word of tenant prose: this message
     # is durable and leaves the machine more easily than a journal does.
     # The digest is what makes the commit checkable against the journal
@@ -6838,22 +6982,22 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     #
     # `-c user.name`/`-c user.email` rather than writing config: nothing
     # this task does may modify the resident's `.git/config`.
-    staged, staged_fault = _run_git(root, ["add", "-N", "--", *paths])
+    #
+    # `--no-verify` and — in `_run_git` itself — `core.hooksPath=/dev/null`:
+    # the resident's hooks are their policy for their own commits, and a
+    # formatting `pre-commit` rewriting the bytes this record just
+    # verified a digest for would break the chain the whole design rides
+    # on. See `NO_HOOKS_ARGS`.
+    staged, staged_fault = _run_git(root, ["add", "-N", "--", *_literal(paths)])
     if staged is None or staged.returncode != 0:
         committed, committed_fault = staged, staged_fault
     else:
         committed, committed_fault = _run_git(
             root,
-            [
-                "-c",
+            ["commit", "--no-verify", "-m", message, "--", *_literal(paths)],
+            config=[
                 f"user.name={APPLY_COMMIT_NAME}",
-                "-c",
                 f"user.email={APPLY_COMMIT_EMAIL}",
-                "commit",
-                "-m",
-                message,
-                "--",
-                *paths,
             ],
         )
     if committed is None or committed.returncode != 0:
@@ -6903,21 +7047,45 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         )
         return result_id, "applied-uncommitted"
 
-    head_after, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
-    commit_sha = (head_after.stdout or "").strip() if head_after is not None else ""
-    detail_lines.append("")
-    detail_lines.append(
-        f"It is now one commit in your configuration repository: `{commit_sha or 'sha unread'}`, "
-        f"on the branch that was checked out. Nothing was pushed anywhere, and nothing "
-        f"was activated — no rebuild, no new generation, no change to the machine you "
-        f"are using. To undo it: `git revert {commit_sha or '<that commit>'}`."
-    )
-    if head_before is not None and commit_sha and (head_before.stdout or "").strip() == commit_sha:
+    # **What the repository actually looks like now, asked rather than
+    # assumed.** git reported success; that is not the same as "exactly
+    # one commit landed, its parent is where we started, and nothing was
+    # left behind." Hook suppression above should make all three true by
+    # construction, and this is the backstop that says so out loud if it
+    # ever is not — a record claiming a commit sha it did not verify is
+    # the one thing worse than no record, because `git revert <sha>` is
+    # printed beside it.
+    commit_sha, landing_fault = _verify_single_commit(root, head_before, paths)
+    if landing_fault:
         detail_lines.append("")
         detail_lines.append(
-            "(The repository's head did not move, which should not be possible after "
-            "a commit that reported success. Look at it before trusting this record.)"
+            "git reported the commit succeeded, and the repository is not in the "
+            f"state that implies: {landing_fault}"
         )
+        detail_lines.append("")
+        detail_lines.append(
+            "No commit sha is named here, deliberately: this cannot say which commit "
+            "is the change you approved, so it will not print one for you to revert. "
+            "Look at `git log` and `git status` in your configuration repository "
+            "before doing anything else. Nothing was rolled back, nothing was "
+            "activated, and nothing was pushed anywhere."
+        )
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="failed",
+            apply_outcome="",
+            detail_lines=detail_lines,
+        )
+        return result_id, ""
+
+    detail_lines.append("")
+    detail_lines.append(
+        f"It is now one commit in your configuration repository: `{commit_sha}`, "
+        f"on the branch that was checked out. Nothing was pushed anywhere, and nothing "
+        f"was activated — no rebuild, no new generation, no change to the machine you "
+        f"are using. To undo it: `git revert {commit_sha}`."
+    )
 
     state, outcome = _evaluate_configuration(root, answer.id, detail_lines)
     apply_outcome = {
