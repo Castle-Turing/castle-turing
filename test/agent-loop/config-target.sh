@@ -39,6 +39,18 @@ export GIT_AUTHOR_NAME="castle-config-target-fixture"
 export GIT_AUTHOR_EMAIL="fixture@example.invalid"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+# The identity vars above are not the only thing a developer's git
+# config can decide. Reproduced: `apply.whitespace = error` in
+# ~/.gitconfig makes `git apply --check` of the CRLF byte-fidelity
+# sidecar exit 128 ("blank-at-eol") — a false FAIL, not the real
+# assertion; `core.autocrlf = true` makes the body-copy apply write
+# CRLF too, so the CRLF-loss contrast this fixture exists to prove
+# stops being observable — also a false FAIL. Every git call in this
+# file inherits these two, closing the gap for good rather than only
+# for the sites that happened to be new when this was noticed
+# (code review finding on this task).
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
 
 # ---------------------------------------------------------------------
 log "building the two checkouts"

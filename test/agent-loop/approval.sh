@@ -41,6 +41,12 @@ export GIT_AUTHOR_NAME="castle-approval-fixture"
 export GIT_AUTHOR_EMAIL="fixture@example.invalid"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+# Same defect, same file family, same fix: the identity vars above are
+# not the only thing a developer's git config can decide (see
+# config-target.sh, whose fixture this reuses), so every git call this
+# harness makes is isolated from it too.
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
 
 # This harness is not about window geometry, and a review driven on a
 # pty here has two real ttys, so `_resize_for_review`'s double-tty gate
