@@ -180,7 +180,13 @@
                 sshKeys = [
                   "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key"
                 ];
-                initialHashedPassword = "REPLACE-WITH-A-REAL-HASH-this-is-a-placeholder-not-a-hash";
+                # A *path*, not a hash — docs/tasks/0032-password-hash.md.
+                # A plain string placeholder that needs no real file to
+                # exist for `nix flake check` to pass (Principle 02:
+                # nothing here may require a real resident's secret to
+                # resolve), pointed at the runtime directory a
+                # `neededForUsers` sops-nix secret actually lands in.
+                hashedPasswordFile = "/run/secrets-for-users/REPLACE-WITH-A-REAL-SECRET-NAME-this-is-a-placeholder-path";
               };
               castle.person = {
                 gitUserName = "Resident";

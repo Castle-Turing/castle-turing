@@ -21,12 +21,14 @@ setting like it that follows will be stuck in the same gap.
 
 - **The two existing patterns, and why neither fits.** *Hard-asserted:*
   `castle.person.gitUserName`/`gitUserEmail` (`modules/home/default.nix`,
-  assertions ~L70-88) and `castle.admin.initialHashedPassword`
-  (`modules/desktop/default.nix`, assertion ~L177) fail the build until
-  the private layer supplies them. *Silently defaulted:* `castle.display.*`
-  and `castle.display.wallpaper` (`lib.mkDefault`,
-  `modules/desktop/default.nix` ~L173) — the framework picks something
-  sensible and says nothing. Failing the build over a timezone would be
+  assertions ~L70-88) and `castle.admin.hashedPasswordFile`
+  (`modules/desktop/default.nix`, assertion ~L349; renamed from
+  `initialHashedPassword` by `docs/tasks/0032-password-hash.md`, which
+  changed nothing about which of these two patterns it belongs to) fail
+  the build until the private layer supplies them. *Silently
+  defaulted:* `castle.display.*` and `castle.display.wallpaper`
+  (`lib.mkDefault`, `modules/desktop/default.nix` ~L346) — the
+  framework picks something sensible and says nothing. Failing the build over a timezone would be
   obnoxious; defaulting it produced this bug.
 - **Detection is a network-privacy question, not a convenience one.**
   The pinned nixpkgs ships `services.automatic-timezoned` and

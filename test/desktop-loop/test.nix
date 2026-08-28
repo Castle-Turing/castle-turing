@@ -86,6 +86,22 @@ let
   testPassword = "castle-turing-harness-password";
   testPasswordHash = "$6$castleturingtest$zio0DohVCoFAZ/ByLr3cUIhPge5lXZ0O1ylANx36BtdkaeKzOqdKht4KBROWu5o3dVZNyIG7UDKROXEl6WVjx0";
 
+  # docs/tasks/0032-password-hash.md turned `castle.admin`'s password
+  # slot from a hash string into a *path*, so this test needs a file
+  # holding the hash above rather than the hash itself. A store path is
+  # the right answer *here specifically*, and would be the wrong answer
+  # in a private layer: the whole point of 0032 is that a real
+  # resident's hash must never reach the world-readable store, and the
+  # documented pattern is a sops-nix secret's runtime `.path`
+  # (test/vm-install/ proves that path end to end on a real install).
+  # This value is neither a real hash nor a real person's — it is a
+  # published fixture whose plaintext is three lines above it, so
+  # putting it in the store discloses nothing that this file does not
+  # already commit. What it buys is that the account genuinely gets
+  # this hash at creation, which is what lets the test type
+  # `testPassword` at a real, unmodified tuigreet prompt below.
+  testPasswordHashFile = pkgs.writeText "castle-desktop-loop-password-hash" testPasswordHash;
+
   # check_assertions.py: an independent, already-reviewed re-derivation
   # of the frontmatter format that does not share agent/castle's own
   # parser (see that file's header for why that independence matters).
@@ -301,7 +317,7 @@ in
       castle.admin = {
         username = "resident";
         sshKeys = [ "ssh-ed25519 REPLACE-WITH-YOUR-PUBLIC-KEY this-is-a-placeholder-not-a-key" ];
-        initialHashedPassword = testPasswordHash;
+        hashedPasswordFile = "${testPasswordHashFile}";
       };
       castle.person = {
         gitUserName = "Resident";

@@ -22,8 +22,21 @@
 # exactly the first-boot lockout docs/tasks/0003-findings.md (finding
 # #1) hit: no config layer supplied one, so console login was
 # impossible on a Wi-Fi-only machine that also couldn't be reached over
-# SSH yet. The assertion below closes that loop — see
-# castle.admin.initialHashedPassword in modules/base.
+# SSH yet. The assertion below *narrows* that loop — see
+# castle.admin.hashedPasswordFile in modules/base.
+#
+# "Narrows", not "closes", and the word changed with
+# docs/tasks/0032-password-hash.md rather than being softened for
+# style. The assertion used to read an option whose value was the hash
+# itself, so a non-null value was a real password, checked at
+# evaluation. That option now holds a *path*, and no evaluation can
+# open a file that will not exist until activation on another machine —
+# so a typo, a wrong secret name, or a secret that never decrypts all
+# satisfy this assertion and still produce finding #1's console
+# lockout. Nothing here can fix that, and an assertion that pretended
+# otherwise would be worse than an honest narrow one. What actually
+# proves the secret reaches the account is test/vm-install/'s phase 2d,
+# on a real unattended install.
 { config, lib, pkgs, ... }:
 
 let
@@ -347,15 +360,31 @@ in
 
     assertions = [
       {
-        assertion = config.castle.admin.initialHashedPassword != null;
+        assertion = config.castle.admin.hashedPasswordFile != null;
         message = ''
-          modules/desktop requires castle.admin.initialHashedPassword to
-          be set: this module deliberately configures no auto-login (see
+          modules/desktop requires castle.admin.hashedPasswordFile to be
+          set: this module deliberately configures no auto-login (see
           the module's header comment), so a login prompt with no
           password behind it is the exact console lockout
-          docs/tasks/0003-findings.md finding #1 describes. Generate a
-          hash with `mkpasswd -m sha-512`; it belongs in the private
-          layer, never this repo — see docs/private-layer.md.
+          docs/tasks/0003-findings.md finding #1 describes. Point it at
+          a decrypted secret's runtime path — see docs/private-layer.md's
+          "Secrets" section and docs/tasks/0032-password-hash.md. This
+          is a *file path*, read at activation, never the hash itself.
+
+          What this check does NOT catch, said plainly so you know what
+          you are still carrying: it only proves the option is set to
+          some string. Nothing at evaluation time can open a file that
+          will not exist until this configuration activates on the
+          target machine, so a mistyped path, a wrong secret name, or a
+          secret that fails to decrypt all pass this assertion and then
+          create the account with a locked password — finding #1 again,
+          discovered at the first console login on a fresh machine.
+
+          Verify the mechanism on the machine, not in the build:
+          `sudo cat <that path>` after a rebuild should print your hash.
+          docs/private-layer.md's "Using the secret: your login
+          password" walks it, and explains why doing this costs you
+          nothing on a machine you are already logged into.
         '';
       }
       {
