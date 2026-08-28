@@ -1313,23 +1313,54 @@ end.
 
 From `docs/tasks/0033-byte-exact-proposal.md`. A result's body embeds
 the tenant's diff for a human to read, but getting there costs four
-lossy transforms — a lenient UTF-8 decode with `errors="replace"`, a
-`.strip()` that drops a trailing newline, and a `splitlines()`-based
-round trip that treats CR, form feed and the Unicode line separators
-as line breaks the same way `\n` is. None of that is a defect in what
-the body is *for*; it is a defect in trusting the body for anything
-else. Once an applier exists (`docs/tasks/0026`), "anything else" is
-exactly what it needs: the tenant's exact bytes, undisturbed.
+lossy transforms: a lenient UTF-8 decode with `errors="replace"` that
+destroys any non-UTF-8 byte irreversibly, a `.strip()` that drops the
+patch's trailing newline, locale-dependent I/O on both the read and
+the write back (no `encoding=` at either `path.read_text()` or
+`path.write_text()`), and a `splitlines()`-based round trip that
+treats CR, form feed and the Unicode line separators as line breaks
+the same way `\n` is. None of that is a defect in what the body is
+*for*; it is a defect in trusting the body for anything else. Once an
+applier exists (`docs/tasks/0026`), "anything else" is exactly what it
+needs: the tenant's exact bytes, undisturbed. This task closes the
+locale-dependent I/O transform outright — `parse_record` and
+`write_record` now pass `encoding="utf-8"` explicitly, see "Records
+are UTF-8 by definition" above — and routes around the other two
+(the lenient decode/strip and the `splitlines()` round trip) rather
+than fixing them: the sidecar below is read from the raw bytes before
+either ever runs, so an applier that reads the sidecar instead of the
+body never meets them.
 
-So a completed, targeted turn writes a second file beside the record,
+So a turn that embeds a diff writes a second file beside the record,
 `<result-id>.patch`, holding the tenant's diff exactly as it wrote it
 to `$CASTLE_DIFF_FILE` — read once, before the lenient decode ever
 runs, and never modified afterward. `patch-sha256`, stamped on the
-result alongside `diff-boundary`, is that sidecar's SHA-256. `castle
-validate` checks it: the sidecar a stamped record names must exist and
-must hash to the stamped value. Absent means "this result embeds no
-diff," the same reading `diff-boundary` already gives absence, and
-`castle validate` does not go looking for a sidecar nothing names.
+result alongside `diff-boundary`, is that sidecar's SHA-256, and it
+rides the same gate `diff-boundary` already does: any turn whose
+tenant wrote a diff gets one, not only a turn that finished cleanly
+and named a resolvable target. Completed-and-targeted is the normal
+case, not the rule — a turn killed at `CASTLE_WORKER_TIMEOUT` with a
+diff already on disk gets a sidecar too, deliberately: the sidecar
+mirrors the body's own diff treatment (a timed-out turn embeds its
+possibly-partial diff in the body, labelled as such), and the exact
+bytes of a partial diff are precisely what you want when diagnosing a
+timeout. `castle validate` checks it regardless of outcome: the
+sidecar a stamped record names must exist and must hash to the
+stamped value. Absent means "this result embeds no diff," the same
+reading `diff-boundary` already gives absence, and `castle validate`
+does not go looking for a sidecar nothing names.
+
+**A sidecar from a turn that did not complete cleanly can never reach
+the approval channel.** `stamped_target` (`agent/castle:4425`) is set
+from `target_text if (diff_text and finished_cleanly) else ""` — a
+strictly narrower gate than the sidecar's own — and
+`_file_proposal_question` (`agent/castle:4564`) is only ever called
+when `stamped_target` is truthy. So a timed-out or otherwise
+not-cleanly-finished turn's sidecar sits in the journal with a valid
+`patch-sha256`, but no `target` field, no question filed for it, and
+therefore nothing for a resident to approve and nothing for 0026's
+applier to spend: this is the contract 0026 relies on, not an
+incidental consequence.
 
 The sidecar lives inside the journal directory, so `docs/tasks/0030`'s
 state-layout rules already cover it with no separate check, and it is
@@ -1342,8 +1373,15 @@ anything that walks the journal today.
 file changed since the proposal was filed? `patch-sha256` is
 byte-fidelity evidence — are these the exact bytes the tenant
 produced, unmangled by anything this record format's own transforms do
-to a body? A result can carry one, the other, both (the normal case
-for a completed, targeted turn), or neither.
+to a body? The two live on different record types, never the same
+file: `patch-sha256` is stamped on the result, `proposal-sha256` on
+the question filed for it, so a given result carries `patch-sha256`,
+possibly-neither, never `proposal-sha256` itself. A completed, targeted
+turn is the only case that produces both records — the result with
+`patch-sha256` and the question with `proposal-sha256` — of the
+journal entries a single turn can write; a turn that embedded a diff
+but was not cleanly completed-and-targeted produces the result and its
+sidecar alone, no question, ever.
 
 Like `proposal-sha256`, this is tamper/fidelity evidence only — not a
 signature, not an attestation of authorship, and not anything that

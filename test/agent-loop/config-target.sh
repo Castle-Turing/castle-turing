@@ -1019,6 +1019,57 @@ assert_checkouts_untouched "after the byte-fidelity cases"
 "$CASTLE" validate >/dev/null
 
 # ---------------------------------------------------------------------
+log "a turn killed at the timeout still gets a sidecar, and that sidecar is unreachable through the approval channel"
+# ---------------------------------------------------------------------
+# `patch-sha256` and the sidecar ride `diff-boundary`'s own gate —
+# `if diff_text`, unconditional on outcome — not `stamped_target`'s
+# narrower `diff_text and finished_cleanly` gate. So a tenant that
+# writes a real diff and is then killed at CASTLE_WORKER_TIMEOUT still
+# gets a byte-exact sidecar (agent/README.md's "The byte-exact
+# sidecar"): completed-and-targeted is the normal case, not the rule.
+# What must also be true, and is the whole point of the split: no
+# `target` field (the SLOW_STAMPER case above already covers this) and
+# — new here — no proposal question ever filed for this result, so
+# nothing reaches the resident to approve and nothing for 0026's
+# applier to spend. Reuses the byte-fidelity block's own
+# no-trailing-newline fixture rather than typing a second copy of the
+# bytes under test.
+TIMEOUT_DIFF_WORKER="$WORKDIR/timeout-diff-worker.sh"
+cat > "$TIMEOUT_DIFF_WORKER" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'timeout-diff-worker: diff and target written, then killed mid-turn\n'
+cp "$CASTLE_BYTE_FIDELITY_DIR/no-trailing-newline.diff" "$CASTLE_DIFF_FILE"
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+sleep 30
+TENANT
+chmod +x "$TIMEOUT_DIFF_WORKER"
+REQ_TIMEOUT_DIFF="$("$CASTLE" ask "An invented errand whose tenant writes a real diff, then is killed at the timeout.")"
+CASTLE_WORKER_TIMEOUT=3 CASTLE_WORKER_COMMAND="$TIMEOUT_DIFF_WORKER" "$CASTLE" work "$REQ_TIMEOUT_DIFF" >/dev/null 2>&1 || true
+R_TIMEOUT_DIFF="$(newest_result_for "$REQ_TIMEOUT_DIFF")"
+R_TIMEOUT_DIFF_ID="$(basename "$R_TIMEOUT_DIFF" .md)"
+
+grep -q '^outcome: timeout$' "$R_TIMEOUT_DIFF" \
+  || fail "timeout-with-diff: the tenant did not time out: $(grep '^outcome:' "$R_TIMEOUT_DIFF")"
+grep -q '^diff-boundary: ' "$R_TIMEOUT_DIFF" \
+  || fail "timeout-with-diff: no diff-boundary field — a timed-out turn that wrote a diff should still gate on it"
+grep -q "^${PATCH_SHA256_FIELD}: " "$R_TIMEOUT_DIFF" \
+  || fail "timeout-with-diff: no patch-sha256 field — the sidecar gate must ride diff-boundary's, not stamped_target's"
+SIDECAR_TIMEOUT_DIFF="${R_TIMEOUT_DIFF%.md}.patch"
+[ -f "$SIDECAR_TIMEOUT_DIFF" ] \
+  || fail "timeout-with-diff: patch-sha256 is stamped but no sidecar file exists beside the result"
+cmp -s "$SIDECAR_TIMEOUT_DIFF" "$BYTE_FIDELITY_DIR/no-trailing-newline.diff" \
+  || fail "timeout-with-diff: the sidecar is not byte-identical to what the tenant wrote"
+grep -q '^target:' "$R_TIMEOUT_DIFF" \
+  && fail "timeout-with-diff: a target was stamped on a turn that did not finish cleanly"
+grep -l "$R_TIMEOUT_DIFF_ID" "$JOURNAL"/*-question-*.md >/dev/null 2>&1 \
+  && fail "timeout-with-diff: a proposal question was filed for a result that never stamped a target — the approval channel is not supposed to be reachable from here"
+"$CASTLE" validate >/dev/null \
+  || fail "timeout-with-diff: castle validate is not green on a journal holding this sidecar"
+assert_checkouts_untouched "after the timeout-with-diff case"
+
+# ---------------------------------------------------------------------
 log "castle validate red/green matrix: patch-sha256"
 # ---------------------------------------------------------------------
 # Reuses the CRLF case's already-completed, already-valid turn as the

@@ -329,9 +329,21 @@ conflating the two fields:
   bytes the tenant produced, unmangled by anything this record
   format's own transforms do to a body?
 
-A record can carry one, the other, both (the normal case for a
-completed, targeted turn), or neither (any turn that proposed
-nothing).
+The two live on different record types, never the same file:
+`patch-sha256` on the result, `proposal-sha256` on the question filed
+for it. `patch-sha256` rides `diff-boundary`'s own gate — any turn
+that embedded a diff, regardless of outcome — so a completed, targeted
+turn producing both (the result with `patch-sha256`, the question with
+`proposal-sha256`) is the normal case, not the rule: a turn that
+embedded a diff but did not complete cleanly and land a resolvable
+target gets a result and its sidecar and nothing else, because
+`stamped_target` (`agent/castle:4425`) requires `diff_text and
+finished_cleanly`, and `_file_proposal_question` (`agent/castle:4564`)
+only ever fires on `stamped_target`. That sidecar is therefore
+unreachable through the approval channel by construction — no
+question, no approval, nothing for 0026's applier to spend — which is
+the contract 0026 relies on. See `agent/README.md`'s "The byte-exact
+sidecar" section for the fuller statement of this invariant.
 
 ### 7. Readers: unchanged
 
