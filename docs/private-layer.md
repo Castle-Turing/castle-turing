@@ -1092,12 +1092,33 @@ part worth reading, because they are what makes this safe to leave on:
   neither does an ignored file: a check that refused forever on a
   perfectly ordinary layout would be worse than no check.
 
+**Your git hooks do not run on its commits.** Not `pre-commit`, not
+`post-commit`, not any of them — they are disabled for exactly the
+commands Castle runs, and they still run on every commit you make
+yourself. This is not tidiness: the commit message records the digest
+of the exact bytes you approved, and a formatting hook that rewrites
+them would leave that record asserting a digest for content it no
+longer describes. Afterwards it checks what actually landed — one
+commit, parented where it started, nothing left uncommitted — and if
+the repository is not in that state it says so and names **no** commit
+sha, rather than printing a `git revert` for a commit it cannot vouch
+for.
+
 **When something goes half-right.** If the change applies and the
-commit then fails — a signing hook, a permissions problem — the record
-says so, gives you both commands (keep it, or drop it), and **nothing
-is rolled back**. A reset would destroy any other uncommitted work in
-this repository, and rewinding your history is a larger authority than
-adding one commit you asked for.
+commit then fails — a signing hook of your own, a permissions problem —
+the record says so, tells you how to keep it, and gives you the exact
+commands to drop it: scoped to the files it touched, never to the whole
+repository, and different for a file it created than for one it
+changed, because the same command does not work for both. **Nothing is
+rolled back** on its own. A reset would destroy other uncommitted work
+in this repository, and rewinding your history is a larger authority
+than adding one commit you asked for.
+
+**And if it could not act at all** — no usable checkout, git not
+answering — the change is untouched and the status surface says
+`could not be applied — castle apply <id> to try again`, naming the
+command. It will not try again by itself: one automatic attempt per
+approval, whatever happened. Fix whatever was in the way and run that.
 
 **The check, if you turn it on.** With
 `castle.agent.apply.evaluateFlake = true`, one `nix build --no-link` of
@@ -1109,6 +1130,13 @@ not say your secrets will decrypt, and it does not say the
 configuration will activate. If it fails, the change stays where it is
 and the record says the check failed; nothing repairs it, re-proposes
 it or asks again. The remedy is a fresh `castle ask`.
+
+One thing it cannot check at all, and says so rather than guessing: if
+this repository's own path contains a `#` or a `?`, Nix reads those as
+flakeref syntax rather than as part of the path, so there is no way to
+name the repository to it. Your change is still made and committed;
+only the check is skipped, and the record names the character. There is
+no escaping rule for them — moving the checkout is the only fix.
 
 **One host, and one attempt.** Turn this on for at most one machine per
 journal, for the reason "Automatic dispatch" above gives. And each

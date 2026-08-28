@@ -541,6 +541,21 @@ reason — two hosts would apply the same approved change to two
 different checkouts, and only one of them is the one the resident
 means — and the doc gains one sentence saying so.
 
+**And the sweep refuses the fallback lock directory**, mirroring
+`cmd_dispatch`'s own refusal word for word in structure. With no
+`XDG_RUNTIME_DIR` and no `/run/user/$UID`, the only lock directory left
+is `/tmp/castle-$UID`, which any local user can create first: they hold
+`apply.lock`, the sweep reports "another applier is already running" and
+exits 0 forever, green in `systemctl --user status`, while every
+approval the resident granted sits unapplied. Dispatch's version of that
+is an errand that never starts; this one is an authorization that never
+gets spent, on the seat with the higher authority of the two. The hand
+path keeps the fallback deliberately, exactly as `castle work` does — a
+human is present and will notice. Not in this brief's original guard
+list; added on the owner's disposition after review, and covered by a
+scenario mirroring `dispatch-test.sh`'s, which branches on whether the
+runner has `/run/user/$UID` so both worlds are asserted.
+
 **The worker-turn guard (STOP-19).** `cmd_apply` refuses outright if
 `WORKER_CLAIM_ENV` is present in the environment, printing a message
 naming the seat that may not do this and the one that may. This is the
@@ -617,7 +632,23 @@ The listed order is otherwise exactly what the code does.
    as the worker's own refusal to record an unresolvable role.
 6. **The tree is clean under the paths the patch touches.**
    `git -C <root> apply --numstat -z -- <sidecar>` is git's own patch
-   parser and touches nothing; it yields the paths. Then
+   parser and touches nothing; it yields the paths. **Read as bytes and
+   decoded with `surrogateescape`**, which the brief did not say and
+   Codex's review found the cost of: `text=True, errors="replace"`
+   turned any byte that is not valid UTF-8 into U+FFFD, in the one
+   function that chose `-z` specifically so as not to mangle a name, so
+   the dirty check inspected a path that does not exist and the pathspec
+   commit failed *after* the tree had been modified. `surrogateescape`
+   round-trips the original bytes back into git's argument list. Its
+   cost is that these strings are not safe to render — a lone surrogate
+   makes `write_text` raise, and records are UTF-8 by definition — so
+   every point where a path reaches a record, a message or a
+   notification sanitises it for display first while git keeps the real
+   value. **And every pathspec is `:(literal)`**, because `--` ends
+   options without stopping git reading what follows as a *pattern*: a
+   resident's file named `weird*.nix` would otherwise glob-match others.
+   Every traced shape failed safe, which is not a property to leave
+   resting on luck. Then
    `git -C <root> status --porcelain -- <those paths>` must be empty.
    Non-empty: `refused-tree-dirty`, with the offending paths' *status
    letters and count* in the body but not their names — a private
@@ -667,6 +698,32 @@ same blanket `_state_tracked_in` applies for the same reason
 (`agent/castle:680-687`): git reads that environment to decide what a
 repository even is.
 
+- **The resident's git hooks do not run**, and this was missing from
+  this brief until code review reproduced what it costs. Every git
+  invocation carries `-c core.hooksPath=/dev/null`, and the commit adds
+  `--no-verify`. Both are needed: `--no-verify` skips `pre-commit` and
+  `commit-msg` only, and `core.hooksPath` is what stops `post-commit`.
+  An ordinary formatting `pre-commit` rewrote the committed bytes, so
+  the commit whose message asserts `patch-sha256` did not contain the
+  bytes that digest describes — the audit chain this whole design rides
+  on, broken silently. A `post-commit` hook is worse in a different
+  direction: it can commit again, so `rev-parse HEAD` afterwards names a
+  commit the applier never made, and the record's own `git revert <sha>`
+  then reverts the hook's work while leaving the approved change in
+  place. It also closes a hole the subprocess timeout cannot, since that
+  kills only the direct child and a daemonising hook outlives it.
+  `/dev/null` is the hooks path deliberately: any real directory has to
+  exist and be trusted, and one under the runtime dir would be
+  world-writable on the `/tmp` fallback — replacing the resident's hooks
+  with an attacker's. `/dev/null` can never be a directory. The
+  resident's hooks still run on the commits they make themselves.
+- **And what landed is verified, not assumed.** After the commit
+  reports success: `HEAD`'s parent is where this started, exactly one
+  commit separates them, and the patch's paths are clean. Only then is
+  the sha taken and printed. If any of the three fails the record is
+  `outcome: failed` with no `apply-outcome` and **no sha at all** — a
+  record naming an unverified commit beside a `git revert` is worse than
+  one naming none.
 - **`-c user.name`/`-c user.email` rather than writing config.**
   Nothing this task does may modify the resident's `.git/config`. The
   identity is `Castle applier <applier@castle.invalid>` — `.invalid`
@@ -748,8 +805,26 @@ promised. What remains argues *for* the commit:
 **What happens when the commit fails after the patch applied.** The
 working tree carries the change and the repository does not. This is a
 real state and it gets a real name (`applied-uncommitted`, §F) with
-`outcome: failed`, plus a body giving the two commands that resolve it
-in either direction. It is not rolled back: see the next paragraph.
+`outcome: failed`, plus a body giving the commands that resolve it in
+either direction. It is not rolled back: see the next paragraph.
+
+**Those commands are rendered per path shape, and the brief's original
+"both recovery commands" was wrong about one of them.** Code review ran
+what this used to print — `git checkout -- .` — and found it actively
+harmful for two of the three shapes: on a path the change *created*,
+`git add -N` has already put an intent-to-add entry in the index, so
+`checkout` restores the file from that entry's **empty blob** and
+leaves it on disk with its contents destroyed, reporting success; and
+on a path the change *deleted*, it leaves the deletion staged in the
+index for the resident's next commit to pick up. It was also repo-wide,
+which the dirty check is deliberately not. So: `git reset` over the
+patch's paths first (the index is what `add -N` touched), then
+`git checkout --` for paths that existed before and `rm -f --` for ones
+the change created — path-scoped throughout, never `.`. Distinguishing
+the two needs one `git ls-files` **before** the patch is applied, since
+the numstat data cannot tell a creation from an append to an empty
+file; when that could not be asked, the record prints no command and
+says so rather than printing the half that destroys work.
 
 **Nothing is ever rolled back, and this is a decision.** No `git reset
 --hard`, no `git checkout --`, no auto-revert of a committed change
@@ -783,7 +858,8 @@ Named for evaluation and not for "validation" generally, per D1, so
 what is being authorised is legible in the option name itself. Wired
 to `CASTLE_APPLY_EVALUATE_FLAKE`.
 
-Three conditions, all required, before `nix` is invoked at all:
+Four conditions, all required, before `nix` is invoked at all — the
+brief specified three, and code review found the fourth by running it:
 
 1. **The option is on.** Absent or unset means no evaluation, no
    subprocess, and an `applied-unvalidated` outcome whose body says
@@ -798,7 +874,21 @@ Three conditions, all required, before `nix` is invoked at all:
    same three-stage remedy 0030 shipped. Outcome:
    `applied-unvalidated`. The apply itself still happens; the gate is
    on evaluation, which is the only thing that copies anything.
-3. **`nix` is on `$PATH`.** `shutil.which("nix")` — a host running the
+3. **The private root's own path can be a flakeref.** A path flakeref
+   splits its attribute path at `#` and its query at `?`, so a checkout
+   whose path contains either makes `nix` resolve a shorter, wrong
+   directory. Verified against nix 2.34: it does not fail as a
+   malformed argument, it fails as "getting status of … No such file or
+   directory" — which arrived here as a nonzero exit and was recorded
+   as `validation-failed`, *a false claim that the resident's
+   configuration no longer builds*. There is no escaping rule for these
+   in a path flakeref, which is why this is a skip rather than
+   something to quote around: outcome `applied-unvalidated`, body
+   naming the character, and — unlike the other three skips — **no
+   command line printed**, because there is no command to print and
+   printing the one that cannot work would be the record recommending
+   what produced the wrong answer.
+4. **`nix` is on `$PATH`.** `shutil.which("nix")` — a host running the
    agent layer without `modules/dev` genuinely has none, exactly as
    `_checkout_fault` documents for `git` (`agent/castle:3212-3221`).
    Absent: `applied-unvalidated`, body saying so. No refusal, no
@@ -1129,8 +1219,34 @@ concrete.
 
 **A fourth stage, inside the existing decision block.** After the
 deciding answer `rec` is found (`:1561-1566`), look in `downstream`
-for the newest `result` whose `refs[0] == rec.id` and which carries
-`apply-outcome`, and let it set `base`. It inherits the enclosing
+for the newest `result` whose `refs[0] == rec.id` and which was
+**written by the applier seat**, and let it set `base`.
+
+**Keyed on the seat and not on `apply-outcome`, which is a correction
+code review made by execution.** Three paths write `outcome: failed`
+with no `apply-outcome` at all — an unusable checkout, a `target`
+naming a role this applier has no checkout for, and a `git apply` git
+never finished — and after this brief's own amendments, a fourth: a
+commit that reported success while leaving the repository in a state
+that contradicts it. Every one of those records names the answer, so
+every one bars it from `_eligible_approvals` forever; keyed on the
+field, none of them was recognised here, and the errand read
+`approved — waiting to be applied` permanently for something that would
+never run, with the remedy named nowhere. The new row's label names the
+hand path, per docs/tasks/0015's rule that a label must not cause the
+inaction it describes — the automatic bar is deliberate and stays; what
+was missing was telling the resident that `castle apply <answer-id>` is
+still open to them. It also makes the fail-closed record-door denial
+visible rather than silent: a hand-planted `seat: applier` result is
+still refused, and now says so.
+
+The same accepted limit `proposals[-1]` carries applies to
+`applies[-1]`: ids are chronological only to one second, so a hand
+retry landing in the same second as the attempt it retries can be
+described by the wrong one of the two. Inherited from
+`docs/backlog/record-ids-are-only-second-resolution.md` rather than
+worked around, on that entry's own finding that a fifth local
+workaround would not help. It inherits the enclosing
 block's two guards for free — never over a live turn, never over
 something newer — and it needs no new keying rule, because
 `_collect_downstream` reaches it through the same `refs[0]` chain that
@@ -1150,6 +1266,7 @@ is fine, exactly as `_outcome_label` already prints `castle work
 | `validation-failed` | `applied, and the check failed — not activated` |
 | `applied-uncommitted` | `partly applied — see your configuration repository` |
 | any `refused-*` | `approved, but not applied — <short reason>` |
+| an applier result with **no** `apply-outcome` | `could not be applied — castle apply <answer-id> to try again` |
 | unrecognised `apply-outcome` | rendered verbatim, never collapsed |
 
 The five short reasons, written here for the same reason the
@@ -1750,6 +1867,12 @@ mechanism assertion, and `castle validate` exiting 0.
    --sweep` is refused, exit nonzero, nothing written
    (`assert_private_untouched`). STOP-19's mechanical half.
 
+6b. **An unattended applier refuses a world-writable lock directory**,
+   mirroring `dispatch-test.sh`'s existing scenario for the same
+   hazard: branch on whether `/run/user/$UID` exists, assert the sweep
+   runs normally where it does and refuses — naming the hand path it
+   deliberately keeps — where it does not.
+
 *Every refusal, one scenario each:*
 
 7. `refused-target-mechanism` — the mechanism-targeted proposal,
@@ -1783,6 +1906,24 @@ mechanism assertion, and `castle validate` exiting 0.
     Plus the **negative** control that makes the check meaningful: an
     uncommitted edit to a *different* path, and an ignored scratch
     file, both leave the apply proceeding normally.
+11b. **The resident's git hooks, planted and asserted not to have
+    run** — a scenario code review added. An ordinary formatting
+    `pre-commit` and an ordinary generating `post-commit` in the
+    fixture, then an apply: exactly one commit, its parent where the
+    scenario started, its bytes the patch's and not the hook's, the
+    tree clean, and the sha the record names the repository's actual
+    head. Plus the control that makes it mean anything — the same two
+    hooks demonstrably do run on a commit the *resident* makes, so the
+    scenario cannot pass because the fixtures were never executable.
+
+11c. **Two file names git has to be asked about** — one carrying a byte
+    that is not valid UTF-8, one carrying a `*`, both generated with
+    `printf` so this harness's own source stays plain ASCII. Assert the
+    apply succeeds, the commit names exactly those two paths and not a
+    decoy file the glob would otherwise reach, and — the half that
+    matters for the journal — `castle validate` is still green, because
+    a surrogate reaching a record body would make it unwritable.
+
 12. `applied-uncommitted` — the commit made to fail. Simplest
     reproduction: point `HOME`/`GIT_CONFIG_GLOBAL` at a directory
     containing a `commit.gpgsign = true` config with no signing key,
@@ -1792,12 +1933,42 @@ mechanism assertion, and `castle validate` exiting 0.
     `apply-outcome: applied-uncommitted`, and the body names both
     recovery commands. If neither method is reliable on the runner,
     the scenario is skipped **loudly** with a printed reason rather
-    than quietly dropped.
+    than quietly dropped. (Implemented as a repository-local
+    `commit.gpgsign` pointing at a signing program that always refuses,
+    which needs no gpg on the runner at all and never depends on luck.)
+
+    **Two variants, and the recorded recovery is EXECUTED rather than
+    grepped for** — code review found that a scenario asserting the
+    string is present passes just as happily when the command does
+    nothing. One variant on a path the change *modified* and one on a
+    path it *created*, each running the block out of the record and
+    asserting both the working tree and the index return to their
+    pre-apply state, with the resident's own staged work untouched. The
+    created variant is the one that caught the defect: the old advice
+    left the file on disk with its contents destroyed.
 13. **Environment fault** — `CASTLE_PRIVATE_ROOT` pointed at a
     subdirectory of the checkout (`_checkout_fault`'s
     toplevel-mismatch case, the one its docstring says nothing
     downstream could detect). `outcome: failed`, no `apply-outcome`,
     body naming the option.
+
+    **And then two assertions about the surface, which the brief's
+    original scenario lacked entirely** — it checked field absence and
+    never looked at what a resident would read. The approval is now
+    barred from the sweep, so: the status line must say
+    `could not be applied — castle apply <answer-id> to try again` and
+    must *not* still say it is waiting; and then that command is run
+    verbatim against a repaired root and must actually apply the
+    change. A label naming a remedy nobody tried is how
+    docs/tasks/0015's defect gets reintroduced one surface over.
+
+13b. **A repository whose path Nix cannot name** — its own throwaway
+    checkout at a path containing `#`, gate on, `nix` stubbed. Assert
+    the stub was **never invoked** (the sharp assertion, and the one a
+    stub can actually prove — a stub exits 0 whatever argv it gets, so
+    it cannot reproduce the false `validation-failed` itself), the
+    outcome is `applied-unvalidated`, the body names the character, and
+    the change still landed as exactly one commit.
 
 *The eval gate, proven in all three directions with no Nix:*
 

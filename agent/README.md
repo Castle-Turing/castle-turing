@@ -1394,11 +1394,25 @@ change nobody authorized.
 
 Then a working-tree edit and exactly one commit on the current branch,
 made with `-c user.name`/`-c user.email` so the resident's `.git/config`
-is never written, and with a pathspec so the commit contains exactly
-the patch's paths and their own staged work is neither swept in nor
-lost. The message names only ids and the patch digest — no paths, no
-tenant prose, nothing that could be resident data — and says in as many
-words that nothing was activated.
+is never written, and with a `:(literal)` pathspec so the commit
+contains exactly the patch's paths — not a glob match on one of them —
+and their own staged work is neither swept in nor lost. The message
+names only ids and the patch digest — no paths, no tenant prose,
+nothing that could be resident data — and says in as many words that
+nothing was activated.
+
+**The resident's git hooks do not run on that commit**, via
+`--no-verify` and `core.hooksPath=/dev/null` (both, since the first
+covers only `pre-commit` and `commit-msg`). A formatting `pre-commit`
+would otherwise rewrite the very bytes the commit message records a
+digest for, and a `post-commit` can commit again — making `rev-parse
+HEAD` name a commit the applier never made, with `git revert <sha>`
+printed beside it. Their hooks still run on commits they make
+themselves. Afterwards the landing is verified rather than assumed:
+one commit, parented at the pre-apply head, nothing left uncommitted
+under the patch's paths. If it is not, the record is `outcome: failed`
+with no `apply-outcome` and no sha — naming an unverified commit beside
+a revert command is worse than naming none.
 
 **Nothing is ever rolled back.** No `git reset --hard`, no auto-revert
 of a change whose check failed. A hard reset would destroy uncommitted
@@ -1424,9 +1438,17 @@ vocabulary, saying what happened to the change:
 | `refused-patch-stale`      | `completed`             | untouched | `git apply --check` refused it |
 | `refused-tree-dirty`       | `completed`             | untouched | the resident has uncommitted work under those paths |
 
-Two shapes carry `outcome: failed` and no `apply-outcome` at all,
-because neither says anything about the change: an environment fault,
-and a `target` naming a role this applier has no checkout for.
+Several shapes carry `outcome: failed` and **no `apply-outcome` at
+all**, because none of them says anything about the change: an
+environment fault, a `target` naming a role this applier has no
+checkout for, a `git apply` git never finished, and a commit that
+reported success while leaving the repository in a state that
+contradicts it. Those records still name the answer, so they still bar
+it from a second automatic attempt — which is why `castle-modal --mode
+status` renders them as `could not be applied — castle apply
+<answer-id> to try again` rather than leaving the errand reading as
+though something were still coming. The automatic bar is deliberate;
+what the label owes the resident is the hand path.
 `interrupted` is never written here and never will be — that value is
 supplied retroactively by a reaper reading a surviving `claim`, and the
 applier deliberately **writes no claim record**, because the reaper
