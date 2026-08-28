@@ -1322,6 +1322,34 @@ And one cross-record rule, in the whole-journal pass beside 0025's two
   exist, which is the one shape of this record nobody should ever be
   able to hand-write into a journal and have validate clean.
 
+  **The gate is `apply-outcome` OR `seat: applier`, and the "or" is a
+  correction this brief's own amendments made necessary.** Keyed on the
+  field alone — which is what it originally said — it silently exempted
+  the shape those amendments introduced: an apply that reached no
+  conclusion *about the change* writes `seat: applier` with `outcome:
+  failed` and no `apply-outcome` at all (an unusable checkout, an
+  unresolvable target role, a `git apply` git never finished, a commit
+  whose landing did not verify). So a hand-written `seat: applier`
+  result naming any real record at all passed clean, while
+  `_eligible_approvals` still counted it as having spent whatever
+  answer it names and §H's fold still recognised it by seat.
+  Fail-closed, and invisible to the one command whose job is naming a
+  broken journal — the residue of a denial case the *fold* was taught
+  to render and the *validator* was not. Reproduced through `castle
+  record` itself, so it is a shape the record door really lets through
+  rather than only a hand-edited file.
+
+  **It stays refs-shape only, and must.** This cannot tell a forged
+  suppressor from a legitimate dead attempt, and nothing append-only
+  ever could: both are `seat: applier` results naming a real approving
+  answer, which is exactly what a genuine environment fault writes. §H
+  already renders both with the hand-retry remedy. All this owes is
+  that a *malformed* one is named. The error wording is therefore true
+  of both shapes ("an applier-seat result must spend a real
+  authorization…") rather than the original "carries `apply-outcome`
+  but…", which would be a false statement about the record that carries
+  none.
+
 ### J. The forged-approval hole, stated
 
 *(Decision D5, [ADOPTED default]. STOP-9 stands: no signing mechanism
@@ -2025,8 +2053,15 @@ mechanism assertion, and `castle validate` exiting 0.
 18. `castle validate` red on: `authorizes-apply` on a non-question;
     `authorizes-apply: false`; `apply-outcome` on a non-result;
     `apply-outcome: sure-why-not`; a result carrying `apply-outcome`
-    whose `refs[0]` is not an approving answer. Green on every record
-    this harness produced.
+    whose `refs[0]` is not an approving answer; and — the shape review
+    found the gate missing — a `seat: applier` result carrying **no**
+    `apply-outcome` whose `refs[0]` names a non-answer, or names
+    nothing. Green on every record this harness produced, and
+    explicitly green on the one that matters most for this rule: the
+    environment-fault scenario's own legitimate no-conclusion record,
+    asserted where it is written rather than only in the run-wide pass,
+    because a rule that condemned it would condemn every environment
+    fault this task records.
 
 ### `test/agent-loop/approval.sh` and `modal-headless-test.sh`
 

@@ -925,6 +925,13 @@ grep -q '^apply-outcome:' "$AP_EF" \
   && fail "an environment fault claimed something about the change: $(field_of "$AP_EF" apply-outcome)"
 grep -q 'castle.agent.repo.private' "$AP_EF" \
   || fail "the environment fault does not name the option that fixes it: $(cat "$AP_EF")"
+# The real green control for the validator's cross-record rule below:
+# this record is `seat: applier` with no `apply-outcome`, which is
+# exactly the shape that rule now covers, and it is legitimate — its
+# first ref resolves to the answer that approved the change. A rule that
+# condemned it would condemn every environment fault this task records.
+"$CASTLE" validate >/dev/null \
+  || fail "a legitimate no-conclusion apply record does not validate: $(cat "$AP_EF")"
 assert_private_untouched "after the environment fault"
 assert_mechanism_untouched "after the environment fault"
 
@@ -1297,7 +1304,39 @@ plant_base
 plant 20260201T000004Z-result-eeeeee result \
   "20260201T000000Z-request-aaaaaa,20260201T000002Z-question-cccccc" \
   "outcome: completed" "apply-outcome: applied-validated"
-expect_invalid "an apply naming no approval" "not an answer approving a change"
+expect_invalid "an apply naming no approval" "must spend a real authorization"
+
+log "  -- an applier-seat result with NO apply-outcome, naming something that is not an answer"
+# The shape this batch introduced and the validator did not learn: an
+# apply that reached no conclusion about the change writes `seat:
+# applier` with `outcome: failed` and no `apply-outcome` at all. Gated
+# on the field alone, this passed clean — while `_eligible_approvals`
+# still counted it as having spent whatever answer it names, and the
+# status fold still recognised it by seat. Reproduced through `castle
+# record` before it was fixed, so this is a shape the record door
+# really does let through, not only a hand-edited file.
+plant_base
+plant 20260201T000004Z-result-eeeeee result 20260201T000001Z-result-bbbbbb \
+  "outcome: failed"
+sed -i 's/^seat: intake$/seat: applier/' "$PLANT/20260201T000004Z-result-eeeeee.md"
+expect_invalid "a no-conclusion applier result naming a result" "must spend a real authorization"
+
+log "  -- and one naming nothing at all"
+plant_base
+plant 20260201T000004Z-result-eeeeee result "" "outcome: failed"
+sed -i 's/^seat: intake$/seat: applier/' "$PLANT/20260201T000004Z-result-eeeeee.md"
+expect_invalid "a no-conclusion applier result naming nothing" "must spend a real authorization"
+
+log "  -- the green control: a LEGITIMATE no-conclusion result still validates clean"
+# Without this, the two cases above are satisfied by a check that
+# condemns every applier record that did not reach a conclusion —
+# which is every environment fault this task deliberately records.
+plant_base
+plant 20260201T000004Z-result-eeeeee result \
+  "20260201T000003Z-answer-dddddd,20260201T000002Z-question-cccccc" \
+  "outcome: failed"
+sed -i 's/^seat: intake$/seat: applier/' "$PLANT/20260201T000004Z-result-eeeeee.md"
+expect_valid "a legitimate no-conclusion applier result"
 
 log "  -- and one naming an answer that did not approve"
 plant_base
@@ -1307,7 +1346,7 @@ plant 20260201T000004Z-answer-eeeeee answer \
 plant 20260201T000005Z-result-ffffff result \
   "20260201T000004Z-answer-eeeeee,20260201T000002Z-question-cccccc" \
   "outcome: completed" "apply-outcome: applied-validated"
-expect_invalid "an apply on a rejection" "not an answer approving a change"
+expect_invalid "an apply on a rejection" "must spend a real authorization"
 
 # ---------------------------------------------------------------------
 log "everything this run produced still validates, and the framework never moved"

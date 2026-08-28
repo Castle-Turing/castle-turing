@@ -8157,8 +8157,35 @@ def cmd_validate(args: argparse.Namespace) -> int:
     # result claiming an authorization that does not exist. `refs[0]` is
     # the answer the apply spent, so it has to resolve to an `answer`
     # carrying `decision: approve`.
+    #
+    # **Keyed on the seat OR the field, and the "or" is a fix.** This
+    # gated on `apply-outcome` alone, which silently exempted the shape
+    # this same task introduced: an apply that reached no conclusion
+    # about the change — an unusable checkout, an unresolvable target
+    # role, a `git apply` git never finished, a commit whose landing did
+    # not verify — writes `seat: applier` with `outcome: failed` and no
+    # `apply-outcome` at all. So a hand-written `seat: applier` result
+    # naming any real record at all passed clean, while
+    # `_eligible_approvals` still counted it as having spent whatever
+    # answer it names and `castle-modal`'s fold still recognised it by
+    # seat. Fail-closed, and invisible to the one command whose job is
+    # to name a broken journal (Codex review on
+    # docs/tasks/0026-apply-validate.md).
+    #
+    # **Refs-shape only, deliberately, and it must stay that way.** This
+    # cannot tell a forged suppressor from a legitimate dead attempt and
+    # nothing appended-only ever could: both are `seat: applier`
+    # results naming a real approving answer, which is exactly what a
+    # genuine environment fault writes. The status fold already renders
+    # both with the hand-retry remedy. All this owes is that a
+    # *malformed* one is named rather than passed over.
     for rec in sorted(records.values(), key=lambda r: r.id):
-        if rec.type != "result" or rec.fields.get(APPLY_OUTCOME_FIELD) is None:
+        if rec.type != "result":
+            continue
+        if (
+            rec.fields.get(APPLY_OUTCOME_FIELD) is None
+            and rec.fields.get("seat") != APPLIER_SEAT
+        ):
             continue
         authorization = records.get(rec.refs[0]) if rec.refs else None
         if (
@@ -8166,10 +8193,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
             or authorization.type != "answer"
             or authorization.fields.get("decision", "").strip() != "approve"
         ):
+            # Wording true of both shapes it now covers. Saying "carries
+            # 'apply-outcome' but…" would be a false statement about the
+            # no-conclusion record, which is the half that was missing.
             errors.append(
-                f"{rec.path.name}: carries '{APPLY_OUTCOME_FIELD}' but its first ref "
-                "is not an answer approving a change. An apply spends exactly one "
-                "authorization and names it first; this one names "
+                f"{rec.path.name}: an applier-seat result must spend a real "
+                "authorization: its first ref has to resolve to an answer carrying "
+                f"'decision: approve', and this one names "
                 f"{rec.refs[0] if rec.refs else 'nothing'} "
                 "(docs/tasks/0026-apply-validate.md)."
             )

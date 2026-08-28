@@ -1449,6 +1449,17 @@ status` renders them as `could not be applied — castle apply
 <answer-id> to try again` rather than leaving the errand reading as
 though something were still coming. The automatic bar is deliberate;
 what the label owes the resident is the hand path.
+`castle validate` holds every result written by this seat to one
+cross-record rule, whether it carries `apply-outcome` or not: its first
+ref must resolve to an `answer` carrying `decision: approve`. An apply
+spends exactly one authorization and names it first, so a record that
+names something else is claiming one that does not exist. The check is
+refs-shape only and deliberately stays that way — it cannot tell a
+forged suppressor from a legitimate dead attempt, because in an
+append-only journal both look identical, and the status fold already
+renders both with the hand-retry remedy. What it owes is that a
+malformed one is *named*.
+
 `interrupted` is never written here and never will be — that value is
 supplied retroactively by a reaper reading a surviving `claim`, and the
 applier deliberately **writes no claim record**, because the reaper
