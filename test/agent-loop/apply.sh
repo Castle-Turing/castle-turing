@@ -489,6 +489,38 @@ log "  -- and the same approval applies perfectly well when no turn is claiming 
 assert_private_changed_exactly "the control after the tenant refusal" "$A_TEN" resident.nix
 
 # ---------------------------------------------------------------------
+log "an unattended applier refuses to make liveness decisions on world-writable locks"
+# ---------------------------------------------------------------------
+# Mirroring dispatch-test.sh's own scenario for the same hazard, one
+# seat up. With no XDG_RUNTIME_DIR and no /run/user/$UID, the only lock
+# directory left is /tmp/castle-$UID, which any local user can create
+# first: they hold `apply.lock`, the sweep reports "another applier is
+# already running" and exits 0 forever, green in systemctl, while every
+# approval the resident granted sits unapplied. The hand path keeps that
+# fallback on purpose — a human is watching it — and a timer is not.
+#
+# Branching on the directory because both worlds are real: a developer
+# machine has /run/user/$UID, a CI runner may not.
+FILES_BEFORE="$(journal_file_count)"
+if [ -d "/run/user/$(id -u)" ]; then
+  log "  -- /run/user/$(id -u) exists here, so the sweep should fall back to it and run normally"
+  env -u XDG_RUNTIME_DIR "$CASTLE" apply --sweep >"$WORKDIR/no-xdg.out" 2>&1 \
+    || fail "a sweep with no XDG_RUNTIME_DIR but a real /run/user/\$UID refused to run: $(cat "$WORKDIR/no-xdg.out")"
+else
+  log "  -- no /run/user/$(id -u) here, so the only lock directory is world-writable and the sweep must refuse"
+  if env -u XDG_RUNTIME_DIR "$CASTLE" apply --sweep >"$WORKDIR/no-xdg.out" 2>&1; then
+    fail "a sweep with only the /tmp lock fallback available exited 0 instead of refusing: $(cat "$WORKDIR/no-xdg.out")"
+  fi
+  grep -q "world-writable" "$WORKDIR/no-xdg.out" \
+    || fail "the refusal did not explain itself: $(cat "$WORKDIR/no-xdg.out")"
+  grep -q "castle apply <answer-id>" "$WORKDIR/no-xdg.out" \
+    || fail "the refusal does not name the hand path it deliberately keeps: $(cat "$WORKDIR/no-xdg.out")"
+fi
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] \
+  || fail "the fallback-lock scenario spent an approval"
+assert_private_untouched "after the world-writable lock scenario"
+
+# ---------------------------------------------------------------------
 log "refused: a change to the framework itself is not this seat's to make"
 # ---------------------------------------------------------------------
 read -r REQ_M R_M Q_M A_M <<<"$(new_approval APPLYABLE-MECHANISM)"

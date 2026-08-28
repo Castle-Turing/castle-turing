@@ -7314,6 +7314,33 @@ def cmd_apply(args: argparse.Namespace) -> int:
         )
         return 0
 
+    # An unattended applier will not make liveness decisions on locks in
+    # a world-writable directory, mirroring `cmd_dispatch`'s refusal
+    # exactly and for a version of the same reason that matters more
+    # here. `/tmp/castle-$UID` is `runtime_dir()`'s last-resort branch,
+    # and any local user can create that path first and hold
+    # `apply.lock`: this would then report "another applier is already
+    # running" and exit 0, forever, staying green in `systemctl --user
+    # status` while every approval the resident granted sat unapplied.
+    # Dispatch's version of that is an errand that never starts; this
+    # one is an authorization that never gets spent, on the seat with
+    # the higher authority of the two.
+    #
+    # The hand path keeps the fallback deliberately, exactly as `castle
+    # work` does: a human is present, watching the command, and will
+    # notice it behaving strangely. Nobody is watching a timer.
+    if args.sweep and runtime_dir_is_fallback():
+        print(
+            "castle apply: refusing to sweep with locks under "
+            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
+            "so the only available lock directory is world-writable and an "
+            "unattended applier cannot trust it. Run applying from a real login "
+            "session (the systemd user units do), or run `castle apply "
+            "<answer-id>` by hand, where a human is present to notice.",
+            file=sys.stderr,
+        )
+        return 1
+
     lock = acquire_lock(apply_lock_path())
     if lock is None:
         # One applier at a time, machine-wide: they would all be writing
