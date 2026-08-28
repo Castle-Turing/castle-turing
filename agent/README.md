@@ -1438,6 +1438,23 @@ vocabulary, saying what happened to the change:
 | `refused-patch-stale`      | `completed`             | untouched | `git apply --check` refused it |
 | `refused-tree-dirty`       | `completed`             | untouched | the resident has uncommitted work under those paths |
 
+An **`apply-commit`** field beside it, also result-only, carrying the
+commit the apply made — stamped **only** where the landing was verified,
+so its meaning is not "a commit happened" but "exactly one commit
+landed, parented where this started, nothing left uncommitted, and this
+is it." Absent on every refusal and every attempt that reached no
+conclusion, matching the body prose, which names no sha there either.
+`castle validate` accepts 40 **or** 64 lowercase hex characters: git's
+sha256 object format is real, and condemning a resident's own
+sha256-format repository would be a validator lying about a perfectly
+good journal.
+
+It exists because the body already said this in prose, and a body is not
+where a machine may read a fact — this file's own rule, stated for
+`outcome` above. `docs/tasks/0027` is the surface that will need it
+mechanically. The prose stays for the resident, beside the `git revert`
+they would actually type.
+
 Several shapes carry `outcome: failed` and **no `apply-outcome` at
 all**, because none of them says anything about the change: an
 environment fault, a `target` naming a role this applier has no

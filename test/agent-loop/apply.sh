@@ -348,6 +348,14 @@ assert_private_changed_exactly "the automatic apply" "$A1" resident.nix
 assert_mechanism_untouched "the automatic apply"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after an apply"
 
+log "  -- and the commit it made is a FIELD, not a sentence something would have to grep for"
+# docs/tasks/0027 is the surface that will need this mechanically, and
+# this project's own named contract says no surface may ever infer a
+# fact by grepping a body (agent/README.md's `outcome` section). The
+# prose stays for the resident; the field is what a machine reads.
+[ "$(field_of "$AP1" apply-commit)" = "$(git -C "$PRIVATE" rev-parse HEAD)" ] \
+  || fail "the record's apply-commit is not the commit the apply made: field says [$(field_of "$AP1" apply-commit)], repository says [$(git -C "$PRIVATE" rev-parse HEAD)]"
+
 log "  -- and the resident is told, in the words drafted for that one line"
 grep -q 'The change you approved is now in your configuration repository. It was not checked, and nothing was activated.' \
   "$CASTLE_NOTIFY_LOG" \
@@ -923,6 +931,10 @@ grep -q '^outcome: failed$' "$AP_EF" \
   || fail "an environment fault is not recorded as a failed run: $(field_of "$AP_EF" outcome)"
 grep -q '^apply-outcome:' "$AP_EF" \
   && fail "an environment fault claimed something about the change: $(field_of "$AP_EF" apply-outcome)"
+# And no commit field either: there is no commit to name, and a field
+# naming one would be the machine-readable half of the same overclaim.
+grep -q '^apply-commit:' "$AP_EF" \
+  && fail "an attempt that made no commit stamped one anyway: $(field_of "$AP_EF" apply-commit)"
 grep -q 'castle.agent.repo.private' "$AP_EF" \
   || fail "the environment fault does not name the option that fixes it: $(cat "$AP_EF")"
 # The real green control for the validator's cross-record rule below:
@@ -1323,6 +1335,30 @@ plant 20260201T000004Z-result-eeeeee result \
   "20260201T000000Z-request-aaaaaa,20260201T000002Z-question-cccccc" \
   "outcome: completed" "apply-outcome: applied-validated"
 expect_invalid "an apply naming no approval" "must spend a real authorization"
+
+log "  -- a commit id that is not one, on a record that claims to name a commit"
+plant_base
+plant 20260201T000004Z-result-eeeeee result \
+  "20260201T000003Z-answer-dddddd,20260201T000002Z-question-cccccc" \
+  "outcome: completed" "apply-outcome: applied-validated" "apply-commit: NOTASHA"
+expect_invalid "a malformed commit id" "40 or 64 lowercase hex"
+
+log "  -- and the control: a sha256-format commit id is accepted, because git really has those"
+# Hard-coding forty would have been a latent lie — `git init
+# --object-format=sha256` is real, and a resident's own repository is
+# theirs to create however they like.
+plant_base
+plant 20260201T000004Z-result-eeeeee result \
+  "20260201T000003Z-answer-dddddd,20260201T000002Z-question-cccccc" \
+  "outcome: completed" "apply-outcome: applied-validated" \
+  "apply-commit: $(printf 'an invented sha256-shaped commit id' | sha256sum | cut -d' ' -f1)"
+expect_valid "a sha256-format commit id"
+
+log "  -- a commit id on a record that reads it nowhere"
+plant_base
+plant 20260201T000004Z-question-ffffff question 20260201T000000Z-request-aaaaaa \
+  "proposal-sha256: $VALID_HASH" "apply-commit: $VALID_HASH"
+expect_invalid "a commit id on a question" "'apply-commit' is a result-record field"
 
 log "  -- an applier-seat result with NO apply-outcome, naming something that is not an answer"
 # The shape this batch introduced and the validator did not learn: an

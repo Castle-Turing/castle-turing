@@ -386,6 +386,25 @@ AUTHORIZES_APPLY_FIELD = "authorizes-apply"
 # vocabulary that four surfaces branch on to say it.
 APPLY_OUTCOME_FIELD = "apply-outcome"
 
+# The commit an apply made, on the result that made it
+# (docs/tasks/0026-apply-validate.md §F). Stamped only on the path where
+# the landing was *verified* — one commit, parented where the applier
+# started, nothing left uncommitted — and absent everywhere else, which
+# is every refusal and every attempt that reached no conclusion.
+#
+# It exists because the body already says this in prose and a body is
+# not where a machine may read a fact. `agent/README.md`'s `outcome`
+# section states that as a named contract: no surface may ever infer a
+# fact by grepping a body. docs/tasks/0027 is the surface that will need
+# this one mechanically — a commit sha is what a rollback route is
+# expressed against — so leaving it as prose would have handed the next
+# task exactly the grep this project has already paid to remove once.
+#
+# The prose stays. It is the resident-facing copy, beside the
+# `git revert` they would actually type; this is the machine-facing
+# fact. Same split as `target` and its resolved path, one record over.
+APPLY_COMMIT_FIELD = "apply-commit"
+
 APPLY_OUTCOME_VALUES = (
     "applied-validated",
     "applied-unvalidated",
@@ -476,6 +495,11 @@ FIELD_ORDER = (
     # the change it was spending an authorization on
     # (docs/tasks/0026-apply-validate.md §F).
     "apply-outcome",
+    # Beside `apply-outcome` and by the same presentation-only rule: on
+    # an apply result the two together are what the record says about
+    # itself before any prose — what happened to the change, and which
+    # commit is it (docs/tasks/0026-apply-validate.md §F).
+    "apply-commit",
     "target",
     # Result-only, and beside `target` for the same presentation-only
     # reason: it is machine-readable structure about the body below,
@@ -6445,6 +6469,7 @@ def _write_apply_result(
     outcome: str,
     apply_outcome: str,
     detail_lines: list[str],
+    commit_sha: str = "",
 ) -> str:
     """The one record an apply writes (docs/tasks/0026-apply-validate.md
     §F).
@@ -6512,6 +6537,15 @@ def _write_apply_result(
     extra = {"outcome": outcome}
     if apply_outcome:
         extra[APPLY_OUTCOME_FIELD] = apply_outcome
+    # Only ever passed by the one call site that got here through
+    # `_verify_single_commit`, which is what makes the field's meaning
+    # exact: not "a commit happened" but "exactly one commit landed,
+    # parented where this started, with nothing left uncommitted, and
+    # this is it." Every refusal and every attempt that reached no
+    # conclusion passes nothing, matching the body prose, which names no
+    # sha on those paths either.
+    if commit_sha:
+        extra[APPLY_COMMIT_FIELD] = commit_sha
     return write_record(
         journal_dir(),
         type="result",
@@ -7283,6 +7317,10 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         outcome=outcome,
         apply_outcome=apply_outcome,
         detail_lines=detail_lines,
+        # The one place this is ever stamped: everything above returned
+        # already, and reaching here means `_verify_single_commit`
+        # answered. See APPLY_COMMIT_FIELD.
+        commit_sha=commit_sha,
     )
     return result_id, apply_outcome
 
@@ -7872,6 +7910,40 @@ def cmd_validate(args: argparse.Namespace) -> int:
             errors.append(
                 f"{path.name}: '{APPLY_OUTCOME_FIELD}' ({apply_outcome_raw!r}) is not "
                 f"one of {', '.join(APPLY_OUTCOME_VALUES)}"
+            )
+
+        # `apply-commit` (result-only,
+        # docs/tasks/0026-apply-validate.md §F), the same "well-formed
+        # if present, never required" treatment as everything above.
+        # Absent means this result made no commit it can vouch for,
+        # which is true of every refusal, every attempt that reached no
+        # conclusion, and every result written before the field existed.
+        #
+        # **Forty OR sixty-four hex characters, and hard-coding forty
+        # would have been a latent lie.** Git's sha256 object format is
+        # real — `git init --object-format=sha256` — and a resident's
+        # configuration repository is theirs to create however they
+        # like. A validator that condemned a perfectly good sha256
+        # commit id would be this project telling a resident their own
+        # repository is malformed, which is exactly the shape of
+        # false-refusal the path-scoped dirty check exists to avoid one
+        # layer over. Both lengths, no third.
+        apply_commit_raw = rec.fields.get(APPLY_COMMIT_FIELD)
+        if apply_commit_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{APPLY_COMMIT_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+        elif apply_commit_raw is not None and (
+            len(apply_commit_raw) not in (40, 64)
+            or any(char not in "0123456789abcdef" for char in apply_commit_raw)
+        ):
+            errors.append(
+                f"{path.name}: '{APPLY_COMMIT_FIELD}' ({apply_commit_raw!r}) is not 40 "
+                "or 64 lowercase hex characters — the two shapes a git commit id has "
+                "(sha1 and sha256 object formats)."
             )
 
         # `target` (result-only, docs/tasks/0024 §6), same append-only

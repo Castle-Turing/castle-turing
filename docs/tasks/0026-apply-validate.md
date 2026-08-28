@@ -1095,6 +1095,31 @@ APPLY_OUTCOME_VALUES = (
 | `refused-patch-stale` | `completed` | untouched | `git apply --check` refused it |
 | `refused-tree-dirty` | `completed` | untouched | the resident has uncommitted work under those paths |
 
+**`apply-commit`: the commit, as a field.** Added after the 0027
+re-baselining pass found this brief's own stop conditions promising
+0027 "a commit sha in a record" while the sha lived only in the body's
+prose. That is precisely the shape `agent/README.md`'s `outcome`
+section forbids as a named contract — *no surface may ever infer a fact
+by grepping a body* — and 0027's activation mechanism is exactly the
+surface that would have had to.
+
+Result-only, stamped **only** on the verified-landing path, which makes
+its meaning exact: not "a commit happened" but "exactly one commit
+landed, parented where this applier started, with nothing left
+uncommitted, and this is it." Every refusal and every attempt that
+reached no conclusion stamps nothing, matching the body prose, which
+names no sha on those paths either. `cmd_validate` shape-checks it
+well-formed-if-present, result-only, and **40 or 64 lowercase hex** —
+git's sha256 object format is real (`git init --object-format=sha256`)
+and a resident's repository is theirs to create however they like, so
+hard-coding 40 would be this project telling them their own repository
+is malformed.
+
+The body prose is unchanged. It is the resident-facing copy, sitting
+beside the `git revert` they would actually type; the field is the
+machine-facing fact. The same split `target` and its resolved path
+already make one record over.
+
 `outcome: completed` on a refusal is deliberate and follows the
 field's own definition: the applier ran to a recorded conclusion. A
 refusal is a conclusion, correctly reached. `outcome: failed` is
@@ -1476,9 +1501,20 @@ implemented, it is named as a default.
   authorization. No new local workaround is added — that entry's own
   finding is that a fifth one would not help.
 - **Whether 0027 activates from the applier's commit or re-derives
-  anything.** Not decided. What this task guarantees 0027 is: a
-  commit sha in a record, a `target` role, and an `apply-outcome` that
-  says whether the configuration was known to build.
+  anything.** Not decided. What this task guarantees 0027, stated
+  precisely because the original wording was not — the 0027
+  re-baselining pass read it as promising more than the code gave:
+  - the commit id as a **field**, `apply-commit`, on the apply result,
+    stamped only where the landing was verified (§F). Not prose.
+  - the `target` role on the **proposal result**, one `refs` hop away
+    (apply result → `refs[1]` is the question → `refs[1]` is the
+    result). It is deliberately **not** copied onto the apply result:
+    `target` is defined as "which checkout the diff a turn produced
+    applies to", and the apply result carries no diff. The promise's
+    original wording was imprecise; the design is not.
+  - `apply-outcome`, saying whether the configuration was known to
+    build — and, by its absence on a `seat: applier` result, that the
+    attempt reached no conclusion at all.
 - **Two dispatch- or apply-enabled hosts sharing one journal.**
   Documented as unsupported, exactly as dispatch already documents it.
   Nothing reconciles them and this task does not pretend to.
