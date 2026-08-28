@@ -949,7 +949,6 @@ in
         # PATH at normal priority and this replaces it.
         PATH = lib.mkForce "/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin";
         CASTLE_STATE_DIR = toString cfg.stateDir;
-        CASTLE_NOTIFY_COMMAND = cfg.notify.command;
         # The private root and nothing else. There is deliberately no
         # CASTLE_MECHANISM_ROOT here: the applier refuses a
         # mechanism-targeted change by name and never needs a path to
@@ -957,7 +956,24 @@ in
         CASTLE_PRIVATE_ROOT = cfg.repo.private;
         CASTLE_APPLY_EVALUATE_FLAKE = lib.boolToString cfg.apply.evaluateFlake;
         CASTLE_APPLY_TIMEOUT = toString cfg.apply.timeoutSeconds;
-      };
+      }
+      # optionalAttrs, not a bare assignment, for hygiene rather than
+      # necessity — and the distinction was settled by building it, not
+      # by trusting the review that flagged it. Codex round 5 claimed a
+      # bare null here fails module evaluation; it does not at this
+      # pin: the toplevel builds and the generated unit simply carries
+      # no CASTLE_NOTIFY_COMMAND line, which is also exactly what this
+      # spelling produces. What the bare assignment leant on was the
+      # unit serializer silently dropping nulls — undocumented
+      # behaviour that a nixpkgs bump could change into either an eval
+      # error or, worse, an empty string, and CASTLE_NOTIFY_COMMAND=""
+      # is a documented, meaningful value (notifications off) where
+      # unset means "default notify-send". The session environment at
+      # the top of this file already spells this option with
+      # optionalAttrs; now both sites agree.
+      // (lib.optionalAttrs (cfg.notify.command != null) {
+        CASTLE_NOTIFY_COMMAND = cfg.notify.command;
+      });
     };
 
     systemd.user.timers.castle-apply = lib.mkIf cfg.apply.enable {
