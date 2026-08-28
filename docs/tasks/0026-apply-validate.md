@@ -678,6 +678,61 @@ The listed order is otherwise exactly what the code does.
    add a `repo-head` stamp to 0024's writer; see Considered and
    rejected.
 
+**8. The breadcrumb, written last of all the pre-flight and before the
+first byte moves.** Not in this brief originally; added after Codex
+found the window it covers. Everything in §C above is a read.
+Everything in §D below can leave the tree or the repository changed —
+and if the process dies in between (killed, rebooted, or with
+`write_record` itself failing) *no result names the answer*, so it stays
+eligible and the next sweep attempts it afresh: on a mutated tree, which
+refuses `refused-tree-dirty`, or on a landed commit, which refuses
+`refused-patch-stale`. Reproduced by disabling the marker and running
+the harness's own kill scenario: the sweep recorded
+`apply-outcome: refused-tree-dirty` about a change sitting in the
+resident's checkout. A durable record saying the applier declined a
+change it in fact made — wrong and plausible, which is the worst kind.
+
+So before `git apply`, one file at
+`state_dir()/apply-in-flight/<answer-id>` holding the answer id,
+`head_before`, and the patch's paths. Removed only inside
+`_write_apply_result`, after `write_record` returns — deliberately not
+in a `finally` around the mutation, because a `finally` also runs when
+the record write itself raises, which is precisely the window this
+exists for.
+
+**In the state directory, not the runtime one**: the window includes a
+reboot, and `runtime_dir()` is wiped by one. **Outside the journal, and
+not a record**: nothing folds it, nothing routes it, and it is deleted,
+which no record ever is. **Not a `claim` record**, which is the obvious
+alternative — the interlock in Considered-and-rejected stands, because
+`_reap_interrupted` would hand it an `interrupted` result and a
+`castle work <request-id>` hint, the wrong command for an apply.
+**Not a lease and not a lock**: `apply.lock` already excludes concurrent
+appliers, and a lock dies with its holder, which is exactly the event
+this has to survive.
+
+**The reconciliation**, at the top of both the sweep and the hand path,
+before anything fresh. A marker means: do not attempt. Write the
+no-conclusion result instead — `outcome: failed`, no `apply-outcome`,
+the shape §H already renders as
+`could not be applied — castle apply <id> to try again` — with a body
+saying an earlier attempt was interrupted after it may have begun
+changing the checkout, naming `head_before` from the marker and
+`git rev-parse HEAD` now (so the resident sees at a glance which side of
+the commit it fell on) and the paths to inspect. Then remove the marker.
+The answer is now barred from automatic retry by its own result, exactly
+like every other dead attempt, and the hand path re-runs the whole check
+suite, where the dirty and staleness checks refuse a double-apply
+honestly.
+
+Two markers get no record, because there is nothing truthful to write:
+one naming an answer that does not resolve to an approving
+authorization (`refs` would point at nothing), and one whose answer some
+result already names — a crash in the narrow window after the account
+landed and before the marker was removed, where a second record would
+claim an attempt died that did not. Both are removed with a note on
+stderr.
+
 ### D. How the change lands, and the authority it is spent against
 
 *(Decision D7, [OWNER], with SPRINT.md decision 4's hardware
@@ -1493,6 +1548,15 @@ implemented, it is named as a default.
   is worse than not having one. Filed as
   `docs/backlog/the-applier-patches-any-path-in-the-private-repo.md`,
   which is where the list belongs once the file inventory is fixed.
+- **What the in-flight marker (§C.8) is not.** Not a lease: it excludes
+  nothing, and `apply.lock` already does that job. Not a lock: a lock
+  dies with the process holding it, and surviving that death is the
+  entire point. Not a `claim` record, and not any record — nothing folds
+  it, nothing routes it, and it is deleted, which no record ever is. It
+  is one attempt's breadcrumb, and it answers exactly one question:
+  *did an attempt get as far as touching the checkout without saying
+  so?* Anything that wanted a general crash-recovery mechanism for this
+  layer would be a different design, and this task does not start one.
 - **Sub-second record ordering.** The applier's fold picks the oldest
   eligible answer by id and inherits
   `docs/backlog/record-ids-are-only-second-resolution.md`'s limit. It
@@ -2025,6 +2089,20 @@ mechanism assertion, and `castle validate` exiting 0.
     verbatim against a repaired root and must actually apply the
     change. A label naming a remedy nobody tried is how
     docs/tasks/0015's defect gets reintroduced one surface over.
+
+13a. **Killed between the mutation and the record**, both sides of the
+    window: after `git apply` and after the commit. Driven by a `git`
+    on `$PATH` that runs the real git and then SIGKILLs its own parent
+    — the castle process — so the crash is genuine and there is no
+    injection seam in the code under test that could drift from
+    production. The same discipline as the `nix` stub, and the reason
+    this brief rejected a `CASTLE_APPLY_NIX`-style override. Assert
+    the breadcrumb was on disk *at the instant* git mutated the tree
+    (the probe is in the same wrapper), that no record was written,
+    then that the next sweep records the no-conclusion shape naming
+    both shas, removes the marker, mutates nothing a second time, and
+    that the status surface names the hand retry. Plus a stray marker
+    naming nothing this journal has, which is discarded with no record.
 
 13b. **A repository whose path Nix cannot name** — its own throwaway
     checkout at a path containing `#`, gate on, `nix` stubbed. Assert

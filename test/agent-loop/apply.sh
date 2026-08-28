@@ -487,6 +487,153 @@ assert_private_untouched "after the hook control"
 assert_mechanism_untouched "after the hook scenarios"
 
 # ---------------------------------------------------------------------
+log "a crash between changing the checkout and writing the record does not become a lie"
+# ---------------------------------------------------------------------
+# The window: `git apply` (or the commit) has run and
+# `_write_apply_result` has not. No result names the answer, so it stays
+# eligible — and the next sweep, attempting afresh, refuses
+# `refused-tree-dirty` over the applier's OWN half-finished work, or
+# `refused-patch-stale` over a change it already committed. A durable
+# record saying the change was refused, about a change sitting in the
+# resident's repository. Wrong and plausible.
+#
+# **Killed for real, through a `git` on $PATH rather than a seam in the
+# code under test.** The wrapper runs the real git and then SIGKILLs its
+# own parent, which is the castle process — so the crash lands exactly
+# between the mutation and the record, with no production injection
+# point that could drift from what production does. Same discipline as
+# the `nix` stub, and the reason the brief rejected a
+# `CASTLE_APPLY_NIX`-style override.
+KILL_BIN="$WORKDIR/kill-bin"
+MARKER_PROBE="$WORKDIR/marker-probe.log"
+mkdir -p "$KILL_BIN"
+REAL_GIT="$(command -v git)"
+cat > "$KILL_BIN/git" <<KILLER
+#!/usr/bin/env bash
+# A real git that dies at a chosen moment, harness fixture only.
+subcommand=""
+for arg in "\$@"; do
+  case "\$arg" in
+    -C|-c) continue ;;
+    -*) continue ;;
+    *) if [ -z "\$subcommand" ] && [ "\$arg" != "\${CASTLE_TEST_ROOT:-}" ]; then subcommand="\$arg"; fi ;;
+  esac
+done
+mutating=no
+case " \$* " in
+  *" apply "*) case " \$* " in *--check*|*--numstat*) ;; *) mutating=apply ;; esac ;;
+esac
+case " \$* " in *" commit "*) mutating=commit ;; esac
+# Whether the crash breadcrumb was on disk at the instant of the
+# mutation — asserted below, because "it is written before the first
+# mutation" is the whole claim.
+if [ "\$mutating" != no ] && [ -n "\${CASTLE_TEST_MARKER_DIR:-}" ]; then
+  if [ -e "\$CASTLE_TEST_MARKER_DIR/\${CASTLE_TEST_MARKER_ID:-none}" ]; then
+    printf '%s marker-present\n' "\$mutating" >> "$MARKER_PROBE"
+  else
+    printf '%s marker-ABSENT\n' "\$mutating" >> "$MARKER_PROBE"
+  fi
+fi
+"$REAL_GIT" "\$@"
+status=\$?
+if [ -n "\${CASTLE_TEST_KILL_AFTER:-}" ] && [ "\$mutating" = "\${CASTLE_TEST_KILL_AFTER}" ]; then
+  kill -9 "\$PPID"
+fi
+exit \$status
+KILLER
+chmod +x "$KILL_BIN/git"
+MARKER_DIR="$CASTLE_STATE_DIR/apply-in-flight"
+
+log "  -- killed after the working tree moved, before anything was recorded"
+read -r REQ_IF R_IF Q_IF A_IF <<<"$(new_approval APPLYABLE-MODIFY-inflight)"
+[ ! -e "$MARKER_DIR/$A_IF" ] || fail "a marker exists before any attempt began"
+: > "$MARKER_PROBE"
+FILES_BEFORE="$(journal_file_count)"
+PATH="$KILL_BIN:$PATH" CASTLE_TEST_KILL_AFTER=apply CASTLE_TEST_MARKER_DIR="$MARKER_DIR" \
+  CASTLE_TEST_MARKER_ID="$A_IF" "$CASTLE" apply "$A_IF" >/dev/null 2>&1 \
+  && fail "the applier was supposed to be killed mid-apply and exited 0"
+grep -q '^apply marker-present$' "$MARKER_PROBE" \
+  || fail "the breadcrumb was not on disk at the instant the working tree moved: $(cat "$MARKER_PROBE")"
+[ -f "$MARKER_DIR/$A_IF" ] || fail "the killed attempt left no breadcrumb behind"
+grep -q "^answer: $A_IF\$" "$MARKER_DIR/$A_IF" \
+  || fail "the breadcrumb does not name the authorization: $(cat "$MARKER_DIR/$A_IF")"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] \
+  || fail "the killed attempt wrote a record after all, so this proves nothing"
+[ -n "$(git -C "$PRIVATE" status --porcelain -- resident.nix)" ] \
+  || fail "the killed attempt did not reach the working tree, so this proves nothing"
+MUTATED_SHA="$(sha256_of "$PRIVATE/resident.nix")"
+
+log "  -- and the next sweep records what the breadcrumb proves, instead of refusing a change that is there"
+"$CASTLE" apply --sweep >/dev/null
+AP_IF="$(newest_apply_result_for "$A_IF")"
+[ -n "$AP_IF" ] || fail "the sweep did not account for the interrupted attempt"
+grep -q '^outcome: failed$' "$AP_IF" \
+  || fail "an interrupted attempt is not recorded as a failed run: $(field_of "$AP_IF" outcome)"
+grep -q '^apply-outcome:' "$AP_IF" \
+  && fail "an interrupted attempt claimed something about the change: $(field_of "$AP_IF" apply-outcome)"
+grep -q '^apply-commit:' "$AP_IF" \
+  && fail "an interrupted attempt named a commit it cannot vouch for"
+# The two refusals the finding is about must NOT be what got written.
+grep -qE '^apply-outcome: (refused-tree-dirty|refused-patch-stale)$' "$AP_IF" \
+  && fail "the sweep refused a change that is sitting in the resident's repository"
+grep -q 'interrupted' "$AP_IF" || fail "the record does not say what happened: $(cat "$AP_IF")"
+grep -qF "$PRIVATE_HEAD" "$AP_IF" \
+  || fail "the record does not name where the repository was when the attempt began"
+grep -q 'has NOT moved' "$AP_IF" \
+  || fail "the record does not tell the resident which side of the commit this fell on: $(cat "$AP_IF")"
+[ ! -e "$MARKER_DIR/$A_IF" ] || fail "the breadcrumb survived its own reconciliation"
+[ "$(sha256_of "$PRIVATE/resident.nix")" = "$MUTATED_SHA" ] \
+  || fail "the sweep changed the working tree a second time"
+[ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$PRIVATE_HEAD" ] || fail "the sweep committed something"
+
+log "  -- and the status surface names the way back, exactly as for any other dead attempt"
+STATUS_IF="$("$MODAL" --mode status --limit 40)"
+printf '%s\n' "$STATUS_IF" | grep -F "$REQ_IF" | grep -q "could not be applied — castle apply $A_IF to try again" \
+  || fail "an interrupted attempt does not name the hand retry: $(printf '%s\n' "$STATUS_IF" | grep -F "$REQ_IF")"
+git -C "$PRIVATE" checkout -q -- resident.nix
+assert_private_untouched "after reconciling an interrupted attempt"
+
+log "  -- killed after the COMMIT landed: the record says the head moved, and still refuses nothing"
+# The other side of the same window, and the one the message's second
+# branch exists for: here the change really is committed, so a fresh
+# attempt would have refused `refused-patch-stale` about a change that
+# is already in the repository.
+read -r REQ_IF2 R_IF2 Q_IF2 A_IF2 <<<"$(new_approval APPLYABLE-MODIFY-inflight2)"
+: > "$MARKER_PROBE"
+PATH="$KILL_BIN:$PATH" CASTLE_TEST_KILL_AFTER=commit CASTLE_TEST_MARKER_DIR="$MARKER_DIR" \
+  CASTLE_TEST_MARKER_ID="$A_IF2" "$CASTLE" apply "$A_IF2" >/dev/null 2>&1 \
+  && fail "the applier was supposed to be killed after committing and exited 0"
+[ -f "$MARKER_DIR/$A_IF2" ] || fail "the killed-after-commit attempt left no breadcrumb"
+[ "$(git -C "$PRIVATE" rev-parse HEAD)" != "$PRIVATE_HEAD" ] \
+  || fail "the killed-after-commit attempt did not commit, so this proves nothing"
+LANDED_HEAD="$(git -C "$PRIVATE" rev-parse HEAD)"
+"$CASTLE" apply --sweep >/dev/null
+AP_IF2="$(newest_apply_result_for "$A_IF2")"
+grep -q '^outcome: failed$' "$AP_IF2" || fail "the killed-after-commit case is not a failed run"
+grep -q '^apply-outcome:' "$AP_IF2" \
+  && fail "the killed-after-commit case claimed something about the change"
+grep -q 'has MOVED\|HAS moved' "$AP_IF2" \
+  || fail "the record does not say the head moved, which is the fact that matters here: $(cat "$AP_IF2")"
+[ ! -e "$MARKER_DIR/$A_IF2" ] || fail "the breadcrumb survived its own reconciliation"
+[ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$LANDED_HEAD" ] \
+  || fail "the sweep committed on top of a change that was already committed"
+PRIVATE_HEAD="$LANDED_HEAD"
+assert_private_untouched "after reconciling an attempt killed after its commit"
+
+log "  -- a breadcrumb naming nothing this journal has is discarded, with no record"
+printf 'answer: 20260101T000000Z-answer-invented\nhead-before: \npaths:\n' \
+  > "$MARKER_DIR/20260101T000000Z-answer-invented"
+FILES_BEFORE="$(journal_file_count)"
+"$CASTLE" apply --sweep >"$WORKDIR/stray-marker.out" 2>&1
+grep -q 'discarding an in-flight marker' "$WORKDIR/stray-marker.out" \
+  || fail "a stray breadcrumb was not reported: $(cat "$WORKDIR/stray-marker.out")"
+[ ! -e "$MARKER_DIR/20260101T000000Z-answer-invented" ] || fail "a stray breadcrumb survived"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] \
+  || fail "a stray breadcrumb produced a record about a checkout nothing can name"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the interruption scenarios"
+assert_mechanism_untouched "after the interruption scenarios"
+
+# ---------------------------------------------------------------------
 log "file names git has to be asked about: an invalid UTF-8 byte, and a glob character"
 # ---------------------------------------------------------------------
 # Built with printf, never pasted, so this file's own source stays plain

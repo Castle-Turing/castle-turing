@@ -1177,6 +1177,111 @@ def spend_lock_path() -> pathlib.Path:
     return d / "spend.lock"
 
 
+def apply_in_flight_dir() -> pathlib.Path:
+    """Where the applier leaves a breadcrumb across a crash
+    (docs/tasks/0026-apply-validate.md §C).
+
+    **In the state directory and not in the runtime one**, which is the
+    whole point: the window this closes includes a reboot, and
+    `runtime_dir()` is wiped by one. It is durable state about an
+    attempt, so it lives beside the journal — but deliberately *outside*
+    it, because it is not a record: nothing folds it, nothing routes it,
+    and it is deleted, which no record ever is.
+
+    **And deliberately not a `claim` record**, which is the obvious
+    alternative and is barred for a verified reason: `_reap_interrupted`
+    walks every claim and hands one whose request has no closing result
+    an `interrupted` result plus a `castle work <request-id>` retry hint
+    — the wrong command for an apply, written by a reaper with no idea
+    what it is reaping. That interlock stands; this is the applier's own
+    crash-recovery note to itself, not an observation about an errand.
+
+    Not a lease and not a lock either. `apply.lock` already excludes
+    concurrent appliers; this says something a lock cannot, because a
+    lock dies with the process that held it: *an attempt got as far as
+    touching the checkout and never wrote its account.*
+    """
+    d = state_dir() / "apply-in-flight"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def apply_in_flight_path(answer_id: str) -> pathlib.Path:
+    return apply_in_flight_dir() / answer_id
+
+
+# The marker's body: two ASCII header lines, a `paths:` line, then the
+# patch's paths NUL-separated. Bytes rather than text throughout,
+# because a path is bytes (see `_patch_paths`) and this file has to hand
+# back exactly what git gave — the same reason `--numstat -z` is read
+# the way it is.
+_IN_FLIGHT_PATHS_HEADER = b"paths:\n"
+
+
+def _write_in_flight(answer_id: str, head_before: str, paths: list[str]) -> None:
+    """Leave the breadcrumb, before the first byte of the checkout moves.
+
+    Best effort in the sense that a failure to write it is not worth
+    refusing an authorized change over — but it is written *before* the
+    mutation, never after, so the window it covers is the whole of the
+    mutation.
+    """
+    payload = b"".join(
+        [
+            f"answer: {answer_id}\n".encode("utf-8"),
+            f"head-before: {head_before}\n".encode("utf-8"),
+            _IN_FLIGHT_PATHS_HEADER,
+        ]
+        + [os.fsencode(path) + b"\0" for path in paths]
+    )
+    try:
+        apply_in_flight_path(answer_id).write_bytes(payload)
+    except OSError as exc:
+        print(
+            f"castle apply: could not write the in-flight marker for {answer_id} "
+            f"({exc}). The change will still be applied; what is lost is the ability "
+            "to tell, after a crash, that an attempt had begun.",
+            file=sys.stderr,
+        )
+
+
+def _read_in_flight(path: pathlib.Path) -> tuple[str, str, list[str]]:
+    """`(answer-id, head-before, paths)` from a marker file, with
+    whatever could not be read coming back empty rather than raising.
+
+    A marker is a breadcrumb, not a record: it is read exactly once, by
+    the reconciliation that is about to delete it, and a malformed one
+    must not be able to stop an applier from running.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "", "", []
+    head, _, tail = raw.partition(_IN_FLIGHT_PATHS_HEADER)
+    answer_id = ""
+    head_before = ""
+    for line in head.decode("utf-8", "replace").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "answer":
+            answer_id = value.strip()
+        elif key.strip() == "head-before":
+            head_before = value.strip()
+    paths = [
+        os.fsdecode(chunk) for chunk in tail.split(b"\0") if chunk
+    ]
+    return answer_id, head_before, paths
+
+
+def _clear_in_flight(answer_id: str) -> None:
+    """Remove the breadcrumb. Called only after the account of the
+    attempt is durable — see `_write_apply_result`, which is the one
+    place that knows that has happened."""
+    try:
+        apply_in_flight_path(answer_id).unlink()
+    except OSError:
+        pass
+
+
 def apply_lock_path() -> pathlib.Path:
     """The global applier lock (docs/tasks/0026-apply-validate.md §B) —
     one applier at a time, machine-wide, per login session.
@@ -6009,6 +6114,154 @@ def _eligible_approvals(records: dict[str, Record]) -> list[Record]:
     return eligible
 
 
+def _reconcile_in_flight(records: dict[str, Record]) -> list[str]:
+    """Account for every attempt that touched a checkout and never wrote
+    its result (docs/tasks/0026-apply-validate.md §C). Returns the ids
+    of the records written.
+
+    Runs before any fresh attempt, on both the sweep and the hand path.
+    An answer with a marker is **not** re-attempted in the same
+    invocation: the honest thing to write is what the marker proves,
+    which is that an earlier attempt got as far as touching the
+    checkout and cannot say what it left behind. Re-attempting on top of
+    that is exactly what produces the contradiction — a
+    `refused-tree-dirty` about the applier's own half-finished work, or
+    a `refused-patch-stale` about a change that is already committed.
+
+    The record is the no-conclusion shape: `outcome: failed`, no
+    `apply-outcome`, which §H already renders as
+    `could not be applied — castle apply <id> to try again`. So the
+    answer is barred from automatic retry exactly like every other dead
+    attempt, and the hand path stays open — and a hand retry re-runs the
+    whole check suite, where the dirty and staleness checks refuse a
+    double-apply honestly.
+
+    Two markers get no record at all, and the difference is whether
+    there is anything to say:
+
+    * one naming an answer that does not resolve to an approving
+      authorization — garbage, or a journal that moved underneath it.
+      There is no record to write, because `refs` would have nothing
+      truthful to point at.
+    * one whose answer some result already names. That is a crash in the
+      narrow window *after* the account landed and before the marker was
+      removed, so the account already exists and a second one would be a
+      duplicate claiming the attempt died when it did not.
+
+    Both are removed with a note on stderr. Nothing happened to a
+    checkout that this could name.
+    """
+    written: list[str] = []
+    try:
+        markers = sorted(apply_in_flight_dir().iterdir())
+    except OSError:
+        return written
+    if not markers:
+        return written
+
+    accounted = {
+        ref
+        for rec in records.values()
+        if rec.type == "result"
+        for ref in rec.refs
+    }
+    root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    for marker in markers:
+        if not marker.is_file():
+            continue
+        answer_id, head_before, paths = _read_in_flight(marker)
+        answer_id = answer_id or marker.name
+        answer = records.get(answer_id)
+        binding = (
+            _approval_binding(records, answer)[0]
+            if answer is not None and answer.type == "answer"
+            else None
+        )
+        if binding is None or answer.fields.get("decision", "").strip() != "approve":
+            print(
+                f"castle apply: discarding an in-flight marker for {answer_id}, which "
+                "is not an approval this journal has. Nothing was written.",
+                file=sys.stderr,
+            )
+            _clear_in_flight(marker.name)
+            continue
+        if answer_id in accounted:
+            print(
+                f"castle apply: discarding an in-flight marker for {answer_id}, whose "
+                "attempt is already accounted for by a result. Nothing was written.",
+                file=sys.stderr,
+            )
+            _clear_in_flight(marker.name)
+            continue
+
+        question, _proposal = binding
+        # Both shas, so the resident can see at a glance which side of
+        # the commit the interruption fell on without running anything.
+        head_now = ""
+        if root:
+            probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+            if probe is not None and probe.returncode == 0:
+                head_now = (probe.stdout or "").strip()
+        moved = (
+            "Your repository's head HAS moved since that attempt began, so the "
+            "change was very likely committed."
+            if head_now and head_before and head_now != head_before
+            else "Your repository's head has NOT moved since that attempt began, so "
+            "if anything reached your files it is uncommitted."
+            if head_now and head_before
+            else "Whether your repository's head has moved could not be established "
+            "here."
+        )
+        detail = [
+            f"What this was for: the change `{question.id}`, approved by "
+            f"`{answer.id}`.",
+            "",
+            "An earlier attempt to make it was interrupted after it may have begun "
+            "changing your configuration repository — the process was killed, or the "
+            "machine stopped, before it could record what it had done. This record "
+            "exists so that nothing later claims the change was refused when it may "
+            "in fact be sitting in your repository.",
+            "",
+            f"Where the repository was when that attempt began: "
+            f"`{head_before or '(no commits yet)'}`.",
+            f"Where it is now: `{head_now or '(could not be read)'}`. {moved}",
+        ]
+        if paths:
+            detail += [
+                "",
+                "The files that attempt was going to change:",
+                "",
+            ] + [f"    {_displayable(path)}" for path in paths]
+        detail += [
+            "",
+            "Nothing was activated and nothing was pushed. Look at `git log` and "
+            "`git status` in that repository, and when it says what you expect, "
+            f"`castle apply {answer.id}` runs the whole thing again — every check "
+            "included, so a change that is already there is refused rather than "
+            "made twice.",
+        ]
+        try:
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail,
+            )
+        except (RecordError, OSError) as exc:
+            # The marker stays. Nothing was accounted for, so the next
+            # run must find it again — that is the whole contract.
+            print(
+                f"castle apply: could not record the interrupted attempt for "
+                f"{answer_id} ({exc}); its marker is left in place.",
+                file=sys.stderr,
+            )
+            continue
+        written.append(result_id)
+        print(f"apply: {result_id} accounts for an interrupted attempt on {answer_id}")
+    return written
+
+
 def _hostname() -> str:
     """This machine's name, for the flake attribute the validation
     builds. A fact about the machine running the applier, never about
@@ -6546,7 +6799,7 @@ def _write_apply_result(
     # sha on those paths either.
     if commit_sha:
         extra[APPLY_COMMIT_FIELD] = commit_sha
-    return write_record(
+    record_id = write_record(
         journal_dir(),
         type="result",
         provenance=answer.fields.get("provenance", "requested"),
@@ -6555,6 +6808,14 @@ def _write_apply_result(
         body="\n".join(body_lines),
         extra=extra,
     )
+    # The account of this attempt is durable as of the line above, so
+    # the crash breadcrumb has nothing left to say. Cleared HERE, at the
+    # one place that knows the record landed, rather than in a `finally`
+    # around the apply: a `finally` also runs when `write_record` itself
+    # raises, which is precisely the window the marker exists to cover.
+    # Pre-mutation refusals never wrote one, so this is a no-op for them.
+    _clear_in_flight(answer.id)
+    return record_id
 
 
 def _validation_command(private_root: str, host: str) -> list[str]:
@@ -7094,6 +7355,37 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         # and the two are not interchangeable. A failure here is carried
         # rather than fatal — it only costs the recovery wording.
         tracked_before, _why_tracked = _tracked_subset(root, paths)
+
+        # An empty string is a legitimate answer: a repository with no
+        # commits yet has no HEAD, and a patch that only creates files
+        # applies to one perfectly well. `_verify_single_commit` reads
+        # it as "the commit this makes is the root commit."
+        #
+        # Read HERE, before the mutation rather than after it, because
+        # the breadcrumb below has to carry it. `git apply` never moves
+        # HEAD, so the value is the same either way.
+        head_probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+        head_before = (
+            (head_probe.stdout or "").strip()
+            if head_probe is not None and head_probe.returncode == 0
+            else ""
+        )
+
+        # **The last line before anything in the resident's checkout
+        # moves.** Everything above this point is a read; everything
+        # below can leave the tree or the repository changed. If this
+        # process dies in that window — killed, rebooted, or with
+        # `write_record` itself failing — no result names this answer,
+        # so it stays eligible and the next sweep would attempt it
+        # again: on a mutated tree, which refuses `refused-tree-dirty`,
+        # or on a landed commit, which refuses `refused-patch-stale`.
+        # Either way a durable record would say the applier declined a
+        # change that is in fact sitting in the resident's repository,
+        # possibly committed. Wrong and plausible, which is the worst
+        # kind (Codex review on this PR, finding 1).
+        #
+        # The marker is what the next run reads instead of guessing.
+        _write_in_flight(answer.id, head_before, paths)
         applied, applied_fault = _run_git(root, ["apply", "--", str(snapshot)])
         if applied is None:
             # git was killed or never ran partway through the one step that
@@ -7146,16 +7438,6 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         except OSError:
             pass
 
-    # An empty string is a legitimate answer here: a repository with no
-    # commits yet has no HEAD, and a patch that only creates files
-    # applies to one perfectly well. `_verify_single_commit` below reads
-    # it as "the commit this makes is the root commit".
-    head_probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
-    head_before = (
-        (head_probe.stdout or "").strip()
-        if head_probe is not None and head_probe.returncode == 0
-        else ""
-    )
     # Ids only, and never a path or a word of tenant prose: this message
     # is durable and leaves the machine more easily than a journal does.
     # The digest is what makes the commit checkable against the journal
@@ -7427,7 +7709,39 @@ def cmd_apply(args: argparse.Namespace) -> int:
             print(f"castle apply: cannot read the journal: {exc}", file=sys.stderr)
             return 1
 
+        # **Before anything fresh, on both paths.** An attempt that
+        # touched a checkout and never wrote its account is the one
+        # thing a re-attempt must not run on top of, so it is settled
+        # first and the answers it settles are barred by their own
+        # results from the fold below.
+        reconciled = _reconcile_in_flight(records)
+        if reconciled:
+            records = load_all(journal_dir())
+
         if not args.sweep:
+            if args.answer_id in {
+                rec.refs[0]
+                for rid in reconciled
+                for rec in (records.get(rid),)
+                if rec is not None and rec.refs
+            }:
+                # This invocation just wrote the account of an
+                # interrupted attempt on the very id it was asked to
+                # apply. It does NOT then proceed: the whole point is
+                # that nothing knows what that attempt left behind, and
+                # re-running on top of it is what manufactures the
+                # contradiction. Running it again is one command away,
+                # and the record says so.
+                print(
+                    f"castle apply: an earlier attempt on {args.answer_id} was "
+                    "interrupted after it may have begun changing your configuration "
+                    "repository; that is now recorded. Look at it, then run this "
+                    "again.",
+                    file=sys.stderr,
+                )
+                for rid in reconciled:
+                    print(rid)
+                return 1
             answer = records.get(args.answer_id)
             if answer is None or answer.type != "answer":
                 print(
@@ -7472,7 +7786,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
                 return 1
             applied += 1
             print(f"apply: {result_id} spends {answer.id} -> {apply_outcome or 'failed'}")
-        if applied:
+        if applied or reconciled:
             # Exactly one route pass after the loop, the same tail step
             # `cmd_dispatch` runs and for the same reason: `route_journal`
             # is an idempotent whole-journal fold, so per-record routing
