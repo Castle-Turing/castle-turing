@@ -6004,6 +6004,24 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
     their own NUL-terminated records — verified against git, not read
     off a manual page, and handled here because a `git diff`-format
     patch from some future tenant can carry one.
+
+    **And the output is read as bytes, not as text** (Codex review on
+    docs/tasks/0026-apply-validate.md, P2). `text=True, errors="replace"`
+    turned any byte that is not valid UTF-8 into U+FFFD — in the one
+    function whose whole reason for choosing `-z` was not to mangle a
+    name. The damage was not cosmetic: the dirty check would then
+    inspect a path that does not exist, find it clean, and the pathspec
+    commit would fail *after* the working tree had already been
+    modified. `surrogateescape` is the decode that round-trips: the
+    original bytes come back out when Python encodes these strings into
+    a subprocess argument list, so git receives exactly what it emitted.
+
+    The cost is that these strings are **not safe to render**. A lone
+    surrogate makes `write_text` raise, and records are UTF-8 by
+    definition (docs/tasks/0033-byte-exact-proposal.md), so a path that
+    reaches a record body, an error message or a notification must go
+    through `_displayable` first. Nothing here renders one; the two
+    places that do are marked.
     """
     git = shutil.which("git")
     if git is None:
@@ -6012,37 +6030,76 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
         probe = subprocess.run(
             [git, "-C", root, "apply", "--numstat", "-z", "--", str(sidecar)],
             capture_output=True,
-            text=True,
-            errors="replace",
             timeout=CHECKOUT_PROBE_SECONDS,
             env=_git_stripped_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"`git apply --numstat` could not be run there ({exc})"
     if probe.returncode != 0:
-        detail = (probe.stderr or "").strip()
+        # git's own message, which may itself name a path, so it is
+        # decoded for display rather than for operation.
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
         return None, detail or f"git exited {probe.returncode}"
 
-    tokens = probe.stdout.split("\0")
-    if tokens and tokens[-1] == "":
+    tokens = (probe.stdout or b"").split(b"\0")
+    if tokens and tokens[-1] == b"":
         tokens.pop()
     paths: list[str] = []
     index = 0
     while index < len(tokens):
-        fields = tokens[index].split("\t", 2)
+        fields = tokens[index].split(b"\t", 2)
         if len(fields) != 3:
             return None, f"could not read git's own numstat output: {tokens[index]!r}"
-        if fields[2] == "":
+        if fields[2] == b"":
             # A rename: the two paths are the next two records.
             if index + 2 >= len(tokens):
                 return None, "git's numstat output ended mid-rename"
-            paths.extend(tokens[index + 1 : index + 3])
+            paths.extend(
+                token.decode("utf-8", "surrogateescape")
+                for token in tokens[index + 1 : index + 3]
+            )
             index += 3
         else:
-            paths.append(fields[2])
+            paths.append(fields[2].decode("utf-8", "surrogateescape"))
             index += 1
     return paths, ""
 
+
+def _displayable(value: str) -> str:
+    """A path safe to write into a record, a message or a notification.
+
+    `_patch_paths` decodes with `surrogateescape` so the original bytes
+    survive back into git's argument list, which means a path whose name
+    is not valid UTF-8 carries lone surrogates. Records are UTF-8 by
+    definition, and `write_text` raises on one — so a path that has
+    reached the point of being *shown* has to lose that property, while
+    the value git is handed keeps it.
+
+    `backslashreplace` rather than `replace`: an escape a resident can
+    read back to the actual byte beats a row of U+FFFD that says only
+    "something was here". A path that is ordinary UTF-8 — every path in
+    practice — comes through untouched.
+    """
+    return value.encode("utf-8", "backslashreplace").decode("utf-8")
+
+def _literal(paths: list[str]) -> list[str]:
+    """Repository paths as **literal** pathspecs.
+
+    `--` separates options from pathspecs; it does not stop git reading
+    what follows as a pathspec *pattern*. So a resident's file called
+    `weird*.nix` glob-matches other files, and one whose name begins
+    with a colon is read as pathspec magic — in commands that add,
+    commit and status exactly the set of paths a patch touched, where
+    matching anything else is the failure. Every shape traced fails
+    safe today (a wider match makes the commit contain more than the
+    patch, which the verification above then refuses), but "fails safe
+    by luck" is not a property to leave standing.
+
+    `:(literal)` is git's own answer and takes no escaping rules of our
+    own: everything after it is the path, byte for byte (code review on
+    docs/tasks/0026-apply-validate.md).
+    """
+    return [f":(literal){path}" for path in paths]
 
 def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
     """A one-line summary of the resident's uncommitted work under
@@ -6069,23 +6126,37 @@ def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
         return None, "`git` is not on this session's PATH"
     try:
         probe = subprocess.run(
-            [git, "-C", root, "status", "--porcelain", "--", *paths],
+            # `-z` here too, and literal pathspecs: this reads only the
+            # two status letters off each record, but a path with a
+            # newline in it would otherwise split one line into two and
+            # inflate the count it reports.
+            [
+                git, "-C", root,
+                "status", "--porcelain", "-z", "--", *_literal(paths),
+            ],
             capture_output=True,
-            text=True,
-            errors="replace",
             timeout=CHECKOUT_PROBE_SECONDS,
             env=_git_stripped_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"`git status` could not be run there ({exc})"
     if probe.returncode != 0:
-        detail = (probe.stderr or "").strip()
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
         return None, detail or f"git exited {probe.returncode}"
-    lines = [line for line in probe.stdout.splitlines() if line.strip()]
-    if not lines:
+    records = [record for record in (probe.stdout or b"").split(b"\0") if record]
+    letters: list[str] = []
+    index = 0
+    while index < len(records):
+        raw = records[index]
+        letters.append(raw[:2].decode("utf-8", "replace").strip() or "??")
+        # A rename or a copy staged in the index emits its SOURCE path as
+        # its own following record, with no status letters on it.
+        # Skipping that record is what keeps the count a count of paths
+        # rather than of records.
+        index += 2 if raw[:1] in (b"R", b"C") else 1
+    if not letters:
         return "", ""
-    letters = sorted({line[:2].strip() or "??" for line in lines})
-    return f"{len(lines)} path(s), status {', '.join(letters)}", ""
+    return f"{len(letters)} path(s), status {', '.join(sorted(set(letters)))}", ""
 
 
 # How long one git command that WRITES the resident's checkout may take.
