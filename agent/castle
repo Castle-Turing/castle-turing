@@ -6065,6 +6065,90 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
     return paths, ""
 
 
+def _tracked_subset(root: str, paths: list[str]) -> tuple[set[str] | None, str]:
+    """Which of `paths` git already tracks, or `(None, why)`.
+
+    Asked **before** the patch is applied, and it is the only way to
+    tell later which paths the change *created*. The numstat data cannot
+    say: a creation has a zero deleted-line count, and so does appending
+    to an empty file.
+
+    That distinction is not bookkeeping — it decides which recovery
+    command the `applied-uncommitted` record prints, and the two are not
+    interchangeable. Reproduced: after `git add -N`, `git checkout --`
+    on a created path restores it from the intent-to-add's *empty* blob,
+    so the file stays on disk with its contents destroyed while the
+    command reports success (code review on
+    docs/tasks/0026-apply-validate.md, finding 3).
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+    try:
+        probe = subprocess.run(
+            [git, "-C", root, *NO_HOOKS_ARGS, "ls-files", "-z", "--", *_literal(paths)],
+            capture_output=True,
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=_git_stripped_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"`git ls-files` could not be run there ({exc})"
+    if probe.returncode != 0:
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+        return None, detail or f"git exited {probe.returncode}"
+    return {
+        record.decode("utf-8", "surrogateescape")
+        for record in (probe.stdout or b"").split(b"\0")
+        if record
+    }, ""
+
+
+def _recovery_lines(paths: list[str], tracked_before: set[str] | None) -> list[str]:
+    """The commands that put the working tree back, for a change that
+    applied and could not be committed.
+
+    Rendered per path shape, because one command cannot serve both and
+    the generic `git checkout -- .` this used to print was wrong for two
+    of the three shapes at once — reproduced: it truncated a created
+    file to empty and left it on disk, and it left a deletion staged in
+    the index for the resident's next commit to pick up.
+
+    Path-scoped and never `.`, for the same reason the dirty check is:
+    the resident may legitimately have other uncommitted work, and a
+    recovery that reaches beyond the paths this applier touched would
+    destroy it.
+
+    `git reset` first in every case, then the per-shape step: `add -N`
+    put an index entry there, so restoring the working tree without
+    first restoring the index leaves the change half-staged.
+
+    When `tracked_before` is None — git could not be asked before the
+    apply — this says so and prints no command at all, rather than
+    printing the one that might be the destructive half.
+    """
+    if tracked_before is None:
+        return [
+            "Which of those files existed before could not be established, so no "
+            "recovery command is printed here: the two are different commands and "
+            "the wrong one destroys work. `git status` in that repository will show "
+            "you what is there.",
+        ]
+    # shlex.quote so a resident can paste this, and `_displayable` first
+    # so a name that is not valid UTF-8 cannot make this record
+    # unwritable. A name needing that escape has no pasteable spelling
+    # anyway; what the escape buys is that they can see which file.
+    restore = [shlex.quote(_displayable(p)) for p in sorted(paths) if p in tracked_before]
+    remove = [shlex.quote(_displayable(p)) for p in sorted(paths) if p not in tracked_before]
+    lines = [
+        "    cd <your configuration repository>",
+        f"    git reset -q -- {' '.join(shlex.quote(_displayable(p)) for p in sorted(paths))}",
+    ]
+    if restore:
+        lines.append(f"    git checkout -- {' '.join(restore)}")
+    if remove:
+        lines.append(f"    rm -f -- {' '.join(remove)}")
+    return lines
+
 def _displayable(value: str) -> str:
     """A path safe to write into a record, a message or a notification.
 
@@ -6896,6 +6980,12 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     # ---------------------------------------------------------------
     # D — the working tree, then exactly one commit. No push, ever.
     # ---------------------------------------------------------------
+    # Asked before anything is written, because afterwards it is
+    # unanswerable: which of these paths the change CREATED decides
+    # which recovery command the `applied-uncommitted` record prints,
+    # and the two are not interchangeable. A failure here is carried
+    # rather than fatal — it only costs the recovery wording.
+    tracked_before, _why_tracked = _tracked_subset(root, paths)
     applied, applied_fault = _run_git(root, ["apply", "--", str(sidecar)])
     if applied is None:
         # git was killed or never ran partway through the one step that
@@ -7029,13 +7119,18 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         detail_lines.append("```")
         detail_lines.append("")
         detail_lines.append(
-            "Nothing was rolled back, because a reset would also destroy any other "
-            "uncommitted work in that repository. Both ways out are yours to choose:"
+            "Nothing was rolled back, because a reset reaching past the files this "
+            "touched would also destroy other uncommitted work in that repository. "
+            "Both ways out are yours to choose. To see it, and then to keep it:"
         )
         detail_lines.append("")
-        detail_lines.append("    git -C <your configuration repository> diff    # to see it")
-        detail_lines.append("    git -C <your configuration repository> commit  # to keep it")
-        detail_lines.append("    git -C <your configuration repository> checkout -- .  # to drop it")
+        detail_lines.append("    cd <your configuration repository>")
+        detail_lines.append("    git diff")
+        detail_lines.append("    git commit")
+        detail_lines.append("")
+        detail_lines.append("Or to drop it, leaving the rest of your work alone:")
+        detail_lines.append("")
+        detail_lines += _recovery_lines(paths, tracked_before)
         detail_lines.append("")
         detail_lines.append("Nothing was activated, and nothing was pushed anywhere.")
         result_id = _write_apply_result(

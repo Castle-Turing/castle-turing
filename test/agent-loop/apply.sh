@@ -701,27 +701,81 @@ printf 'invented signing failure, harness fixture only\n' >&2
 exit 1
 SIGNER
 chmod +x "$FAILING_SIGNER"
+signing_fails() { git -C "$PRIVATE" config commit.gpgsign true; git -C "$PRIVATE" config gpg.program "$FAILING_SIGNER"; }
+signing_works() { git -C "$PRIVATE" config --unset commit.gpgsign; git -C "$PRIVATE" config --unset gpg.program; }
+
+# The recovery block out of the record, EXECUTED rather than grepped for.
+# A command that reads plausibly and does nothing — or, worse, destroys
+# the thing it claims to restore — is exactly what this scenario missed
+# until the review ran it: `git checkout -- .` truncated a created file
+# to empty, left it on disk, and left a deletion staged in the index for
+# the resident's next commit to pick up.
+run_recorded_recovery() {
+  local record="$1" script="$WORKDIR/recovery.sh"
+  awk '/^Or to drop it/ { grab = 1; next }
+       grab && /^    / { sub(/^    /, ""); print; next }
+       grab && NF { exit }' "$record" > "$script"
+  [ -s "$script" ] || fail "the record printed no recovery command at all: $(cat "$record")"
+  grep -qx 'cd <your configuration repository>' "$script" \
+    || fail "the recovery block does not begin by naming the repository: $(cat "$script")"
+  # The one placeholder a resident substitutes by hand; everything after
+  # it must work verbatim.
+  sed -i "1s|^cd <your configuration repository>$|cd '$PRIVATE'|" "$script"
+  bash -e "$script" >"$WORKDIR/recovery.out" 2>&1 \
+    || fail "the recorded recovery command failed: $(cat "$script")
+$(cat "$WORKDIR/recovery.out")"
+}
+
+log "  -- a MODIFIED path: the change is in the tree, HEAD has not moved, and the recovery works"
 read -r REQ_UC R_UC Q_UC A_UC <<<"$(new_approval APPLYABLE-MODIFY-uncommitted)"
-git -C "$PRIVATE" config commit.gpgsign true
-git -C "$PRIVATE" config gpg.program "$FAILING_SIGNER"
+INDEX_BEFORE="$(git -C "$PRIVATE" ls-files -s | sha256sum)"
+signing_fails
 "$CASTLE" apply "$A_UC" >/dev/null 2>&1 && fail "an apply whose commit failed reported success"
-git -C "$PRIVATE" config --unset commit.gpgsign
-git -C "$PRIVATE" config --unset gpg.program
+signing_works
 AP_UC="$(newest_apply_result_for "$A_UC")"
 grep -q '^apply-outcome: applied-uncommitted$' "$AP_UC" \
   || fail "a commit that failed after the patch applied has the wrong outcome: $(field_of "$AP_UC" apply-outcome)"
 grep -q '^outcome: failed$' "$AP_UC" \
   || fail "an apply that did not reach a conclusion is not recorded as failed: $(field_of "$AP_UC" outcome)"
-grep -q 'git -C <your configuration repository> commit' "$AP_UC" \
+grep -q '^    git commit$' "$AP_UC" \
   || fail "the record does not name the way to keep the change: $(cat "$AP_UC")"
-grep -q 'git -C <your configuration repository> checkout -- .' "$AP_UC" \
-  || fail "the record does not name the way to drop the change: $(cat "$AP_UC")"
+# Never `.`: a recovery reaching past the paths this applier touched
+# would destroy the resident's other uncommitted work.
+grep -qE '^    git (checkout|reset).* \.$' "$AP_UC" \
+  && fail "the recovery command is repo-wide rather than scoped to the change's own paths: $(cat "$AP_UC")"
 [ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$PRIVATE_HEAD" ] \
   || fail "the failed commit moved HEAD anyway"
 [ -n "$(git -C "$PRIVATE" status --porcelain -- resident.nix)" ] \
   || fail "the change is not in the working tree, so 'applied-uncommitted' is not what happened"
-git -C "$PRIVATE" checkout -q -- resident.nix
-assert_private_untouched "after cleaning up the uncommitted apply"
+run_recorded_recovery "$AP_UC"
+assert_private_untouched "after running the recorded recovery for a modified path"
+[ "$(git -C "$PRIVATE" ls-files -s | sha256sum)" = "$INDEX_BEFORE" ] \
+  || fail "the recorded recovery left the index changed"
+
+log "  -- a CREATED path: the recovery that would silently destroy it instead removes it"
+# The shape the generic advice got wrong. `git add -N` put an
+# intent-to-add entry in the index, so `git checkout --` on this path
+# restores it from an EMPTY blob: exit 0, success reported, file still
+# present, contents gone.
+read -r REQ_UC2 R_UC2 Q_UC2 A_UC2 <<<"$(new_approval APPLYABLE-NEWFILE-uncommitted)"
+NEW_PATH="hosts/example/new-uncommitted.nix"
+INDEX_BEFORE="$(git -C "$PRIVATE" ls-files -s | sha256sum)"
+signing_fails
+"$CASTLE" apply "$A_UC2" >/dev/null 2>&1 && fail "an apply whose commit failed reported success"
+signing_works
+AP_UC2="$(newest_apply_result_for "$A_UC2")"
+grep -q '^apply-outcome: applied-uncommitted$' "$AP_UC2" \
+  || fail "the created-path uncommitted case has the wrong outcome: $(field_of "$AP_UC2" apply-outcome)"
+[ -s "$PRIVATE/$NEW_PATH" ] \
+  || fail "the created file is not in the working tree, so this proves nothing"
+grep -qF "$NEW_PATH" "$AP_UC2" \
+  || fail "the recovery does not name the path it created: $(cat "$AP_UC2")"
+run_recorded_recovery "$AP_UC2"
+[ ! -e "$PRIVATE/$NEW_PATH" ] \
+  || fail "the recorded recovery left the created file behind (contents: $(od -c "$PRIVATE/$NEW_PATH" | head -2))"
+assert_private_untouched "after running the recorded recovery for a created path"
+[ "$(git -C "$PRIVATE" ls-files -s | sha256sum)" = "$INDEX_BEFORE" ] \
+  || fail "the recorded recovery left the index changed for a created path"
 assert_mechanism_untouched "after the uncommitted apply"
 
 # ---------------------------------------------------------------------

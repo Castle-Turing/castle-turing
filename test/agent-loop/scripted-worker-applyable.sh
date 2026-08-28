@@ -119,6 +119,22 @@ if packet_has "APPLYABLE-CREATE"; then
   exit 0
 fi
 
+if packet_has "APPLYABLE-NEWFILE-"; then
+  # A creation, like APPLYABLE-CREATE, but at a path chosen per errand
+  # so more than one scenario can use one. `applied-uncommitted` needs
+  # its own, because that record's recovery command is different for a
+  # path the change created than for one it modified.
+  TOKEN="$(sed -n 's/.*APPLYABLE-NEWFILE-\([A-Za-z0-9]*\).*/\1/p' "$errand_records" | head -1)"
+  say "proposing a new file this configuration does not have yet ($TOKEN)"
+  : > "$SCRATCH/nothing"
+  printf '# Created by the applyable fixture tenant, harness fixture only.\n# APPLYABLE-MARKER: %s\n' \
+    "$TOKEN" > "$SCRATCH/newfile"
+  emit_diff "hosts/example/new-$TOKEN.nix" "$SCRATCH/nothing" "$SCRATCH/newfile"
+  expect "hosts/example/new-$TOKEN.nix" "$SCRATCH/newfile"
+  printf 'private\n' > "$CASTLE_TARGET_FILE"
+  exit 0
+fi
+
 if packet_has "APPLYABLE-DELETE"; then
   say "proposing that a file stop existing"
   # A plain `diff -u` against /dev/null only truncates a file to empty —
