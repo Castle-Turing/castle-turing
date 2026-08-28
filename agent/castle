@@ -5755,6 +5755,15 @@ APPLY_COMMIT_EMAIL = "applier@castle.invalid"
 # hostname it used and says plainly what that does and does not mean.
 HOSTNAME_PATH = "/proc/sys/kernel/hostname"
 
+# The two characters a path flakeref cannot contain, because Nix reads
+# them as syntax: `#` opens the attribute path and `?` opens the query.
+# Verified against nix 2.34 rather than read off a manual — a private
+# root containing either does not produce a parse error, it silently
+# resolves a shorter, wrong directory and reports that it does not
+# exist, which arrives as an ordinary build failure. There is no
+# escaping rule for them in a path flakeref, which is what makes this a
+# skip rather than something to quote around.
+FLAKEREF_RESERVED = ("#", "?")
 # The first line of every apply result's body, per outcome. This is the
 # notification a resident actually receives — `_fire_notification` takes
 # exactly this line — so it is drafted rather than improvised, carries
@@ -6561,16 +6570,60 @@ def _evaluate_configuration(
     from what production does, and it is also the one command a resident
     can paste to check the thing themselves.
 
-    **Three gates, all required before `nix` is invoked at all.** The
+    **Four gates, all required before `nix` is invoked at all.** The
     option, off by default; a state layout where evaluating would not
     publish the resident's whole decision history to the world-readable
-    store; and `nix` actually being on PATH, which a host running the
+    store; a private root whose path can be expressed as a flakeref at
+    all; and `nix` actually being on PATH, which a host running the
     agent layer without `modules/dev` genuinely may not have. None of
-    the three is a refusal to *apply*: the change is already committed
+    the four is a refusal to *apply*: the change is already committed
     by the time this runs, and the gate is on evaluation, which is the
     only step that copies anything anywhere.
     """
     host = _hostname()
+
+    # **Before anything is built into a flakeref: can this path even be
+    # one?** A flakeref splits the attribute path at `#` and the query
+    # at `?`, so a private checkout whose own path contains either makes
+    # `nix` resolve some shorter, wrong directory. Reproduced against
+    # nix 2.34: it does not fail as a malformed argument, it fails as
+    # "getting status of ... No such file or directory" — which arrived
+    # here as a nonzero exit and was recorded as `validation-failed`, a
+    # false claim that the resident's configuration no longer builds
+    # (code review on docs/tasks/0026-apply-validate.md).
+    #
+    # Escaping was considered and there is nothing to escape *to*: a
+    # path flakeref has no quoting rule for these, which is why they are
+    # reserved. So this is a skip and not a refusal — the apply and the
+    # commit are fine, and only the check is inexpressible.
+    flakeref_reserved = sorted({char for char in FLAKEREF_RESERVED if char in private_root})
+
+    def skip(reason: str, *, command: str | None) -> tuple[str, str]:
+        detail_lines.append("")
+        detail_lines.append(f"No evaluation was attempted: {reason}")
+        if command is not None:
+            detail_lines.append("")
+            detail_lines.append("The check that would have run is:")
+            detail_lines.append("")
+            detail_lines.append(f"    {command}")
+        return "skipped", "completed"
+
+    if flakeref_reserved:
+        # Deliberately BEFORE the hostname sentence and with no command
+        # line printed: there is no command to print. Printing the one
+        # that cannot work would be this record recommending the thing
+        # that produced the wrong answer.
+        return skip(
+            "your configuration repository's own path contains "
+            + " and ".join(f"`{char}`" for char in flakeref_reserved)
+            + ", which Nix reads as flakeref syntax rather than as part of the "
+            "path — so there is no way to name this repository to `nix build` at "
+            "all. Nothing is wrong with the change, and nothing about it was "
+            "checked. Moving the checkout to a path without those characters is "
+            "the only fix; there is no escaping rule for them.",
+            command=None,
+        )
+
     argv = _validation_command(private_root, host)
     printable = shlex.join(argv)
 
@@ -6583,20 +6636,12 @@ def _evaluate_configuration(
         "whether the change did what the proposal claimed."
     )
 
-    def skip(reason: str) -> tuple[str, str]:
-        detail_lines.append("")
-        detail_lines.append(f"No evaluation was attempted: {reason}")
-        detail_lines.append("")
-        detail_lines.append("The check that would have run is:")
-        detail_lines.append("")
-        detail_lines.append(f"    {printable}")
-        return "skipped", "completed"
-
     if os.environ.get(APPLY_EVALUATE_ENV, "").strip() != "true":
         return skip(
             f"`castle.agent.apply.evaluateFlake` is off (it is off by default, and "
             f"wires ${APPLY_EVALUATE_ENV}). Turning it on lets this build the host "
-            "configuration your change produces. Nothing is activated either way."
+            "configuration your change produces. Nothing is activated either way.",
+            command=printable,
         )
 
     finding = _state_layout_finding(state_dir())
@@ -6604,7 +6649,8 @@ def _evaluate_configuration(
         return skip(
             "evaluating this flake would publish your own decision history, and "
             "unlike a rebuild it is this tool that would be making the copy — so it "
-            f"declines rather than reports. What was found: {finding}"
+            f"declines rather than reports. What was found: {finding}",
+            command=printable,
         )
 
     nix = shutil.which("nix")
@@ -6612,7 +6658,8 @@ def _evaluate_configuration(
         return skip(
             "`nix` is not on this session's PATH, so there is nothing here to "
             "evaluate with. Nothing about the change is in question; it simply was "
-            "not checked."
+            "not checked.",
+            command=printable,
         )
 
     timeout = apply_timeout_seconds()

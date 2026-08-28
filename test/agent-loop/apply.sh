@@ -973,6 +973,53 @@ kill -0 "$BUILDER_PID" 2>/dev/null \
   && fail "the check's own child survived the timeout — only the parent was killed"
 assert_private_changed_exactly "the timed-out apply" "$A_V3" resident.nix
 
+log "  -- a repository whose own path Nix cannot be told about at all"
+# Verified against real nix before it was fixed: a `#` in the private
+# root makes the flakeref split there, so nix resolves a shorter path,
+# reports it does not exist, and exits nonzero — which landed as
+# `validation-failed`, a false claim that the resident's configuration
+# no longer builds. There is no escaping rule for `#` or `?` in a path
+# flakeref, so this is a skip with an honest reason and not a refusal:
+# the apply and the commit are fine, only the check is inexpressible.
+#
+# The sharp assertion here is that nix is **never invoked**, which is
+# what this harness can prove with a stub and what no real-nix run is
+# needed for. A stub exits 0 whatever argv it is handed, so it cannot
+# reproduce the false `validation-failed` itself; what it can prove is
+# that the wrong flakeref is never constructed in the first place.
+#
+# Its own throwaway checkout, because the character has to be in the
+# repository's real path.
+HASHED="$WORKDIR/private#hash"
+mkdir -p "$HASHED"
+cp "$PRIVATE/flake.nix" "$HASHED/flake.nix"
+printf '# Synthetic private layer, harness fixture only.\n# APPLYABLE-MARKER: start\n{ }\n' \
+  > "$HASHED/resident.nix"
+git -C "$HASHED" init -q
+git -C "$HASHED" add -A
+git -C "$HASHED" commit -q -m "fixture: a checkout at a path Nix cannot name"
+: > "$NIX_LOG"
+make_nix_stub 'exit 0'
+read -r REQ_HR R_HR Q_HR A_HR <<<"$(CASTLE_PRIVATE_ROOT="$HASHED" new_approval APPLYABLE-MODIFY-hashroot)"
+PATH="$NIX_BIN:$PATH" CASTLE_PRIVATE_ROOT="$HASHED" CASTLE_APPLY_EVALUATE_FLAKE=true \
+  "$CASTLE" apply "$A_HR" >/dev/null \
+  || fail "an apply into a repository Nix cannot name failed outright"
+AP_HR="$(newest_apply_result_for "$A_HR")"
+grep -q '^apply-outcome: applied-unvalidated$' "$AP_HR" \
+  || fail "an unexpressible flakeref was reported as a failed build: $(field_of "$AP_HR" apply-outcome)"
+grep -qF 'flakeref syntax' "$AP_HR" \
+  || fail "the record does not say why nothing could be checked: $(cat "$AP_HR")"
+grep -qF '`#`' "$AP_HR" \
+  || fail "the record does not name the character in the way: $(cat "$AP_HR")"
+[ ! -s "$NIX_LOG" ] \
+  || fail "nix was invoked with a flakeref that names the wrong directory: $(cat "$NIX_LOG")"
+# The change itself landed perfectly well — only the check was skipped.
+[ "$(git -C "$HASHED" rev-list --count HEAD)" = "2" ] \
+  || fail "the apply into the oddly-named checkout did not make exactly one commit"
+[ -z "$(git -C "$HASHED" status --porcelain)" ] \
+  || fail "the apply into the oddly-named checkout left the tree dirty"
+assert_private_untouched "after the unnameable-root scenario"
+
 log "  -- and with no nix on PATH at all: not checked, and no crash"
 read -r REQ_V4 R_V4 Q_V4 A_V4 <<<"$(new_approval APPLYABLE-MODIFY-nonix)"
 EMPTY_BIN="$WORKDIR/empty-bin"
