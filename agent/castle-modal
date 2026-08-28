@@ -1794,6 +1794,32 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # keying rule either — `_collect_downstream` reaches an
             # apply result through the same `refs[0]` chain that reaches
             # the answer.
+            #
+            # **Selected by seat and not by the field**, which is a
+            # correction: keying on `apply-outcome` alone missed every
+            # attempt that failed *before* reaching a conclusion about
+            # the change — an unusable checkout, a target role with no
+            # checkout, a `git apply` git never finished — all of which
+            # write `outcome: failed` with no `apply-outcome` at all.
+            # Those records still name the answer, so they still bar it
+            # from ever being applied automatically again; the errand
+            # then read "approved — waiting to be applied" forever, for
+            # something that would never run, with the remedy named
+            # nowhere. Verified, not theorised (code review on
+            # docs/tasks/0026-apply-validate.md, finding 2).
+            #
+            # ACCEPTED LIMIT, the same one `proposals[-1]` above carries
+            # and inherited rather than worked around: `applies[-1]` is
+            # "newest" only across seconds, so a hand retry landing in
+            # the same second as the attempt it retries can be described
+            # by the wrong one of the two. The bug is the id format —
+            # docs/backlog/record-ids-are-only-second-resolution.md,
+            # which records that patching one more call site would make
+            # the fifth local workaround and still leave the next fold
+            # to rediscover it. What bounds the damage here: both
+            # records are apply attempts on the same approval, so the
+            # label is wrong about which attempt rather than about what
+            # kind of thing happened, and the next second resolves it.
             applies = sorted(
                 (
                     other
@@ -1801,14 +1827,27 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
                     if other.type == "result"
                     and other.refs
                     and other.refs[0] == rec.id
-                    and other.fields.get(castle.APPLY_OUTCOME_FIELD, "").strip()
+                    and other.fields.get("seat") == castle.APPLIER_SEAT
                 ),
                 key=lambda other: other.id,
             )
             if applies:
-                base = _apply_outcome_label(
-                    applies[-1].fields.get(castle.APPLY_OUTCOME_FIELD, "").strip()
-                )
+                newest_apply = applies[-1]
+                outcome = newest_apply.fields.get(castle.APPLY_OUTCOME_FIELD, "").strip()
+                if outcome:
+                    base = _apply_outcome_label(outcome)
+                else:
+                    # An attempt that reached no conclusion about the
+                    # change. The automatic bar is deliberate and stays
+                    # — one attempt per approval, whatever happened — so
+                    # what this owes the resident is the hand path,
+                    # named, per docs/tasks/0015's rule that a label
+                    # must not cause the inaction it describes. It is
+                    # also what makes the fail-closed record-door denial
+                    # visible: a hand-planted `seat: applier` result is
+                    # still refused, but now it says so instead of
+                    # reading as an eternal wait.
+                    base = f"could not be applied — castle apply {rec.id} to try again"
 
     # Naming the remedy, the same way every outcome label above does:
     # docs/tasks/0015's rule is that a label must not cause the inaction
