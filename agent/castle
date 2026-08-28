@@ -5997,19 +5997,45 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "lowercase hex characters — the only shape a SHA-256 digest has."
             )
         elif patch_raw is not None:
-            sidecar = path.parent / f"{rec.id}.patch"
+            # Keyed on `path.stem`, not `rec.id`: the sidecar was named
+            # after the id that also names the record *file* (`_file_
+            # proposal_question`'s caller writes both from the same
+            # `result_id`), so the two agree for any well-formed
+            # journal. A record whose `id` field disagrees with its own
+            # filename is already flagged by the mismatch check above;
+            # keying this lookup on `rec.id` would then go looking for a
+            # sidecar named after an id that never named any file,
+            # report a second, misleading "no sidecar" error, and never
+            # check the sidecar that is actually sitting on disk beside
+            # this record. `path.stem` reports about the file that is
+            # really there (code review finding on this task).
+            sidecar = path.parent / f"{path.stem}.patch"
             if not sidecar.exists():
                 errors.append(
                     f"{path.name}: '{PATCH_SHA256_FIELD}' is present but no sidecar "
                     f"file exists at {sidecar.name} beside it."
                 )
             else:
-                actual = hashlib.sha256(sidecar.read_bytes()).hexdigest()
-                if actual != patch_raw:
+                try:
+                    sidecar_bytes = sidecar.read_bytes()
+                except OSError as exc:
+                    # Reproduced: replace the sidecar with a directory
+                    # and this raises `IsADirectoryError` uncaught —
+                    # `validate`'s whole job is to report a broken
+                    # journal, not to crash on one (code review finding
+                    # on this task).
                     errors.append(
-                        f"{path.name}: '{PATCH_SHA256_FIELD}' ({patch_raw!r}) does not "
-                        f"match the sidecar {sidecar.name}'s actual digest ({actual!r})."
+                        f"{path.name}: '{PATCH_SHA256_FIELD}' names sidecar "
+                        f"{sidecar.name}, which could not be read: {exc}."
                     )
+                else:
+                    actual = hashlib.sha256(sidecar_bytes).hexdigest()
+                    if actual != patch_raw:
+                        errors.append(
+                            f"{path.name}: '{PATCH_SHA256_FIELD}' ({patch_raw!r}) does "
+                            f"not match the sidecar {sidecar.name}'s actual digest "
+                            f"({actual!r})."
+                        )
 
         # `decision` and `proposal-sha256`
         # (docs/tasks/0025-approval.md §F), same "well-formed if

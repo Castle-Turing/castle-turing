@@ -1115,6 +1115,22 @@ grep -q "is not 64 lowercase hex characters" "$validate_output" \
 cp "$WORKDIR/record-backup.md" "$R_CRLF"
 "$CASTLE" validate >/dev/null || fail "castle validate did not recover once the record was restored"
 
+log "  -- red: a sidecar replaced by a directory"
+# Reproduced: `sidecar.read_bytes()` with the sidecar path pointing at
+# a directory raises `IsADirectoryError` uncaught — `castle validate`'s
+# whole job is to report a broken journal, not crash on one.
+mv "$SIDECAR_CRLF" "$WORKDIR/sidecar-crlf-real.patch"
+mkdir "$SIDECAR_CRLF"
+"$CASTLE" validate >/dev/null 2>&1 && fail "castle validate passed with the sidecar replaced by a directory"
+"$CASTLE" validate > "$validate_output" 2>&1 || true
+grep -qF "Traceback" "$validate_output" \
+  && fail "castle validate crashed with a Python traceback instead of reporting the directory-sidecar error"
+grep -qF "$(basename "$SIDECAR_CRLF")" "$validate_output" \
+  || fail "the directory-sidecar error does not name the sidecar path"
+rmdir "$SIDECAR_CRLF"
+mv "$WORKDIR/sidecar-crlf-real.patch" "$SIDECAR_CRLF"
+"$CASTLE" validate >/dev/null || fail "castle validate did not recover once the sidecar was restored"
+
 log "  -- green: a result with neither diff-boundary nor patch-sha256 at all"
 # $R_NOMECH, from the mechanism block above: a completed turn that
 # proposed nothing. Absent means absent — no sidecar expected.
