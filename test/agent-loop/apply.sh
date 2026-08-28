@@ -1143,8 +1143,26 @@ BUILDER_PID="$(cat "$WORKDIR/builder.pid" 2>/dev/null || true)"
 # The proof that the whole process group was killed rather than just the
 # parent: `nix build` spawns builders, and killing only the parent
 # leaves them running.
-kill -0 "$BUILDER_PID" 2>/dev/null \
-  && fail "the check's own child survived the timeout — only the parent was killed"
+#
+# Not `kill -0`: a zombie's pid is still visible to it — the process
+# table entry survives until its parent reaps it — so `kill -0` alone
+# cannot tell "already killed, not yet reaped" from "still running".
+# Reproduced in CI: the killed `sleep` stayed `<defunct>` long enough
+# for `kill -0` to see it and fail the assertion (Codex review on this
+# PR). `/proc/<pid>/stat`'s state field says which: `Z` (or the file
+# being gone once something does reap it) means it already died.
+builder_stat_state() {
+  local pid="$1" stat
+  stat="$(cat "/proc/$pid/stat" 2>/dev/null)" || { printf 'gone'; return; }
+  # Field 3 is the state letter. Field 2 is "(comm)", and a command
+  # name can itself contain spaces or parentheses, so split on the
+  # LAST ")" rather than by naive whitespace splitting.
+  stat="${stat##*) }"
+  printf '%s' "${stat%% *}"
+}
+BUILDER_STATE="$(builder_stat_state "$BUILDER_PID")"
+[ "$BUILDER_STATE" = "gone" ] || [ "$BUILDER_STATE" = "Z" ] \
+  || fail "the check's own child survived the timeout — only the parent was killed (state: $BUILDER_STATE)"
 assert_private_changed_exactly "the timed-out apply" "$A_V3" resident.nix
 
 log "  -- a repository whose own path Nix cannot be told about at all"
