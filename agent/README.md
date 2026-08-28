@@ -39,7 +39,7 @@ file, `agent/castle`, meant to be read top to bottom.
 
 ```
 castle ask [--provenance requested|initiated] [--refs id,id] TEXT...
-castle answer QUESTION_ID [--fact NAME] TEXT...
+castle answer QUESTION_ID [--fact NAME] [--decision approve|reject|defer] TEXT...
 castle correct [--refs id,id] TEXT...
 castle record --type T --provenance P --seat S [--refs id,id] [--evidence TEXT] [--fact NAME] [--outcome VALUE] [--target private|mechanism] [--blocking] [--body TEXT | --body-file PATH] [--spool]
 castle route
@@ -88,6 +88,18 @@ castle show ID
   answer starts real work within seconds of landing, there is no window
   in which a wrong one could be taken back: the remedy is a new
   request, not an undo.
+  `--decision approve|reject|defer` is the other thing an answer can
+  be, since `docs/tasks/0025-approval.md`: the resident's verdict on a
+  **proposed configuration change**. Valid only against a question the
+  harness itself filed to propose one (see "Proposing a change, and
+  deciding it," below), and refused on anything else. The body is
+  optional here and only here — a decision is a complete answer on its
+  own, and demanding prose beside it would train a resident to type
+  "ok" before every approval. Whatever they do type is stored
+  verbatim, unparsed, and no authorization path ever reads it.
+  **Nothing is applied, committed, or activated by any of the three
+  values**; applying an approved change is `docs/tasks/0026` and
+  activating one is `docs/tasks/0027`.
 - **`correct`** — also intake, and a second, different kind of speech:
   the resident volunteering how the system is doing, unbidden, rather
   than asking for anything or answering a question it posed
@@ -119,12 +131,20 @@ castle show ID
   `--outcome failed` when an errand failed**, because no surface may
   read failure out of prose: a result with no `outcome` field reads as
   done, forever (see "The claim record, and the `outcome` field").
+  `--outcome` is **enforced at write time too**, refused on any
+  `--type` but `result` — since `docs/tasks/0025-approval.md` gave the
+  validator that same scoping, and a validator stricter than the writer
+  it backstops is the worse half of the asymmetry it was fixing: the
+  record would be written, print an id, exit 0, and be condemned
+  afterwards by an advisory command nothing runs automatically, in a
+  journal whose only remedy is editing history the design says is never
+  edited.
   `--target` names which checkout a result's diff is against
   (`private` or `mechanism`) — the automatic path fills it in from what
   the tenant wrote to `$CASTLE_TARGET_FILE`, and this flag is the same
   lever for a human holding the seat by hand or a fixture building a
   result directly. It is **enforced at write time**, like `--blocking`
-  and unlike `--fact`/`--outcome`: refused on any `--type` but
+  and unlike `--fact`: refused on any `--type` but
   `result`, and refused blank. Not because it carries `--blocking`'s
   dangling-reference hazard — it does not — but for the reason stated
   just below about that flag, running the other way. `cmd_validate`
@@ -136,7 +156,7 @@ castle show ID
   nothing — would later call it malformed. What is deliberately *not*
   enforced is the vocabulary: a third checkout role should not need a
   schema migration (`docs/tasks/0024-config-target.md`).
-  `--blocking` is **not** convention-only like those two — it is
+  `--blocking` is **not** convention-only like `--fact` — it is
   enforced at write time, and the refusals are listed below — and it
   says that this question stopped the errand — the one thing no later
   reader could reconstruct, since a question filed *alongside* a result
@@ -155,6 +175,18 @@ castle show ID
   errand has stopped does not belong there) and `--blocking` on any
   `--type` but `question` (nothing reads the field anywhere else)
   (`docs/tasks/0023-resume-cold.md`).
+  `--decision` exists here only so this writer can refuse it **by
+  name**: `castle record` never writes a `decision` field, on any type,
+  ever. The posture is `--type correction`'s, for the same reason —
+  what makes an approval mean anything is the set of checks
+  `file_answer` runs before writing one (this really is a change the
+  harness proposed, it elicits no fact, its second ref really is the
+  result, and that result's bytes still hash to what was proposed), and
+  this writer runs none of them. Not a security boundary: a tenant
+  running as the resident could write the file by hand. The difference
+  is between a decision made through the one path that verifies what it
+  is deciding and one that does not
+  (`docs/tasks/0025-approval.md`).
 - **`route`** — the router. Reads every `result` and `question` record
   not yet referenced by a `decision` record **written by the router
   seat itself** — filtering on `seat: router`, not just record type, is
@@ -325,12 +357,15 @@ A floating `foot` terminal (bound to `Mod4+Shift+Return` for compose
 and `Mod4+Shift+a` for answer in `modules/home`'s Sway config — see that
 module for why these chords and not others) running
 `agent/castle-modal`, a second stdlib-only Python script that imports
-`agent/castle` in-process rather than shelling out to it. Three modes:
+`agent/castle` in-process rather than shelling out to it. Four modes,
+though only three have a chord — review is reached from answer's own
+picker:
 
 ```
 castle-modal --mode compose [--limit N] [--kind request|correction]
 castle-modal --mode status  [--limit N]
 castle-modal --mode answer  [--question ID]
+castle-modal --mode review  [--question ID]
 ```
 
 - **compose** (the default) — reads multi-line free text from stdin
@@ -446,15 +481,81 @@ castle-modal --mode answer  [--question ID]
   pending, or a deliberate dismissal (looking and declining is a
   success, not an error); exit 1 on an empty body, an unresolvable or
   missing `--question`, a target that is not a question, and an
-  already-answered question.
+  already-answered question. One further refusal since
+  `docs/tasks/0025-approval.md`: a question that turns out to be a
+  **proposed configuration change** is not answerable in prose at all,
+  on either the scripted or the interactive path — the interactive one
+  branches into review mode, and the scripted one refuses with a
+  pointer to `--mode review --question ID`.
+
+- **review** (no chord of its own) — the first place a resident grants
+  Castle anything (`docs/tasks/0025-approval.md`). A question the
+  harness filed to propose a configuration change appears in answer
+  mode's picker like any other — that fold has never cared what a
+  question is about — and picking it branches here instead of into the
+  free-text grammar. No second chord, deliberately: a resident who
+  pressed the "what is waiting on me" chord should not have needed to
+  know in advance which of two kinds of waiting it was.
+
+  Four things are shown, in this order and for this reason: **where
+  the change applies** (the harness's own resolved-path sentence,
+  quoted rather than re-derived), **what approving does and does not
+  do**, **Castle's own account of why** under a label saying whose
+  words those are, and **the diff, last, verbatim, never truncated**,
+  with a line pointing at `foot`'s scrollback for a long one. Evidence
+  before reasoning; the diff always available and always last. No
+  checklist, and no "reversible? y/n" line asserting a property
+  nothing here checked.
+
+  The boundary statement is printed **beside the keys**, not under the
+  diff, and it is the load-bearing part of this surface: *nothing on
+  this machine is edited, committed, or applied by approving*. An
+  "Approve" that silently has no effect is `docs/tasks/0015`'s defect
+  in its sharpest form — a label causing the inaction it describes —
+  so the sentence lives where the keypress is offered rather than in a
+  footnote. Three distinct, labelled keys: `[a]pprove`, `[r]eject`,
+  `[d]efer`. **Any other key, bare Enter included, closes without
+  deciding and writes nothing** — no key a resident reaches for by
+  reflex authorizes anything. Approve and reject then invite an
+  optional comment in compose mode's `.`-terminated grammar; defer
+  invites nothing, since asking for a reason before letting someone
+  leave is the friction deferring exists to avoid.
+
+  Nothing tenant-authored is parsed. The rendering recognises exactly
+  two things in the result body, and both are the harness's own
+  writing: the fenced diff block and the resolved-path sentence. Two
+  more of the harness's own lines are dropped rather than shown under
+  Castle's account — the turn header, which carries a record id and
+  the tenant's store path, and the worker-proposes note, whose content
+  the boundary statement already says in this surface's own words.
+  Everything else is quoted whole.
+
+  The window resizes itself on entry when it has a terminal on both
+  ends, best-effort, `swaymsg` with `[app_id="castle-modal"]` criteria
+  — scoped rather than focus-relative, because a bare `resize set` is
+  correct at the instant of the keypress and not a moment after.
+  `CASTLE_REVIEW_RESIZE_COMMAND` overrides the whole command line and
+  the empty string opts out, the same convention
+  `CASTLE_NOTIFY_COMMAND` has. A host with no Sway gets a harmless
+  failed exec and a review that works at whatever size the window
+  already is.
+
+  This mode's vocabulary rule is answer mode's plus three words:
+  `question`, `answer` and `proposal` are also absent from anything it
+  adds, and the resident-facing noun for what is being decided is
+  **"a change"** — chosen once, here, so a later surface does not
+  invent a third word. `--question` is the scripted contract, read
+  under the same rule answer mode applies and for a larger reason: a
+  preselected guess here would be an authorization.
 
 Headless by construction: every mode only ever reads `sys.stdin` and
 writes `sys.stdout`/`sys.stderr`, with no `curses` and no compositor
 dependency anywhere in the control flow — `sys.stdin.isatty()` is
 checked only to decide whether to print a couple of purely cosmetic
-prompts, whether to hold the window open for a dismissal, and (in
-answer mode) whether there is a human present to show a picker to at
-all. That's what lets CI pipe canned
+prompts, whether to hold the window open for a dismissal, whether there
+is a human present to show a picker to (answer and review mode), and
+whether there is a window worth asking Sway to resize (review mode).
+That's what lets CI pipe canned
 input at it and assert on the request record it produces with zero
 Sway, zero foot, and zero display server involved.
 
@@ -1051,6 +1152,145 @@ concluding it produced nothing** — `docs/tasks/0025` in particular. A
 consumer that skips that check silently discards exactly the errands
 this shape exists to turn into real proposals later.
 
+### Where a result's diff starts and stops: `diff-boundary`
+
+From `docs/tasks/0025-approval.md`. A `result` record embeds the diff
+its turn produced, and something has to be able to say where that diff
+ends — the review surface shows the diff as its own section, last and
+whole, and shows everything else as the machine's reasoning.
+
+**A markdown fence cannot be that boundary.** The diff is arbitrary
+bytes a tenant produced, and a unified diff of a file that itself
+contains a fenced code block carries context lines that strip to
+exactly ```` ``` ```` and ```` ```diff ````. A reader scanning for a
+fence finds one *inside* the diff, closes the block early, and prints
+the remainder — real `-`/`+` lines included — as prose. That is not a
+rendering wobble on the approval surface: the resident is shown less
+than the change they are approving, with the missing part relabelled as
+reasoning, on the one screen in this system where authority is granted.
+
+So the boundary is a **nonce**, the same answer `render_continuation_
+packet` gives to the same problem (`docs/tasks/0023-resume-cold.md`:
+section boundaries are unforgeable, body text is not trusted to be
+structure). Eight random bytes, generated when the result is written —
+which is *after* the tenant has finished producing every byte of that
+diff — so no diff content can contain, spell, move or close it. The
+diff is wrapped in `CASTLE-DIFF-<nonce> BEGIN` / `... END` lines and the
+nonce is stamped in the frontmatter, where a body cannot reach. The
+frontmatter's copy is the only thing that makes a line in the body a
+boundary.
+
+The difference from the packet's nonce is that this one has to be
+**stored**: the packet is a stream rendered and consumed in one
+process, while a record is written once and read months later, so the
+token must travel with it.
+
+The markdown fence stays, *inside* the boundary, so the record still
+renders as a diff wherever a journal is read as markdown. It is
+decoration now, not structure: nothing keys on it.
+
+Validated **when present**, result-only, and shape-checked as sixteen
+lowercase hex characters — `blocking`'s and `target`'s treatment, for
+the same reasons. Absent means "this result embeds no diff", which is
+true of every turn that proposed nothing and of every result written
+before the field existed. A reader that meets a proposal whose result
+carries no boundary **shows that body whole** rather than guessing:
+nothing is hidden, and what is given up is the split, not the content.
+
+### Proposing a change, and deciding it: `proposal-sha256` and `decision`
+
+From `docs/tasks/0025-approval.md`. A worker turn that finishes
+`completed`, with a real diff and a resolved `target`, has produced
+something the resident could authorize — and until this task, nothing
+in the journal distinguished "the resident has authorized this exact
+artifact" from "the resident has not looked at it yet."
+
+Two fields close that, and no new record type. A **`question`** is
+what proposes; an **`answer`** is what decides. Everything about
+lineage, immutability, authorship and routing already works for that
+pair, and the one genuine gap — no mechanical way to tell an approval
+from a sentence containing the word "yes" — is a field problem, not a
+type problem.
+
+**The proposal question is written by the harness, immediately after
+the result, and never by the tenant.** `refs` is
+`<request-id>,<result-id>`: the request stays `refs[0]`, so every
+existing walk attributes it to its errand with no change anywhere, and
+the result is `refs[1]`, the same "first ref is lineage, later refs
+are context" split `claim` and `result` already use. Its body is one
+fixed, harness-authored sentence, which is also what makes it visually
+distinct in the answer picker and what a resident reads in the
+notification. `seat: worker`, like the claim and the result for the
+same turn — a seat is what reads and writes, not who or what produced
+a particular record (Proposal 03).
+
+Two properties of that question are **guarantees rather than
+conventions**, which is the whole reason the harness writes it:
+
+- **Never `blocking`.** Resumption filters on `_is_blocking` alone, so
+  a question that never carries the field cannot enter the resumable
+  set, so answering it cannot buy the errand another turn. Were it
+  blocking, approving a change would silently re-run the worker and
+  produce a second, unauthorized proposal — the sharpest failure
+  available in a task that applies nothing.
+- **Never `fact`.** `file_answer`'s `resolved_fact` therefore sees
+  `None`, so no approve and no reject can write a stated preference
+  into the resident model. `file_answer` re-checks anyway, against
+  both the question's field *and* a caller-supplied `--fact`, and
+  `castle validate` refuses a question carrying both a stamp and a
+  fact permanently.
+
+**`proposal-sha256`** is the SHA-256 of the result record's file bytes,
+exactly as written — no canonicalization, no field selection, because
+field order is stable and records are never rewritten. It is stamped
+on the question, re-derived from disk by `file_answer` at write time,
+and copied onto the answer. It buys tamper-evidence and nothing more:
+under append-only semantics the id already identifies the proposal, and
+what the hash adds is that "append-only in spirit" becomes something a
+machine can check at the one moment it will matter — a future applier
+reading those bytes to mutate a configuration. It is also what lets the
+check hold with **no state carried between processes**: the window that
+displayed the change and the process that writes the decision both
+re-derive the same comparison from disk, so a crash, a closed window,
+or a reboot in between costs nothing.
+
+**`decision`** is a closed vocabulary on `answer` records:
+`approve`, `reject`, `defer`. Three and not two: without `defer`, a
+resident who is not ready either has to reject something they might
+want or leave it pending with no recorded signal that they looked —
+indistinguishable from never having opened the window. That
+distinction is not decoration; `docs/backlog/authority-taxonomy-prior-
+art.md` records residents laundering socially costly refusals through
+an agent's autonomous tier precisely because the vocabulary gave them
+nowhere else to put "not now."
+
+A decision-bearing answer carries `refs:
+<question-id>,<result-id>` — the question stays the lineage edge every
+closure fold keys on, and the result is carried forward as the thing
+actually decided. `castle validate` checks the shape `refs` is now
+responsible for: two entries, the second resolving to a `result`, a
+stamp present alongside any `decision`, `decision` only on an
+`answer`, a stamp only on a `question` or an `answer`, and at most one
+decision per question — the last being an honest backstop for the
+scan-then-write race `file_answer`'s duplicate guard documents about
+itself, not a claim that the race cannot happen.
+
+**Nothing is applied.** Not by approving, not by any of the three
+values, not anywhere in this layer. Applying an approved change is
+`docs/tasks/0026` and activating a generation is `docs/tasks/0027`.
+Until then, `castle-modal --mode status` renders an approved errand as
+`approved — nothing applied yet` rather than `done` — the sentence
+0026 will have to come back and change, which is exactly why it is
+written that way.
+
+**A pending change waits indefinitely.** No expiry, no auto-approve,
+no auto-cancel, no re-ask. That is defensible in this one channel —
+nobody else is waiting, the wait cost is about zero, the change is
+reversible by design — and it is a posture rather than a strategy;
+see `docs/backlog/approval-channel-has-no-transfer-of-control-
+strategy.md` before copying it anywhere a third party is on the other
+end.
+
 ### Corrections and filing-time context
 
 A `correction` record (`docs/tasks/0010-correction-record.md`) needs no
@@ -1278,7 +1518,7 @@ plan for how that first entry gets written on the reference host.
 
 ## Testing
 
-Six harnesses, all plain bash and stdlib Python — no Nix involved,
+Seven harnesses, all plain bash and stdlib Python — no Nix involved,
 unlike `test/vm-install/`'s harness — runnable locally with nothing
 beyond `bash`, `python3` and `git` on `$PATH`:
 
@@ -1289,14 +1529,20 @@ test/agent-loop/modal-headless-test.sh   # drives castle-modal with canned stdin
 test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: watermark, lease, claim, reaper, outcomes
 test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
 test/agent-loop/config-target.sh         # two real checkouts: which one a diff targets, and what happens when one is missing or broken
+test/agent-loop/approval.sh              # the resident approves, rejects or defers a proposed change — and nothing moves
 ```
 
-**`git` is a real prerequisite, not just python3.** Three of the six
-need it: `config-target.sh` builds its two fixture checkouts with `git
-init` and `git archive`, and `dispatch-test.sh` and `resume.sh` each
-`git init` the private root the target pre-flight now requires
-(`docs/tasks/0024-config-target.md`). On a host without it those three
-die with `git: command not found` rather than failing an assertion.
+`test/agent-loop/pty-drive.py` is not a harness: it is the shared pty
+driver `modal-headless-test.sh` and `approval.sh` both use to type at
+an interactive program and read what it printed back.
+
+**`git` is a real prerequisite, not just python3.** Four of the seven
+need it: `config-target.sh` and `approval.sh` build their fixture
+checkouts with `git init` and `git archive`, and `dispatch-test.sh`
+and `resume.sh` each `git init` the private root the target pre-flight
+now requires (`docs/tasks/0024-config-target.md`). On a host without
+it those four die with `git: command not found` rather than failing an
+assertion.
 `modules/dev` supplies it, exactly as it supplies python3 — the same
 shape `docs/tasks/0029-python3-on-dev-hosts.md` fixed for the
 interpreter, and named here in the same breath so the next person
@@ -1349,7 +1595,7 @@ interpreter as the deployed CLI.
   journal. An exact match proves the worker seat was re-tenanted with
   no structural change, without running a real model in CI.
 - **`modal-headless-test.sh`** (the `modal-headless-test` CI job) pipes
-  canned stdin at `castle-modal` in all three modes and asserts on the
+  canned stdin at `castle-modal` in every mode and asserts on the
   request record compose mode produces and the fold status mode
   renders — no `foot`, no Sway, no display server anywhere in the
   script, proving the modal's logic is driveable independent of the
@@ -1394,6 +1640,20 @@ interpreter as the deployed CLI.
   planted at an explicit id, because a picker keyed to screen position
   cannot be asserted on against a journal the tests above it are still
   accumulating.
+  `docs/tasks/0025-approval.md` added a review-mode section, planted
+  by hand into a state directory of its own for the same reason: a
+  rendering assertion needs a body whose every line is known. It
+  proves a change picked out of the *answer* picker branches into
+  review rather than into free text; that the four sections appear in
+  the order the design turns on, checked by line number rather than by
+  presence, since four greps in any order prove no ordering at all;
+  that no record id and none of the internal vocabulary appears in the
+  text the tool itself adds, nor the store path and record id the
+  result body's own harness-written header carries; and — the part
+  that would otherwise be prose nobody checks — that the window-resize
+  shell-out really is attempted on the interactive path, really is not
+  on a piped one, and really is skipped when the environment variable
+  is set to the empty string.
 - **`dispatch-test.sh`** (the `dispatch-test` CI job,
   `docs/tasks/0021-auto-dispatch.md`) drives `castle dispatch` — the
   sweep a systemd path unit and timer trigger on a real host — by hand.
@@ -1490,3 +1750,35 @@ interpreter as the deployed CLI.
   of an empty diff apart; and, after every turn, that both checkouts'
   working trees and both `HEAD`s are unchanged — the worker's
   no-deploy boundary as a check rather than a comment.
+
+- **`approval.sh`** (also in the `dispatch-test` CI job,
+  `docs/tasks/0025-approval.md`) reuses that fixture shape for the
+  same reason it exists: `assert_checkouts_untouched` after every
+  single scenario, because a task whose whole promise is that it
+  applies nothing has to say so with a check.
+
+  It proves: a completed, targeted turn files exactly one change to
+  decide, non-blocking, carrying no fact, with `refs` naming the
+  errand and the exact result and a stamp `sha256sum` independently
+  agrees is that result file's hash; all three verdicts through both
+  write paths, the CLI and a pty-driven `--mode review`; and every
+  refusal — an ordinary answer against a change from either surface,
+  `castle record --decision`, a second decision, a change altered on
+  disk (with, as the control, the same change becoming decidable again
+  once its exact bytes come back), a change altered *between* being
+  rendered and the keypress landing, a hand-planted change that also
+  elicits a fact, and `--fact` supplied beside `--decision`. Ten
+  planted records exercise the validator's permanent gate, each with a
+  control that would catch a validator refusing everything.
+
+  Two of its proofs are behavioural rather than structural, and both
+  matter more than the assertions around them. After an approval it
+  runs two full dispatch sweeps and requires that no further turn
+  happened — the record-shape check for "not blocking" would not
+  notice a future change making answers to it resumable. And one
+  decision runs under a `$PATH` where `nixos-rebuild`, `systemctl`,
+  `sudo`, `git` and friends are stubs that log their own invocation:
+  nothing may be *reached for*, not merely nothing moved. A grep over
+  the source was tried first and is the wrong tool — both files are
+  full of those commands named in comments explaining why they are
+  never run.

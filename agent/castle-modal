@@ -9,7 +9,7 @@ binary. It is deliberately NOT a GTK app, a wofi/fuzzel script, or
 written in a second language; it's a terminal program because the
 terminal is already the substrate this whole project is built on.
 
-Three modes, all just callers of agent/castle's own record-writing and
+Four modes, all just callers of agent/castle's own record-writing and
 record-reading functions — this file adds no judgment of its own,
 exactly like `castle ask`/`castle digest` add none (Proposal 03):
 
@@ -39,6 +39,20 @@ exactly like `castle ask`/`castle digest` add none (Proposal 03):
            resident never types or reads a record id to do any of it,
            and nothing at all is written unless a question was chosen
            and a body typed.
+  review   The first place a resident grants Castle anything
+           (docs/tasks/0025-approval.md). Reached from the same
+           Mod4+Shift+a picker rather than a chord of its own: a
+           question the harness filed to propose a configuration
+           change branches out of answer mode's free-text grammar and
+           into this, which shows where the change applies, says in
+           the surface's own words what approving does and does not
+           do, quotes Castle's account of why, prints the diff last
+           and whole, and reads one keypress — approve, reject, or
+           defer. **Nothing is applied by any of the three.** Applying
+           is docs/tasks/0026 and activating is 0027; until they
+           exist, a decision made here is a decision and nothing else,
+           and this surface says so where the keys are rather than in
+           a footnote.
 
 Headless by construction, not by special-casing: every mode reads
 stdin and writes stdout/stderr with no dependency on a terminal at all.
@@ -55,7 +69,11 @@ import argparse
 import datetime as dt
 import importlib.machinery
 import importlib.util
+import os
 import pathlib
+import re
+import shlex
+import subprocess
 import sys
 
 
@@ -265,11 +283,25 @@ def _pending_questions(records: dict) -> list:
     silently unanswerable" cannot inherit a fold that can hide a question
     by construction.
 
-    Pending is the direct predicate, exact rather than heuristic:
-    file_answer guarantees every answer's refs is exactly the one
-    question it closes, so there is no ambiguity to approximate around.
-    It is the same test castle's own pendingness check and the status
-    surface's "waiting on you" overlay apply.
+    Pending is the direct predicate, exact rather than heuristic: an
+    answer's FIRST ref is the one question it closes, always, and the
+    `answered` set below is the union of every answer's refs. It is the
+    same test castle's own pendingness check and the status surface's
+    "waiting on you" overlay apply.
+
+    That set is deliberately a superset of the questions: since
+    docs/tasks/0025-approval.md an answer deciding a proposed change
+    refs `[question, result]`, so result ids are in it too, and
+    `castle record --type answer --refs A,B` has always been able to
+    put anything else in. It is safe here because it is only ever used
+    to *exclude* — and only questions are tested against it, so a
+    result id in the set matches nothing. **A reader widening this fold
+    past `rec.type == "question"` must not inherit the assumption that
+    every member of `answered` is a question that was answered.** The
+    old wording of this paragraph said `file_answer` guaranteed exactly
+    that, which was true when it was written and is not any more; it is
+    corrected rather than deleted because a stated invariant is
+    precisely what a later change would have relied on.
 
     Sorted by full id, which is chronological only to one-second
     granularity (review round 1, finding 7): `make_id` prefixes a
@@ -289,6 +321,18 @@ def _pending_questions(records: dict) -> list:
     )
 
 
+def _is_proposal(castle, question) -> bool:
+    """Is this question one the harness filed to propose a configuration
+    change (docs/tasks/0025-approval.md §B)?
+
+    The stamp, not the wording: a proposal question carries
+    `proposal-sha256` and an ordinary elicited one never does. Nothing
+    here greps the body — the same discipline `outcome` established for
+    "did this turn fail," applied to "is this a change to decide."
+    """
+    return bool(question.fields.get(castle.PROPOSAL_SHA256_FIELD, "").strip())
+
+
 def _about_line(castle, records: dict, question) -> str:
     """The first line of the request this question came out of, or "" if
     the walk reaches no request. No placeholder and no error in that
@@ -300,8 +344,16 @@ def _about_line(castle, records: dict, question) -> str:
     return _first_line(root.body)
 
 
-def _show_picker(castle, records: dict, pending: list, out=sys.stdout):
+def _show_picker(castle, records: dict, pending: list, out=sys.stdout, action: str = "answer"):
     """Print the picker and read the one keypress that answers it.
+
+    `action` is the verb in the prompt, and exists only because review
+    mode reuses this picker for proposed changes
+    (docs/tasks/0025-approval.md §G): "press a number to answer" would
+    name the wrong act there, on a surface whose whole subject is
+    keeping the resident exact about what they are doing. The list,
+    the ordering, the paging and the keypress grammar are identical —
+    one picker, one thing to learn.
     Returns the chosen question record, or None for "close without
     answering."
 
@@ -358,11 +410,11 @@ def _show_picker(castle, records: dict, pending: list, out=sys.stdout):
             print(file=out)
             if pages > 1:
                 print(
-                    "Press a number to answer, m for more, or any other key to close.",
+                    f"Press a number to {action}, m for more, or any other key to close.",
                     file=out,
                 )
             else:
-                print("Press a number to answer, or any other key to close.", file=out)
+                print(f"Press a number to {action}, or any other key to close.", file=out)
             key = sys.stdin.read(1)
 
             # Explicit membership, not `str.isdigit()` (review round 1,
@@ -411,6 +463,30 @@ def _answer_refusal(exc) -> str:
         # go and fix. It says what happened and that nothing was
         # written, which is the honest part they can act on.
         return "castle-modal: can't check that question is still open, nothing filed."
+    # The five from docs/tasks/0025-approval.md §C, in the same
+    # vocabulary as the four above: no ids, no filenames, and none of
+    # the internal words — a resident meeting one of these has to be
+    # told what happened and that nothing was written, and nothing
+    # else. "Change" is this surface's chosen noun throughout.
+    if exc.kind == "not_a_proposal":
+        return "castle-modal: that is not a proposed change, nothing filed."
+    if exc.kind == "proposal_carries_fact":
+        return (
+            "castle-modal: deciding that change would also write down something "
+            "about you, which deciding a change must never do. Nothing filed."
+        )
+    if exc.kind == "proposal_unresolvable":
+        return "castle-modal: can't find the change that was proposed, nothing filed."
+    if exc.kind == "proposal_stale":
+        return (
+            "castle-modal: that change is not what it was when it was proposed — "
+            "it has been altered on disk since. Nothing filed."
+        )
+    if exc.kind == "proposal_needs_decision":
+        return (
+            "castle-modal: that is a proposed change, so it needs approve, reject "
+            "or set aside rather than a written reply. Nothing filed."
+        )
     return "castle-modal: empty answer, nothing filed."
 
 
@@ -429,6 +505,24 @@ def _run_answer_scripted(castle, question_id: str | None, out=sys.stdout) -> int
             "castle-modal: questions are waiting, but this session has no terminal to "
             "choose one at — pass --question ID (scripts and CI only), or open the "
             "modal and pick.",
+            file=sys.stderr,
+        )
+        return 1
+    # A proposed change is refused here, early, with the right pointer
+    # rather than the generic one (docs/tasks/0025-approval.md §G).
+    # `file_answer` would refuse this write anyway — an ordinary answer
+    # against a proposal question is `proposal_needs_decision` — but
+    # the refusal a caller can act on is "you wanted the other mode",
+    # and only this function knows that. The lookup tolerates an
+    # unresolvable id: every other refusal on this path is
+    # `file_answer`'s to give, and pre-empting them here would be two
+    # implementations of the same checks.
+    named = castle.load_journal_record(question_id)
+    if named is not None and named.type == "question" and _is_proposal(castle, named):
+        print(
+            "castle-modal: that is a proposed change, and an ordinary answer would "
+            "close it with no decision recorded — use --mode review --question ID "
+            "(scripts and CI only), which approves, rejects or sets it aside.",
             file=sys.stderr,
         )
         return 1
@@ -492,6 +586,17 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
         # exists to avoid.
         return 0
 
+    # A proposed configuration change is decided, not answered
+    # (docs/tasks/0025-approval.md §G). The picker's own fold needed no
+    # change to offer it — `_pending_questions` folds every unanswered
+    # question and has never cared what one is about — and this is the
+    # entire difference in what happens after it is picked. No new
+    # chord: a resident who pressed Mod4+Shift+a to see what is waiting
+    # on them should not have to know in advance which of two kinds of
+    # waiting it was.
+    if _is_proposal(castle, question):
+        return run_review_for(castle, question, records, out, interactive=True)
+
     # The full body, verbatim, never truncated. The picker's first-line
     # preview is a convenience for choosing among several; letting a
     # resident answer on a truncated understanding of the question is a
@@ -552,6 +657,631 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
         print("Noted — I'll remember that.", file=out)
     _pause_for_dismissal(out)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Review mode (docs/tasks/0025-approval.md). The first place a resident
+# grants Castle anything, and the reason every line below is written
+# the way it is: what a resident is being asked for here is
+# authorization, so the surface that asks has to be exact about what
+# the authorization does — which today is nothing but be recorded.
+#
+# It obeys answer mode's vocabulary rule unchanged, with the same
+# carve-out: no record ids, and none of the words seat, provenance,
+# refs, journal, record, channel, evidence, question, answer, proposal,
+# in anything this mode *adds*. The resident-facing noun for what is
+# being decided is "a change", chosen once here so a later surface does
+# not invent a third word. What the result record's own body says —
+# Castle's account and the diff — is shown verbatim and unfiltered,
+# exactly as question and request bodies already are.
+# ---------------------------------------------------------------------------
+
+# Printed identically on every review, never model-generated, and
+# printed WITH the keys rather than under the diff. Proposal 06's "the
+# system may grade its own delivery, never its own judgment" given
+# code: the same actor that produced the diff does not also get to
+# assert what approving it does. And the direct fix for the defect this
+# project keeps rediscovering — a label that causes the inaction it
+# describes (docs/tasks/0015) — in its sharpest available form: an
+# "Approve" that silently has no effect. As of this task the honest
+# answer to "does approving edit configuration or activate a
+# generation" is neither, and that belongs in the same breath as the
+# keypress.
+#
+# When docs/tasks/0026 can apply an approved change, this constant is
+# one of exactly two places that must stop saying so — the other is
+# `_errand_state`'s "approved — nothing applied yet". Both are wrong to
+# leave true by accident.
+REVIEW_BOUNDARY_STATEMENT = """\
+Approving this is you authorizing this exact change, and that
+authorization is kept.
+
+NOTHING ON THIS MACHINE IS EDITED, COMMITTED, OR APPLIED BY APPROVING
+IT — no file changes, no `git commit`, no rebuild, no new generation.
+That is true for every change shown here today.
+
+Rejecting says this change is wrong. Setting it aside says you are not
+deciding it now. Both close it for good — nothing expires, and nothing
+decides on your behalf."""
+
+# The window this mode runs in opens at 720x480 (the fixed geometry
+# modules/home's `window.commands` gives every castle-modal window),
+# which cannot show a diff and an explanation at once. Rather than a
+# second app_id with its own Nix rule — which would mean spawning a
+# second process and handing off to it, since review mode runs inside a
+# window that is already open and already mapped — the window resizes
+# itself, best-effort, exactly the way `_fire_notification` fires:
+# environment-overridable, silent on failure, and a no-op on a host
+# with no Sway.
+#
+# **Scoped by app_id criteria, not "whatever is focused right now."** A
+# bare `resize set` is focus-relative, and the window is only reliably
+# focused at the instant of the keypress — a workspace switch or a
+# resident who alt-tabbed while reading leaves it resizing and
+# re-centring whatever they switched *to*, silently, from a tool whose
+# whole subject is not acting without permission. Known, accepted edge
+# case: two castle-modal windows open at once both match and both
+# resize. Harmless — neither window's content changes, only its
+# geometry — and not worth capturing this window's own container id
+# from `swaymsg -t get_tree` to target `[con_id=N]` instead.
+REVIEW_RESIZE_ENV = "CASTLE_REVIEW_RESIZE_COMMAND"
+# A literal argv rather than a string to be split, so the criteria's
+# quoting reaches swaymsg exactly as written instead of surviving a
+# shlex round-trip. The environment override IS shlex-split, like
+# CASTLE_NOTIFY_COMMAND, because an override is a whole command line a
+# human or a harness typed.
+REVIEW_RESIZE_ARGV = [
+    "swaymsg",
+    '[app_id="castle-modal"] resize set 1100 760, move position center',
+]
+
+
+def _resize_for_review() -> None:
+    """Best-effort, never fatal, and never attempted without a terminal
+    on both ends — the same double-tty gate `_pause_for_dismissal` uses,
+    for the identical reason: a piped caller has no window to resize.
+
+    `CASTLE_REVIEW_RESIZE_COMMAND` set to the empty string opts out
+    explicitly, the same "don't even try" convention
+    `CASTLE_NOTIFY_COMMAND` already has. A host with no Sway, no
+    `swaymsg`, or a resident on another compositor gets a harmless
+    failed exec and a review that still works at whatever size the
+    window already is.
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    raw = os.environ.get(REVIEW_RESIZE_ENV)
+    if raw is None:
+        argv = list(REVIEW_RESIZE_ARGV)
+    elif not raw.strip():
+        return
+    else:
+        try:
+            argv = shlex.split(raw)
+        except ValueError:
+            return
+        if not argv:
+            return
+    try:
+        subprocess.run(
+            argv, check=False, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _split_proposal_body(castle, result) -> tuple[str, str, str]:
+    """Take a result record apart into the three things this mode shows
+    separately: where the change applies, Castle's account of why, and
+    the diff.
+
+    **The diff's boundary is the nonce in the record's own frontmatter,
+    never a markdown fence in its body.** The first version of this
+    function scanned for ```` ```diff ```` and ```` ``` ````, which is
+    content being trusted to be structure — and a unified diff of a
+    file that itself contains a fenced code block carries context lines
+    that strip to exactly those, so the block closed early, the rest of
+    the diff was relabelled as the machine's reasoning, and the
+    resident was shown less than the change they were approving. That
+    is the worst shape a defect can take on this surface, so the fix is
+    structural rather than a stricter pattern: `run_worker_turn`
+    generates eight random bytes *after* the tenant has finished
+    producing the diff, wraps the diff in lines carrying them, and
+    stamps them in the frontmatter. No diff content can contain a token
+    that did not exist when the diff was written, and the frontmatter
+    is somewhere a body cannot reach. `render_continuation_packet`
+    solved the same problem the same way for the same reason
+    (docs/tasks/0023); this is that idea applied to a record rather
+    than to a stream, which is why the nonce has to be stored instead
+    of merely generated.
+
+    **Nothing here parses the tenant's prose.** The two other things
+    this recognises are the harness's own writing — its opening line
+    and the sentence naming the resolved checkout — and both are looked
+    for only OUTSIDE the diff, which the boundary makes possible: a
+    tenant that writes "This diff targets the ..." into a file this
+    change touches can no longer have that line lifted out of the diff
+    and shown as the harness's own. An earlier design (the decision
+    pass's N20) wanted five parsed sections; that is exactly the parser
+    this cannot have, since `agent/castle-worker-claude` tells a tenant
+    only to "explain the reasoning on stdout" with no required
+    headings, and a parser built against headings nobody promised would
+    work today and break silently later.
+
+    **The whole tail is dropped, not an enumeration of known lines.**
+    `run_worker_turn` writes the tenant's own stdout *before* the
+    boundary and appends only its own prose after it — the resolved-
+    checkout sentence, the "no target was declared" notes, the
+    undrained-output note, the mechanism-unavailable note, and
+    `WORKER_PROPOSES_NOTE`. So everything after the closing boundary is
+    harness-written by construction, and quoting any of it under
+    "Castle's own account of why (its words, not verified by a person)"
+    misattributes it by definition.
+
+    An earlier version dropped exactly two of those lines by name and
+    let the rest through, which is the enumeration this rule replaces:
+    the mechanism-unavailable note reached the diagnosis carrying
+    `castle.agent.repo.mechanism` and the configured filesystem path,
+    an internal option name and a home-shaped path on a resident
+    surface — the two things this surface may never print, the same two
+    the opening line is dropped for. A list of known appended lines
+    grows every time `run_worker_turn` learns to say something new, and
+    the failure mode of forgetting to extend it is a leak on the one
+    screen where authority is granted. A rule about where a line came
+    from does not go stale.
+
+    The resolved-checkout sentence is the single exception, lifted out
+    as `where` rather than kept: it is shown under its own label, in
+    the harness's own words, as the harness's — see `_render_proposal`.
+
+    What this gives up is real and is named rather than hidden: on a
+    turn whose output could not be collected (a setsid grandchild
+    holding the pipes — rare, but possible on a `completed` turn), the
+    harness's note saying so no longer reaches this screen, and since
+    that same turn has no tenant reasoning either, the resident is
+    shown a change with no account of why at all. That is the honest
+    rendering of a turn that produced none. What must not happen is the
+    resident reading the harness's explanation of the silence as the
+    machine's reasoning about the change.
+
+    **A result with no boundary stamped shows its body whole.** That is
+    every result written before this field existed, and any a hand
+    written proposal points at. Nothing is hidden and nothing is
+    lifted: with no trustworthy way to say where the diff ends, this
+    declines to guess rather than showing a resident three-quarters of
+    a change under a heading that promises all of it.
+    """
+    body = result.body if result is not None else ""
+    boundary = (
+        result.fields.get(castle.DIFF_BOUNDARY_FIELD, "").strip()
+        if result is not None
+        else ""
+    )
+    if not boundary:
+        return "", body.strip(), ""
+
+    begin, end = castle.diff_boundary_lines(boundary)
+    lines = body.splitlines()
+    try:
+        start = lines.index(begin)
+        stop = lines.index(end, start + 1)
+    except ValueError:
+        # Stamped but not findable — a truncated or hand-edited record.
+        # Same answer as no stamp at all: show everything, split
+        # nothing.
+        return "", body.strip(), ""
+
+    diff_lines = lines[start + 1 : stop]
+    # The markdown fence the harness writes just inside the boundary is
+    # decoration, kept so the record still renders as a diff wherever a
+    # journal is read as markdown. Dropped here only on an exact match,
+    # so a body that somehow lacks it loses nothing but a reader's
+    # tidiness.
+    if diff_lines and diff_lines[0] == "```diff":
+        diff_lines = diff_lines[1:]
+    if diff_lines and diff_lines[-1] == "```":
+        diff_lines = diff_lines[:-1]
+
+    before = lines[:start]
+    after = lines[stop + 1 :]
+
+    where = ""
+    kept: list[str] = []
+    for index, line in enumerate(before):
+        if index == 0 and line.startswith("Errand `"):
+            continue
+        kept.append(line)
+    # The tail contributes exactly one thing and discards the rest: see
+    # the docstring's "the whole tail is dropped" paragraph for why a
+    # rule about provenance replaced a list of known lines here.
+    #
+    # Searched only in the tail, because that is where the harness
+    # writes it — restricting the search is what keeps a tenant's own
+    # prose, or a line of a file it is changing, from being promoted
+    # into a sentence this surface presents as the mechanism's.
+    for line in after:
+        if not where and line.strip().startswith("This diff targets the "):
+            where = line.strip()
+            break
+    return where, "\n".join(kept).strip(), "\n".join(diff_lines)
+
+
+def _proposal_result(castle, question, records: dict):
+    """The result record a proposal question is about, or None.
+
+    `refs[1]` is the proposal, by the "first ref is lineage, later refs
+    are context" convention (docs/tasks/0025-approval.md §A) — and the
+    type is checked, not assumed, so this is the same predicate
+    `file_answer` refuses on as `proposal_unresolvable`. One function,
+    because the render and the pre-flight that decides whether to
+    render at all must not be able to disagree about whether a proposal
+    resolves.
+
+    The fold is consulted first and the journal only as a fallback, the
+    order the render has always used: a caller that already loaded the
+    journal should not pay for a second read, and a question reached by
+    id alone still resolves.
+    """
+    if len(question.refs) < 2:
+        return None
+    result = records.get(question.refs[1]) or castle.load_journal_record(
+        question.refs[1]
+    )
+    if result is None or result.type != "result":
+        return None
+    return result
+
+
+def _pending_proposals(castle, records: dict) -> list:
+    """Every unanswered proposal, oldest first — `_pending_questions`
+    narrowed to the ones this mode decides, with the same fold and the
+    same ordering guarantee, so a change cannot be pending on one
+    surface and absent from the other."""
+    return [q for q in _pending_questions(records) if _is_proposal(castle, q)]
+
+
+# Every C0/C1 control byte except newline and tab, including the ESC
+# (0x1b) that starts every ANSI escape sequence. Newline and tab are
+# the only control bytes this surface's own layout relies on; nothing
+# it prints itself needs the rest, so the class is "everything but
+# those two" rather than a denylist of specific sequences a future
+# terminal could grow a new way to spell.
+_UNSAFE_TERMINAL_CHARS_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _defang_for_terminal(text: str) -> str:
+    """Strip control bytes from tenant-authored text before it reaches the
+    terminal a keypress is about to be read from.
+
+    `_split_proposal_body` hands back the tenant's diagnosis and diff
+    verbatim, by design — but "verbatim" cannot mean "byte for byte" on
+    a surface that reads an approve/reject/defer keypress moments after
+    printing them, in the same terminal. A changed file (or a model's
+    own prose) containing a clear-screen or cursor-reposition escape
+    sequence would repaint over the boundary statement and the key list
+    an instant before the keypress is read, and the resident would be
+    authorizing whatever was left on screen rather than what this
+    function actually printed. Dropping every control byte but newline
+    and tab leaves a sequence's parameter bytes as inert text — the
+    ESC that would have made them live is gone — without touching how
+    the diff or diagnosis reads.
+    """
+    return _UNSAFE_TERMINAL_CHARS_RE.sub("", text)
+
+
+def _render_proposal(castle, question, records: dict, out) -> None:
+    """What the resident reads before deciding, in the one order that
+    survives having no structure to parse: evidence first, then what
+    approving does and does not do beside the keys that do it, then
+    Castle's own account, then the diff — last, verbatim, never
+    truncated.
+
+    No checklist anywhere, deliberately. Four sections, no checkboxes,
+    and no "reversible? y/n" summary line asserting a property nothing
+    here checked (Hodges et al., on checklists inverting the expertise
+    ordering — docs/backlog/legible-history-calibrated-trust.md).
+    """
+    where, diagnosis, diff = _split_proposal_body(
+        castle, _proposal_result(castle, question, records)
+    )
+
+    print(question.body.strip() or "(no text)", file=out)
+    about = _about_line(castle, records, question)
+    if about:
+        print(f"about: {about}", file=out)
+    print(file=out)
+
+    if where:
+        # Quoted, not re-derived. `run_worker_turn` already wrote this
+        # exact fact in the harness's own words, beside the diff it is
+        # about; restating it here in different words would be a second
+        # implementation of one sentence, free to drift.
+        print("Where this applies:", file=out)
+        print(f"  {where}", file=out)
+        print(file=out)
+
+    print(REVIEW_BOUNDARY_STATEMENT, file=out)
+    print(file=out)
+    # Three distinct, labelled, non-adjacent keys, printed here rather
+    # than under the diff so that no resident can meet the keys without
+    # meeting the sentence above them. Any other key — including bare
+    # Enter — closes without deciding: there is no key whose accidental
+    # press authorizes anything.
+    print("  [a]pprove      [r]eject      [d]efer", file=out)
+    print("  any other key closes this without deciding anything.", file=out)
+    print(file=out)
+
+    if diagnosis:
+        # Whole and unparsed. Summarising it here would be exactly the
+        # paraphrase docs/tasks/0010's "no seat paraphrases" forbids,
+        # one surface over — applied to a read rather than a write.
+        # Labelled, because a resident about to grant authority has to
+        # know which of the words in front of them are a machine's.
+        print("Castle's own account of why (its words, not verified by a person):", file=out)
+        print(file=out)
+        print(_defang_for_terminal(diagnosis), file=out)
+        print(file=out)
+
+    if diff:
+        # The window resize above buys headroom, not a guarantee, and
+        # `foot` has real scrollback that nothing otherwise tells a
+        # resident exists. No pager: a $PAGER subprocess is new
+        # machinery with its own failure modes — a missing binary, a
+        # pager that eats the keypress this mode still has to read
+        # afterwards — to solve a problem the terminal already solves.
+        print(
+            "Full diff below — scroll up in this window (Shift+Page Up in `foot`) "
+            "if it runs past what's on screen.",
+            file=out,
+        )
+        print(file=out)
+        print(_defang_for_terminal(diff), file=out)
+        print(file=out)
+
+
+def _render_and_read(castle, question, records: dict, out, *, interactive: bool) -> str:
+    """Print the whole review and read the one keypress that decides it.
+
+    The two are one function because cbreak is engaged **before**
+    anything is printed and left on until the key arrives — the same
+    discipline `_show_picker` keeps across its own redraws, and for the
+    same two reasons, both of which bite harder here. A keypress
+    landing between the last print and the mode switch would be held
+    by the still-canonical line discipline until a newline that a bare
+    keypress never sends, hanging the read forever. And
+    `tty.setcbreak` defaults to TCSAFLUSH, which *discards* whatever is
+    already queued — so a resident who read the diff and pressed a key
+    before this got around to switching modes would have that keypress
+    thrown away rather than merely mistimed. This render is long, which
+    makes both windows wide rather than microscopic.
+
+    cbreak changes how input is line-buffered and nothing about how
+    output is rendered, so holding it across the print costs nothing.
+
+    A piped caller reads the same single character from stdin with no
+    tty involved: `--question ID` is the scripted contract, and it
+    decides with the same grammar rather than a second one.
+    """
+    if not interactive:
+        _render_proposal(castle, question, records, out)
+        return sys.stdin.read(1)
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        _render_proposal(castle, question, records, out)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+# The keypress contract, in one place so the prompt above and the
+# branch below cannot drift. Bare Enter is deliberately absent: a
+# default decision reached by the key a resident presses to get out of
+# things is the click-through habituation Proposal 06 warns about.
+REVIEW_KEYS = {"a": "approve", "r": "reject", "d": "defer"}
+REVIEW_CONFIRMATIONS = {
+    "approve": "Approved.",
+    "reject": "Declined.",
+    "defer": "Set aside — it will not be offered again.",
+}
+
+
+def run_review_for(castle, question, records: dict, out=sys.stdout, *, interactive: bool) -> int:
+    """Decide exactly one proposed change, and never more than one per
+    invocation (no batching, no approve-all: a keypress that spans more
+    than one authorization is the "spray of decisions" this project's
+    own posture warns against).
+
+    Returns 0 for a decision and for a dismissal alike — looking and
+    choosing not to decide is a successful use of this surface, and it
+    writes nothing at all.
+
+    **A proposal that resolves to nothing is refused before the keys
+    are offered, not after they are pressed.** `file_answer` refuses it
+    either way and nothing is ever written, so this is not a
+    data-integrity fix; it is that a screen granting authority must not
+    print the boundary statement, offer `[a]pprove [r]eject [d]efer`,
+    and take a comment for a change it has already established it
+    cannot show. With no result to split, `where`, the diagnosis and
+    the diff were all empty — the resident was asked to authorize a
+    blank. Reachable through the picker: a question carrying the stamp
+    is pending whatever its `refs` say, which is the shape
+    `modal-headless-test.sh`'s own `plant_bare_proposal` creates.
+
+    The refusal is `file_answer`'s own `proposal_unresolvable`, raised
+    here and rendered by `_answer_refusal`, so this pre-flight cannot
+    come to say something different from the write path it is
+    pre-empting.
+    """
+    if _proposal_result(castle, question, records) is None:
+        print(
+            _answer_refusal(
+                castle.AnswerRefused("proposal_unresolvable", question_id=question.id)
+            ),
+            file=sys.stderr,
+        )
+        _pause_for_dismissal(out)
+        return 1
+    if interactive:
+        _resize_for_review()
+    key = _render_and_read(castle, question, records, out, interactive=interactive)
+    decision = REVIEW_KEYS.get(key.lower()) if len(key) == 1 else None
+    if decision is None:
+        # Dismissal. Nothing written, no second "are you sure", no
+        # durable trace — the journal cannot distinguish "shown four
+        # times and walked away from" from "never opened", and that
+        # cost is named rather than paid for with a receipt whose
+        # observation window nothing here declared in advance
+        # (Proposal 06).
+        print(file=out)
+        return 0
+
+    body = ""
+    if decision != "defer":
+        # Genuinely optional, and only asked for where it might mean
+        # something: `file_answer` no longer refuses an empty body when
+        # a decision is present, so nobody has to type "ok" to approve.
+        # Deferring asks for nothing at all — it is "not now", and
+        # demanding a reason before letting the resident leave is
+        # exactly the friction deferring exists to avoid paying.
+        print(file=out)
+        print("Anything you want to say about it? (optional)", file=out)
+        print("End with a line containing just '.' (or Ctrl-D).", file=out)
+        print(file=out)
+        body = _read_typed_body()
+
+    try:
+        castle.file_answer(question_id=question.id, body=body, decision=decision)
+    except castle.AnswerRefused as exc:
+        # Including the two this surface exists to make survivable: the
+        # change was altered on disk since it was shown, or another
+        # window decided it while this one was open. No re-prompt loop
+        # — the chord is one keypress away.
+        print(_answer_refusal(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
+    except castle.RecordError as exc:
+        print(str(exc), file=sys.stderr)
+        _pause_for_dismissal(out)
+        return 1
+
+    print(file=out)
+    print(REVIEW_CONFIRMATIONS[decision], file=out)
+
+    # Re-read rather than reasoned about: another window may have
+    # decided something while this one was open, and the count a
+    # resident is given has to be the count that is true now.
+    remaining = [
+        proposal
+        for proposal in _pending_proposals(castle, castle.load_all(castle.journal_dir()))
+        if proposal.id != question.id
+    ]
+    if remaining:
+        # Said, and then this exits — it does not loop into the next
+        # one. Looping would be the spray of decisions again, and
+        # reopening the list is one chord away. CHORD COUPLING:
+        # Mod4+Shift+a is prose here and a real binding in
+        # modules/home/default.nix's keybindings attrset; change one
+        # and grep for the other.
+        noun = "change" if len(remaining) == 1 else "changes"
+        print(
+            f"{len(remaining)} more proposed {noun} waiting — press Mod4+Shift+a "
+            "again to see them.",
+            file=out,
+        )
+    _pause_for_dismissal(out)
+    return 0
+
+
+def run_review(castle, out=sys.stdout, question_id: str | None = None) -> int:
+    """`--mode review`, entered directly rather than through the answer
+    picker. The picker route (run_answer) is how a resident actually
+    gets here; this exists so the same decision is reachable from a
+    script, from CI, and from a resident with no working display —
+    exactly the parity every other write path in this tool already has.
+    """
+    records = castle.load_all(castle.journal_dir())
+    pending = _pending_proposals(castle, records)
+    interactive = sys.stdin.isatty()
+
+    # A scripted caller naming one goes straight to it, whatever the
+    # fold says — the same ordering answer mode settled on (review
+    # round 1, finding 2) and for the same reason: an empty fold is
+    # exactly when a script is most likely to hit a documented
+    # refusal, and letting the friendly "nothing waiting" exit come
+    # first would turn every one of them into exit 0 with prose.
+    if question_id and not interactive:
+        question = castle.load_journal_record(question_id)
+        if question is None or question.type != "question":
+            print(_answer_refusal_for_missing(question), file=sys.stderr)
+            return 1
+        if not _is_proposal(castle, question):
+            print(
+                "castle-modal: that is not a proposed change — an ordinary question "
+                "is closed with --mode answer --question ID. Nothing filed.",
+                file=sys.stderr,
+            )
+            return 1
+        return run_review_for(castle, question, records, out, interactive=False)
+
+    if not pending:
+        print("No changes are waiting for your decision.", file=out)
+        _pause_for_dismissal(out)
+        return 0
+
+    if not interactive:
+        # Guessing in a script context is the silent wrong-record path
+        # `--question` exists to prevent, and the stakes are higher
+        # here than in answer mode: the wrong guess would be an
+        # authorization.
+        print(
+            "castle-modal: this session has no terminal to choose a change at — "
+            "pass --question ID (scripts and CI only), or open the modal and "
+            "review it there.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # An interactive session ignores --question and chooses for itself,
+    # the same rule answer mode already applies and for the same
+    # reason: preselecting for a human who is looking at the screen is
+    # the deciding-the-wrong-one hazard the picker exists to remove.
+    # With exactly one waiting there is nothing to choose between, so
+    # the oldest — the only — one is shown directly.
+    if len(pending) == 1:
+        question = pending[0]
+    else:
+        question = _show_picker(castle, records, pending, out, action="review")
+        if question is None:
+            return 0
+    return run_review_for(castle, question, records, out, interactive=True)
+
+
+def _answer_refusal_for_missing(question) -> str:
+    """The two shapes `run_review`'s scripted path can meet before
+    `file_answer` ever gets a look, said in this surface's vocabulary
+    and matching `_answer_refusal`'s wording for the same two kinds."""
+    if question is None:
+        return "castle-modal: no such question, nothing filed."
+    return "castle-modal: that is not a question, nothing filed."
+
+
+def _stamp_of(record_id: str) -> str:
+    """The UTC timestamp a record id begins with, and nothing else.
+
+    Ids are `<stamp>-<type>-<random suffix>`, so comparing two of them
+    whole compares the type name whenever the stamps tie — which makes
+    `...-answer-...` older than a `...-result-...` written in the same
+    second, by alphabet rather than by time. Callers that mean "which
+    happened later" want this; callers that only need a deterministic
+    total order (the picker) are right to use the whole id.
+    """
+    return record_id.split("-", 1)[0]
 
 
 def _started_at(castle, claim) -> str:
@@ -684,9 +1414,10 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     answered = {
         ref for rec in records.values() if rec.type == "answer" for ref in rec.refs
     }
-    waiting = any(
-        rec.type == "question" and rec.id not in answered for rec in downstream
-    )
+    waiting_questions = [
+        rec for rec in downstream if rec.type == "question" and rec.id not in answered
+    ]
+    waiting = bool(waiting_questions)
 
     # `_collect_downstream` is transitive over `refs` with no keying by
     # type or by errand, which is right for the fold as a whole and
@@ -714,9 +1445,17 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     )
 
     base = None
+    # The id of the record `base` was derived from, and whether a turn
+    # is running right now. Both exist for the decision overlay below,
+    # which must not describe an errand by something older than its
+    # newest turn (finding 4 of docs/tasks/0025's code review).
+    base_source_id = ""
+    turn_is_live = False
     if claims:
         newest_claim = claims[-1]
         if castle.lease_is_held(request_id):
+            turn_is_live = True
+            base_source_id = newest_claim.id
             base = f"in progress (started {_started_at(castle, newest_claim)})"
         else:
             # The result that closes *this* turn, not merely the newest
@@ -728,15 +1467,18 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # "interrupted" the reaper was about to contradict.
             closing = castle.closing_result(newest_claim, results, claims)
             if closing is not None:
+                base_source_id = closing.id
                 base = _outcome_label(closing.fields.get("outcome", ""), request_id)
             else:
                 # The window between "the lease died" and "the next
                 # dispatch sweep reaps it into a result". Nothing is
                 # running, so "interrupted" is the honest label.
+                base_source_id = newest_claim.id
                 base = f"interrupted — castle work {request_id} to retry"
     elif results:
         # No claim records anywhere on this errand: a journal from
         # before docs/tasks/0021, where nothing recorded turns at all.
+        base_source_id = results[-1].id
         base = _outcome_label(results[-1].fields.get("outcome", ""), request_id)
     elif any(
         rec.type == "decision"
@@ -767,6 +1509,111 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
         # what is true and what to do about it.
         base = f"filed during a worker turn — castle work {request_id} to run it"
 
+    # A decided proposal relabels the errand
+    # (docs/tasks/0025-approval.md §H). Without this the base label
+    # underneath is still the newest turn's outcome — "done" — which is
+    # precisely the word that must never describe a change the resident
+    # REJECTED. The overlay below already clears itself once the
+    # proposal is decided (an answer names it, so it is not waiting),
+    # and that is the whole problem: clearing the overlay leaves "done"
+    # standing alone as the account of an errand whose proposal the
+    # resident declined.
+    #
+    # **Keyed to this request, like `results` and `claims` above and
+    # for the identical reason.** `_collect_downstream` is transitive
+    # over `refs`, so a follow-up filed with `castle ask --refs R1`
+    # drags its own proposal into R1's fold — and without the key, a
+    # verdict the resident gave on the FOLLOW-UP's change relabelled
+    # its parent: `[R1] requested — you declined this`, about an errand
+    # the resident declined nothing on. `refs[0]` is the test because
+    # that is the lineage edge a proposal question carries its errand
+    # on, the same edge `claims` is keyed by (finding 3 of this task's
+    # code review).
+    proposals = sorted(
+        (
+            rec
+            for rec in downstream
+            if rec.type == "question"
+            and rec.fields.get(castle.PROPOSAL_SHA256_FIELD)
+            and rec.refs
+            and rec.refs[0] == request_id
+        ),
+        key=lambda rec: rec.id,
+    )
+    # ACCEPTED LIMIT, and the reason it is not fixed here.
+    # `proposals[-1]` below is "newest" only across seconds: ids carry a
+    # one-second stamp and a random suffix, so two proposals filed on one
+    # errand inside the same second sort arbitrarily, and this can label
+    # the errand with the verdict belonging to the other one. Found by
+    # the cross-model review, round 3.
+    #
+    # Not patched, because the bug is the id format rather than this
+    # line — see docs/backlog/record-ids-are-only-second-resolution.md,
+    # which records that this same hazard has now produced a defect in
+    # four separate tasks, including twelve lines below, where the
+    # decision-versus-result comparison deliberately compares only the
+    # timestamp half to dodge it. Patching one more call site would make
+    # the fifth local workaround and still leave the next fold to
+    # rediscover it.
+    #
+    # What bounds the damage: the `waiting` branch at the end of this
+    # function is computed independently of this selection, so an errand
+    # with an undecided proposal still says "waiting on you — press
+    # Mod4+Shift+a to review" whichever proposal got picked. The
+    # resident is never left without the remedy; the verdict half of the
+    # label can name the wrong one of two changes decided in the same
+    # second. Two turns finishing on one errand within one second is a
+    # scripted caller or a fast retry, not an ordinary use.
+    if proposals and not turn_is_live:
+        # **Never over a live turn**, and never over anything newer
+        # than the decision itself. This block's own stated rule is
+        # that an errand's state is the state of its newest turn, and
+        # an unconditional override broke it in two ways: a decision
+        # would have described an errand whose next turn is running
+        # right now, and — approve, then `castle work` again, then have
+        # that turn fail — it would have gone on reading "approved —
+        # nothing applied yet" while the failure and its retry command
+        # vanished from the surface that exists to show them.
+        #
+        # Compared on the TIMESTAMP half of the id, not the whole of
+        # it, and ties go to the decision. Comparing whole ids read
+        # correctly and behaved wrongly: a full id is
+        # `<stamp>-<type>-<suffix>`, so within one second the type name
+        # decides, `answer` sorts before `result`, and a decision made
+        # in the same second as the result it is about looked older
+        # than it. That is not a rare case — it is what a scripted
+        # caller does every time, and what a resident who approves
+        # straight off the notification does too. A tie going to the
+        # decision is right on its own terms as well: a decision can
+        # only exist after the change it decides, so when the two share
+        # a second, the decision is the later event.
+        newest_proposal = proposals[-1]
+        for rec in sorted(records.values(), key=lambda r: r.id):
+            if rec.type != "answer" or newest_proposal.id not in rec.refs:
+                continue
+            verdict = rec.fields.get("decision", "").strip()
+            if not verdict or _stamp_of(rec.id) < _stamp_of(base_source_id):
+                continue
+            # "approved — nothing applied yet" and not "approved"
+            # alone. The same discipline the review surface states to
+            # the resident at decision time, restated where a status
+            # line would otherwise let "approved" read as "handled".
+            # When docs/tasks/0026 can apply an approved change, this
+            # is the sentence that task must come back and change —
+            # which is the point of writing it this way.
+            #
+            # An unrecognised value renders verbatim rather than
+            # collapsing into any of the three, exactly as
+            # `_outcome_label` treats an outcome from outside its own
+            # vocabulary: a surface quietly reporting a state because
+            # it did not understand what it was told is the failure
+            # both closed vocabularies exist to prevent.
+            base = {
+                "approve": "approved — nothing applied yet",
+                "reject": "you declined this",
+                "defer": "you set this aside",
+            }.get(verdict, f"{verdict} — nothing applied yet")
+
     # Naming the remedy, the same way every outcome label above does:
     # docs/tasks/0015's rule is that a label must not cause the inaction
     # it describes, and "waiting on you" was the one label on this
@@ -778,7 +1625,29 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # chord's own mentions went stale exactly this way once already,
     # docs/tasks/0019).
     if waiting:
-        hint = "waiting on you — press Mod4+Shift+a to answer"
+        # "answer" names the wrong act on a proposal: `_show_picker`
+        # grew an `action` parameter for exactly this reason
+        # (docs/tasks/0025-approval.md §G, called with `action="review"`
+        # where a proposal branches out of answer mode's picker), and
+        # this overlay used to say "answer" regardless — the same
+        # defect the comment above this method already guards against,
+        # for a different reason. Pick the verb from what is actually
+        # waiting: all proposals says "review" (the same word the
+        # picker itself uses, "Press a number to review"); no proposals
+        # keeps the original, unchanged "answer"; a mix of both kinds
+        # means neither verb is honest for everything waiting, so this
+        # falls back to the kind-agnostic phrasing already used where
+        # a resident reaches this picker not knowing in advance which
+        # kind of waiting it is ("to see what is waiting on them",
+        # above `run_answer`'s branch into review mode).
+        proposal_flags = [_is_proposal(castle, rec) for rec in waiting_questions]
+        if all(proposal_flags):
+            verb = "review"
+        elif not any(proposal_flags):
+            verb = "answer"
+        else:
+            verb = "see what's waiting"
+        hint = f"waiting on you — press Mod4+Shift+a to {verb}"
         return f"{base}, {hint}" if base else hint
     return base or "awaiting a worker"
 
@@ -837,11 +1706,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="castle-modal", description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("compose", "status", "answer"),
+        choices=("compose", "status", "answer", "review"),
         default="compose",
         help=(
-            "compose a new request, fold recent errands, or answer a question the "
-            "system is waiting on (default: compose)"
+            "compose a new request, fold recent errands, answer a question the "
+            "system is waiting on, or review a proposed configuration change and "
+            "approve, reject or defer it (default: compose). Review mode is "
+            "normally reached from answer mode's own picker rather than named "
+            "here — a proposed change picked there branches into it "
+            "(docs/tasks/0025-approval.md)"
         ),
     )
     parser.add_argument(
@@ -873,7 +1746,9 @@ def build_parser() -> argparse.ArgumentParser:
             "this flag entirely and always shows the picker, because preselecting a "
             "question for a human who is looking at the screen is exactly the "
             "answering-the-wrong-one hazard the picker exists to prevent "
-            "(docs/tasks/0022-answer-in-ui.md scope 2)."
+            "(docs/tasks/0022-answer-in-ui.md scope 2). Review mode reads the same "
+            "flag under the same rule, and the hazard there is larger: the wrong "
+            "guess would be an authorization."
         ),
     )
     return parser
@@ -886,6 +1761,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_compose(castle, kind=args.kind)
     if args.mode == "answer":
         return run_answer(castle, question_id=args.question)
+    if args.mode == "review":
+        return run_review(castle, question_id=args.question)
     return run_status(castle, args.limit)
 
 

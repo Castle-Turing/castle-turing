@@ -319,8 +319,22 @@ RESULT_RACE="$(basename "$(referencing result "$REQ_RACE")" .md)"
 [ -n "$RESULT_RACE" ] || fail "the raced sweep produced no result for $REQ_RACE"
 DECISIONS_FOR_RACE="$(referencing decision "$RESULT_RACE" | grep -c . || true)"
 [ "$DECISIONS_FOR_RACE" -eq 1 ] || fail "the raced result was routed $DECISIONS_FOR_RACE times, expected exactly 1 — a hand-run route and the sweep's tail both routed it"
-NOTIFY_AFTER_RACE="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
-[ "$(( NOTIFY_AFTER_RACE - NOTIFY_BEFORE_RACE ))" -eq 1 ] || fail "the raced result fired $(( NOTIFY_AFTER_RACE - NOTIFY_BEFORE_RACE )) notifications, expected exactly 1"
+# Counted over the notifications this race actually added, and scoped
+# to the ones about a `result`. The assertion is about the race — did
+# two folds in flight both notify for the same record — not about how
+# many records one turn produces, and since
+# docs/tasks/0025-approval.md a completed turn with a resolved target
+# produces two routable records: the result, and the proposal question
+# the harness files about it. Both are routed and both notify, once
+# each, which is correct and would have made a bare "delta == 1" fail
+# for a reason having nothing to do with routing twice. Asserted from
+# both sides so neither half can rot.
+NOTIFIED_IN_RACE="$(tail -n "+$(( NOTIFY_BEFORE_RACE + 1 ))" "$CASTLE_NOTIFY_LOG")"
+RESULT_NOTIFIES="$(printf '%s\n' "$NOTIFIED_IN_RACE" | grep -c 'Castle Turing — result' || true)"
+[ "$RESULT_NOTIFIES" -eq 1 ] || fail "the raced result fired $RESULT_NOTIFIES notifications, expected exactly 1"
+QUESTION_NOTIFIES="$(printf '%s\n' "$NOTIFIED_IN_RACE" | grep -c 'Castle Turing — question' || true)"
+[ "$QUESTION_NOTIFIES" -eq 1 ] \
+  || fail "the proposal question the raced turn filed fired $QUESTION_NOTIFIES notifications, expected exactly 1"
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
