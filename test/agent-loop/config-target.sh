@@ -1131,6 +1131,31 @@ rmdir "$SIDECAR_CRLF"
 mv "$WORKDIR/sidecar-crlf-real.patch" "$SIDECAR_CRLF"
 "$CASTLE" validate >/dev/null || fail "castle validate did not recover once the sidecar was restored"
 
+log "  -- red: a record containing one invalid UTF-8 byte"
+# `parse_record`'s `read_text(encoding="utf-8")` raises
+# `UnicodeDecodeError` on this, and every existing caller before this
+# task's fix caught only OSError/RecordError, so `castle validate` and
+# `castle digest` both tracebacked instead of reporting the file. Not a
+# regression this task introduced, but this is the branch that made
+# "records are UTF-8 by definition" an explicit, enforced claim, so it
+# owns making a violation report cleanly (docs/tasks/0033-byte-exact-
+# proposal.md, agent/README.md's "The record format").
+cp "$R_CRLF" "$WORKDIR/record-backup.md"
+printf '\x80' >> "$R_CRLF"
+"$CASTLE" validate >/dev/null 2>&1 && fail "castle validate passed with a record containing an invalid UTF-8 byte"
+"$CASTLE" validate > "$validate_output" 2>&1 || true
+grep -qF "Traceback" "$validate_output" \
+  && fail "castle validate crashed with a Python traceback on invalid UTF-8 instead of reporting it"
+grep -qF "$(basename "$R_CRLF")" "$validate_output" \
+  || fail "the invalid-UTF-8 error does not name the file"
+digest_output="$WORKDIR/digest-output.log"
+"$CASTLE" digest > "$digest_output" 2>&1 \
+  || fail "castle digest did not exit 0 over a journal with one invalid-UTF-8 record (load_all's documented skip contract): $(cat "$digest_output")"
+grep -qF "Traceback" "$digest_output" \
+  && fail "castle digest crashed with a Python traceback on invalid UTF-8 instead of skipping the record"
+cp "$WORKDIR/record-backup.md" "$R_CRLF"
+"$CASTLE" validate >/dev/null || fail "castle validate did not recover once the record was restored"
+
 log "  -- green: a result with neither diff-boundary nor patch-sha256 at all"
 # $R_NOMECH, from the mechanism block above: a completed turn that
 # proposed nothing. Absent means absent — no sidecar expected.

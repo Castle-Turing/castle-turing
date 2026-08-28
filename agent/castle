@@ -505,6 +505,24 @@ def parse_record(path: pathlib.Path) -> Record:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RecordError(f"cannot read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # Records are UTF-8 by definition (docs/tasks/0033-byte-exact-
+        # proposal.md, agent/README.md's "The record format"), and this
+        # is that rule's enforcement failing loud instead of silent:
+        # without this, `UnicodeDecodeError` — a `ValueError`, not an
+        # `OSError` — passed straight through every caller here, none
+        # of which caught anything but `OSError`/`RecordError`, so
+        # `castle validate` and `castle digest` both tracebacked on a
+        # record containing one invalid byte instead of reporting it.
+        # Not a regression this task introduced (the locale-default
+        # `read_text()` this replaced failed the same way before it),
+        # but this is the commit that made "UTF-8 by definition" an
+        # explicit, documented claim, so it is the one that owns making
+        # a violation report as a validation error rather than a crash.
+        raise RecordError(
+            f"{path}: not valid UTF-8 at byte offset {exc.start} ({exc.reason}) — "
+            "records are UTF-8 by definition (docs/tasks/0033-byte-exact-proposal.md)"
+        ) from exc
 
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
