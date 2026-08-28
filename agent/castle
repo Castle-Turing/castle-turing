@@ -5764,6 +5764,7 @@ HOSTNAME_PATH = "/proc/sys/kernel/hostname"
 # escaping rule for them in a path flakeref, which is what makes this a
 # skip rather than something to quote around.
 FLAKEREF_RESERVED = ("#", "?")
+
 # The first line of every apply result's body, per outcome. This is the
 # notification a resident actually receives — `_fire_notification` takes
 # exactly this line — so it is drafted rather than improvised, carries
@@ -6158,6 +6159,7 @@ def _recovery_lines(paths: list[str], tracked_before: set[str] | None) -> list[s
         lines.append(f"    rm -f -- {' '.join(remove)}")
     return lines
 
+
 def _displayable(value: str) -> str:
     """A path safe to write into a record, a message or a notification.
 
@@ -6175,102 +6177,6 @@ def _displayable(value: str) -> str:
     """
     return value.encode("utf-8", "backslashreplace").decode("utf-8")
 
-def _verify_single_commit(
-    root: str, head_before: str, paths: list[str]
-) -> tuple[str, str]:
-    """The sha of the one commit the applier just made, or `("", why)`
-    if the repository is not in the state a successful commit implies.
-
-    Three questions, and each one caught a real shape in review:
-
-    * **Does `HEAD` have the parent we started from?** A `post-commit`
-      hook can commit again, or amend; then `rev-parse HEAD` names a
-      commit the applier did not make and the record's own
-      `git revert <sha>` reverts the *hook's* work while leaving the
-      approved change in place.
-    * **Is it exactly one commit?** Same hazard, counted from the other
-      end, and it catches a hook that committed without moving the
-      parent chain the way the first test expects.
-    * **Is the tree clean under the patch's paths?** A hook that stages
-      or writes leaves the change half-committed, which the record would
-      otherwise report as a clean apply.
-
-    An empty `head_before` means the repository had no commits at all
-    before this, which is a legitimate state — a patch that only creates
-    files applies to a fresh `git init` perfectly well. There the commit
-    is the root commit, so it has no parent and the count is measured
-    from the beginning of history instead.
-
-    Returns the sha only when all three hold, so a caller cannot print
-    an unverified one beside a `git revert`.
-    """
-    head_probe, fault = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
-    if head_probe is None or head_probe.returncode != 0:
-        return "", (
-            fault
-            or "the repository has no HEAD after a commit that reported success"
-        )
-    commit_sha = (head_probe.stdout or "").strip()
-    if not commit_sha:
-        return "", "git named no commit after a commit that reported success"
-
-    if head_before:
-        parent_probe, fault = _run_git(
-            root, ["rev-parse", f"{commit_sha}^"], timeout=CHECKOUT_PROBE_SECONDS
-        )
-        parent = (
-            (parent_probe.stdout or "").strip()
-            if parent_probe is not None and parent_probe.returncode == 0
-            else ""
-        )
-        if parent != head_before:
-            return "", (
-                "the new commit's parent is not where this started, so something "
-                "other than this applier has committed here as well"
-            )
-        span = [f"{head_before}..{commit_sha}"]
-    else:
-        span = [commit_sha]
-    count_probe, fault = _run_git(
-        root, ["rev-list", "--count", *span], timeout=CHECKOUT_PROBE_SECONDS
-    )
-    if count_probe is None or count_probe.returncode != 0:
-        return "", fault or "git could not count the commits this made"
-    count = (count_probe.stdout or "").strip()
-    if count != "1":
-        return "", f"{count} commits landed where exactly one was expected"
-
-    dirty, why_dirty = _dirty_under(root, paths)
-    if dirty is None:
-        return "", (
-            f"whether anything was left uncommitted could not be established "
-            f"({why_dirty})"
-        )
-    if dirty:
-        return "", (
-            f"the files it touched are not clean afterwards ({dirty}), so part of "
-            "the change is not in that commit"
-        )
-    return commit_sha, ""
-
-def _literal(paths: list[str]) -> list[str]:
-    """Repository paths as **literal** pathspecs.
-
-    `--` separates options from pathspecs; it does not stop git reading
-    what follows as a pathspec *pattern*. So a resident's file called
-    `weird*.nix` glob-matches other files, and one whose name begins
-    with a colon is read as pathspec magic — in commands that add,
-    commit and status exactly the set of paths a patch touched, where
-    matching anything else is the failure. Every shape traced fails
-    safe today (a wider match makes the commit contain more than the
-    patch, which the verification above then refuses), but "fails safe
-    by luck" is not a property to leave standing.
-
-    `:(literal)` is git's own answer and takes no escaping rules of our
-    own: everything after it is the path, byte for byte (code review on
-    docs/tasks/0026-apply-validate.md).
-    """
-    return [f":(literal){path}" for path in paths]
 
 def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
     """A one-line summary of the resident's uncommitted work under
@@ -6431,6 +6337,105 @@ def _run_git(
         return None, f"`git {args[0]}` did not finish within {timeout}s"
     except OSError as exc:
         return None, f"`git {args[0]}` could not be run there ({exc})"
+
+
+def _verify_single_commit(
+    root: str, head_before: str, paths: list[str]
+) -> tuple[str, str]:
+    """The sha of the one commit the applier just made, or `("", why)`
+    if the repository is not in the state a successful commit implies.
+
+    Three questions, and each one caught a real shape in review:
+
+    * **Does `HEAD` have the parent we started from?** A `post-commit`
+      hook can commit again, or amend; then `rev-parse HEAD` names a
+      commit the applier did not make and the record's own
+      `git revert <sha>` reverts the *hook's* work while leaving the
+      approved change in place.
+    * **Is it exactly one commit?** Same hazard, counted from the other
+      end, and it catches a hook that committed without moving the
+      parent chain the way the first test expects.
+    * **Is the tree clean under the patch's paths?** A hook that stages
+      or writes leaves the change half-committed, which the record would
+      otherwise report as a clean apply.
+
+    An empty `head_before` means the repository had no commits at all
+    before this, which is a legitimate state — a patch that only creates
+    files applies to a fresh `git init` perfectly well. There the commit
+    is the root commit, so it has no parent and the count is measured
+    from the beginning of history instead.
+
+    Returns the sha only when all three hold, so a caller cannot print
+    an unverified one beside a `git revert`.
+    """
+    head_probe, fault = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    if head_probe is None or head_probe.returncode != 0:
+        return "", (
+            fault
+            or "the repository has no HEAD after a commit that reported success"
+        )
+    commit_sha = (head_probe.stdout or "").strip()
+    if not commit_sha:
+        return "", "git named no commit after a commit that reported success"
+
+    if head_before:
+        parent_probe, fault = _run_git(
+            root, ["rev-parse", f"{commit_sha}^"], timeout=CHECKOUT_PROBE_SECONDS
+        )
+        parent = (
+            (parent_probe.stdout or "").strip()
+            if parent_probe is not None and parent_probe.returncode == 0
+            else ""
+        )
+        if parent != head_before:
+            return "", (
+                "the new commit's parent is not where this started, so something "
+                "other than this applier has committed here as well"
+            )
+        span = [f"{head_before}..{commit_sha}"]
+    else:
+        span = [commit_sha]
+    count_probe, fault = _run_git(
+        root, ["rev-list", "--count", *span], timeout=CHECKOUT_PROBE_SECONDS
+    )
+    if count_probe is None or count_probe.returncode != 0:
+        return "", fault or "git could not count the commits this made"
+    count = (count_probe.stdout or "").strip()
+    if count != "1":
+        return "", f"{count} commits landed where exactly one was expected"
+
+    dirty, why_dirty = _dirty_under(root, paths)
+    if dirty is None:
+        return "", (
+            f"whether anything was left uncommitted could not be established "
+            f"({why_dirty})"
+        )
+    if dirty:
+        return "", (
+            f"the files it touched are not clean afterwards ({dirty}), so part of "
+            "the change is not in that commit"
+        )
+    return commit_sha, ""
+
+
+def _literal(paths: list[str]) -> list[str]:
+    """Repository paths as **literal** pathspecs.
+
+    `--` separates options from pathspecs; it does not stop git reading
+    what follows as a pathspec *pattern*. So a resident's file called
+    `weird*.nix` glob-matches other files, and one whose name begins
+    with a colon is read as pathspec magic — in commands that add,
+    commit and status exactly the set of paths a patch touched, where
+    matching anything else is the failure. Every shape traced fails
+    safe today (a wider match makes the commit contain more than the
+    patch, which the verification above then refuses), but "fails safe
+    by luck" is not a property to leave standing.
+
+    `:(literal)` is git's own answer and takes no escaping rules of our
+    own: everything after it is the path, byte for byte (code review on
+    docs/tasks/0026-apply-validate.md).
+    """
+    return [f":(literal){path}" for path in paths]
 
 
 def _write_apply_result(
