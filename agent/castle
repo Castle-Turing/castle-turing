@@ -6088,24 +6088,50 @@ def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
     return f"{len(lines)} path(s), status {', '.join(letters)}", ""
 
 
-def _run_git(root: str, args: list[str], *, timeout: int = CHECKOUT_PROBE_SECONDS):
+# How long one git command that WRITES the resident's checkout may take.
+# Much longer than `CHECKOUT_PROBE_SECONDS`, which bounds a `rev-parse`
+# that answers instantly, because these do real work on real files and
+# may be doing it on a network mount. Bounded at all for the reason
+# every other subprocess here is: an unattended sweep that hangs is
+# indistinguishable from one that is working.
+APPLY_GIT_SECONDS = 120
+
+
+def _run_git(root: str, args: list[str], *, timeout: int = APPLY_GIT_SECONDS):
     """One `git` in the resident's checkout, with `GIT_*` stripped.
 
-    Returns the `CompletedProcess`, or raises `OSError` if git is not
-    reachable at all — which is a case every caller here has already
-    ruled out, because `_checkout_fault` ran first.
+    Returns `(CompletedProcess, "")`, or `(None, why)` when git could
+    not be run to completion at all — not on disk, would not exec, or
+    outlived its bound.
+
+    **Never raises, and that is the point.** These run in the middle of
+    a sequence that has already edited a resident's working tree, so an
+    exception escaping here would abort the sweep with a traceback and
+    write no record of what state that tree was left in. The two cases
+    are kept distinct rather than folded into a nonzero return code
+    because they mean different things: git speaking and refusing is a
+    fact about the patch, while git never answering is a fact about the
+    machine, and §F gives those two different records.
     """
     git = shutil.which("git")
     if git is None:
-        raise OSError("`git` is not on this session's PATH")
-    return subprocess.run(
-        [git, "-C", root, *args],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=timeout,
-        env=_git_stripped_env(),
-    )
+        return None, "`git` is not on this session's PATH"
+    try:
+        return (
+            subprocess.run(
+                [git, "-C", root, *args],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
+                env=_git_stripped_env(),
+            ),
+            "",
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"`git {args[0]}` did not finish within {timeout}s"
+    except OSError as exc:
+        return None, f"`git {args[0]}` could not be run there ({exc})"
 
 
 def _write_apply_result(
@@ -6625,7 +6651,26 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     # git whether the patch still fits, which is a more precise question
     # than comparing revisions anyway, since a revision that moved for
     # unrelated reasons is not staleness.
-    check = _run_git(root, ["apply", "--check", "--", str(sidecar)])
+    check, check_fault = _run_git(root, ["apply", "--check", "--", str(sidecar)])
+    if check is None:
+        # git never answered, so nothing is known about the patch and
+        # nothing was written. An environment fault, not a property of
+        # the change — the same shape §C.1 takes, and it aborts the
+        # sweep for the same reason: the next approval would meet the
+        # identical broken machine.
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="failed",
+            apply_outcome="",
+            detail_lines=detail_lines
+            + [
+                "",
+                f"Castle could not ask git whether the change still fits: "
+                f"{check_fault}. Nothing was written anywhere.",
+            ],
+        )
+        raise ApplyEnvironmentFault(check_fault, result_id)
     if check.returncode != 0:
         return refuse(
             "refused-patch-stale",
@@ -6645,7 +6690,33 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     # ---------------------------------------------------------------
     # D — the working tree, then exactly one commit. No push, ever.
     # ---------------------------------------------------------------
-    applied = _run_git(root, ["apply", "--", str(sidecar)])
+    applied, applied_fault = _run_git(root, ["apply", "--", str(sidecar)])
+    if applied is None:
+        # git was killed or never ran partway through the one step that
+        # writes files, so what is in the tree is genuinely unknown —
+        # `git apply` validates the whole patch before writing any of
+        # it, but nothing here can promise it got that far. Recorded as
+        # `outcome: failed` with NO `apply-outcome`, which is exactly
+        # what that shape means: the applier did not reach a conclusion
+        # about the change. Naming it `applied-uncommitted` would claim
+        # the change IS in the tree, which is the overclaim the whole
+        # vocabulary exists to prevent.
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="failed",
+            apply_outcome="",
+            detail_lines=detail_lines
+            + [
+                "",
+                f"Castle started making the change and git did not finish: "
+                f"{applied_fault}. Whether anything reached your files is not "
+                "something this can honestly say — look at "
+                "`git status` in your configuration repository before doing "
+                "anything else. Nothing was committed, and nothing was activated.",
+            ],
+        )
+        raise ApplyEnvironmentFault(applied_fault, result_id)
     if applied.returncode != 0:
         # `--check` passed a moment ago, so this is a race or a
         # filesystem fault rather than a stale patch. Named as the
@@ -6663,12 +6734,17 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
             ],
         )
 
-    head_before = _run_git(root, ["rev-parse", "HEAD"])
+    head_before, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    # Ids only, and never a path or a word of tenant prose: this message
+    # is durable and leaves the machine more easily than a journal does.
+    # The digest is what makes the commit checkable against the journal
+    # years later with no tooling at all.
+    errand = _find_root_request(records, question)
     message = "\n".join(
         [
             "castle: apply an approved change",
             "",
-            f"errand:   {_find_root_request(records, question).id if _find_root_request(records, question) else '(none recorded)'}",
+            f"errand:   {errand.id if errand is not None else '(none recorded)'}",
             f"change:   {question.id}",
             f"decision: {answer.id}",
             f"proposal: {proposal.id}",
@@ -6691,9 +6767,11 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     #
     # `-c user.name`/`-c user.email` rather than writing config: nothing
     # this task does may modify the resident's `.git/config`.
-    staged = _run_git(root, ["add", "-N", "--", *paths])
-    committed = (
-        _run_git(
+    staged, staged_fault = _run_git(root, ["add", "-N", "--", *paths])
+    if staged is None or staged.returncode != 0:
+        committed, committed_fault = staged, staged_fault
+    else:
+        committed, committed_fault = _run_git(
             root,
             [
                 "-c",
@@ -6707,10 +6785,7 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
                 *paths,
             ],
         )
-        if staged.returncode == 0
-        else staged
-    )
-    if committed.returncode != 0:
+    if committed is None or committed.returncode != 0:
         # A real state with a real name. The working tree carries the
         # change and the repository does not, and **it is not rolled
         # back**: a hard reset destroys uncommitted work this applier
@@ -6718,6 +6793,12 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         # above is scoped to the patch's own paths — and rewinding a
         # resident's repository is a larger authority than adding one
         # commit they authorized. Both ways out are named instead.
+        #
+        # Unlike the `git apply` step above, git failing to *answer*
+        # here is still `applied-uncommitted` rather than an unknown
+        # state: the patch is already in the tree by this point, which
+        # is the whole content of that outcome, and whether the commit
+        # was refused or never finished changes only the sentence.
         detail_lines.append("")
         detail_lines.append(
             "The change is in your working tree and is NOT committed: git refused "
@@ -6725,7 +6806,11 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         )
         detail_lines.append("")
         detail_lines.append("```")
-        detail_lines.append((committed.stderr or committed.stdout or "").strip())
+        detail_lines.append(
+            committed_fault
+            if committed is None
+            else (committed.stderr or committed.stdout or "").strip()
+        )
         detail_lines.append("```")
         detail_lines.append("")
         detail_lines.append(
@@ -6747,16 +6832,16 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         )
         return result_id, "applied-uncommitted"
 
-    head_after = _run_git(root, ["rev-parse", "HEAD"])
-    commit_sha = (head_after.stdout or "").strip()
+    head_after, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    commit_sha = (head_after.stdout or "").strip() if head_after is not None else ""
     detail_lines.append("")
     detail_lines.append(
-        f"It is now one commit in your configuration repository: `{commit_sha}`, on "
-        f"the branch that was checked out. Nothing was pushed anywhere, and nothing "
+        f"It is now one commit in your configuration repository: `{commit_sha or 'sha unread'}`, "
+        f"on the branch that was checked out. Nothing was pushed anywhere, and nothing "
         f"was activated — no rebuild, no new generation, no change to the machine you "
-        f"are using. To undo it: `git revert {commit_sha}`."
+        f"are using. To undo it: `git revert {commit_sha or '<that commit>'}`."
     )
-    if (head_before.stdout or "").strip() == commit_sha:
+    if head_before is not None and commit_sha and (head_before.stdout or "").strip() == commit_sha:
         detail_lines.append("")
         detail_lines.append(
             "(The repository's head did not move, which should not be possible after "
