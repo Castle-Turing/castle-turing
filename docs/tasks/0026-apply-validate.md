@@ -390,6 +390,42 @@ the hand-retry path and is *not* bounded by the one-attempt rule
 by hand IS the retry path), and the sweep form is the automatic one
 and is.
 
+**The exit codes, which this brief did not specify and the
+implementation had to choose.** The two forms get different contracts,
+for the same reason their bounds differ. `castle apply --sweep` keeps
+`castle dispatch`'s: 0 whenever the sweep ran and recorded outcomes for
+whatever it found, with refusals visible in records rather than in the
+exit code, so the unit's failed state keeps meaning "the mechanism
+broke." `castle apply <answer-id>` exits 0 only for `applied-validated`
+and `applied-unvalidated` — a human typing it is asking "did my change
+land, and is it all right?", and the shell's status is where they read
+the answer — and 1 for a refusal, a failed check, an uncommitted apply
+or an environment fault.
+
+**And two more things the sweep does that this brief did not say.**
+
+*It aborts on the first environment fault* rather than continuing,
+raising after the record is written, exactly as `TenantNotRunnable`
+does for a sweep of errands and for a sharper version of its reason. A
+misconfigured `CASTLE_PRIVATE_ROOT` is the same for every eligible
+approval, and any result at all bars a second automatic attempt (the
+fold below) — so a sweep that shrugged and carried on would burn every
+resident authorization in the journal on `failed` records in a single
+pass. An authorization is costlier and less repeatable than an errand's
+automatic attempt, which is the whole argument §K makes for the second
+assertion; the abort is that argument applied at runtime.
+
+*It routes once at the end*, the same tail step `cmd_dispatch` runs and
+via the same `route_journal()` fold, when it applied anything. Without
+it, §F's stated intent — "the resident authorized something, and the
+push channel is how they learn what happened to it" — is only true on a
+host that also enabled dispatch, since nothing else would ever route
+the apply's result. The hand path deliberately does **not** route,
+exactly as `castle work` does not: a human at a terminal can see what
+happened, and `castle route` is one command away. Lock ordering is
+unaffected — nothing takes `apply.lock` while holding the router's, so
+`apply.lock -> route.lock` closes no cycle.
+
 **The argument is the answer id, not the question id.** The
 authorization is the answer; the question is a proposal, which
 authorizes nothing on its own. Naming the thing being spent is the
@@ -523,7 +559,13 @@ in `write_record` it mirrors — see §J.
 
 *(Decision D7's pre-flight, [OWNER].)*
 
-In order, each failing check producing a record and stopping (§F):
+In order, each failing check producing a record and stopping (§F) —
+**except that check 2 runs first, which is a correction this brief's
+implementation made and which the list below is written as if it
+had.** Check 2 is the only one that writes no record, so running it
+before check 1 is what keeps a mistyped id from putting a permanent
+`failed` result in an append-only journal to describe somebody's typo.
+The listed order is otherwise exactly what the code does.
 
 1. **The environment.** `CASTLE_PRIVATE_ROOT` is set, and
    `_checkout_fault` (`agent/castle:3175`) returns None for it.
@@ -985,8 +1027,14 @@ nothing was attempted as far as the journal is concerned.
 
 **Body shape**, in order: the harness's one-sentence first line (the
 notification, per outcome — see the table below); what was applied,
-by id; the `target` copied from the proposal's result (D6) and the
-role's resolved path **not** stated (unlike the worker's result body,
+by id; the `target` copied from the proposal's result (D6) — **in the
+body's prose and deliberately not as a frontmatter field**, because
+`target` is defined as "which checkout the diff a turn produced applies
+to", the applier's result carries no diff, and the value would be
+either constant (`private`, on every record that applied anything) or
+absent; what 0027 is guaranteed is that the role is stated and
+reachable, not that a second record type now carries the field — and
+the role's resolved path **not** stated (unlike the worker's result body,
 which does state it — the applier's record is routed to a notification
 and rendered in digests, and it has no reason a resident needs to see
 the path they configured); the commit sha, when there is one, and the
@@ -1103,6 +1151,13 @@ is fine, exactly as `_outcome_label` already prints `castle work
 | `applied-uncommitted` | `partly applied — see your configuration repository` |
 | any `refused-*` | `approved, but not applied — <short reason>` |
 | unrecognised `apply-outcome` | rendered verbatim, never collapsed |
+
+The five short reasons, written here for the same reason the
+notification lines are, and obeying the same vocabulary rule: "it
+changes the Castle Turing framework, not your own configuration";
+"what is on disk is no longer what you approved"; "no exact copy of
+the change was kept"; "it no longer fits your configuration
+repository"; "you have uncommitted edits to the same files."
 
 The unrecognised case follows `_outcome_label`'s own rule
 (`agent/castle-modal:1293-1304`) for the same reason it gives: a
@@ -1441,6 +1496,17 @@ implemented, it is named as a default.
   - `CASTLE_APPLY_EVALUATE_FLAKE`/`CASTLE_APPLY_TIMEOUT` added to the
     existing `environment.sessionVariables` block so a hand-run
     `castle apply` in a terminal behaves like the unit.
+- **`flake.nix`** — not in this brief's original list, and added on the
+  precedent 0021 set for exactly this shape. `nixosConfigurations.example`
+  gains the assertion that **no** `castle-apply` unit exists while the
+  option is at its default, written as an implication so the variant
+  below can inherit it; and `nixosConfigurations.example-apply` is that
+  variant, turning the option on and asserting the three units carry
+  what an apply needs — including, deliberately, no
+  `CASTLE_MECHANISM_ROOT`. Default-off has to be provably off, and it
+  matters more here than it did for dispatch: what importing
+  `nixosModules.agent` must never quietly acquire is the authority to
+  change a resident's configuration.
 - **`agent/README.md`** — a new "Applying an approved change" section
   after "Proposing a change, and deciding it"; the `outcome`
   reservation paragraph (`:814-816`) gains one sentence recording that
@@ -1559,7 +1625,21 @@ and containing only literals this repo already publishes:
   does not fire on one.
 
 `PRIVATE_HEAD` is captured after the initial commit, as `approval.sh`
-does.
+does — and, unlike there, **advanced by
+`assert_private_changed_exactly` itself**, so "exactly one commit"
+means one since the previous scenario rather than one since the run
+began.
+
+**One isolation the neighbouring harnesses do not need, and it is the
+applier's own design that requires it.** Every git subprocess the
+applier runs has its whole `GIT_*` environment stripped — deliberately,
+so what a repository *is* cannot be decided by whoever exported
+something — which means `GIT_CONFIG_GLOBAL=/dev/null`, the shield every
+other harness here uses, does not reach it. That was harmless while
+nothing ever committed. This harness commits, so it also points `HOME`
+and `XDG_CONFIG_HOME` at empty directories under `$WORKDIR`: a
+developer with `commit.gpgsign = true` set globally would otherwise
+watch every scenario fail for a reason unrelated to the code.
 
 **The scripted tenant, `scripted-worker-applyable.sh` (new).**
 `contract-worker.sh`'s diff is deliberately synthetic and names a file
@@ -1576,6 +1656,35 @@ constraint every other tenant fixture here honours, and
 request text select which of these it produces: a modification, a
 file creation, a file deletion, a two-file patch, a patch to a path
 another scenario will dirty, and `target: mechanism`.
+
+Two things the implementation found by running git rather than by
+reading about it, both recorded here because the brief reasoned from
+documentation:
+
+- **A deletion needs git's own `deleted file mode` header.** A plain
+  `diff -u <file> /dev/null` produces a well-formed patch that `git
+  apply` accepts and that *truncates the file to empty* rather than
+  removing it. The fixture emits the two-line git header before the
+  hunks; the `index` line real git also writes is omitted deliberately,
+  because `git apply` neither needs nor reads it here and a fixture
+  inventing a blob hash would be stating something it has not computed.
+- **The rest of the sequence behaves exactly as this brief predicted.**
+  `git apply --numstat -z` yields `<added>\t<deleted>\t<path>NUL`, with
+  a rename spelled as an empty third field followed by two more
+  NUL-terminated records (handled in the code, though no fixture here
+  produces one); `git add -N` is a no-op on an already-tracked path,
+  succeeds on a path the patch deleted, and is what lets a pathspec
+  commit name a created one; and a pathspec commit leaves the
+  resident's staged work in another file staged and uncommitted. All
+  three verified against this fixture.
+
+The tenant's second output is the byte-exact post-image of every path
+it expects to exist afterwards, written under
+`$CASTLE_APPLYABLE_EXPECT_DIR`. That is what lets
+`assert_private_changed_exactly` compare an applied file against what
+the patch was *supposed* to produce, using a copy the tenant itself
+computed rather than a second, independently typed one free to drift —
+and a path with no expect file is one the harness asserts was removed.
 
 **The inverted assertion.** `approval.sh`'s
 `assert_checkouts_untouched` is the claim this task is here to break
@@ -1649,10 +1758,18 @@ mechanism assertion, and `castle validate` exiting 0.
    `assert_mechanism_untouched` **and** `assert_private_untouched`.
 8. `refused-artifact-changed` — flip a byte in the result record file
    after the approval (the answer's stamp no longer matches). Refused,
-   nothing written to either checkout. Note this deliberately leaves
-   the journal in a state `castle validate` flags; the scenario runs
-   last in its group or restores the byte, and says which in a
-   comment.
+   nothing written to either checkout. The scenario restores the byte
+   afterwards and says so in a comment, so the scenarios after it start
+   from a journal nothing has tampered with. **Plus the second variant
+   the brief omitted and the two-digest design requires**: leave the
+   record exactly as approved and tamper with the *sidecar* instead.
+   The record can be word for word what the resident read while the
+   bytes that would actually be written to their files are not, which
+   is precisely why there are two digests. Same outcome, different
+   check — and a control afterwards that restoring the exact bytes
+   makes the same approval applyable again, so neither refusal is
+   satisfied by a check that simply never lets anything through once it
+   has been near a file.
 9. `refused-no-patch` — delete the `.patch` sidecar after approval.
    (And a second variant: a hand-planted proposal question whose
    result carries neither `patch-sha256` nor a sidecar — the pre-0033
@@ -1697,6 +1814,13 @@ mechanism assertion, and `castle validate` exiting 0.
     fixture's root, and
     `#nixosConfigurations.<hostname>.config.system.build.toplevel`
     with the hostname read from `/proc/sys/kernel/hostname`.
+    **Compared through a shell-word splitter, not by string
+    equality.** The recorded line is `shlex.join`'d so a resident can
+    paste it, and the `#` in a flakeref makes that quote the whole
+    argument — correctly. A harness asserting on the quoting rather
+    than on the arguments would break the first time either side got
+    safer, so it splits the recorded line with `shlex.split` and
+    compares the list.
 15. **On, unsafe layout → refuses to evaluate, names the doc.** Point
     `CASTLE_STATE_DIR` at a directory inside a fixture repo carrying a
     `flake.nix` with committed content under it — the exact shape
@@ -1706,9 +1830,11 @@ mechanism assertion, and `castle validate` exiting 0.
     `apply-outcome: applied-unvalidated`, and the body quotes the
     finding and names `docs/private-layer.md`.
 16. **On, safe layout → the evaluation happens.** Gate on, safe state
-    layout, a `nix` stub on `$PATH` that logs its full argv and exits
+    layout, a `nix` stub on `$PATH` that logs its full argv (one
+    argument per line, for the quoting reason above) and exits
     0. Assert the stub was invoked exactly once, that its logged argv
-    is byte-identical to the command line the record reports, and that
+    matches the command line the record reports argument for argument,
+    and that
     the outcome is `applied-validated`. Then the same with a stub that
     exits 1 and prints 200 lines: outcome `validation-failed`,
     `outcome: completed`, the body carries the **last 40** of those
@@ -1719,7 +1845,9 @@ mechanism assertion, and `castle validate` exiting 0.
     background `sleep` it spawns, to model a builder) is dead
     afterwards — the process-group kill proved rather than assumed.
 17. **On, no `nix` on `$PATH` at all.** `applied-unvalidated`, body
-    saying so, no crash.
+    saying so, no crash. Two binaries are borrowed onto the otherwise
+    empty `$PATH` and only two: `git`, which this task needs, and the
+    interpreter `castle`'s own `/usr/bin/env` shebang resolves.
 
 *Validator coverage:*
 
@@ -1747,12 +1875,31 @@ anything, and if that ever changes, that helper is what says so.
 
 Extended only as far as the modal surfaces changed, per the
 established "one representative path, not the matrix" discipline: the
-existing end-to-end approve path asserts the new boundary statement
+existing end-to-end approve path asserts the new authority wording
 reaches a real compositor, and the status line afterwards reads
-`approved — waiting to be applied`. **The VM does not run an apply**:
+`approved — waiting to be applied`.
+
+**One correction to which sentence gets asserted there.** The brief
+said "the boundary statement"; the test asserts the **confirmation**
+instead, and the reason is the existing code's own. That path
+deliberately waits for the diff — the last thing printed — because the
+boundary statement may already have scrolled past, and the file says so
+in a comment: "That the boundary statement is printed at all, and
+printed before the keys, is asserted by
+`test/agent-loop/modal-headless-test.sh`, where it can be checked
+against a transcript instead of against pixels." The confirmation is
+printed last and is still on screen, so it is the surface a compositor
+can actually be asked about. Both new wordings are asserted in full,
+against transcripts, in the headless harness. The status label is read
+as text from `castle-modal --mode status` rather than off the screen,
+for the same reason: it is a fold's output.
+
+**The VM does not run an apply**:
 `castle.agent.apply.enable` stays at its default there, so the
 existing "neither checkout moved / no `nixos-rebuild` ran" assertions
-keep holding unchanged and keep meaning what they mean.
+keep holding unchanged and keep meaning what they mean — and one
+assertion is added to say why they still do: no `castle-apply` unit
+file exists on that machine at all.
 
 ### `nix flake check`
 
@@ -1762,6 +1909,16 @@ must evaluate with every new option at its default, and the two
 assertions must be provably reachable (evaluate a scratch
 configuration with `apply.enable = true` and `stateDir = null` and
 confirm it fails with the intended message).
+
+Both halves are now permanent rather than one-off, per the file list's
+`flake.nix` entry: `nixosConfigurations.example` asserts the units are
+absent at defaults and `nixosConfigurations.example-apply` asserts they
+carry what they need when the option is on, so `nix flake check` proves
+the wiring on every run. The two assertions' *reachability* stays a
+one-off check, because a configuration that fails to evaluate cannot be
+a flake output — it is confirmed by temporarily forcing `stateDir` and
+`repo.private` to null in `example-apply` and watching both messages
+appear, then reverting.
 
 ### Genuinely needs human hands
 
