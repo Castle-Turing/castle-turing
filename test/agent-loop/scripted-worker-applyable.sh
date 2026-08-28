@@ -135,6 +135,28 @@ if packet_has "APPLYABLE-NEWFILE-"; then
   exit 0
 fi
 
+if packet_has "APPLYABLE-ODDNAMES"; then
+  # Two file names git's own pathspec and encoding rules have to be
+  # asked about rather than assumed: one carrying a byte that is not
+  # valid UTF-8, and one carrying a `*`, which is a glob to a pathspec
+  # that has not been marked literal. The harness builds both names —
+  # once, with printf, so this fixture's source stays plain ASCII — and
+  # passes them in, the same discipline
+  # scripted-worker-byte-fidelity.sh uses for its own byte sequences.
+  : "${CASTLE_APPLYABLE_ODD_NAMES:?scripted-worker-applyable.sh: CASTLE_APPLYABLE_ODD_NAMES must be set}"
+  say "proposing two files whose names git has to be asked about"
+  : > "$SCRATCH/nothing"
+  while IFS= read -r odd; do
+    [ -n "$odd" ] || continue
+    printf '# Created by the applyable fixture tenant, harness fixture only.\n' \
+      > "$SCRATCH/odd"
+    emit_diff "$odd" "$SCRATCH/nothing" "$SCRATCH/odd"
+    expect "$odd" "$SCRATCH/odd"
+  done < "$CASTLE_APPLYABLE_ODD_NAMES"
+  printf 'private\n' > "$CASTLE_TARGET_FILE"
+  exit 0
+fi
+
 if packet_has "APPLYABLE-DELETE"; then
   say "proposing that a file stop existing"
   # A plain `diff -u` against /dev/null only truncates a file to empty —
