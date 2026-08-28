@@ -343,6 +343,54 @@ PROPOSAL_QUESTION_BODY = (
 # decoration now, not structure: nothing keys on it.
 DIFF_BOUNDARY_FIELD = "diff-boundary"
 
+# The field that says this proposed change, if approved, carries
+# authority to APPLY it (docs/tasks/0026-apply-validate.md §A).
+# Stamped by `_file_proposal_question` on every proposal it files from
+# this task onward, and by nothing else.
+#
+# It exists because the sentence a resident read while deciding is the
+# scope of what they decided. Every proposal filed before this task was
+# decided under a screen saying in capitals that approving edits
+# nothing, so approving one authorized a record and nothing more, and
+# no later change to that wording reaches backwards. Absence is
+# therefore not "unknown": it is the positive fact that this proposal
+# was offered under the older, narrower statement.
+#
+# Drawing the line by comparing timestamps against the commit that
+# changed the wording would be wrong twice over: record ids are
+# one-second resolution
+# (docs/backlog/record-ids-are-only-second-resolution.md), and a
+# restored or synced journal has no defensible relationship between its
+# stamps and this repo's history. The field travels with the record
+# that was shown.
+#
+# Literal "true", the only spelling, following BLOCKING_FIELD's
+# reasoning exactly: absence means no, an unrecognised value means no,
+# and `cmd_validate` names any other spelling rather than letting it
+# sit there looking meaningful.
+AUTHORIZES_APPLY_FIELD = "authorizes-apply"
+
+# What happened to the CHANGE, on a result written by the applier seat
+# (docs/tasks/0026-apply-validate.md §F). Distinct from `outcome`,
+# which stays exactly what agent/README.md reserves it as: an
+# observation about the writer's own run. The two compose — a
+# validation killed at its bound is `outcome: timeout` with
+# `apply-outcome: validation-failed`, and nothing had to widen a
+# vocabulary that four surfaces branch on to say it.
+APPLY_OUTCOME_FIELD = "apply-outcome"
+
+APPLY_OUTCOME_VALUES = (
+    "applied-validated",
+    "applied-unvalidated",
+    "applied-uncommitted",
+    "validation-failed",
+    "refused-target-mechanism",
+    "refused-artifact-changed",
+    "refused-no-patch",
+    "refused-patch-stale",
+    "refused-tree-dirty",
+)
+
 # The field name a proposal's sidecar digest is stamped under
 # (docs/tasks/0033-byte-exact-proposal.md). Distinct from
 # PROPOSAL_SHA256_FIELD by what each proves: proposal-sha256 is
@@ -414,6 +462,13 @@ FIELD_ORDER = (
     "seat",
     "created",
     "outcome",
+    # Result-only, and beside `outcome` for the same presentation-only
+    # reason, because it is the other half of the same sentence on the
+    # one record type that carries both: `outcome` says what happened
+    # to the applier's own run, `apply-outcome` says what happened to
+    # the change it was spending an authorization on
+    # (docs/tasks/0026-apply-validate.md §F).
+    "apply-outcome",
     "target",
     # Result-only, and beside `target` for the same presentation-only
     # reason: it is machine-readable structure about the body below,
@@ -437,6 +492,12 @@ FIELD_ORDER = (
     # about resumption depends on `blocking` sitting here rather than
     # falling out in the sorted remainder the way `channel` does.
     "blocking",
+    # Question-only, beside `blocking` and by the same presentation-only
+    # rule: both are machine-readable facts the question's own writer
+    # stated about what filing it means, and a reader skimming a
+    # proposal should meet them before the prose
+    # (docs/tasks/0026-apply-validate.md §A).
+    "authorizes-apply",
     # Answer-only and question-or-answer respectively
     # (docs/tasks/0025-approval.md §A), placed together and for the
     # same presentation-only reason as everything above them: on the
@@ -3472,6 +3533,17 @@ def _file_proposal_question(request: Record, result_id: str, target: str) -> Non
     journal is append-only in spirit" becomes something a machine can
     check at the one moment it will matter — 0026 reading these bytes
     to mutate a configuration.
+
+    **`authorizes-apply: true`, unconditionally, on every proposal this
+    files from docs/tasks/0026-apply-validate.md onward.** The applier
+    honours only a decision whose question carries it, and the field is
+    stamped here rather than inferred anywhere because the sentence a
+    resident read while deciding is the scope of what they decided: a
+    proposal filed before this task was offered under a review screen
+    saying in capitals that approving edits nothing, and no later
+    change to that wording reaches backwards. Absence is the positive
+    fact that this was such a proposal, which is why there is no
+    migration and can never be one — see AUTHORIZES_APPLY_FIELD.
     """
     try:
         result_bytes = (journal_dir() / f"{result_id}.md").read_bytes()
@@ -3482,7 +3554,10 @@ def _file_proposal_question(request: Record, result_id: str, target: str) -> Non
             seat="worker",
             refs=[request.id, result_id],
             body=PROPOSAL_QUESTION_BODY.format(target=target),
-            extra={PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest()},
+            extra={
+                PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest(),
+                AUTHORIZES_APPLY_FIELD: "true",
+            },
         )
     except (OSError, RecordError) as exc:
         # `RecordError` as well as `OSError`, which is wider than the
@@ -5923,6 +5998,56 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "other value."
             )
 
+        # `authorizes-apply` (question-only,
+        # docs/tasks/0026-apply-validate.md §I), word for word
+        # `blocking`'s two checks above and for word-for-word the same
+        # reasons: type-scoped because nothing reads it off any other
+        # record, and strict about the one spelling because the
+        # applier's fold is strict in the other direction. A
+        # hand-written `authorizes-apply: false` is inert rather than
+        # dangerous — what it is not is *visible*, and this check is
+        # what names it. No `cmd_record` writer guard is paired with it,
+        # unlike `--blocking`'s, for the simple reason that
+        # `cmd_record` has no generic field flag and so cannot write
+        # this field at all.
+        authorizes_raw = rec.fields.get(AUTHORIZES_APPLY_FIELD)
+        if authorizes_raw is not None and rtype != "question":
+            errors.append(
+                f"{path.name}: '{AUTHORIZES_APPLY_FIELD}' is a question-record field "
+                f"and this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+        elif authorizes_raw is not None and authorizes_raw != "true":
+            errors.append(
+                f"{path.name}: '{AUTHORIZES_APPLY_FIELD}' ({authorizes_raw!r}) is "
+                "present but is not the literal 'true' — the only spelling "
+                "`_file_proposal_question` writes. Absent means this proposal was "
+                "offered under the older statement that approving applies nothing; "
+                "there is no other value."
+            )
+
+        # `apply-outcome` (result-only, docs/tasks/0026-apply-validate.md
+        # §I), the same "well-formed if present, never required"
+        # treatment as everything above it. A membership test rather
+        # than `target`'s open non-blank check, because unlike `target`
+        # this vocabulary is closed by construction: exactly one writer
+        # exists (`_apply_one`) and every surface that reads it
+        # branches on the value.
+        apply_outcome_raw = rec.fields.get(APPLY_OUTCOME_FIELD)
+        if apply_outcome_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{APPLY_OUTCOME_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+        elif apply_outcome_raw is not None and apply_outcome_raw not in APPLY_OUTCOME_VALUES:
+            errors.append(
+                f"{path.name}: '{APPLY_OUTCOME_FIELD}' ({apply_outcome_raw!r}) is not "
+                f"one of {', '.join(APPLY_OUTCOME_VALUES)}"
+            )
+
         # `target` (result-only, docs/tasks/0024 §6), same append-only
         # treatment again: checked when present, never required, so no
         # result written before this field existed is failed
@@ -6221,6 +6346,37 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 )
             else:
                 decided[first] = rec.id
+
+    # The cross-record half of docs/tasks/0026-apply-validate.md §I, and
+    # it is deliberately narrower than "at most one apply per
+    # authorization." That bound is structural in the fold
+    # (`_eligible_approvals` skips any answer some result already
+    # names), but a hand-run `castle apply <answer-id>` is deliberately
+    # allowed to retry — it is the retry path, exactly as `castle work`
+    # is for an errand — so two apply results naming one answer are a
+    # legitimate journal and not an error.
+    #
+    # What is checked instead is the one shape nobody should be able to
+    # hand-write into a journal and have validate call clean: an apply
+    # result claiming an authorization that does not exist. `refs[0]` is
+    # the answer the apply spent, so it has to resolve to an `answer`
+    # carrying `decision: approve`.
+    for rec in sorted(records.values(), key=lambda r: r.id):
+        if rec.type != "result" or rec.fields.get(APPLY_OUTCOME_FIELD) is None:
+            continue
+        authorization = records.get(rec.refs[0]) if rec.refs else None
+        if (
+            authorization is None
+            or authorization.type != "answer"
+            or authorization.fields.get("decision", "").strip() != "approve"
+        ):
+            errors.append(
+                f"{rec.path.name}: carries '{APPLY_OUTCOME_FIELD}' but its first ref "
+                "is not an answer approving a change. An apply spends exactly one "
+                "authorization and names it first; this one names "
+                f"{rec.refs[0] if rec.refs else 'nothing'} "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
 
     # Unconditionally, and outside the pass/fail branch below: an unsafe
     # state layout is a fact about the environment, not a malformed
