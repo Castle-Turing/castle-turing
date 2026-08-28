@@ -1403,14 +1403,20 @@ nothing was activated.
 
 **The resident's git hooks do not run on that commit**, via
 `--no-verify` and `core.hooksPath=/dev/null` (both, since the first
-covers only `pre-commit` and `commit-msg`). A formatting `pre-commit`
+covers only `pre-commit` and `commit-msg`), and neither do their
+user-level git attributes (`core.attributesFile=/dev/null`). A formatting `pre-commit`
 would otherwise rewrite the very bytes the commit message records a
 digest for, and a `post-commit` can commit again — making `rev-parse
 HEAD` name a commit the applier never made, with `git revert <sha>`
 printed beside it. Their hooks still run on commits they make
-themselves. Afterwards the landing is verified rather than assumed:
-one commit, parented at the pre-apply head, nothing left uncommitted
-under the patch's paths. If it is not, the record is `outcome: failed`
+themselves. An in-repo `.gitattributes` `clean` filter cannot be
+switched off the same way — it is the resident's own tracked content,
+and an approved change may touch it — so it is *detected* instead:
+afterwards the landing is verified rather than assumed, and that check
+includes reading each committed blob back and comparing it byte for
+byte against the file on disk. One commit, parented at the pre-apply
+head, nothing left uncommitted under the patch's paths, and the commit
+holding the bytes that were actually applied. If it is not, the record is `outcome: failed`
 with no `apply-outcome` and no sha — naming an unverified commit beside
 a revert command is worse than naming none.
 

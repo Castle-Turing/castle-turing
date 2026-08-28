@@ -6315,7 +6315,7 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
         return None, "`git` is not on this session's PATH"
     try:
         probe = subprocess.run(
-            [git, "-C", root, *NO_HOOKS_ARGS, "apply", "--numstat", "-z", "--", str(sidecar)],
+            [git, "-C", root, *GIT_ISOLATION_ARGS, "apply", "--numstat", "-z", "--", str(sidecar)],
             capture_output=True,
             timeout=CHECKOUT_PROBE_SECONDS,
             env=_git_stripped_env(),
@@ -6373,7 +6373,7 @@ def _tracked_subset(root: str, paths: list[str]) -> tuple[set[str] | None, str]:
         return None, "`git` is not on this session's PATH"
     try:
         probe = subprocess.run(
-            [git, "-C", root, *NO_HOOKS_ARGS, "ls-files", "-z", "--", *_literal(paths)],
+            [git, "-C", root, *GIT_ISOLATION_ARGS, "ls-files", "-z", "--", *_literal(paths)],
             capture_output=True,
             timeout=CHECKOUT_PROBE_SECONDS,
             env=_git_stripped_env(),
@@ -6485,7 +6485,7 @@ def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
             # newline in it would otherwise split one line into two and
             # inflate the count it reports.
             [
-                git, "-C", root, *NO_HOOKS_ARGS,
+                git, "-C", root, *GIT_ISOLATION_ARGS,
                 "status", "--porcelain", "-z", "--", *_literal(paths),
             ],
             capture_output=True,
@@ -6557,7 +6557,31 @@ APPLY_GIT_SECONDS = 120
 #
 # None of this touches how the resident's own commits behave. Their
 # hooks are their policy for their own work, and they still run on it.
-NO_HOOKS_ARGS = ["-c", "core.hooksPath=/dev/null"]
+# And `core.attributesFile`, for the same class of reason one level
+# over. A `.gitattributes` clean filter runs at `add`/`commit` even with
+# hooks disabled, and a clean/smudge pair can leave `git status`
+# reporting a clean tree while the committed blob differs from the
+# working-tree bytes — verified: with an ordinary
+# `clean = sed s/MARKER:/MARKER:FILTERED/`, the parent, the commit count
+# and the cleanliness check all passed and the commit held bytes nobody
+# approved.
+#
+# **This closes half of it and cannot close the other half.** Git reads
+# attributes from three places: the user's `~/.config/git/attributes`
+# and the `core.attributesFile` it points at, `.git/info/attributes`,
+# and `.gitattributes` files *inside the tree*. The first is switched
+# off here outright. The last cannot be — it is tracked resident
+# content, and the applier reading a resident's own repository has no
+# standing to decide their `.gitattributes` does not apply to it; that
+# file may be the very thing an approved change touches. So the in-repo
+# half is **detected** rather than prevented: `_verify_single_commit`
+# reads the committed blob back and compares it to the bytes on disk.
+GIT_ISOLATION_ARGS = [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
+]
 
 
 def _run_git(
@@ -6568,7 +6592,8 @@ def _run_git(
     timeout: int = APPLY_GIT_SECONDS,
 ):
     """One `git` in the resident's checkout, with `GIT_*` stripped and
-    the resident's hooks disabled (see `NO_HOOKS_ARGS`).
+    the resident's hooks and user-level git attributes disabled (see
+    `GIT_ISOLATION_ARGS`).
 
     `config` is per-invocation `-c key=value` settings. A parameter
     rather than something the caller splices into `args`, so `args[0]`
@@ -6601,7 +6626,7 @@ def _run_git(
     try:
         return (
             subprocess.run(
-                [git, "-C", root, *NO_HOOKS_ARGS, *settings, *args],
+                [git, "-C", root, *GIT_ISOLATION_ARGS, *settings, *args],
                 capture_output=True,
                 text=True,
                 errors="replace",
@@ -6614,6 +6639,41 @@ def _run_git(
         return None, f"`git {args[0]}` did not finish within {timeout}s"
     except OSError as exc:
         return None, f"`git {args[0]}` could not be run there ({exc})"
+
+
+def _blob_at_head(root: str, path: str) -> tuple[bool | None, bytes, str]:
+    """`(present, bytes, why)` for `path` in the commit at `HEAD`.
+
+    `present` is None when git could not be asked at all, False when the
+    commit does not contain the path, True with the blob's exact bytes
+    otherwise.
+
+    Its own subprocess rather than `_run_git`, for one reason: this
+    returns file content, and `_run_git` decodes with
+    `errors="replace"`, which would corrupt every byte a comparison
+    depends on. `cat-file blob HEAD:<path>` takes an object name and not
+    a pathspec, so there is no globbing to guard against here.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, b"", "`git` is not on this session's PATH"
+    try:
+        probe = subprocess.run(
+            [git, "-C", root, *GIT_ISOLATION_ARGS, "cat-file", "blob", f"HEAD:{path}"],
+            capture_output=True,
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=_git_stripped_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, b"", f"`git cat-file` could not be run there ({exc})"
+    if probe.returncode != 0:
+        # Absent from the tree and "git broke" are the same exit code
+        # here, which is tolerable precisely because of what the caller
+        # does with it: for a path the change deleted, absent is the
+        # expected answer, and for one it wrote, a comparison against
+        # nothing fails closed.
+        return False, b"", (probe.stderr or b"").decode("utf-8", "replace").strip()
+    return True, probe.stdout or b"", ""
 
 
 def _verify_single_commit(
@@ -6692,6 +6752,62 @@ def _verify_single_commit(
             f"the files it touched are not clean afterwards ({dirty}), so part of "
             "the change is not in that commit"
         )
+
+    # **And the fourth question, which the three above cannot answer:
+    # does the commit actually hold the bytes that were verified?** A
+    # `.gitattributes` clean filter runs at commit even with hooks
+    # disabled, and a clean/smudge pair leaves `git status` reporting a
+    # clean tree while the committed blob differs — verified by running
+    # it: parent, count and cleanliness all passed over a commit
+    # containing bytes nobody approved, stamped with a digest asserting
+    # otherwise. `core.attributesFile=/dev/null` closes the user-level
+    # half; the in-repo half is the resident's own tracked content and
+    # cannot be switched off on their behalf, so it is detected here
+    # (Codex review on this PR, finding 2).
+    #
+    # Read back and compared byte for byte, which is the only check that
+    # is about the thing the authorization was actually for.
+    for path in paths:
+        on_disk = pathlib.Path(root) / path
+        present, blob, why = _blob_at_head(root, path)
+        if present is None:
+            return "", (
+                "whether the commit holds the bytes that were verified could not be "
+                f"established ({why})"
+            )
+        # A path the change removed: the right answer is that the commit
+        # does not contain it. `lexists`, not `exists`, so a dangling
+        # symlink is judged as the link it is rather than as absent.
+        if not os.path.lexists(on_disk):
+            if present:
+                return "", (
+                    f"the commit still contains {_displayable(path)}, which the change "
+                    "removed"
+                )
+            continue
+        if not present:
+            return "", f"the commit does not contain {_displayable(path)}"
+        # git stores a symlink's target as its blob, so that is what a
+        # symlink compares against — reading the file would read
+        # whatever it points at.
+        try:
+            actual = (
+                os.fsencode(os.readlink(on_disk))
+                if os.path.islink(on_disk)
+                else on_disk.read_bytes()
+            )
+        except OSError as exc:
+            return "", (
+                f"{_displayable(path)} could not be read back to compare against the "
+                f"commit ({exc})"
+            )
+        if actual != blob:
+            return "", (
+                f"the committed content of {_displayable(path)} is not the bytes that "
+                "were applied and verified — a content filter (a `.gitattributes` "
+                "`clean` filter in that repository) is the likeliest cause, and this "
+                "will not report a commit as the exact approved change when it is not"
+            )
     return commit_sha, ""
 
 
@@ -7475,7 +7591,7 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     # the resident's hooks are their policy for their own commits, and a
     # formatting `pre-commit` rewriting the bytes this record just
     # verified a digest for would break the chain the whole design rides
-    # on. See `NO_HOOKS_ARGS`.
+    # on. See `GIT_ISOLATION_ARGS`.
     staged, staged_fault = _run_git(root, ["add", "-N", "--", *_literal(paths)])
     if staged is None or staged.returncode != 0:
         committed, committed_fault = staged, staged_fault

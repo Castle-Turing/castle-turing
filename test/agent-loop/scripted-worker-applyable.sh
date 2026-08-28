@@ -135,6 +135,13 @@ if packet_has "APPLYABLE-NEWFILE-"; then
   exit 0
 fi
 
+if packet_has "APPLYABLE-FILTERED"; then
+  say "proposing a change to a file the repository runs a content filter over"
+  rewrite_marker "filtered.nix" "filteredchange"
+  printf 'private\n' > "$CASTLE_TARGET_FILE"
+  exit 0
+fi
+
 if packet_has "APPLYABLE-ODDNAMES"; then
   # Two file names git's own pathspec and encoding rules have to be
   # asked about rather than assumed: one carrying a byte that is not

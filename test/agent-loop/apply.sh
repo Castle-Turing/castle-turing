@@ -487,6 +487,88 @@ assert_private_untouched "after the hook control"
 assert_mechanism_untouched "after the hook scenarios"
 
 # ---------------------------------------------------------------------
+log "a content filter that rewrites the commit is caught, not reported as the approved change"
+# ---------------------------------------------------------------------
+# A `.gitattributes` clean filter runs at commit even with hooks
+# disabled, and a clean/smudge pair leaves `git status` reporting a
+# clean tree while the committed blob differs from the bytes that were
+# applied. Verified before the fix: the parent check, the commit count
+# and the cleanliness check all passed over a commit containing bytes
+# nobody approved — which would then have been stamped `apply-commit`
+# and described by a message asserting the patch's digest.
+#
+# `core.attributesFile=/dev/null` closes the user-level half outright.
+# This half cannot be closed the same way: `.gitattributes` is the
+# resident's own tracked content, and an approved change may legitimately
+# touch it. So it is detected.
+FILTER_HEAD_BEFORE="$PRIVATE_HEAD"
+# An ordinary formatter-shaped filter: rewrites on the way in, passes
+# through on the way out. Nothing adversarial.
+#
+# Configured BEFORE the fixture file is committed, deliberately. With
+# the filter added afterwards, the index would hold unfiltered bytes and
+# `git status` would report the file as modified forever — the apply
+# would refuse `refused-tree-dirty` and never reach the commit this
+# scenario is about. Committing under the filter is also what a
+# resident's repository actually looks like.
+#
+# **And it rewrites only what the change INTRODUCES, which is what makes
+# this the hazard rather than a self-limiting case.** `git apply` matches
+# a patch in "clean" space, so a filter that also transforms the
+# context lines makes the patch simply not apply — refused honestly as
+# `refused-patch-stale`, no commit, nothing to catch. The dangerous
+# filter is the one that leaves the preimage alone: the patch applies,
+# `git status` reports clean afterwards (index and clean(worktree) agree),
+# the parent and commit count are right, and only reading the blob back
+# shows that the committed bytes are not the approved ones.
+# No space in the sed script: git splits a filter command on
+# whitespace, so a quoted expression would need quoting rules this
+# fixture has no reason to carry.
+git -C "$PRIVATE" config filter.rewriter.clean "sed s/filteredchange/FILTERED-filteredchange/"
+git -C "$PRIVATE" config filter.rewriter.smudge cat
+printf '# Synthetic file this repository filters, harness fixture only.\n# APPLYABLE-MARKER: start\n' \
+  > "$PRIVATE/filtered.nix"
+printf 'filtered.nix filter=rewriter\n' > "$PRIVATE/.gitattributes"
+git -C "$PRIVATE" add -A
+git -C "$PRIVATE" commit -q -m "fixture: a file this repository runs a content filter over"
+PRIVATE_HEAD="$(git -C "$PRIVATE" rev-parse HEAD)"
+[ -z "$(git -C "$PRIVATE" status --porcelain)" ] \
+  || fail "the filtered fixture is dirty before the scenario starts: $(git -C "$PRIVATE" status --porcelain)"
+read -r REQ_FL R_FL Q_FL A_FL <<<"$(new_approval APPLYABLE-FILTERED)"
+"$CASTLE" apply "$A_FL" >/dev/null 2>&1 \
+  && fail "an apply whose commit was rewritten by a content filter reported success"
+AP_FL="$(newest_apply_result_for "$A_FL")"
+grep -q '^outcome: failed$' "$AP_FL" \
+  || fail "a rewritten commit is not recorded as a failed run: $(field_of "$AP_FL" outcome)"
+grep -q '^apply-outcome:' "$AP_FL" \
+  && fail "a rewritten commit claimed something about the change: $(field_of "$AP_FL" apply-outcome)"
+grep -q '^apply-commit:' "$AP_FL" \
+  && fail "a commit holding bytes nobody approved was stamped as the approved change"
+grep -q 'filtered.nix' "$AP_FL" \
+  || fail "the record does not name the file whose bytes moved: $(cat "$AP_FL")"
+grep -q 'content filter' "$AP_FL" \
+  || fail "the record does not name the likely cause: $(cat "$AP_FL")"
+log "  -- and the control: git's own three checks all pass over that same commit"
+# Without this the assertion above is satisfied by any check that
+# happened to fail. The commit really did land, with the right parent
+# and a clean tree — which is exactly why nothing before this batch
+# could see it.
+[ "$(git -C "$PRIVATE" rev-parse 'HEAD^')" = "$PRIVATE_HEAD" ] \
+  || fail "the filtered commit did not land with the expected parent, so this tests the wrong thing"
+[ -z "$(git -C "$PRIVATE" status --porcelain)" ] \
+  || fail "the filtered commit left a dirty tree, so the cleanliness check would have caught it anyway"
+git -C "$PRIVATE" cat-file blob HEAD:filtered.nix | grep -q 'FILTERED' \
+  || fail "the fixture filter did not actually rewrite the commit, so this proves nothing"
+# Put the fixture back: drop the bad commit and the filter with it.
+git -C "$PRIVATE" config --unset filter.rewriter.clean
+git -C "$PRIVATE" config --unset filter.rewriter.smudge
+git -C "$PRIVATE" reset -q --hard "$FILTER_HEAD_BEFORE"
+PRIVATE_HEAD="$FILTER_HEAD_BEFORE"
+assert_private_untouched "after the content-filter scenario"
+assert_mechanism_untouched "after the content-filter scenario"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the content-filter scenario"
+
+# ---------------------------------------------------------------------
 log "a crash between changing the checkout and writing the record does not become a lie"
 # ---------------------------------------------------------------------
 # The window: `git apply` (or the commit) has run and

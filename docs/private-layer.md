@@ -1098,7 +1098,18 @@ commands Castle runs, and they still run on every commit you make
 yourself. This is not tidiness: the commit message records the digest
 of the exact bytes you approved, and a formatting hook that rewrites
 them would leave that record asserting a digest for content it no
-longer describes. Afterwards it checks what actually landed — one
+longer describes.
+
+**A `.gitattributes` content filter is a different matter, and it is
+checked rather than switched off.** A `clean` filter in your repository
+transforms content on its way into a commit, and it can do that while
+`git status` still reports a clean tree — so nothing about the commit
+looks wrong. Castle cannot disable that on your behalf: it is your own
+tracked configuration, and a change you approve may well be *to* it. So
+after committing, it reads each file back out of the commit and compares
+it byte for byte with what is on disk. If they differ, it says so, names
+the file, and stamps no commit id — rather than reporting a commit as
+the exact change you approved when it is not. Afterwards it checks what actually landed — one
 commit, parented where it started, nothing left uncommitted — and if
 the repository is not in that state it says so and names **no** commit
 sha, rather than printing a `git revert` for a commit it cannot vouch

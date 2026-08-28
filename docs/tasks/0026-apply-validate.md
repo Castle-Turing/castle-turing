@@ -774,11 +774,43 @@ repository even is.
   resident's hooks still run on the commits they make themselves.
 - **And what landed is verified, not assumed.** After the commit
   reports success: `HEAD`'s parent is where this started, exactly one
-  commit separates them, and the patch's paths are clean. Only then is
+  commit separates them, the patch's paths are clean, and — the fourth
+  question, which the first three cannot answer — **the committed blob
+  for each path is byte-identical to the file on disk**. Only then is
   the sha taken and printed. If any of the three fails the record is
   `outcome: failed` with no `apply-outcome` and **no sha at all** — a
   record naming an unverified commit beside a `git revert` is worse than
   one naming none.
+- **A content filter is detected, because it cannot be prevented.** A
+  `.gitattributes` `clean` filter runs at `add`/`commit` even with hooks
+  disabled, and a `clean`/`smudge` pair leaves `git status` reporting a
+  clean tree while the committed blob differs from the bytes that were
+  applied — so the three checks above all pass over a commit holding
+  content nobody approved, which would then be stamped `apply-commit`
+  under a message asserting the patch's digest. Verified by running it.
+
+  `core.attributesFile=/dev/null` joins `core.hooksPath` in
+  `GIT_ISOLATION_ARGS` and closes the user-level half outright. The
+  in-repo half **cannot be closed the same way and this brief does not
+  pretend otherwise**: `.gitattributes` is the resident's own tracked
+  content, an approved change may legitimately touch it, and an applier
+  reading their repository has no standing to decide their configuration
+  does not apply to it. So it is caught rather than suppressed, by
+  reading the blob back.
+
+  Note the shape that is *not* the hazard, because it explains why the
+  harness fixture looks the way it does: `git apply` matches a patch in
+  "clean" space, so a filter that also transforms the patch's **context**
+  lines makes the patch simply not apply — refused honestly as
+  `refused-patch-stale`, with no commit to catch. The dangerous filter is
+  the one that transforms only what the change *introduces*.
+
+  **The limit, stated.** What the applier guarantees is that the
+  committed bytes equal the working-tree bytes it verified. A `smudge`
+  filter that transforms on the way *out* is the resident's own
+  configuration acting on their own future checkouts, and is out of
+  scope — nothing here reads a file through it, and nothing here could
+  meaningfully object to it.
 - **`-c user.name`/`-c user.email` rather than writing config.**
   Nothing this task does may modify the resident's `.git/config`. The
   identity is `Castle applier <applier@castle.invalid>` — `.invalid`
@@ -2089,6 +2121,16 @@ mechanism assertion, and `castle validate` exiting 0.
     verbatim against a repaired root and must actually apply the
     change. A label naming a remedy nobody tried is how
     docs/tasks/0015's defect gets reintroduced one surface over.
+
+12b. **A content filter that rewrites the commit.** A `.gitattributes`
+    `clean` filter in the fixture, transforming only the token the
+    change introduces, so the patch still applies and `git status` is
+    still clean afterwards. Assert the apply lands as the
+    verified-landing failure — `outcome: failed`, no `apply-outcome`,
+    **no `apply-commit`** — naming the path and the likely cause; and
+    assert as a control that git's own three checks (parent, count,
+    cleanliness) all pass over that same commit, which is exactly why
+    nothing before this could see it.
 
 13a. **Killed between the mutation and the record**, both sides of the
     window: after `git apply` and after the commit. Driven by a `git`
