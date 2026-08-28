@@ -408,6 +408,12 @@ APPLY_COMMIT_FIELD = "apply-commit"
 APPLY_OUTCOME_VALUES = (
     "applied-validated",
     "applied-unvalidated",
+    # No longer produced by any path, since the commit is built before
+    # anything in the repository moves — there is no window in which the
+    # working tree can carry the change while the repository does not.
+    # Kept in the vocabulary rather than deleted, because the journal is
+    # append-only and a validator must never condemn a record some
+    # writer of this code could have written.
     "applied-uncommitted",
     "validation-failed",
     "refused-target-mechanism",
@@ -6352,91 +6358,6 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
     return paths, ""
 
 
-def _tracked_subset(root: str, paths: list[str]) -> tuple[set[str] | None, str]:
-    """Which of `paths` git already tracks, or `(None, why)`.
-
-    Asked **before** the patch is applied, and it is the only way to
-    tell later which paths the change *created*. The numstat data cannot
-    say: a creation has a zero deleted-line count, and so does appending
-    to an empty file.
-
-    That distinction is not bookkeeping — it decides which recovery
-    command the `applied-uncommitted` record prints, and the two are not
-    interchangeable. Reproduced: after `git add -N`, `git checkout --`
-    on a created path restores it from the intent-to-add's *empty* blob,
-    so the file stays on disk with its contents destroyed while the
-    command reports success (code review on
-    docs/tasks/0026-apply-validate.md, finding 3).
-    """
-    git = shutil.which("git")
-    if git is None:
-        return None, "`git` is not on this session's PATH"
-    try:
-        probe = subprocess.run(
-            [git, "-C", root, *GIT_ISOLATION_ARGS, "ls-files", "-z", "--", *_literal(paths)],
-            capture_output=True,
-            timeout=CHECKOUT_PROBE_SECONDS,
-            env=_git_stripped_env(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, f"`git ls-files` could not be run there ({exc})"
-    if probe.returncode != 0:
-        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
-        return None, detail or f"git exited {probe.returncode}"
-    return {
-        record.decode("utf-8", "surrogateescape")
-        for record in (probe.stdout or b"").split(b"\0")
-        if record
-    }, ""
-
-
-def _recovery_lines(paths: list[str], tracked_before: set[str] | None) -> list[str]:
-    """The commands that put the working tree back, for a change that
-    applied and could not be committed.
-
-    Rendered per path shape, because one command cannot serve both and
-    the generic `git checkout -- .` this used to print was wrong for two
-    of the three shapes at once — reproduced: it truncated a created
-    file to empty and left it on disk, and it left a deletion staged in
-    the index for the resident's next commit to pick up.
-
-    Path-scoped and never `.`, for the same reason the dirty check is:
-    the resident may legitimately have other uncommitted work, and a
-    recovery that reaches beyond the paths this applier touched would
-    destroy it.
-
-    `git reset` first in every case, then the per-shape step: `add -N`
-    put an index entry there, so restoring the working tree without
-    first restoring the index leaves the change half-staged.
-
-    When `tracked_before` is None — git could not be asked before the
-    apply — this says so and prints no command at all, rather than
-    printing the one that might be the destructive half.
-    """
-    if tracked_before is None:
-        return [
-            "Which of those files existed before could not be established, so no "
-            "recovery command is printed here: the two are different commands and "
-            "the wrong one destroys work. `git status` in that repository will show "
-            "you what is there.",
-        ]
-    # shlex.quote so a resident can paste this, and `_displayable` first
-    # so a name that is not valid UTF-8 cannot make this record
-    # unwritable. A name needing that escape has no pasteable spelling
-    # anyway; what the escape buys is that they can see which file.
-    restore = [shlex.quote(_displayable(p)) for p in sorted(paths) if p in tracked_before]
-    remove = [shlex.quote(_displayable(p)) for p in sorted(paths) if p not in tracked_before]
-    lines = [
-        "    cd <your configuration repository>",
-        f"    git reset -q -- {' '.join(shlex.quote(_displayable(p)) for p in sorted(paths))}",
-    ]
-    if restore:
-        lines.append(f"    git checkout -- {' '.join(restore)}")
-    if remove:
-        lines.append(f"    rm -f -- {' '.join(remove)}")
-    return lines
-
-
 def _displayable(value: str) -> str:
     """A path safe to write into a record, a message or a notification.
 
@@ -6455,16 +6376,14 @@ def _displayable(value: str) -> str:
     return value.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
-def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
-    """A one-line summary of the resident's uncommitted work under
+def _dirty_entries(
+    root: str, paths: list[str]
+) -> tuple[list[tuple[str, str]] | None, str]:
+    """`(status-letters, path)` for everything uncommitted under
     `paths`, or `(None, why)` if git could not say.
 
-    **Status letters and a count, never file names.** A private
-    checkout's file names are resident data and this string goes into a
-    durable record that leaves the machine more easily than a journal
-    does (CLAUDE.md's hard rule). The resident's own `git status` tells
-    them which files; this record's job is to say that it did not
-    overwrite their work.
+    Two readers, and they are allowed to see different things — see
+    `_dirty_under` below, which is the one that must not name a file.
 
     **Scoped to the patch's own paths, not repo-wide**, and that is a
     decision rather than an economy. Three documented layouts leave a
@@ -6498,19 +6417,43 @@ def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
         detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
         return None, detail or f"git exited {probe.returncode}"
     records = [record for record in (probe.stdout or b"").split(b"\0") if record]
-    letters: list[str] = []
+    entries: list[tuple[str, str]] = []
     index = 0
     while index < len(records):
         raw = records[index]
-        letters.append(raw[:2].decode("utf-8", "replace").strip() or "??")
+        entries.append(
+            (
+                raw[:2].decode("utf-8", "replace").strip() or "??",
+                raw[3:].decode("utf-8", "surrogateescape"),
+            )
+        )
         # A rename or a copy staged in the index emits its SOURCE path as
         # its own following record, with no status letters on it.
         # Skipping that record is what keeps the count a count of paths
         # rather than of records.
         index += 2 if raw[:1] in (b"R", b"C") else 1
-    if not letters:
+    return entries, ""
+
+
+def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
+    """`_dirty_entries` summarised the way a refusal about the
+    RESIDENT'S OWN work must be: status letters and a count, never file
+    names.
+
+    That distinction is the whole reason there are two functions. A path
+    the approved change touches is one the resident read on the review
+    screen and can be named back to them; a path they happen to be
+    working on is theirs, and this record is durable and leaves the
+    machine more easily than a journal does (CLAUDE.md's hard rule).
+    This is the caller for the second kind.
+    """
+    entries, why = _dirty_entries(root, paths)
+    if entries is None:
+        return None, why
+    if not entries:
         return "", ""
-    return f"{len(letters)} path(s), status {', '.join(sorted(set(letters)))}", ""
+    letters = sorted({letter for letter, _path in entries})
+    return f"{len(entries)} path(s), status {', '.join(letters)}", ""
 
 
 # How long one git command that WRITES the resident's checkout may take.
@@ -6589,6 +6532,7 @@ def _run_git(
     args: list[str],
     *,
     config: list[str] | None = None,
+    env_extra: dict[str, str] | None = None,
     timeout: int = APPLY_GIT_SECONDS,
 ):
     """One `git` in the resident's checkout, with `GIT_*` stripped and
@@ -6623,6 +6567,13 @@ def _run_git(
     if git is None:
         return None, "`git` is not on this session's PATH"
     settings = [item for value in (config or []) for item in ("-c", value)]
+    # `env_extra` exists for exactly one variable — `GIT_INDEX_FILE`,
+    # which is how the commit below is built without touching the
+    # resident's real index. It is added *after* the strip, deliberately:
+    # the strip is about not inheriting whatever the ambient environment
+    # says a repository is, and this is this process saying it.
+    env = _git_stripped_env()
+    env.update(env_extra or {})
     try:
         return (
             subprocess.run(
@@ -6631,7 +6582,7 @@ def _run_git(
                 text=True,
                 errors="replace",
                 timeout=timeout,
-                env=_git_stripped_env(),
+                env=env,
             ),
             "",
         )
@@ -6641,82 +6592,312 @@ def _run_git(
         return None, f"`git {args[0]}` could not be run there ({exc})"
 
 
-def _blob_at_head(root: str, path: str) -> tuple[bool | None, bytes, str]:
-    """`(present, bytes, why)` for `path` in the commit at `HEAD`.
+def _worktree_state(root: str, paths: list[str]) -> dict[str, tuple[str, bytes]]:
+    """What each path looks like on disk right now, in a form two
+    snapshots can be compared by.
 
-    `present` is None when git could not be asked at all, False when the
-    commit does not contain the path, True with the blob's exact bytes
-    otherwise.
+    `("absent", b"")`, `("link", <target>)` or `("file", <bytes>)` — a
+    symlink compares by its target, because that is what it *is*, and
+    reading through it would compare whatever it happens to point at.
+    An unreadable file comes back as `("unreadable", b"")`, which the
+    caller treats as "do not touch this": a path it cannot see is one it
+    must not decide it owns.
+    """
+    state: dict[str, tuple[str, bytes]] = {}
+    for path in paths:
+        target = pathlib.Path(root) / path
+        try:
+            if not os.path.lexists(target):
+                state[path] = ("absent", b"")
+            elif os.path.islink(target):
+                state[path] = ("link", os.fsencode(os.readlink(target)))
+            else:
+                state[path] = ("file", target.read_bytes())
+        except OSError:
+            state[path] = ("unreadable", b"")
+    return state
 
-    Its own subprocess rather than `_run_git`, for one reason: this
-    returns file content, and `_run_git` decodes with
-    `errors="replace"`, which would corrupt every byte a comparison
-    depends on. `cat-file blob HEAD:<path>` takes an object name and not
-    a pathspec, so there is no globbing to guard against here.
+
+def _build_commit(
+    root: str,
+    snapshot: pathlib.Path,
+    head_before: str,
+    message: str,
+) -> tuple[str, str, str]:
+    """Build the commit the approved change produces, without touching
+    the repository. Returns `(sha, failed_stage, detail)`.
+
+    **This is docs/tasks/0026-apply-validate.md §D's landing sequence,
+    and it replaces applying to the working tree and committing from
+    it.** That older sequence had an irreducible race in it: between
+    `git apply` writing the tree and the pathspec commit reading it
+    back, anything at all — the resident, an editor, a formatter on save
+    — could write one of those paths, and the commit then contained
+    *their* bytes, certified under a message asserting the approved
+    patch's digest. Nothing downstream could catch it either, because
+    the committed blob and the working tree agreed: both held the
+    concurrent edit (Codex review on this PR, round 4; reproduced).
+
+    Constructing the commit from `head_before`'s tree plus the verified
+    patch bytes, in a private index, removes the race rather than
+    narrowing it. The content of the commit is a pure function of two
+    things already verified, and the working tree is not one of them.
+    Nothing here mutates anything: the temp index is a temp file, and
+    the objects `write-tree`/`commit-tree` create are unreferenced until
+    the caller moves a ref — which is why a failure at any stage below
+    is a clean refusal with nothing to undo.
+
+    **`git apply --cached` does not run `clean` filters** — established
+    by running it, not by reading — so the tree holds the approved bytes
+    exactly. That is strictly stronger than the blob comparison it
+    replaces: a `.gitattributes` filter can no longer transform the
+    commit at all, rather than being caught after the fact. The cost is
+    stated where a resident meets it: in a repository whose filter would
+    have canonicalised those bytes differently, git reports the file as
+    modified until they decide what they want, and the record says so.
+
+    **Nothing signs these commits, and that is right rather than
+    incidental.** `commit-tree` does not sign, so a resident whose
+    `commit.gpgsign` is on gets an unsigned commit here — as they
+    should. The identity on it is the applier seat, not them, and
+    signing a seat's commit with a resident's key would assert
+    authorship they do not have.
+
+    The stage name comes back so the caller can tell "this patch does
+    not fit that tree" — a fact about the change, and a refusal — from
+    "git would not run" — a fact about the machine.
+    """
+    index_fd, index_path = tempfile.mkstemp(prefix="castle-apply-index-")
+    os.close(index_fd)
+    index_env = {"GIT_INDEX_FILE": index_path}
+    try:
+        seed = ["read-tree", "--empty"] if not head_before else ["read-tree", head_before]
+        for stage, args in (
+            ("read-tree", seed),
+            ("apply", ["apply", "--cached", "--", str(snapshot)]),
+        ):
+            probe, fault = _run_git(root, args, env_extra=index_env)
+            if probe is None:
+                return "", stage, fault
+            if probe.returncode != 0:
+                return "", stage, (probe.stderr or probe.stdout or "").strip()
+
+        probe, fault = _run_git(root, ["write-tree"], env_extra=index_env)
+        if probe is None or probe.returncode != 0:
+            return "", "write-tree", (
+                fault if probe is None else (probe.stderr or "").strip()
+            )
+        tree = (probe.stdout or "").strip()
+        if not tree:
+            return "", "write-tree", "git named no tree"
+
+        # `-p` only when there is a parent: a repository with no commits
+        # yet takes a root commit, which is a legitimate state — a patch
+        # that only creates files applies to a fresh `git init`.
+        commit_args = ["commit-tree", tree]
+        if head_before:
+            commit_args += ["-p", head_before]
+        commit_args += ["-m", message]
+        probe, fault = _run_git(
+            root,
+            commit_args,
+            config=[
+                f"user.name={APPLY_COMMIT_NAME}",
+                f"user.email={APPLY_COMMIT_EMAIL}",
+            ],
+            env_extra=index_env,
+        )
+        if probe is None or probe.returncode != 0:
+            return "", "commit-tree", (
+                fault if probe is None else (probe.stderr or "").strip()
+            )
+        sha = (probe.stdout or "").strip()
+        if not sha:
+            return "", "commit-tree", "git named no commit"
+        return sha, "", ""
+    finally:
+        try:
+            os.unlink(index_path)
+        except OSError:
+            pass
+
+
+def _paths_in_commit(
+    root: str, sha: str, paths: list[str]
+) -> tuple[set[str] | None, str]:
+    """Which of `paths` the commit `sha` contains, or `(None, why)`.
+
+    One `ls-tree` rather than a `cat-file` each, and `-z` for the same
+    reason every other path-reading call here uses it: a name is bytes,
+    and this must hand back exactly what git holds so the sync below can
+    hand it straight back to git.
+
+    Only presence is asked. Content is not compared against anything,
+    and that is a change: the commit is built in a private index from
+    `head_before` plus the verified bytes, so its content is a pure
+    function of two already-verified inputs. Comparing it to a
+    separately-derived post-image would mean re-implementing patch
+    application here — a second implementation of the thing whose whole
+    virtue is that git does it — and comparing it to the working tree is
+    exactly the check the apply-to-commit race defeated.
     """
     git = shutil.which("git")
     if git is None:
-        return None, b"", "`git` is not on this session's PATH"
+        return None, "`git` is not on this session's PATH"
     try:
         probe = subprocess.run(
-            [git, "-C", root, *GIT_ISOLATION_ARGS, "cat-file", "blob", f"HEAD:{path}"],
+            [
+                git, "-C", root, *GIT_ISOLATION_ARGS,
+                "ls-tree", "-r", "-z", "--name-only", sha, "--", *_literal(paths),
+            ],
             capture_output=True,
             timeout=CHECKOUT_PROBE_SECONDS,
             env=_git_stripped_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, b"", f"`git cat-file` could not be run there ({exc})"
+        return None, f"`git ls-tree` could not be run there ({exc})"
     if probe.returncode != 0:
-        # Absent from the tree and "git broke" are the same exit code
-        # here, which is tolerable precisely because of what the caller
-        # does with it: for a path the change deleted, absent is the
-        # expected answer, and for one it wrote, a comparison against
-        # nothing fails closed.
-        return False, b"", (probe.stderr or b"").decode("utf-8", "replace").strip()
-    return True, probe.stdout or b"", ""
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+        return None, detail or f"git exited {probe.returncode}"
+    return {
+        record.decode("utf-8", "surrogateescape")
+        for record in (probe.stdout or b"").split(b"\0")
+        if record
+    }, ""
+
+
+def _sync_worktree(
+    root: str,
+    sha: str,
+    paths: list[str],
+    pre_images: dict[str, tuple[str, bytes]],
+) -> tuple[list[str], list[str]]:
+    """Bring the working tree and the index to the commit just made,
+    without ever writing over somebody else's edit. Returns
+    `(diverged, faults)`.
+
+    The commit is already durable and already correct by the time this
+    runs, which is what makes this step safe to do carefully rather than
+    atomically. For each path, `pre_images` says what was on disk before
+    any of this began:
+
+    * unchanged since then — nobody else touched it — so the file is
+      brought to what the commit says, by `checkout-index`, which
+      applies the repository's own `smudge` filter and restores modes
+      (a symlink comes back a symlink). That is exactly what the
+      resident's own `git checkout` would produce.
+    * changed since then — somebody wrote it during the window — so it
+      is **left exactly as they left it** and named to the caller. Their
+      edit becomes ordinary visible dirt over an approved commit, which
+      `git status` will show them. Nothing is clobbered and nothing is
+      claimed.
+
+    The index is reset to the commit first, for both kinds of path,
+    because otherwise every path would read as staged-for-reversal:
+    nothing has updated the real index, so it still holds
+    `head_before`'s entries while HEAD holds the new commit.
+
+    A residual, stated rather than engineered around: an edit landing
+    between the comparison and the write is still last-writer-wins on
+    that one file. It cannot be closed without holding a lock on a
+    resident's filesystem, and it no longer matters for the thing this
+    task guarantees — the *commit* is the approved change either way.
+    """
+    diverged: list[str] = []
+    faults: list[str] = []
+
+    reset, fault = _run_git(root, ["reset", "-q", "--", *_literal(paths)])
+    if reset is None or reset.returncode != 0:
+        faults.append(
+            "the index could not be brought to the new commit "
+            f"({fault or (reset.stderr or '').strip()}), so `git status` will show "
+            "these files as though the change were being undone until you run "
+            "`git reset`"
+        )
+
+    present, why = _paths_in_commit(root, sha, paths)
+    if present is None:
+        faults.append(
+            f"which files the commit contains could not be established ({why}), so "
+            "the working tree was left alone"
+        )
+        return diverged, faults
+
+    now = _worktree_state(root, paths)
+    to_restore: list[str] = []
+    for path in paths:
+        if now.get(path) != pre_images.get(path):
+            diverged.append(path)
+            continue
+        if path in present:
+            to_restore.append(path)
+        else:
+            try:
+                (pathlib.Path(root) / path).unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                faults.append(f"{_displayable(path)} could not be removed ({exc})")
+
+    if to_restore:
+        checked_out, fault = _run_git(
+            root, ["checkout-index", "-f", "--", *to_restore]
+        )
+        if checked_out is None or checked_out.returncode != 0:
+            faults.append(
+                "the working tree could not be brought to the new commit "
+                f"({fault or (checked_out.stderr or '').strip()}); the commit itself "
+                "is unaffected, and `git checkout HEAD -- .` in that repository "
+                "finishes the job"
+            )
+    return diverged, faults
 
 
 def _verify_single_commit(
-    root: str, head_before: str, paths: list[str]
+    root: str, head_before: str, expected_sha: str
 ) -> tuple[str, str]:
-    """The sha of the one commit the applier just made, or `("", why)`
-    if the repository is not in the state a successful commit implies.
+    """Confirm the repository's head really is the commit this applier
+    built, or `("", why)`.
 
-    Three questions, and each one caught a real shape in review:
+    **Belt, since the construction moved.** These questions used to be
+    the only thing standing between a hook and a false record; now the
+    commit is built in a private index from `head_before` plus the
+    verified patch bytes, and the ref moved under an old-value guard, so
+    "exactly one commit, parented where this started, containing the
+    approved bytes" is true by construction rather than by inspection.
+    What is left for these to catch is the narrow thing construction
+    cannot: something moving the ref again between that guarded update
+    and this read.
 
-    * **Does `HEAD` have the parent we started from?** A `post-commit`
-      hook can commit again, or amend; then `rev-parse HEAD` names a
-      commit the applier did not make and the record's own
-      `git revert <sha>` reverts the *hook's* work while leaving the
-      approved change in place.
-    * **Is it exactly one commit?** Same hazard, counted from the other
-      end, and it catches a hook that committed without moving the
-      parent chain the way the first test expects.
-    * **Is the tree clean under the patch's paths?** A hook that stages
-      or writes leaves the change half-committed, which the record would
-      otherwise report as a clean apply.
+    They are kept because they cost three `rev-parse`-class commands and
+    the alternative is a record asserting a commit id it never looked
+    at, printed beside a `git revert`.
 
-    An empty `head_before` means the repository had no commits at all
-    before this, which is a legitimate state — a patch that only creates
-    files applies to a fresh `git init` perfectly well. There the commit
-    is the root commit, so it has no parent and the count is measured
-    from the beginning of history instead.
-
-    Returns the sha only when all three hold, so a caller cannot print
-    an unverified one beside a `git revert`.
+    **Cleanliness is deliberately no longer among them.** The working
+    tree is synced separately and per path, and there are two ordinary
+    reasons for a path to be dirty afterwards that say nothing bad about
+    the commit: a concurrent edit, which the caller records by name, and
+    a repository whose own `clean` filter would canonicalise the
+    approved bytes differently. Gating on cleanliness would turn either
+    into `outcome: failed` over a commit that is exactly right.
     """
     head_probe, fault = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
     if head_probe is None or head_probe.returncode != 0:
         return "", (
             fault
-            or "the repository has no HEAD after a commit that reported success"
+            or "the repository has no HEAD after the reference was moved to one"
         )
     commit_sha = (head_probe.stdout or "").strip()
     if not commit_sha:
-        return "", "git named no commit after a commit that reported success"
+        return "", "git named no commit after the reference was moved to one"
+    if commit_sha != expected_sha:
+        return "", (
+            "the repository's head is not the commit this built, so something else "
+            "has moved it since"
+        )
 
     if head_before:
-        parent_probe, fault = _run_git(
+        parent_probe, _ = _run_git(
             root, ["rev-parse", f"{commit_sha}^"], timeout=CHECKOUT_PROBE_SECONDS
         )
         parent = (
@@ -6740,74 +6921,6 @@ def _verify_single_commit(
     count = (count_probe.stdout or "").strip()
     if count != "1":
         return "", f"{count} commits landed where exactly one was expected"
-
-    dirty, why_dirty = _dirty_under(root, paths)
-    if dirty is None:
-        return "", (
-            f"whether anything was left uncommitted could not be established "
-            f"({why_dirty})"
-        )
-    if dirty:
-        return "", (
-            f"the files it touched are not clean afterwards ({dirty}), so part of "
-            "the change is not in that commit"
-        )
-
-    # **And the fourth question, which the three above cannot answer:
-    # does the commit actually hold the bytes that were verified?** A
-    # `.gitattributes` clean filter runs at commit even with hooks
-    # disabled, and a clean/smudge pair leaves `git status` reporting a
-    # clean tree while the committed blob differs — verified by running
-    # it: parent, count and cleanliness all passed over a commit
-    # containing bytes nobody approved, stamped with a digest asserting
-    # otherwise. `core.attributesFile=/dev/null` closes the user-level
-    # half; the in-repo half is the resident's own tracked content and
-    # cannot be switched off on their behalf, so it is detected here
-    # (Codex review on this PR, finding 2).
-    #
-    # Read back and compared byte for byte, which is the only check that
-    # is about the thing the authorization was actually for.
-    for path in paths:
-        on_disk = pathlib.Path(root) / path
-        present, blob, why = _blob_at_head(root, path)
-        if present is None:
-            return "", (
-                "whether the commit holds the bytes that were verified could not be "
-                f"established ({why})"
-            )
-        # A path the change removed: the right answer is that the commit
-        # does not contain it. `lexists`, not `exists`, so a dangling
-        # symlink is judged as the link it is rather than as absent.
-        if not os.path.lexists(on_disk):
-            if present:
-                return "", (
-                    f"the commit still contains {_displayable(path)}, which the change "
-                    "removed"
-                )
-            continue
-        if not present:
-            return "", f"the commit does not contain {_displayable(path)}"
-        # git stores a symlink's target as its blob, so that is what a
-        # symlink compares against — reading the file would read
-        # whatever it points at.
-        try:
-            actual = (
-                os.fsencode(os.readlink(on_disk))
-                if os.path.islink(on_disk)
-                else on_disk.read_bytes()
-            )
-        except OSError as exc:
-            return "", (
-                f"{_displayable(path)} could not be read back to compare against the "
-                f"commit ({exc})"
-            )
-        if actual != blob:
-            return "", (
-                f"the committed content of {_displayable(path)} is not the bytes that "
-                "were applied and verified — a content filter (a `.gitattributes` "
-                "`clean` filter in that repository) is the likeliest cause, and this "
-                "will not report a commit as the exact approved change when it is not"
-            )
     return commit_sha, ""
 
 
@@ -7463,23 +7576,28 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
             )
 
         # -----------------------------------------------------------
-        # D — the working tree, then exactly one commit. No push, ever.
+        # D — build the commit, move the ref, then sync the tree.
         # -----------------------------------------------------------
-        # Asked before anything is written, because afterwards it is
-        # unanswerable: which of these paths the change CREATED decides
-        # which recovery command the `applied-uncommitted` record prints,
-        # and the two are not interchangeable. A failure here is carried
-        # rather than fatal — it only costs the recovery wording.
-        tracked_before, _why_tracked = _tracked_subset(root, paths)
+        # **The commit is constructed, not collected**, and that is the
+        # change round 4 of review forced. The old sequence applied the
+        # patch to the working tree and committed from it, which left an
+        # irreducible window: anything writing one of those paths in
+        # between — the resident, an editor, a formatter on save — got
+        # its bytes committed and certified under a message asserting
+        # the approved patch's digest, with the committed blob and the
+        # working tree agreeing because both held the concurrent edit.
+        # Reproduced. See `_build_commit`, which removes the race rather
+        # than narrowing it: the commit's content is a pure function of
+        # `head_before` and the verified patch bytes, and the working
+        # tree is not an input to it at all.
+        #
+        # What is on disk right now, per path, so the sync below can
+        # tell "nobody touched this" from "somebody did".
+        pre_images = _worktree_state(root, paths)
 
         # An empty string is a legitimate answer: a repository with no
         # commits yet has no HEAD, and a patch that only creates files
-        # applies to one perfectly well. `_verify_single_commit` reads
-        # it as "the commit this makes is the root commit."
-        #
-        # Read HERE, before the mutation rather than after it, because
-        # the breadcrumb below has to carry it. `git apply` never moves
-        # HEAD, so the value is the same either way.
+        # applies to one perfectly well.
         head_probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
         head_before = (
             (head_probe.stdout or "").strip()
@@ -7487,32 +7605,51 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
             else ""
         )
 
-        # **The last line before anything in the resident's checkout
-        # moves.** Everything above this point is a read; everything
-        # below can leave the tree or the repository changed. If this
-        # process dies in that window — killed, rebooted, or with
-        # `write_record` itself failing — no result names this answer,
-        # so it stays eligible and the next sweep would attempt it
-        # again: on a mutated tree, which refuses `refused-tree-dirty`,
-        # or on a landed commit, which refuses `refused-patch-stale`.
-        # Either way a durable record would say the applier declined a
-        # change that is in fact sitting in the resident's repository,
-        # possibly committed. Wrong and plausible, which is the worst
-        # kind (Codex review on this PR, finding 1).
-        #
-        # The marker is what the next run reads instead of guessing.
-        _write_in_flight(answer.id, head_before, paths)
-        applied, applied_fault = _run_git(root, ["apply", "--", str(snapshot)])
-        if applied is None:
-            # git was killed or never ran partway through the one step that
-            # writes files, so what is in the tree is genuinely unknown —
-            # `git apply` validates the whole patch before writing any of
-            # it, but nothing here can promise it got that far. Recorded as
-            # `outcome: failed` with NO `apply-outcome`, which is exactly
-            # what that shape means: the applier did not reach a conclusion
-            # about the change. Naming it `applied-uncommitted` would claim
-            # the change IS in the tree, which is the overclaim the whole
-            # vocabulary exists to prevent.
+        # Ids only, and never a path or a word of tenant prose: this
+        # message is durable and leaves the machine more easily than a
+        # journal does. The digest is what makes the commit checkable
+        # against the journal years later with no tooling at all.
+        errand = _find_root_request(records, question)
+        message = "\n".join(
+            [
+                "castle: apply an approved change",
+                "",
+                f"errand:   {errand.id if errand is not None else '(none recorded)'}",
+                f"change:   {question.id}",
+                f"decision: {answer.id}",
+                f"proposal: {proposal.id}",
+                f"patch-sha256: {patch_digest}",
+                "",
+                "Applied by `castle apply` on the resident's recorded approval",
+                "(docs/tasks/0026-apply-validate.md). Nothing was activated: no",
+                "nixos-rebuild, no switch, no new generation.",
+            ]
+        )
+
+        # Nothing below this line has touched the repository yet: a temp
+        # index and some unreferenced objects. A failure here is a clean
+        # refusal with nothing to undo, which is why the patch not
+        # fitting is an ordinary named refusal rather than the alarming
+        # "it passed a dry run and then would not apply" the old
+        # sequence had to write.
+        built_sha, failed_stage, build_detail = _build_commit(
+            root, snapshot, head_before, message
+        )
+        if failed_stage == "apply":
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "It no longer fits the commit it would be made on top of. Nothing "
+                    "was touched: the change is built against your repository's "
+                    "history before anything is written, so a change that does not "
+                    "fit simply is not made. Git's own account:",
+                    "",
+                    "```",
+                    build_detail,
+                    "```",
+                ],
+            )
+        if failed_stage:
             result_id = _write_apply_result(
                 answer,
                 question,
@@ -7521,163 +7658,77 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
                 detail_lines=detail_lines
                 + [
                     "",
-                    f"Castle started making the change and git did not finish: "
-                    f"{applied_fault}. Whether anything reached your files is not "
-                    "something this can honestly say — look at "
-                    "`git status` in your configuration repository before doing "
-                    "anything else. Nothing was committed, and nothing was activated.",
+                    f"Castle could not build the commit for it (`git {failed_stage}`: "
+                    f"{build_detail}). Nothing in your configuration repository was "
+                    "touched — the change is assembled before anything is written, "
+                    "so a failure here changes nothing.",
                 ],
             )
-            raise ApplyEnvironmentFault(applied_fault, result_id)
-        if applied.returncode != 0:
-            # `--check` passed a moment ago, so this is a race or a
-            # filesystem fault rather than a stale patch. Named as the
-            # nearest true thing rather than given a tenth outcome for a
-            # case that has no distinct remedy.
+            raise ApplyEnvironmentFault(build_detail, result_id)
+
+        # **The last line before anything in the resident's repository
+        # moves**, and the window it covers is now only the reference
+        # update and the working-tree sync below. If this process dies
+        # in that window — killed, rebooted, or with `write_record`
+        # itself failing — no result names this answer, so it stays
+        # eligible and the next sweep would attempt it afresh: on a
+        # landed commit, which refuses `refused-patch-stale`. A durable
+        # record saying the applier declined a change that is in fact in
+        # the resident's repository. The marker is what the next run
+        # reads instead of guessing.
+        _write_in_flight(answer.id, head_before, paths)
+
+        # One guarded move. `--old-value` semantics: an empty
+        # `head_before` means "this reference must not exist yet", which
+        # is the root-commit case. Anything else committing here in the
+        # meantime makes this fail loudly rather than splice a commit
+        # onto history that moved.
+        moved, moved_fault = _run_git(
+            root, ["update-ref", "HEAD", built_sha, head_before]
+        )
+        if moved is None or moved.returncode != 0:
             return refuse(
                 "refused-patch-stale",
                 [
-                    "It passed a dry run and then would not apply, which means the "
-                    "repository moved underneath this attempt. Git's own account:",
+                    "Something else committed to your configuration repository while "
+                    "this was being prepared, so the change was not made — it will "
+                    "not splice a commit onto history that moved underneath it. "
+                    "Nothing was touched. Git's own account:",
                     "",
                     "```",
-                    (applied.stderr or applied.stdout or "").strip(),
+                    moved_fault if moved is None else (moved.stderr or "").strip(),
                     "```",
                 ],
             )
+
+        diverged, sync_faults = _sync_worktree(root, built_sha, paths, pre_images)
     finally:
-        # Best-effort: the checkout is already committed to or refused
-        # by the time this runs, and a leftover temp file is a cleanup
-        # nit, never a correctness question.
+        # Best-effort: a leftover temp file is a cleanup nit, never a
+        # correctness question.
         try:
             pathlib.Path(snapshot_path_str).unlink()
         except OSError:
             pass
 
-    # Ids only, and never a path or a word of tenant prose: this message
-    # is durable and leaves the machine more easily than a journal does.
-    # The digest is what makes the commit checkable against the journal
-    # years later with no tooling at all.
-    errand = _find_root_request(records, question)
-    message = "\n".join(
-        [
-            "castle: apply an approved change",
-            "",
-            f"errand:   {errand.id if errand is not None else '(none recorded)'}",
-            f"change:   {question.id}",
-            f"decision: {answer.id}",
-            f"proposal: {proposal.id}",
-            f"patch-sha256: {patch_digest}",
-            "",
-            "Applied by `castle apply` on the resident's recorded approval",
-            "(docs/tasks/0026-apply-validate.md). Nothing was activated: no",
-            "nixos-rebuild, no switch, no new generation.",
-        ]
-    )
-    # `add -N` so a pathspec commit can name a file the patch created at
-    # all; a no-op on paths that were already tracked. Then a pathspec
-    # commit and never a bare one: a bare `git commit` sweeps in whatever
-    # the resident had staged, while `commit -- <paths>` builds a
-    # temporary index from HEAD plus those paths' working-tree content
-    # and leaves the index alone — so the commit contains exactly the
-    # patch's paths and the resident's own staged work is neither
-    # committed nor lost. Verified against a real fixture for all three
-    # shapes (modification, creation, deletion), not read off a manual.
-    #
-    # `-c user.name`/`-c user.email` rather than writing config: nothing
-    # this task does may modify the resident's `.git/config`.
-    #
-    # `--no-verify` and — in `_run_git` itself — `core.hooksPath=/dev/null`:
-    # the resident's hooks are their policy for their own commits, and a
-    # formatting `pre-commit` rewriting the bytes this record just
-    # verified a digest for would break the chain the whole design rides
-    # on. See `GIT_ISOLATION_ARGS`.
-    staged, staged_fault = _run_git(root, ["add", "-N", "--", *_literal(paths)])
-    if staged is None or staged.returncode != 0:
-        committed, committed_fault = staged, staged_fault
-    else:
-        committed, committed_fault = _run_git(
-            root,
-            ["commit", "--no-verify", "-m", message, "--", *_literal(paths)],
-            config=[
-                f"user.name={APPLY_COMMIT_NAME}",
-                f"user.email={APPLY_COMMIT_EMAIL}",
-            ],
-        )
-    if committed is None or committed.returncode != 0:
-        # A real state with a real name. The working tree carries the
-        # change and the repository does not, and **it is not rolled
-        # back**: a hard reset destroys uncommitted work this applier
-        # did not put there — provably possible, since the dirty check
-        # above is scoped to the patch's own paths — and rewinding a
-        # resident's repository is a larger authority than adding one
-        # commit they authorized. Both ways out are named instead.
-        #
-        # Unlike the `git apply` step above, git failing to *answer*
-        # here is still `applied-uncommitted` rather than an unknown
-        # state: the patch is already in the tree by this point, which
-        # is the whole content of that outcome, and whether the commit
-        # was refused or never finished changes only the sentence.
-        detail_lines.append("")
-        detail_lines.append(
-            "The change is in your working tree and is NOT committed: git refused "
-            "the commit. Its own account:"
-        )
-        detail_lines.append("")
-        detail_lines.append("```")
-        detail_lines.append(
-            committed_fault
-            if committed is None
-            else (committed.stderr or committed.stdout or "").strip()
-        )
-        detail_lines.append("```")
-        detail_lines.append("")
-        detail_lines.append(
-            "Nothing was rolled back, because a reset reaching past the files this "
-            "touched would also destroy other uncommitted work in that repository. "
-            "Both ways out are yours to choose. To see it, and then to keep it:"
-        )
-        detail_lines.append("")
-        detail_lines.append("    cd <your configuration repository>")
-        detail_lines.append("    git diff")
-        detail_lines.append("    git commit")
-        detail_lines.append("")
-        detail_lines.append("Or to drop it, leaving the rest of your work alone:")
-        detail_lines.append("")
-        detail_lines += _recovery_lines(paths, tracked_before)
-        detail_lines.append("")
-        detail_lines.append("Nothing was activated, and nothing was pushed anywhere.")
-        result_id = _write_apply_result(
-            answer,
-            question,
-            outcome="failed",
-            apply_outcome="applied-uncommitted",
-            detail_lines=detail_lines,
-        )
-        return result_id, "applied-uncommitted"
-
-    # **What the repository actually looks like now, asked rather than
-    # assumed.** git reported success; that is not the same as "exactly
-    # one commit landed, its parent is where we started, and nothing was
-    # left behind." Hook suppression above should make all three true by
-    # construction, and this is the backstop that says so out loud if it
-    # ever is not — a record claiming a commit sha it did not verify is
-    # the one thing worse than no record, because `git revert <sha>` is
-    # printed beside it.
-    commit_sha, landing_fault = _verify_single_commit(root, head_before, paths)
+    # Belt, not the guarantee — see `_verify_single_commit`. The commit
+    # is right by construction; this catches something moving the
+    # reference again between the guarded update and this read.
+    commit_sha, landing_fault = _verify_single_commit(root, head_before, built_sha)
     if landing_fault:
         detail_lines.append("")
         detail_lines.append(
-            "git reported the commit succeeded, and the repository is not in the "
-            f"state that implies: {landing_fault}"
+            "The commit was made, and the repository is not in the state that "
+            f"implies: {landing_fault}"
         )
         detail_lines.append("")
         detail_lines.append(
-            "No commit sha is named here, deliberately: this cannot say which commit "
-            "is the change you approved, so it will not print one for you to revert. "
-            "Look at `git log` and `git status` in your configuration repository "
-            "before doing anything else. Nothing was rolled back, nothing was "
-            "activated, and nothing was pushed anywhere."
+            f"The commit this built is `{built_sha}` — it contains exactly the change "
+            "you approved, because it was assembled from your repository's history "
+            "plus those exact bytes. What cannot be vouched for is what your "
+            "repository's history looks like now, so no commit is named here as "
+            "*the* one to revert. Look at `git log` and `git status` before doing "
+            "anything else. Nothing was rolled back, nothing was activated, and "
+            "nothing was pushed anywhere."
         )
         result_id = _write_apply_result(
             answer,
@@ -7691,10 +7742,67 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
     detail_lines.append("")
     detail_lines.append(
         f"It is now one commit in your configuration repository: `{commit_sha}`, "
-        f"on the branch that was checked out. Nothing was pushed anywhere, and nothing "
-        f"was activated — no rebuild, no new generation, no change to the machine you "
-        f"are using. To undo it: `git revert {commit_sha}`."
+        f"on the branch that was checked out. It holds exactly the change you "
+        f"approved: it was built from your repository's history plus those exact "
+        f"bytes, so nothing that happened while it was being made could get into "
+        f"it. Nothing was pushed anywhere, and nothing was activated — no rebuild, "
+        f"no new generation, no change to the machine you are using. To undo it: "
+        f"`git revert {commit_sha}`."
     )
+    if diverged:
+        # The unavoidable last-writer race, turned into visible dirt
+        # rather than into either a lie or destroyed work.
+        detail_lines.append("")
+        detail_lines.append(
+            "Something changed these files while the change was being made, so they "
+            "have been left exactly as you left them rather than being overwritten:"
+        )
+        detail_lines.append("")
+        detail_lines += [f"    {_displayable(path)}" for path in diverged]
+        detail_lines.append("")
+        detail_lines.append(
+            "The commit above is still the change you approved. Your edits are on "
+            "top of it, uncommitted, and `git status` will show them — `git diff` "
+            "says what they are and nothing here has decided anything about them."
+        )
+    for fault in sync_faults:
+        detail_lines.append("")
+        detail_lines.append(
+            f"The commit was made and one step of bringing your working files to it "
+            f"did not finish: {fault}"
+        )
+
+    # Information, never a gate. The paths this synced should read clean
+    # afterwards; when they do not, the likeliest reason by far is a
+    # `.gitattributes` `clean` filter that would store those bytes in a
+    # different canonical form than the ones that were approved. The
+    # commit is still exactly the approved change — `git apply --cached`
+    # does not filter — but git will go on reporting the file as
+    # modified until the resident decides which form they want, and
+    # meeting that with no explanation would be its own small failure.
+    synced = [path for path in paths if path not in diverged]
+    if synced:
+        residue, _why_residue = _dirty_entries(root, synced)
+        if residue:
+            detail_lines.append("")
+            detail_lines.append(
+                "Your repository still reports these files as changed, even though "
+                "the commit holds exactly the bytes you approved:"
+            )
+            detail_lines.append("")
+            detail_lines += [
+                f"    {_displayable(path)}" for _letters, path in residue
+            ]
+            detail_lines.append("")
+            detail_lines.append(
+                "That usually means a content filter in that repository (a "
+                "`.gitattributes` `clean` rule) would store them in a different form "
+                "than the one that was proposed to you. Nothing here decided between "
+                "the two: the change you approved is what was committed, and git will "
+                "keep showing the difference until you say which you want. These are "
+                "files the change itself touched — nothing else in your repository "
+                "was looked at."
+            )
 
     state, outcome = _evaluate_configuration(root, answer.id, detail_lines)
     apply_outcome = {

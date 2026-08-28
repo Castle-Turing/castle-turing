@@ -1100,30 +1100,44 @@ of the exact bytes you approved, and a formatting hook that rewrites
 them would leave that record asserting a digest for content it no
 longer describes.
 
-**A `.gitattributes` content filter is a different matter, and it is
-checked rather than switched off.** A `clean` filter in your repository
-transforms content on its way into a commit, and it can do that while
-`git status` still reports a clean tree — so nothing about the commit
-looks wrong. Castle cannot disable that on your behalf: it is your own
-tracked configuration, and a change you approve may well be *to* it. So
-after committing, it reads each file back out of the commit and compares
-it byte for byte with what is on disk. If they differ, it says so, names
-the file, and stamps no commit id — rather than reporting a commit as
-the exact change you approved when it is not. Afterwards it checks what actually landed — one
+**The commit is built, not taken from your working files.** Castle
+assembles it from your repository's history plus the exact bytes you
+approved, in a scratch area of its own, and only then moves your branch
+to it. Two things follow that are worth knowing.
+
+If you (or your editor, or a formatter on save) change one of those
+files while this is happening, **your edit cannot get into the commit**
+— the commit was already assembled from what you approved. And your
+edit is not thrown away either: Castle notices the file is no longer as
+it found it, leaves it exactly as you left it, and says so in the
+record. Your change sits on top of the approved commit as ordinary
+uncommitted work, and `git status` shows it.
+
+If your repository runs a `.gitattributes` content filter, that filter
+also cannot reach the commit. That is usually what you want — you
+approved specific bytes, and those are what get committed. It does mean
+git may report the file as modified afterwards, because your filter
+would store it in a different form than the one you were shown. Castle
+does not pick between the two: it commits what you approved, tells you
+which files git will keep flagging, and leaves the choice to you.
+
+Nothing signs these commits, whatever your `commit.gpgsign` says. The
+author on them is `Castle applier`, not you, and signing them with your
+key would claim you wrote them. Afterwards it checks what actually landed — one
 commit, parented where it started, nothing left uncommitted — and if
 the repository is not in that state it says so and names **no** commit
 sha, rather than printing a `git revert` for a commit it cannot vouch
 for.
 
-**When something goes half-right.** If the change applies and the
-commit then fails — a signing hook of your own, a permissions problem —
-the record says so, tells you how to keep it, and gives you the exact
-commands to drop it: scoped to the files it touched, never to the whole
-repository, and different for a file it created than for one it
-changed, because the same command does not work for both. **Nothing is
-rolled back** on its own. A reset would destroy other uncommitted work
-in this repository, and rewinding your history is a larger authority
-than adding one commit you asked for.
+**When something goes half-right.** There is no longer a state where
+the change is in your files but not committed — the commit is built
+before anything moves, so it either happened or it did not. What can
+still be left half-done is the mild opposite: the commit is there and
+your working files have not caught up to it yet. The record says so and
+names the commit, because the change is durable and only the files on
+disk are behind. **Nothing is rolled back** on its own, ever: rewinding
+your history is a larger authority than adding one commit you asked
+for.
 
 **And if it could not act at all** — no usable checkout, git not
 answering — the change is untouched and the status surface says

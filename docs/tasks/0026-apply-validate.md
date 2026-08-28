@@ -678,21 +678,24 @@ The listed order is otherwise exactly what the code does.
    add a `repo-head` stamp to 0024's writer; see Considered and
    rejected.
 
-**8. The breadcrumb, written last of all the pre-flight and before the
-first byte moves.** Not in this brief originally; added after Codex
-found the window it covers. Everything in §C above is a read.
-Everything in §D below can leave the tree or the repository changed —
-and if the process dies in between (killed, rebooted, or with
-`write_record` itself failing) *no result names the answer*, so it stays
-eligible and the next sweep attempts it afresh: on a mutated tree, which
-refuses `refused-tree-dirty`, or on a landed commit, which refuses
-`refused-patch-stale`. Reproduced by disabling the marker and running
-the harness's own kill scenario: the sweep recorded
-`apply-outcome: refused-tree-dirty` about a change sitting in the
-resident's checkout. A durable record saying the applier declined a
-change it in fact made — wrong and plausible, which is the worst kind.
+**8. The breadcrumb, written immediately before the reference moves.**
+Not in this brief originally; added after Codex found the window it
+covers. Everything in §C above is a read, and — since §D's construction
+— so is everything up to `git update-ref`. The window is therefore the
+reference update and the working-tree sync after it. If the process
+dies there (killed, rebooted, or with `write_record` itself failing)
+*no result names the answer*, so it stays eligible and the next sweep
+attempts it afresh, on a landed commit, which refuses
+`refused-patch-stale`: a durable record saying the applier declined a
+change it in fact made. Wrong and plausible, which is the worst kind.
+Reproduced by disabling the marker.
 
-So before `git apply`, one file at
+It is deliberately conservative about what it proves — that an attempt
+reached the point of moving the reference, not that it did — which is
+why the reconciliation names both `head_before` and the head now and
+lets the resident see which side of the commit it fell on.
+
+So before `git update-ref`, one file at
 `state_dir()/apply-in-flight/<answer-id>` holding the answer id,
 `head_before`, and the patch's paths. Removed only inside
 `_write_apply_result`, after `write_record` returns — deliberately not
@@ -738,20 +741,89 @@ stderr.
 *(Decision D7, [OWNER], with SPRINT.md decision 4's hardware
 boundary.)*
 
-**Working-tree edit plus exactly one commit, on the private repo's
-current branch, no push, ever.**
+**The commit is CONSTRUCTED from verified inputs, not collected from
+the working tree**, then the reference moves once under a guard, then
+the working tree is brought to it. On the private repo's current
+branch, no push, ever.
 
 ```
-git -C <root> apply -- <sidecar>                       # working tree
-git -C <root> add -N -- <paths>                        # created files only
-git -C <root> -c user.name=... -c user.email=... \
-    commit -m <message> -- <paths>                     # exactly those paths
+GIT_INDEX_FILE=<temp> git read-tree <head_before>      # or --empty
+GIT_INDEX_FILE=<temp> git apply --cached -- <snapshot>
+GIT_INDEX_FILE=<temp> git write-tree                   -> <tree>
+git -c user.name=... commit-tree <tree> -p <head_before> -m <message>  -> <sha>
+git update-ref HEAD <sha> <head_before>                # guarded; the only mutation
+git reset -q -- <paths>                                # index, to the new commit
+git checkout-index -f -- <unchanged paths>             # working tree, per path
 ```
+
+**This replaces an apply-to-the-worktree-then-commit-from-it sequence,
+and the reason is a race that sequence could not close.** Between
+`git apply` writing the tree and the pathspec commit reading it back,
+anything at all — the resident, an editor, a formatter on save — could
+write one of those paths, and the commit then held *their* bytes,
+certified under a message asserting the approved patch's digest.
+Nothing downstream could catch it: the committed blob and the working
+tree agreed, because both held the concurrent edit. Reproduced, with
+every check of the day passing over it (Codex review, round 4).
+
+Constructing the commit removes the race rather than narrowing it. Its
+content is a pure function of `head_before` and the verified patch
+bytes; the working tree is not an input. Three consequences follow, and
+each of them is a simplification rather than a cost:
+
+- **Everything before `update-ref` mutates nothing.** A temp index is a
+  temp file and the objects `write-tree`/`commit-tree` create are
+  unreferenced. So a patch that does not fit is an ordinary refusal
+  with nothing to undo — not the alarming "it passed a dry run and then
+  would not apply" the old sequence had to write.
+- **`applied-uncommitted` can no longer happen.** There is no window in
+  which the tree carries the change and the repository does not. The
+  value stays in `APPLY_OUTCOME_VALUES` — the journal is append-only
+  and a validator must not condemn a record some writer of this code
+  could have written — and nothing produces it.
+- **`git apply --cached` does not run `clean` filters** (established by
+  running it), so a `.gitattributes` filter can no longer transform the
+  commit at all. What was a detection is now a prevention; see §D's
+  filter paragraph for the disagreement that remains and is reported.
+
+**The reference moves once, guarded.** `git update-ref HEAD <sha>
+<head_before>`, with an empty old-value for a repository that has no
+commits yet, which means "this reference must not exist". Anything else
+committing in the meantime makes this fail loudly rather than splice a
+commit onto history that moved — verified by running it.
+
+**Then the working tree, per path, and never over anybody's work.** The
+index is reset to the new commit first (otherwise every path reads as
+staged-for-reversal, since nothing has updated the real index). Then
+for each path: if the bytes on disk are still what they were before any
+of this began, `checkout-index` brings the file to the commit — which
+applies the repository's own `smudge` filter and restores modes, so a
+symlink comes back a symlink, exactly as the resident's own
+`git checkout` would produce. If they are **not**, somebody wrote that
+file during the window: it is left exactly as they left it and named in
+the record. Their edit becomes ordinary visible dirt over an approved
+commit, which `git status` shows them. Nothing is clobbered and nothing
+is claimed.
+
+One residual, stated rather than engineered around: an edit landing
+between that comparison and that write is still last-writer-wins on one
+file. It cannot be closed without holding a lock on a resident's
+filesystem, and it no longer matters for what this task guarantees —
+the *commit* is the approved change either way.
 
 Every subprocess runs with `GIT_*` stripped from the environment, the
 same blanket `_state_tracked_in` applies for the same reason
 (`agent/castle:680-687`): git reads that environment to decide what a
-repository even is.
+repository even is. The one exception is `GIT_INDEX_FILE`, added after
+the strip, which is this process saying where its private index is
+rather than inheriting somebody's opinion about it.
+
+**Nothing signs these commits.** `commit-tree` does not, so a resident
+whose `commit.gpgsign` is on gets an unsigned commit — as they should.
+The identity on it is the applier seat, and signing a seat's commit
+with a resident's key would assert authorship they do not have. (It
+also means the configuration that used to break an apply outright no
+longer does.)
 
 - **The resident's git hooks do not run**, and this was missing from
   this brief until code review reproduced what it costs. Every git
@@ -772,45 +844,48 @@ repository even is.
   world-writable on the `/tmp` fallback — replacing the resident's hooks
   with an attacker's. `/dev/null` can never be a directory. The
   resident's hooks still run on the commits they make themselves.
-- **And what landed is verified, not assumed.** After the commit
-  reports success: `HEAD`'s parent is where this started, exactly one
-  commit separates them, the patch's paths are clean, and — the fourth
-  question, which the first three cannot answer — **the committed blob
-  for each path is byte-identical to the file on disk**. Only then is
-  the sha taken and printed. If any of the three fails the record is
+- **And what landed is verified — now as belt.** `HEAD` is the commit
+  this built, its parent is where this started, and exactly one commit
+  separates them. All three are true by construction since the sequence
+  above, so what these catch is the narrow thing construction cannot:
+  something moving the reference again between the guarded update and
+  this read. Cleanliness is deliberately **no longer** among them: a
+  path can be legitimately dirty afterwards for two ordinary reasons —
+  a concurrent edit, which is recorded by name, and a repository whose
+  own `clean` filter would canonicalise the approved bytes differently
+  — and gating on it would turn either into `outcome: failed` over a
+  commit that is exactly right. Only when all three hold is the sha
+  taken and stamped. If any of the three fails the record is
   `outcome: failed` with no `apply-outcome` and **no sha at all** — a
   record naming an unverified commit beside a `git revert` is worse than
   one naming none.
-- **A content filter is detected, because it cannot be prevented.** A
-  `.gitattributes` `clean` filter runs at `add`/`commit` even with hooks
-  disabled, and a `clean`/`smudge` pair leaves `git status` reporting a
-  clean tree while the committed blob differs from the bytes that were
-  applied — so the three checks above all pass over a commit holding
-  content nobody approved, which would then be stamped `apply-commit`
-  under a message asserting the patch's digest. Verified by running it.
+- **A content filter can no longer reach the commit, and the
+  disagreement it leaves is reported.** This bullet said "detected,
+  because it cannot be prevented" until the construction above moved:
+  `git apply --cached` does not run `clean` filters, so a commit built
+  in a private index holds the approved bytes exactly and the filter has
+  nowhere to act. `core.attributesFile=/dev/null` still closes the
+  user-level half of the attribute lookup; the in-repo half still cannot
+  be closed on a resident's behalf, and no longer needs to be.
 
-  `core.attributesFile=/dev/null` joins `core.hooksPath` in
-  `GIT_ISOLATION_ARGS` and closes the user-level half outright. The
-  in-repo half **cannot be closed the same way and this brief does not
-  pretend otherwise**: `.gitattributes` is the resident's own tracked
-  content, an approved change may legitimately touch it, and an applier
-  reading their repository has no standing to decide their configuration
-  does not apply to it. So it is caught rather than suppressed, by
-  reading the blob back.
+  What remains is a real disagreement rather than a hazard: a repository
+  whose filter would canonicalise those bytes differently will report
+  the file as modified, because the committed form and the filtered form
+  differ. The applier does not pick a side — it commits what was
+  approved, names the files git is reporting, and says why. Meeting that
+  with no explanation would be its own small failure.
 
-  Note the shape that is *not* the hazard, because it explains why the
-  harness fixture looks the way it does: `git apply` matches a patch in
-  "clean" space, so a filter that also transforms the patch's **context**
-  lines makes the patch simply not apply — refused honestly as
-  `refused-patch-stale`, with no commit to catch. The dangerous filter is
-  the one that transforms only what the change *introduces*.
+  The shape that is *not* the hazard, kept because it explains the
+  fixture: `git apply` matches in "clean" space, so a filter that also
+  transforms the patch's **context** lines makes the patch not apply at
+  all. The interesting filter is the one that transforms only what the
+  change introduces.
 
-  **The limit, stated.** What the applier guarantees is that the
-  committed bytes equal the working-tree bytes it verified. A `smudge`
-  filter that transforms on the way *out* is the resident's own
-  configuration acting on their own future checkouts, and is out of
-  scope — nothing here reads a file through it, and nothing here could
-  meaningfully object to it.
+  **The limit, unchanged.** What the applier guarantees is that the
+  commit holds the bytes that were approved. A `smudge` filter
+  transforming on the way *out* is the resident's own configuration
+  acting on their own checkout, and is out of scope.
+
 - **`-c user.name`/`-c user.email` rather than writing config.**
   Nothing this task does may modify the resident's `.git/config`. The
   identity is `Castle applier <applier@castle.invalid>` — `.invalid`
@@ -889,29 +964,17 @@ promised. What remains argues *for* the commit:
   configuration — the same property the journal exists for, in the
   repository the change actually lives in.
 
-**What happens when the commit fails after the patch applied.** The
-working tree carries the change and the repository does not. This is a
-real state and it gets a real name (`applied-uncommitted`, §F) with
-`outcome: failed`, plus a body giving the commands that resolve it in
-either direction. It is not rolled back: see the next paragraph.
-
-**Those commands are rendered per path shape, and the brief's original
-"both recovery commands" was wrong about one of them.** Code review ran
-what this used to print — `git checkout -- .` — and found it actively
-harmful for two of the three shapes: on a path the change *created*,
-`git add -N` has already put an intent-to-add entry in the index, so
-`checkout` restores the file from that entry's **empty blob** and
-leaves it on disk with its contents destroyed, reporting success; and
-on a path the change *deleted*, it leaves the deletion staged in the
-index for the resident's next commit to pick up. It was also repo-wide,
-which the dirty check is deliberately not. So: `git reset` over the
-patch's paths first (the index is what `add -N` touched), then
-`git checkout --` for paths that existed before and `rm -f --` for ones
-the change created — path-scoped throughout, never `.`. Distinguishing
-the two needs one `git ls-files` **before** the patch is applied, since
-the numstat data cannot tell a creation from an append to an empty
-file; when that could not be asked, the record prints no command and
-says so rather than printing the half that destroys work.
+**What happens when the commit fails after the patch applied — a state
+that no longer exists.** It used to: the working tree carried the
+change and the repository did not, named `applied-uncommitted` (§F)
+with a body giving per-shape recovery commands. The construction above
+removed the window it lived in, so nothing produces it any more. The
+value stays in the vocabulary for the append-only reason, and the
+recovery machinery is deleted rather than left dead. What the applier
+can still leave half-done is the *opposite* and much milder: the commit
+made and the working tree not yet synced to it, which is reported in
+the body with the commit named, since the change is durable and only
+the files on disk are behind.
 
 **Nothing is ever rolled back, and this is a decision.** No `git reset
 --hard`, no `git checkout --`, no auto-revert of a committed change
@@ -1175,7 +1238,7 @@ APPLY_OUTCOME_VALUES = (
 | `applied-validated` | `completed` | one commit | applied, committed, and the host configuration builds |
 | `applied-unvalidated` | `completed` | one commit | applied and committed; no evaluation was attempted (option off, unsafe state layout, or no `nix`) — the body says which |
 | `validation-failed` | `completed` / `timeout` | one commit | applied and committed; the build failed or outlived its bound |
-| `applied-uncommitted` | `failed` | edited, not committed | the patch applied and the commit did not; the body gives both recovery commands |
+| `applied-uncommitted` | `failed` | edited, not committed | **no longer produced** — the commit is built before anything moves, so the window it named does not exist. Kept in the vocabulary because the journal is append-only |
 | `refused-target-mechanism` | `completed` | untouched | §G |
 | `refused-artifact-changed` | `completed` | untouched | a digest no longer matches |
 | `refused-no-patch` | `completed` | untouched | no sidecar to apply |
@@ -1661,6 +1724,35 @@ implemented, it is named as a default.
   `--recount`, `patch(1)`). Rejected outright and named as a non-goal:
   a patch that does not apply exactly is not the change the resident
   approved.
+- **Applying to the working tree and committing from it** — this
+  brief's original landing sequence, and the one every earlier round of
+  review hardened rather than replaced. Rejected on a race it cannot
+  close: between `git apply` writing the tree and the pathspec commit
+  reading it back, anything writing one of those paths gets its bytes
+  committed and certified under the approved patch's digest, with the
+  committed blob and the working tree agreeing because both hold the
+  concurrent edit. Reproduced, with the hook suppression, the landing
+  verification and the blob comparison all passing over it. Every fix
+  short of construction narrows the window rather than closing it,
+  because the working tree is a shared mutable input and the commit was
+  reading it. Superseded by §D; the reasoning that produced the
+  intermediate hardening is kept there because those checks are still
+  what catch a reference moved from underneath.
+
+- **Per-shape recovery commands for a half-applied change.** Belonged
+  with `applied-uncommitted`, which the construction designs out, and
+  deleted with it rather than left as dead code. Recorded because the
+  finding underneath was a good one and would apply again to any future
+  path that leaves a tree edited and uncommitted: `git checkout -- .`
+  is wrong for a path the change CREATED — `git add -N` has already put
+  an intent-to-add entry in the index, so `checkout` restores the file
+  from that entry's empty blob, leaving it on disk with its contents
+  destroyed while reporting success — and wrong for a path it DELETED,
+  where it leaves the deletion staged. The shape that worked was
+  `git reset` over the paths first, then `git checkout --` for paths
+  that existed before and `rm -f --` for ones the change created, never
+  repo-wide.
+
 - **Rolling back a commit whose validation failed.** §D. Destroys
   work the applier did not put there, is a larger authority than the
   one granted, and prevents nothing, since nothing is activated.
@@ -2084,56 +2176,37 @@ mechanism assertion, and `castle validate` exiting 0.
     matters for the journal — `castle validate` is still green, because
     a surrogate reaching a record body would make it unwritable.
 
-12. `applied-uncommitted` — the commit made to fail. Simplest
-    reproduction: point `HOME`/`GIT_CONFIG_GLOBAL` at a directory
-    containing a `commit.gpgsign = true` config with no signing key,
-    or make `.git` read-only for one step. Whichever the implementer
-    finds reliable in CI: the assertion is that the patch is in the
-    tree, `HEAD` has not moved, the record says `outcome: failed` with
-    `apply-outcome: applied-uncommitted`, and the body names both
-    recovery commands. If neither method is reliable on the runner,
-    the scenario is skipped **loudly** with a printed reason rather
-    than quietly dropped. (Implemented as a repository-local
-    `commit.gpgsign` pointing at a signing program that always refuses,
-    which needs no gpg on the runner at all and never depends on luck.)
+12. **A repository that signs every commit** — what the
+    `applied-uncommitted` scenario became. `commit.gpgsign` on, pointed
+    at a signing program that always refuses: assert the apply
+    *succeeds*, because the construction removed the failure mode, and
+    that the commit is **not** signed — the identity on it is the
+    applier seat, and signing a seat's commit with a resident's key
+    would assert authorship they do not have.
 
-    **Two variants, and the recorded recovery is EXECUTED rather than
-    grepped for** — code review found that a scenario asserting the
-    string is present passes just as happily when the command does
-    nothing. One variant on a path the change *modified* and one on a
-    path it *created*, each running the block out of the record and
-    asserting both the working tree and the index return to their
-    pre-apply state, with the resident's own staged work untouched. The
-    created variant is the one that caught the defect: the old advice
-    left the file on disk with its contents destroyed.
-13. **Environment fault** — `CASTLE_PRIVATE_ROOT` pointed at a
-    subdirectory of the checkout (`_checkout_fault`'s
-    toplevel-mismatch case, the one its docstring says nothing
-    downstream could detect). `outcome: failed`, no `apply-outcome`,
-    body naming the option.
+12b. **A content filter that CANNOT rewrite the commit.** A
+    `.gitattributes` `clean` filter in the fixture, transforming only
+    the token the change introduces — a filter that also touches the
+    patch's context lines makes the patch simply not apply, which is
+    not the hazard. Assert the apply **succeeds**, that the committed
+    blob holds the approved bytes and *not* the filter's, that
+    `apply-commit` is stamped, and that the record names the file git
+    will keep reporting as modified and why. This was a detection
+    scenario until the construction turned it into a prevention one.
 
-    **And then two assertions about the surface, which the brief's
-    original scenario lacked entirely** — it checked field absence and
-    never looked at what a resident would read. The approval is now
-    barred from the sweep, so: the status line must say
-    `could not be applied — castle apply <answer-id> to try again` and
-    must *not* still say it is waiting; and then that command is run
-    verbatim against a repaired root and must actually apply the
-    change. A label naming a remedy nobody tried is how
-    docs/tasks/0015's defect gets reintroduced one surface over.
+12c. **A concurrent edit in the one window that remains.** The finding
+    the construction exists for. There is no worktree-apply step to
+    race any more, so the edit is injected after the reference moves
+    and before the working tree is synced, by the same `git`-on-`$PATH`
+    wrapper. Assert three things: the commit holds the approved change
+    and **none** of the concurrent edit; the edit is still on disk
+    byte-for-byte, as ordinary visible dirt; and the record names the
+    divergence rather than pretending it did not happen.
 
-12b. **A content filter that rewrites the commit.** A `.gitattributes`
-    `clean` filter in the fixture, transforming only the token the
-    change introduces, so the patch still applies and `git status` is
-    still clean afterwards. Assert the apply lands as the
-    verified-landing failure — `outcome: failed`, no `apply-outcome`,
-    **no `apply-commit`** — naming the path and the likely cause; and
-    assert as a control that git's own three checks (parent, count,
-    cleanliness) all pass over that same commit, which is exactly why
-    nothing before this could see it.
-
-13a. **Killed between the mutation and the record**, both sides of the
-    window: after `git apply` and after the commit. Driven by a `git`
+13a. **Killed between the reference moving and the record**, both
+    sides of that window: before `update-ref` (nothing changed, and the
+    record says the head has NOT moved) and after it (the commit is
+    there, and the record says it HAS). Driven by a `git`
     on `$PATH` that runs the real git and then SIGKILLs its own parent
     — the castle process — so the crash is genuine and there is no
     injection seam in the code under test that could drift from

@@ -1392,31 +1392,58 @@ that `git apply --check` accepts it. **No fuzz, ever** — no `-3`, no
 the change the resident approved, and a three-way merge would produce a
 change nobody authorized.
 
-Then a working-tree edit and exactly one commit on the current branch,
-made with `-c user.name`/`-c user.email` so the resident's `.git/config`
-is never written, and with a `:(literal)` pathspec so the commit
-contains exactly the patch's paths — not a glob match on one of them —
-and their own staged work is neither swept in nor lost. The message
-names only ids and the patch digest — no paths, no tenant prose,
-nothing that could be resident data — and says in as many words that
-nothing was activated.
+Then the commit — **constructed, not collected**. The patch is applied
+to a *private temporary index* seeded from the pre-apply commit, that
+index is written to a tree, and the tree is committed with
+`commit-tree`; only then does one guarded `update-ref` move the branch,
+and only then is the working tree brought to it. The commit's content is
+therefore a pure function of the pre-apply commit and the verified patch
+bytes — the working tree is not an input at all.
+
+That closes a race an apply-to-the-worktree-then-commit-from-it sequence
+cannot: anything writing one of those paths in between got *its* bytes
+committed and certified under the approved patch's digest, with every
+check passing because the committed blob and the working tree agreed.
+Three things follow. Everything before the `update-ref` mutates nothing,
+so a patch that no longer fits is an ordinary refusal with nothing to
+undo. `applied-uncommitted` can no longer occur. And a `.gitattributes`
+`clean` filter can no longer transform the commit, because
+`git apply --cached` does not run one.
+
+The identity is passed with `-c user.name`/`-c user.email`, so the
+resident's `.git/config` is never written, and nothing signs these
+commits: the identity on them is the applier seat, and signing a seat's
+commit with a resident's key would assert authorship they do not have.
+The message names only ids and the patch digest — no paths, no tenant
+prose, nothing that could be resident data — and says in as many words
+that nothing was activated.
+
+**The working tree is then synced per path, and never over anybody's
+work.** If a file's bytes are still what they were before any of this
+began, it is brought to the commit (with the repository's own `smudge`
+filter and modes, so a symlink stays a symlink). If they are not,
+somebody wrote it during the window: it is left exactly as they left it
+and named in the record, so their edit is ordinary visible dirt over an
+approved commit rather than either a lie or destroyed work.
 
 **The resident's git hooks do not run on that commit**, via
-`--no-verify` and `core.hooksPath=/dev/null` (both, since the first
-covers only `pre-commit` and `commit-msg`), and neither do their
-user-level git attributes (`core.attributesFile=/dev/null`). A formatting `pre-commit`
+`core.hooksPath=/dev/null`, and neither do their user-level git
+attributes (`core.attributesFile=/dev/null`). `commit-tree` runs no
+hooks of its own either, so this is belt on top of construction. A formatting `pre-commit`
 would otherwise rewrite the very bytes the commit message records a
 digest for, and a `post-commit` can commit again — making `rev-parse
 HEAD` name a commit the applier never made, with `git revert <sha>`
 printed beside it. Their hooks still run on commits they make
-themselves. An in-repo `.gitattributes` `clean` filter cannot be
-switched off the same way — it is the resident's own tracked content,
-and an approved change may touch it — so it is *detected* instead:
-afterwards the landing is verified rather than assumed, and that check
-includes reading each committed blob back and comparing it byte for
-byte against the file on disk. One commit, parented at the pre-apply
-head, nothing left uncommitted under the patch's paths, and the commit
-holding the bytes that were actually applied. If it is not, the record is `outcome: failed`
+themselves. Afterwards the landing is verified as belt rather than as
+the guarantee: HEAD is the commit this built, its parent is where it
+started, exactly one commit separates them. All three are true by
+construction; what they catch is something moving the reference again
+in between. Cleanliness is deliberately not among them, because a path
+can be legitimately dirty afterwards — a concurrent edit, or a
+repository whose own `clean` filter would store the approved bytes in a
+different canonical form — and gating on it would report `outcome:
+failed` over a commit that is exactly right. Both of those are named in
+the record's body instead. If it is not, the record is `outcome: failed`
 with no `apply-outcome` and no sha — naming an unverified commit beside
 a revert command is worse than naming none.
 

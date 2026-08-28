@@ -487,43 +487,34 @@ assert_private_untouched "after the hook control"
 assert_mechanism_untouched "after the hook scenarios"
 
 # ---------------------------------------------------------------------
-log "a content filter that rewrites the commit is caught, not reported as the approved change"
+log "a content filter cannot reach the commit at all, and the disagreement is reported"
 # ---------------------------------------------------------------------
-# A `.gitattributes` clean filter runs at commit even with hooks
-# disabled, and a clean/smudge pair leaves `git status` reporting a
-# clean tree while the committed blob differs from the bytes that were
-# applied. Verified before the fix: the parent check, the commit count
-# and the cleanliness check all passed over a commit containing bytes
-# nobody approved — which would then have been stamped `apply-commit`
-# and described by a message asserting the patch's digest.
+# This used to be a detection scenario, and the temp-index construction
+# turned it into a prevention one. A `.gitattributes` clean filter runs
+# at `add`/`commit` even with hooks disabled, so the old
+# apply-then-commit sequence committed the filter's bytes rather than
+# the approved ones. `git apply --cached` does NOT run clean filters —
+# established by running it — so a commit built in a private index from
+# `head_before` plus the verified patch holds exactly what was
+# approved, and the filter has nowhere to act.
 #
-# `core.attributesFile=/dev/null` closes the user-level half outright.
-# This half cannot be closed the same way: `.gitattributes` is the
-# resident's own tracked content, and an approved change may legitimately
-# touch it. So it is detected.
+# What is left is a real disagreement that has to be *said* rather than
+# resolved: the repository's own filter would canonicalise those bytes
+# differently, so git will report the file as modified. The applier does
+# not pick a side; it commits what was approved and names the
+# difference.
 FILTER_HEAD_BEFORE="$PRIVATE_HEAD"
 # An ordinary formatter-shaped filter: rewrites on the way in, passes
 # through on the way out. Nothing adversarial.
 #
-# Configured BEFORE the fixture file is committed, deliberately. With
-# the filter added afterwards, the index would hold unfiltered bytes and
-# `git status` would report the file as modified forever — the apply
-# would refuse `refused-tree-dirty` and never reach the commit this
-# scenario is about. Committing under the filter is also what a
-# resident's repository actually looks like.
+# Configured BEFORE the fixture file is committed, deliberately. Added
+# afterwards, the index would hold unfiltered bytes and `git status`
+# would report the file modified forever — the apply would refuse
+# `refused-tree-dirty` and never reach the commit this is about.
+# Committing under the filter is also what a resident's repository
+# actually looks like.
 #
-# **And it rewrites only what the change INTRODUCES, which is what makes
-# this the hazard rather than a self-limiting case.** `git apply` matches
-# a patch in "clean" space, so a filter that also transforms the
-# context lines makes the patch simply not apply — refused honestly as
-# `refused-patch-stale`, no commit, nothing to catch. The dangerous
-# filter is the one that leaves the preimage alone: the patch applies,
-# `git status` reports clean afterwards (index and clean(worktree) agree),
-# the parent and commit count are right, and only reading the blob back
-# shows that the committed bytes are not the approved ones.
-# No space in the sed script: git splits a filter command on
-# whitespace, so a quoted expression would need quoting rules this
-# fixture has no reason to carry.
+# No space in the sed script: git splits a filter command on whitespace.
 git -C "$PRIVATE" config filter.rewriter.clean "sed s/filteredchange/FILTERED-filteredchange/"
 git -C "$PRIVATE" config filter.rewriter.smudge cat
 printf '# Synthetic file this repository filters, harness fixture only.\n# APPLYABLE-MARKER: start\n' \
@@ -535,31 +526,28 @@ PRIVATE_HEAD="$(git -C "$PRIVATE" rev-parse HEAD)"
 [ -z "$(git -C "$PRIVATE" status --porcelain)" ] \
   || fail "the filtered fixture is dirty before the scenario starts: $(git -C "$PRIVATE" status --porcelain)"
 read -r REQ_FL R_FL Q_FL A_FL <<<"$(new_approval APPLYABLE-FILTERED)"
-"$CASTLE" apply "$A_FL" >/dev/null 2>&1 \
-  && fail "an apply whose commit was rewritten by a content filter reported success"
+"$CASTLE" apply "$A_FL" >/dev/null \
+  || fail "an apply into a repository with a content filter failed"
 AP_FL="$(newest_apply_result_for "$A_FL")"
-grep -q '^outcome: failed$' "$AP_FL" \
-  || fail "a rewritten commit is not recorded as a failed run: $(field_of "$AP_FL" outcome)"
-grep -q '^apply-outcome:' "$AP_FL" \
-  && fail "a rewritten commit claimed something about the change: $(field_of "$AP_FL" apply-outcome)"
-grep -q '^apply-commit:' "$AP_FL" \
-  && fail "a commit holding bytes nobody approved was stamped as the approved change"
-grep -q 'filtered.nix' "$AP_FL" \
-  || fail "the record does not name the file whose bytes moved: $(cat "$AP_FL")"
+grep -q '^apply-outcome: applied-unvalidated$' "$AP_FL" \
+  || fail "the filtered apply has the wrong outcome: $(field_of "$AP_FL" apply-outcome)"
+log "  -- and the commit holds the APPROVED bytes, not the filter's"
+# The whole point, and the assertion that would have failed before the
+# construction changed.
+git -C "$PRIVATE" cat-file blob HEAD:filtered.nix | grep -q 'APPLYABLE-MARKER: filteredchange' \
+  || fail "the commit does not hold the approved bytes: $(git -C "$PRIVATE" cat-file blob HEAD:filtered.nix)"
+git -C "$PRIVATE" cat-file blob HEAD:filtered.nix | grep -q 'FILTERED-' \
+  && fail "the content filter reached the commit — it committed bytes nobody approved"
+[ "$(field_of "$AP_FL" apply-commit)" = "$(git -C "$PRIVATE" rev-parse HEAD)" ] \
+  || fail "the filtered apply did not stamp the commit it made"
+log "  -- and the record says why git will keep showing that file as modified"
 grep -q 'content filter' "$AP_FL" \
-  || fail "the record does not name the likely cause: $(cat "$AP_FL")"
-log "  -- and the control: git's own three checks all pass over that same commit"
-# Without this the assertion above is satisfied by any check that
-# happened to fail. The commit really did land, with the right parent
-# and a clean tree — which is exactly why nothing before this batch
-# could see it.
-[ "$(git -C "$PRIVATE" rev-parse 'HEAD^')" = "$PRIVATE_HEAD" ] \
-  || fail "the filtered commit did not land with the expected parent, so this tests the wrong thing"
-[ -z "$(git -C "$PRIVATE" status --porcelain)" ] \
-  || fail "the filtered commit left a dirty tree, so the cleanliness check would have caught it anyway"
-git -C "$PRIVATE" cat-file blob HEAD:filtered.nix | grep -q 'FILTERED' \
-  || fail "the fixture filter did not actually rewrite the commit, so this proves nothing"
-# Put the fixture back: drop the bad commit and the filter with it.
+  || fail "the record does not explain the disagreement: $(cat "$AP_FL")"
+grep -q 'filtered.nix' "$AP_FL" \
+  || fail "the record does not name the file the disagreement is about: $(cat "$AP_FL")"
+[ -n "$(git -C "$PRIVATE" status --porcelain)" ] \
+  || fail "the fixture filter does not actually disagree, so this proves nothing"
+# Put the fixture back: drop the commit and the filter with it.
 git -C "$PRIVATE" config --unset filter.rewriter.clean
 git -C "$PRIVATE" config --unset filter.rewriter.smudge
 git -C "$PRIVATE" reset -q --hard "$FILTER_HEAD_BEFORE"
@@ -569,23 +557,22 @@ assert_mechanism_untouched "after the content-filter scenario"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after the content-filter scenario"
 
 # ---------------------------------------------------------------------
-log "a crash between changing the checkout and writing the record does not become a lie"
+log "a crash between moving the reference and writing the record does not become a lie"
 # ---------------------------------------------------------------------
-# The window: `git apply` (or the commit) has run and
-# `_write_apply_result` has not. No result names the answer, so it stays
-# eligible — and the next sweep, attempting afresh, refuses
-# `refused-tree-dirty` over the applier's OWN half-finished work, or
-# `refused-patch-stale` over a change it already committed. A durable
-# record saying the change was refused, about a change sitting in the
-# resident's repository. Wrong and plausible.
+# The window, and it is now much smaller than it was: everything up to
+# `git update-ref` is a read plus a private index, so the only span in
+# which the repository can have moved without the journal saying so is
+# the reference update and the working-tree sync after it. If the
+# process dies there, no result names the answer, so it stays eligible —
+# and a fresh attempt would refuse `refused-patch-stale` over a change
+# that is already committed. A durable record saying the applier
+# declined a change sitting in the resident's repository.
 #
 # **Killed for real, through a `git` on $PATH rather than a seam in the
 # code under test.** The wrapper runs the real git and then SIGKILLs its
-# own parent, which is the castle process — so the crash lands exactly
-# between the mutation and the record, with no production injection
-# point that could drift from what production does. Same discipline as
-# the `nix` stub, and the reason the brief rejected a
-# `CASTLE_APPLY_NIX`-style override.
+# own parent, which is the castle process. Same discipline as the `nix`
+# stub, and the reason the brief rejected a `CASTLE_APPLY_NIX`-style
+# override.
 KILL_BIN="$WORKDIR/kill-bin"
 MARKER_PROBE="$WORKDIR/marker-probe.log"
 mkdir -p "$KILL_BIN"
@@ -593,28 +580,21 @@ REAL_GIT="$(command -v git)"
 cat > "$KILL_BIN/git" <<KILLER
 #!/usr/bin/env bash
 # A real git that dies at a chosen moment, harness fixture only.
-subcommand=""
-for arg in "\$@"; do
-  case "\$arg" in
-    -C|-c) continue ;;
-    -*) continue ;;
-    *) if [ -z "\$subcommand" ] && [ "\$arg" != "\${CASTLE_TEST_ROOT:-}" ]; then subcommand="\$arg"; fi ;;
-  esac
-done
 mutating=no
-case " \$* " in
-  *" apply "*) case " \$* " in *--check*|*--numstat*) ;; *) mutating=apply ;; esac ;;
-esac
-case " \$* " in *" commit "*) mutating=commit ;; esac
-# Whether the crash breadcrumb was on disk at the instant of the
-# mutation — asserted below, because "it is written before the first
-# mutation" is the whole claim.
+case " \$* " in *" update-ref "*) mutating=update-ref ;; esac
+# Whether the crash breadcrumb was on disk at the instant the
+# repository moved — asserted below, because "it is written before the
+# first mutation" is the whole claim.
 if [ "\$mutating" != no ] && [ -n "\${CASTLE_TEST_MARKER_DIR:-}" ]; then
   if [ -e "\$CASTLE_TEST_MARKER_DIR/\${CASTLE_TEST_MARKER_ID:-none}" ]; then
     printf '%s marker-present\n' "\$mutating" >> "$MARKER_PROBE"
   else
     printf '%s marker-ABSENT\n' "\$mutating" >> "$MARKER_PROBE"
   fi
+fi
+if [ -n "\${CASTLE_TEST_KILL_BEFORE:-}" ] && [ "\$mutating" = "\${CASTLE_TEST_KILL_BEFORE}" ]; then
+  kill -9 "\$PPID"
+  sleep 5
 fi
 "$REAL_GIT" "\$@"
 status=\$?
@@ -626,81 +606,70 @@ KILLER
 chmod +x "$KILL_BIN/git"
 MARKER_DIR="$CASTLE_STATE_DIR/apply-in-flight"
 
-log "  -- killed after the working tree moved, before anything was recorded"
+log "  -- killed BEFORE the reference moved: nothing changed, and the record is conservative"
+# The breadcrumb cannot know whether the update happened, so it says an
+# attempt may have begun and gives the resident both shas to compare.
+# Here they are equal, and the record says so.
 read -r REQ_IF R_IF Q_IF A_IF <<<"$(new_approval APPLYABLE-MODIFY-inflight)"
 [ ! -e "$MARKER_DIR/$A_IF" ] || fail "a marker exists before any attempt began"
 : > "$MARKER_PROBE"
 FILES_BEFORE="$(journal_file_count)"
-PATH="$KILL_BIN:$PATH" CASTLE_TEST_KILL_AFTER=apply CASTLE_TEST_MARKER_DIR="$MARKER_DIR" \
+PATH="$KILL_BIN:$PATH" CASTLE_TEST_KILL_BEFORE=update-ref CASTLE_TEST_MARKER_DIR="$MARKER_DIR" \
   CASTLE_TEST_MARKER_ID="$A_IF" "$CASTLE" apply "$A_IF" >/dev/null 2>&1 \
-  && fail "the applier was supposed to be killed mid-apply and exited 0"
-grep -q '^apply marker-present$' "$MARKER_PROBE" \
-  || fail "the breadcrumb was not on disk at the instant the working tree moved: $(cat "$MARKER_PROBE")"
+  && fail "the applier was supposed to be killed at the reference update and exited 0"
+grep -q '^update-ref marker-present$' "$MARKER_PROBE" \
+  || fail "the breadcrumb was not on disk at the instant the repository was about to move: $(cat "$MARKER_PROBE")"
 [ -f "$MARKER_DIR/$A_IF" ] || fail "the killed attempt left no breadcrumb behind"
 grep -q "^answer: $A_IF\$" "$MARKER_DIR/$A_IF" \
   || fail "the breadcrumb does not name the authorization: $(cat "$MARKER_DIR/$A_IF")"
-[ "$(journal_file_count)" = "$FILES_BEFORE" ] \
-  || fail "the killed attempt wrote a record after all, so this proves nothing"
-[ -n "$(git -C "$PRIVATE" status --porcelain -- resident.nix)" ] \
-  || fail "the killed attempt did not reach the working tree, so this proves nothing"
-MUTATED_SHA="$(sha256_of "$PRIVATE/resident.nix")"
-
-log "  -- and the next sweep records what the breadcrumb proves, instead of refusing a change that is there"
+[ "$(journal_file_count)" = "$FILES_BEFORE" ] || fail "the killed attempt wrote a record after all"
+assert_private_untouched "after a kill before the reference moved"
 "$CASTLE" apply --sweep >/dev/null
 AP_IF="$(newest_apply_result_for "$A_IF")"
 [ -n "$AP_IF" ] || fail "the sweep did not account for the interrupted attempt"
 grep -q '^outcome: failed$' "$AP_IF" \
   || fail "an interrupted attempt is not recorded as a failed run: $(field_of "$AP_IF" outcome)"
 grep -q '^apply-outcome:' "$AP_IF" \
-  && fail "an interrupted attempt claimed something about the change: $(field_of "$AP_IF" apply-outcome)"
+  && fail "an interrupted attempt claimed something about the change"
 grep -q '^apply-commit:' "$AP_IF" \
   && fail "an interrupted attempt named a commit it cannot vouch for"
-# The two refusals the finding is about must NOT be what got written.
 grep -qE '^apply-outcome: (refused-tree-dirty|refused-patch-stale)$' "$AP_IF" \
-  && fail "the sweep refused a change that is sitting in the resident's repository"
-grep -q 'interrupted' "$AP_IF" || fail "the record does not say what happened: $(cat "$AP_IF")"
-grep -qF "$PRIVATE_HEAD" "$AP_IF" \
-  || fail "the record does not name where the repository was when the attempt began"
+  && fail "the sweep refused a change rather than recording that an attempt was interrupted"
 grep -q 'has NOT moved' "$AP_IF" \
-  || fail "the record does not tell the resident which side of the commit this fell on: $(cat "$AP_IF")"
+  || fail "the record does not tell the resident nothing was committed: $(cat "$AP_IF")"
 [ ! -e "$MARKER_DIR/$A_IF" ] || fail "the breadcrumb survived its own reconciliation"
-[ "$(sha256_of "$PRIVATE/resident.nix")" = "$MUTATED_SHA" ] \
-  || fail "the sweep changed the working tree a second time"
-[ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$PRIVATE_HEAD" ] || fail "the sweep committed something"
+assert_private_untouched "after reconciling an attempt killed before the reference moved"
 
-log "  -- and the status surface names the way back, exactly as for any other dead attempt"
-STATUS_IF="$("$MODAL" --mode status --limit 40)"
-printf '%s\n' "$STATUS_IF" | grep -F "$REQ_IF" | grep -q "could not be applied — castle apply $A_IF to try again" \
-  || fail "an interrupted attempt does not name the hand retry: $(printf '%s\n' "$STATUS_IF" | grep -F "$REQ_IF")"
-git -C "$PRIVATE" checkout -q -- resident.nix
-assert_private_untouched "after reconciling an interrupted attempt"
-
-log "  -- killed after the COMMIT landed: the record says the head moved, and still refuses nothing"
-# The other side of the same window, and the one the message's second
-# branch exists for: here the change really is committed, so a fresh
-# attempt would have refused `refused-patch-stale` about a change that
-# is already in the repository.
+log "  -- killed AFTER the reference moved: the commit is there, and the record says so"
+# The half that matters. A fresh attempt here would have refused
+# `refused-patch-stale` about a change that is already committed.
 read -r REQ_IF2 R_IF2 Q_IF2 A_IF2 <<<"$(new_approval APPLYABLE-MODIFY-inflight2)"
 : > "$MARKER_PROBE"
-PATH="$KILL_BIN:$PATH" CASTLE_TEST_KILL_AFTER=commit CASTLE_TEST_MARKER_DIR="$MARKER_DIR" \
+PATH="$KILL_BIN:$PATH" CASTLE_TEST_KILL_AFTER=update-ref CASTLE_TEST_MARKER_DIR="$MARKER_DIR" \
   CASTLE_TEST_MARKER_ID="$A_IF2" "$CASTLE" apply "$A_IF2" >/dev/null 2>&1 \
-  && fail "the applier was supposed to be killed after committing and exited 0"
-[ -f "$MARKER_DIR/$A_IF2" ] || fail "the killed-after-commit attempt left no breadcrumb"
-[ "$(git -C "$PRIVATE" rev-parse HEAD)" != "$PRIVATE_HEAD" ] \
-  || fail "the killed-after-commit attempt did not commit, so this proves nothing"
+  && fail "the applier was supposed to be killed after the reference moved and exited 0"
+[ -f "$MARKER_DIR/$A_IF2" ] || fail "the killed-after-update attempt left no breadcrumb"
 LANDED_HEAD="$(git -C "$PRIVATE" rev-parse HEAD)"
+[ "$LANDED_HEAD" != "$PRIVATE_HEAD" ] \
+  || fail "the killed-after-update attempt did not move the reference, so this proves nothing"
 "$CASTLE" apply --sweep >/dev/null
 AP_IF2="$(newest_apply_result_for "$A_IF2")"
-grep -q '^outcome: failed$' "$AP_IF2" || fail "the killed-after-commit case is not a failed run"
+grep -q '^outcome: failed$' "$AP_IF2" || fail "the killed-after-update case is not a failed run"
 grep -q '^apply-outcome:' "$AP_IF2" \
-  && fail "the killed-after-commit case claimed something about the change"
-grep -q 'has MOVED\|HAS moved' "$AP_IF2" \
+  && fail "the killed-after-update case claimed something about the change"
+grep -q 'HAS moved' "$AP_IF2" \
   || fail "the record does not say the head moved, which is the fact that matters here: $(cat "$AP_IF2")"
+grep -qF "$PRIVATE_HEAD" "$AP_IF2" \
+  || fail "the record does not name where the repository was when the attempt began"
 [ ! -e "$MARKER_DIR/$A_IF2" ] || fail "the breadcrumb survived its own reconciliation"
 [ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$LANDED_HEAD" ] \
   || fail "the sweep committed on top of a change that was already committed"
+# The interrupted attempt never got to sync the working tree, which is
+# exactly the state the record describes; put it right the way a
+# resident would.
+git -C "$PRIVATE" reset -q --hard "$LANDED_HEAD"
 PRIVATE_HEAD="$LANDED_HEAD"
-assert_private_untouched "after reconciling an attempt killed after its commit"
+assert_private_untouched "after reconciling an attempt killed after the reference moved"
 
 log "  -- a breadcrumb naming nothing this journal has is discarded, with no record"
 printf 'answer: 20260101T000000Z-answer-invented\nhead-before: \npaths:\n' \
@@ -714,6 +683,80 @@ grep -q 'discarding an in-flight marker' "$WORKDIR/stray-marker.out" \
   || fail "a stray breadcrumb produced a record about a checkout nothing can name"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after the interruption scenarios"
 assert_mechanism_untouched "after the interruption scenarios"
+
+# ---------------------------------------------------------------------
+log "a concurrent edit cannot get into the commit, and is not destroyed either"
+# ---------------------------------------------------------------------
+# The finding this construction exists for. Under the old sequence — 
+# apply to the working tree, then commit from it — anything writing one
+# of those paths in between got its bytes committed and certified under
+# a message asserting the approved patch's digest, with every check
+# passing because the committed blob and the working tree agreed.
+# Reproduced before the change.
+#
+# There is no worktree-apply step any more, so the edit is injected into
+# the only window that remains: after the reference moves, before the
+# working tree is synced to it. The wrapper writes the file the instant
+# it sees `update-ref` succeed.
+CONCURRENT_BIN="$WORKDIR/concurrent-bin"
+mkdir -p "$CONCURRENT_BIN"
+cat > "$CONCURRENT_BIN/git" <<CONC
+#!/usr/bin/env bash
+# A real git that lets somebody else write a file mid-sequence.
+mutating=no
+case " \$* " in *" update-ref "*) mutating=update-ref ;; esac
+"$REAL_GIT" "\$@"
+status=\$?
+if [ "\$mutating" = update-ref ] && [ \$status -eq 0 ] && [ -n "\${CASTLE_TEST_CONCURRENT_FILE:-}" ]; then
+  printf '%s' "\${CASTLE_TEST_CONCURRENT_BODY}" > "\$CASTLE_TEST_CONCURRENT_FILE"
+  unset CASTLE_TEST_CONCURRENT_FILE
+fi
+exit \$status
+CONC
+chmod +x "$CONCURRENT_BIN/git"
+read -r REQ_CC R_CC Q_CC A_CC <<<"$(new_approval APPLYABLE-MODIFY-concurrent)"
+CONCURRENT_BODY='# Synthetic private layer, harness fixture only.
+# APPLYABLE-MARKER: the resident typed this instead
+'
+PATH="$CONCURRENT_BIN:$PATH" CASTLE_TEST_CONCURRENT_FILE="$PRIVATE/resident.nix" \
+  CASTLE_TEST_CONCURRENT_BODY="$CONCURRENT_BODY" "$CASTLE" apply "$A_CC" >/dev/null \
+  || fail "an apply raced by a concurrent edit failed outright"
+AP_CC="$(newest_apply_result_for "$A_CC")"
+
+log "  -- the commit holds the approved change, and none of the concurrent edit"
+git -C "$PRIVATE" cat-file blob HEAD:resident.nix | grep -q 'the resident typed this instead' \
+  && fail "bytes nobody approved were committed and certified as the approved change"
+git -C "$PRIVATE" cat-file blob HEAD:resident.nix | grep -q 'APPLYABLE-MARKER: concurrent' \
+  || fail "the commit does not hold the approved change: $(git -C "$PRIVATE" cat-file blob HEAD:resident.nix)"
+[ "$(field_of "$AP_CC" apply-commit)" = "$(git -C "$PRIVATE" rev-parse HEAD)" ] \
+  || fail "the record does not stamp the commit that was made"
+[ "$(git -C "$PRIVATE" rev-list --count "$PRIVATE_HEAD..HEAD")" = "1" ] \
+  || fail "the raced apply did not make exactly one commit"
+
+log "  -- and their edit is still on disk, untouched, as ordinary visible dirt"
+# `cmp`, not `$(cat) = $VAR`: command substitution strips trailing
+# newlines from one side and not the other, which would let a genuinely
+# clobbered file compare equal.
+printf '%s' "$CONCURRENT_BODY" > "$WORKDIR/concurrent-expected"
+cmp -s "$WORKDIR/concurrent-expected" "$PRIVATE/resident.nix" \
+  || fail "the concurrent edit was overwritten: $(cat "$PRIVATE/resident.nix")"
+[ -n "$(git -C "$PRIVATE" status --porcelain -- resident.nix)" ] \
+  || fail "the concurrent edit is not visible as dirt, so the resident would never see it"
+
+log "  -- and the record names the divergence rather than pretending it did not happen"
+grep -q 'left exactly as you left them' "$AP_CC" \
+  || fail "the record does not say the file was left alone: $(cat "$AP_CC")"
+grep -q 'resident.nix' "$AP_CC" \
+  || fail "the record does not name the diverged file: $(cat "$AP_CC")"
+STATUS_CC="$("$MODAL" --mode status --limit 40)"
+printf '%s\n' "$STATUS_CC" | grep -F "$REQ_CC" | grep -q 'applied, not checked — not activated' \
+  || fail "the raced errand does not read as applied: $(printf '%s\n' "$STATUS_CC" | grep -F "$REQ_CC")"
+# The resident's own call to make; the harness takes the commit.
+git -C "$PRIVATE" checkout -q -- resident.nix
+PRIVATE_HEAD="$(git -C "$PRIVATE" rev-parse HEAD)"
+assert_private_untouched "after the concurrent-edit scenario"
+assert_mechanism_untouched "after the concurrent-edit scenario"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the concurrent-edit scenario"
 
 # ---------------------------------------------------------------------
 log "file names git has to be asked about: an invalid UTF-8 byte, and a glob character"
@@ -1053,12 +1096,22 @@ assert_private_untouched "after the dirty-tree controls"
 assert_mechanism_untouched "after the dirty-tree controls"
 
 # ---------------------------------------------------------------------
-log "the partial state that gets a name: applied, and not committed"
+log "a repository that signs every commit: the failure mode is gone, not handled"
 # ---------------------------------------------------------------------
-# Made to fail deterministically rather than by luck: a repository-local
-# `commit.gpgsign` pointed at a signing program that always refuses.
-# Nothing about a resident's own config is assumed, and nothing on the
-# runner has to have gpg at all.
+# This section used to prove `applied-uncommitted` — the patch in the
+# working tree with the commit refused — using a signing program that
+# always fails. That state can no longer occur: the commit is built in
+# a private index and the reference is moved in one guarded step, so
+# there is no window in which the tree carries the change and the
+# repository does not. `commit-tree` does not sign at all.
+#
+# The value stays in the vocabulary (the journal is append-only, and a
+# validator must not condemn a record some writer of this code could
+# have written) and nothing produces it. What is asserted here instead
+# is that the configuration which used to break an apply now does not,
+# and that the commit is NOT signed as the resident — the identity on it
+# is the applier seat, and signing a seat's commit with a resident's key
+# would assert authorship they do not have.
 FAILING_SIGNER="$WORKDIR/failing-signer.sh"
 cat > "$FAILING_SIGNER" <<'SIGNER'
 #!/usr/bin/env bash
@@ -1066,82 +1119,22 @@ printf 'invented signing failure, harness fixture only\n' >&2
 exit 1
 SIGNER
 chmod +x "$FAILING_SIGNER"
-signing_fails() { git -C "$PRIVATE" config commit.gpgsign true; git -C "$PRIVATE" config gpg.program "$FAILING_SIGNER"; }
-signing_works() { git -C "$PRIVATE" config --unset commit.gpgsign; git -C "$PRIVATE" config --unset gpg.program; }
-
-# The recovery block out of the record, EXECUTED rather than grepped for.
-# A command that reads plausibly and does nothing — or, worse, destroys
-# the thing it claims to restore — is exactly what this scenario missed
-# until the review ran it: `git checkout -- .` truncated a created file
-# to empty, left it on disk, and left a deletion staged in the index for
-# the resident's next commit to pick up.
-run_recorded_recovery() {
-  local record="$1" script="$WORKDIR/recovery.sh"
-  awk '/^Or to drop it/ { grab = 1; next }
-       grab && /^    / { sub(/^    /, ""); print; next }
-       grab && NF { exit }' "$record" > "$script"
-  [ -s "$script" ] || fail "the record printed no recovery command at all: $(cat "$record")"
-  grep -qx 'cd <your configuration repository>' "$script" \
-    || fail "the recovery block does not begin by naming the repository: $(cat "$script")"
-  # The one placeholder a resident substitutes by hand; everything after
-  # it must work verbatim.
-  sed -i "1s|^cd <your configuration repository>$|cd '$PRIVATE'|" "$script"
-  bash -e "$script" >"$WORKDIR/recovery.out" 2>&1 \
-    || fail "the recorded recovery command failed: $(cat "$script")
-$(cat "$WORKDIR/recovery.out")"
-}
-
-log "  -- a MODIFIED path: the change is in the tree, HEAD has not moved, and the recovery works"
-read -r REQ_UC R_UC Q_UC A_UC <<<"$(new_approval APPLYABLE-MODIFY-uncommitted)"
-INDEX_BEFORE="$(git -C "$PRIVATE" ls-files -s | sha256sum)"
-signing_fails
-"$CASTLE" apply "$A_UC" >/dev/null 2>&1 && fail "an apply whose commit failed reported success"
-signing_works
-AP_UC="$(newest_apply_result_for "$A_UC")"
-grep -q '^apply-outcome: applied-uncommitted$' "$AP_UC" \
-  || fail "a commit that failed after the patch applied has the wrong outcome: $(field_of "$AP_UC" apply-outcome)"
-grep -q '^outcome: failed$' "$AP_UC" \
-  || fail "an apply that did not reach a conclusion is not recorded as failed: $(field_of "$AP_UC" outcome)"
-grep -q '^    git commit$' "$AP_UC" \
-  || fail "the record does not name the way to keep the change: $(cat "$AP_UC")"
-# Never `.`: a recovery reaching past the paths this applier touched
-# would destroy the resident's other uncommitted work.
-grep -qE '^    git (checkout|reset).* \.$' "$AP_UC" \
-  && fail "the recovery command is repo-wide rather than scoped to the change's own paths: $(cat "$AP_UC")"
-[ "$(git -C "$PRIVATE" rev-parse HEAD)" = "$PRIVATE_HEAD" ] \
-  || fail "the failed commit moved HEAD anyway"
-[ -n "$(git -C "$PRIVATE" status --porcelain -- resident.nix)" ] \
-  || fail "the change is not in the working tree, so 'applied-uncommitted' is not what happened"
-run_recorded_recovery "$AP_UC"
-assert_private_untouched "after running the recorded recovery for a modified path"
-[ "$(git -C "$PRIVATE" ls-files -s | sha256sum)" = "$INDEX_BEFORE" ] \
-  || fail "the recorded recovery left the index changed"
-
-log "  -- a CREATED path: the recovery that would silently destroy it instead removes it"
-# The shape the generic advice got wrong. `git add -N` put an
-# intent-to-add entry in the index, so `git checkout --` on this path
-# restores it from an EMPTY blob: exit 0, success reported, file still
-# present, contents gone.
-read -r REQ_UC2 R_UC2 Q_UC2 A_UC2 <<<"$(new_approval APPLYABLE-NEWFILE-uncommitted)"
-NEW_PATH="hosts/example/new-uncommitted.nix"
-INDEX_BEFORE="$(git -C "$PRIVATE" ls-files -s | sha256sum)"
-signing_fails
-"$CASTLE" apply "$A_UC2" >/dev/null 2>&1 && fail "an apply whose commit failed reported success"
-signing_works
-AP_UC2="$(newest_apply_result_for "$A_UC2")"
-grep -q '^apply-outcome: applied-uncommitted$' "$AP_UC2" \
-  || fail "the created-path uncommitted case has the wrong outcome: $(field_of "$AP_UC2" apply-outcome)"
-[ -s "$PRIVATE/$NEW_PATH" ] \
-  || fail "the created file is not in the working tree, so this proves nothing"
-grep -qF "$NEW_PATH" "$AP_UC2" \
-  || fail "the recovery does not name the path it created: $(cat "$AP_UC2")"
-run_recorded_recovery "$AP_UC2"
-[ ! -e "$PRIVATE/$NEW_PATH" ] \
-  || fail "the recorded recovery left the created file behind (contents: $(od -c "$PRIVATE/$NEW_PATH" | head -2))"
-assert_private_untouched "after running the recorded recovery for a created path"
-[ "$(git -C "$PRIVATE" ls-files -s | sha256sum)" = "$INDEX_BEFORE" ] \
-  || fail "the recorded recovery left the index changed for a created path"
-assert_mechanism_untouched "after the uncommitted apply"
+read -r REQ_SG R_SG Q_SG A_SG <<<"$(new_approval APPLYABLE-MODIFY-signing)"
+git -C "$PRIVATE" config commit.gpgsign true
+git -C "$PRIVATE" config gpg.program "$FAILING_SIGNER"
+"$CASTLE" apply "$A_SG" >/dev/null \
+  || fail "an apply into a repository that signs every commit failed"
+git -C "$PRIVATE" config --unset commit.gpgsign
+git -C "$PRIVATE" config --unset gpg.program
+AP_SG="$(newest_apply_result_for "$A_SG")"
+grep -q '^apply-outcome: applied-unvalidated$' "$AP_SG" \
+  || fail "the signing-repository apply has the wrong outcome: $(field_of "$AP_SG" apply-outcome)"
+grep -q '^apply-commit:' "$AP_SG" || fail "the signing-repository apply stamped no commit"
+assert_private_changed_exactly "a repository that signs every commit" "$A_SG" resident.nix
+log "  -- and the commit is not signed, because it is the applier's and not the resident's"
+[ "$(git -C "$PRIVATE" show -s --format=%G? HEAD)" = "N" ] \
+  || fail "the applier's commit carries a signature: $(git -C "$PRIVATE" show -s --format=%G? HEAD)"
+assert_mechanism_untouched "after the signing-repository scenario"
 
 # ---------------------------------------------------------------------
 log "an environment fault is about the environment, not about the change"
