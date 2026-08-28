@@ -300,6 +300,39 @@
                   '';
                 }
                 {
+                  # docs/tasks/0026-apply-validate.md: the same
+                  # default-off proof for the applier, and it matters
+                  # more here than it does one assertion up. Turning
+                  # dispatch on lets a model tenant spend money;
+                  # turning this on lets the agent layer change the
+                  # resident's own configuration and commit it. If
+                  # importing nixosModules.agent ever quietly declared
+                  # these units, a resident would acquire that
+                  # capability by installing the framework rather than
+                  # by deciding to.
+                  #
+                  # Same implication form as the dispatch check above,
+                  # and for the same reason: nixosConfigurations.example-apply
+                  # extends this configuration and inherits its
+                  # assertions.
+                  assertion =
+                    config.castle.agent.apply.enable
+                    || (
+                      !(config.systemd.user.services ? castle-apply)
+                      && !(config.systemd.user.paths ? castle-apply)
+                      && !(config.systemd.user.timers ? castle-apply)
+                    );
+                  message = ''
+                    nixosConfigurations.example generates a castle-apply systemd
+                    user unit even though castle.agent.apply.enable is left at
+                    its default. Making an approved change in a resident's own
+                    configuration repository is opt-in
+                    (docs/tasks/0026-apply-validate.md): importing
+                    nixosModules.agent must never acquire that authority on its
+                    own.
+                  '';
+                }
+                {
                   # docs/tasks/0031-secrets-tooling.md: what this repo
                   # can prove about the secrets slot without ever
                   # holding a key. Three facts, all about the empty
@@ -657,6 +690,89 @@
                     backstop timer, and a session-start watermark oneshot that
                     runs `castle dispatch --watermark-only`
                     (docs/tasks/0021-auto-dispatch.md §1).
+                  '';
+                }
+              ];
+            }
+          )
+        ];
+      };
+
+      # The other half of the applier's default-off proof
+      # (docs/tasks/0026-apply-validate.md §K), on exactly the
+      # `example-dispatch` precedent above: `nixosConfigurations.example`
+      # asserts that no castle-apply unit exists when the option is left
+      # alone, and this variant turns it on and asserts the three units
+      # exist and carry what an apply needs. Eval-only, like its
+      # neighbour — nothing builds or boots this, but `nix flake check`
+      # forces every nixosConfiguration's `assertions`, which is all it
+      # takes to prove the wiring.
+      #
+      # Dummy paths, invented and hardware-neutral, and both are
+      # required here rather than only recommended: the module refuses
+      # to enable applying without a state directory AND without a
+      # private checkout, which is the one place it is deliberately
+      # stricter than dispatch — an unconfigured root there burns an
+      # errand's automatic attempt, and here it burns a resident's
+      # granted authorization.
+      nixosConfigurations.example-apply = self.nixosConfigurations.example.extendModules {
+        modules = [
+          (
+            { config, lib, ... }:
+            let
+              dummyStateDir = "/home/resident/private-state";
+              dummyRepoRoot = "/home/resident/private";
+              unit = config.systemd.user.services.castle-apply or null;
+              pathUnit = config.systemd.user.paths.castle-apply or null;
+              timerUnit = config.systemd.user.timers.castle-apply or null;
+              environment = if unit == null then { } else unit.environment;
+            in
+            {
+              castle.agent = {
+                apply.enable = true;
+                stateDir = dummyStateDir;
+                repo.private = dummyRepoRoot;
+              };
+              assertions = [
+                {
+                  assertion =
+                    unit != null
+                    && unit.unitConfig.ConditionUser == "!@system"
+                    && unit.serviceConfig.Type == "oneshot"
+                    && unit.serviceConfig.WorkingDirectory == "%h"
+                    && lib.hasSuffix "castle apply --sweep" unit.serviceConfig.ExecStart
+                    # No `wantedBy`, deliberately: a oneshot pulled into
+                    # default.target would hold a login's activation
+                    # open for however long a build takes.
+                    && !(unit ? wantedBy && unit.wantedBy != [ ])
+                    && environment.CASTLE_STATE_DIR or null == dummyStateDir
+                    && environment.CASTLE_PRIVATE_ROOT or null == dummyRepoRoot
+                    # Both defaults reach the unit as values rather than
+                    # as absences, so a resident reading `systemctl
+                    # --user show` sees what it will actually do.
+                    && environment.CASTLE_APPLY_EVALUATE_FLAKE or null == "false"
+                    && environment.CASTLE_APPLY_TIMEOUT or null == "1800"
+                    # And the mechanism checkout is deliberately absent:
+                    # the applier refuses a mechanism-targeted change by
+                    # name and never needs a path to that checkout, so
+                    # it is not given one.
+                    && !(environment ? CASTLE_MECHANISM_ROOT)
+                    && pathUnit != null
+                    && pathUnit.wantedBy == [ "default.target" ]
+                    && pathUnit.unitConfig.ConditionUser == "!@system"
+                    && pathUnit.pathConfig.PathChanged == "${dummyStateDir}/journal"
+                    && timerUnit != null
+                    && timerUnit.wantedBy == [ "default.target" ]
+                    && timerUnit.unitConfig.ConditionUser == "!@system"
+                    && timerUnit.timerConfig.OnUnitActiveSec == "1min";
+                  message = ''
+                    nixosConfigurations.example-apply: the castle-apply units do
+                    not carry what an apply needs. Expected a oneshot service
+                    running `castle apply --sweep` from %h with
+                    CASTLE_STATE_DIR, CASTLE_PRIVATE_ROOT and both apply
+                    settings baked in and no mechanism checkout, a path unit
+                    watching the configured journal directory, and a one-minute
+                    backstop timer (docs/tasks/0026-apply-validate.md §B, §K).
                   '';
                 }
               ];

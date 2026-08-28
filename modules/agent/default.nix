@@ -364,6 +364,116 @@ in
       '';
     };
 
+    apply.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Make changes you have approved, in your own configuration
+        repository, with no `castle apply` typed by hand
+        (docs/tasks/0026-apply-validate.md).
+
+        Declares three `systemd.user` units of its own — a path unit
+        watching the journal directory, a `oneshot` service running
+        `castle apply --sweep`, and a one-minute timer as a backstop
+        for a missed inotify event. Deliberately its own trio rather
+        than a step inside the dispatch sweep: an apply may run a
+        build, and a build inside that sweep would hold the global
+        dispatch lock — or the dispatch unit itself — for as long as it
+        took, so one slow check would stop every errand on the machine.
+
+        **What turning this on authorizes, exactly.** For each change
+        you approve from here on, and once each: edit those files in
+        `castle.agent.repo.private` and make one commit there naming
+        your approval. It **pushes nothing anywhere**, it **activates
+        nothing** — no `nixos-rebuild`, no `switch`, no new generation,
+        no change to the running system — and it never writes a
+        checkout of this framework. Switching to a new configuration
+        stays yours to do, by hand.
+
+        **It cannot reach an approval you gave before this existed.**
+        Every proposal is stamped at filing time with whether approving
+        it authorizes an apply, and the applier honours only that stamp
+        — because the sentence you read while deciding is the scope of
+        what you decided, and no later change of wording reaches
+        backwards. There is no migration and there will not be one.
+
+        **Default off, deliberately**, and this is a larger authority
+        decision than `dispatch.enable`'s: that one lets a model tenant
+        spend money, this one lets the agent layer change your
+        configuration. This framework will not make that decision for a
+        resident; a private layer opts in (docs/private-layer.md). The
+        undecided taxonomy that would let this be described more
+        precisely is docs/backlog/authority-taxonomy-prior-art.md.
+
+        Requires `castle.agent.stateDir` and
+        `castle.agent.repo.private`, both asserted below.
+
+        **Enable this on at most one host per journal**, for a sharper
+        version of the reason `dispatch.enable` gives: two enabled
+        hosts would apply the same approved change to two different
+        checkouts, and only one of them is the one you mean.
+      '';
+    };
+
+    apply.evaluateFlake = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        After making an approved change, check that the configuration it
+        produces still evaluates and builds
+        (docs/tasks/0026-apply-validate.md §E). Wired into
+        `CASTLE_APPLY_EVALUATE_FLAKE`.
+
+        Named for **evaluation** rather than for "validation" generally,
+        because evaluation is what is actually being authorised here.
+        This is the first thing in the agent layer that evaluates your
+        flake at all, and evaluating a path flakeref copies the
+        repository's whole tracked tree into `/nix/store`, where every
+        file is readable by every account and every process on the
+        machine, immutably until garbage collection.
+
+        That is safe exactly because docs/tasks/0030–0032 made that tree
+        publish-safe: the rule is "keep *plaintext* out of the store",
+        your journal has lived outside the flake since 0030, and
+        `secrets.yaml` is ciphertext by design. It is not safe if your
+        state directory is still inside the flake's tracked tree — so
+        the applier asks that question first and declines to evaluate
+        rather than publishing your decision history. The change is
+        still made either way; only the check is gated.
+
+        What it runs, once, unprivileged, is
+        `nix build --no-link --no-write-lock-file --no-update-lock-file`
+        on this machine's own `system.build.toplevel`. Never as root,
+        never `nix flake check`, never a lock-file update, and it
+        activates nothing. The exact command line is recorded whether it
+        ran or not, so you can paste it yourself.
+
+        **What "checked" does and does not mean**: the configuration
+        evaluates and its toplevel builds. Not that the change did what
+        it said it would — nothing anywhere declares that — not that
+        secrets will decrypt, and not that it will activate.
+      '';
+    };
+
+    apply.timeoutSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1800;
+      description = ''
+        How long `castle apply` lets that check run before killing its
+        whole process group and recording `outcome: timeout`
+        (docs/tasks/0026-apply-validate.md). Wired into
+        `CASTLE_APPLY_TIMEOUT`.
+
+        Thirty minutes is chosen, not derived, and it is deliberately
+        much longer than `worker.timeoutSeconds`: that one bounds a
+        model call, this one bounds a *build*, and the only Nix-capable
+        host this ever runs on is your own machine, which may
+        legitimately compile a kernel. The change is already made and
+        committed by the time this clock starts; what a timeout costs is
+        the check, never the change.
+      '';
+    };
+
     notify.command = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -469,12 +579,23 @@ in
     # layer against. A single CASTLE_REPO_ROOT could not name both,
     # and is retired rather than kept alongside them — one renamed
     # alias would just relocate the ambiguity under a new name.
+    #
+    # The two apply variables joined with
+    # docs/tasks/0026-apply-validate.md for the same reason the timeout
+    # did: a `castle apply <answer-id>` a resident runs by hand from a
+    # terminal inside the Sway session must behave exactly as the unit
+    # does, not evaluate when the unit would not or run to a different
+    # bound. Both ride unconditionally — each always has a value — and
+    # `apply.enable` itself is deliberately NOT among them: it declares
+    # units, it is not something the CLI reads.
     environment.sessionVariables =
       (lib.optionalAttrs (cfg.stateDir != null) { CASTLE_STATE_DIR = cfg.stateDir; })
       // { CASTLE_WORKER_COMMAND = cfg.worker.command; }
       // { CASTLE_WORKER_TIMEOUT = toString cfg.worker.timeoutSeconds; }
       // (lib.optionalAttrs (cfg.repo.private != null) { CASTLE_PRIVATE_ROOT = cfg.repo.private; })
       // (lib.optionalAttrs (cfg.repo.mechanism != null) { CASTLE_MECHANISM_ROOT = cfg.repo.mechanism; })
+      // { CASTLE_APPLY_EVALUATE_FLAKE = lib.boolToString cfg.apply.evaluateFlake; }
+      // { CASTLE_APPLY_TIMEOUT = toString cfg.apply.timeoutSeconds; }
       // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
 
     # ---------------------------------------------------------------
@@ -752,6 +873,113 @@ in
       };
     };
 
+    # ---------------------------------------------------------------
+    # Applying an approved change (docs/tasks/0026-apply-validate.md),
+    # off by default — see castle.agent.apply.enable's description.
+    #
+    # Its own trio, modelled line for line on the dispatch units above
+    # and watching the same directory, rather than a step inside the
+    # dispatch sweep. Three things that buys, none of them cosmetic:
+    #
+    # A validation may legitimately run for half an hour
+    # (apply.timeoutSeconds), and inside the sweep that would either
+    # hold the global dispatch lock — escalating
+    # docs/backlog/stalled-mount-wedges-a-sweep.md from "one errand
+    # hangs" to "the whole mechanism stops, silently" — or hold the
+    # dispatch *unit* busy, which stops the next sweep at the systemd
+    # level even with the lock free.
+    #
+    # Dispatch learns nothing about applies: its eligibility fold, its
+    # one-attempt bound and its "the wakeup is a hint, the fold is the
+    # authority" doctrine are all untouched. A second watcher on the
+    # same directory is that doctrine applied twice rather than bent
+    # once.
+    #
+    # And `castle dispatch`'s exit-code contract keeps meaning what it
+    # means. An apply refusal is not a dispatch mechanism fault, and
+    # folding one into that unit's health signal would blur the one
+    # signal a resident is asked to trust.
+    #
+    # **No watermark unit, and none is needed.** Dispatch needs a
+    # boundary because "has this request been worked" cannot be answered
+    # about a restored history; the applier's bound is per-answer and an
+    # approval granted before this task lacks `authorizes-apply`
+    # entirely, so a restored journal is invisible to its fold with no
+    # boundary to put down.
+    # ---------------------------------------------------------------
+    systemd.user.paths.castle-apply = lib.mkIf cfg.apply.enable {
+      description = "Watch the castle journal for approved changes to make";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      pathConfig = {
+        # The whole journal directory, for the reason the dispatch path
+        # unit gives at length: the wakeup is a hint and the fold is the
+        # authority, so a watcher keyed to a filename shape would
+        # foreclose the next predicate for no gain. Here the record that
+        # matters is an `answer`, which a request-shaped watcher would
+        # have missed outright.
+        PathChanged = "${toString cfg.stateDir}/journal";
+        # Deliberately no MakeDirectory, same as dispatch: creating the
+        # resident's state directory from a unit is the restore-order
+        # hazard `castle apply`'s own guard closes.
+      };
+    };
+
+    systemd.user.services.castle-apply = lib.mkIf cfg.apply.enable {
+      description = "Make every approved change that has not been made yet";
+      # No wantedBy, same as castle-dispatch and for the same reason: the
+      # path unit and the timer activate this, and a Type=oneshot pulled
+      # into default.target would hold the user manager's activation
+      # open for the whole run — here potentially a whole build.
+      unitConfig.ConditionUser = "!@system";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${castleCli}/bin/castle apply --sweep";
+        WorkingDirectory = "%h";
+      };
+      # The unit-level `environment` option and never a raw
+      # serviceConfig.Environment list — see the dispatch service's own
+      # comment for the whitespace-splitting bug that choice avoids.
+      environment = {
+        # `git` for the apply itself and `nix` for the optional check,
+        # both of which reach a session only through modules/dev, plus
+        # `notify-send` for the sweep's routing tail. A systemd user
+        # manager's bare PATH has none of them. mkForce for the same
+        # reason dispatch gives: nixpkgs' user.nix already sets a stock
+        # PATH at normal priority and this replaces it.
+        PATH = lib.mkForce "/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin";
+        CASTLE_STATE_DIR = toString cfg.stateDir;
+        CASTLE_NOTIFY_COMMAND = cfg.notify.command;
+        # The private root and nothing else. There is deliberately no
+        # CASTLE_MECHANISM_ROOT here: the applier refuses a
+        # mechanism-targeted change by name and never needs a path to
+        # that checkout, so it is not given one.
+        CASTLE_PRIVATE_ROOT = cfg.repo.private;
+        CASTLE_APPLY_EVALUATE_FLAKE = lib.boolToString cfg.apply.evaluateFlake;
+        CASTLE_APPLY_TIMEOUT = toString cfg.apply.timeoutSeconds;
+      };
+    };
+
+    systemd.user.timers.castle-apply = lib.mkIf cfg.apply.enable {
+      description = "Backstop for the castle apply path unit";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      timerConfig = {
+        # 15s rather than dispatch's 5s, and the difference is
+        # deliberate: nothing is ever eligible here until a resident has
+        # approved something, so there is no backlog worth racing to at
+        # login, and starting a possible build fifteen seconds after the
+        # user manager comes up is politer than five.
+        OnStartupSec = "15s";
+        # A minute, matching dispatch: this tick is the only thing that
+        # runs when an inotify event is missed or when an approval was
+        # made while this session was down, and the price of either is
+        # total silence until the next one. It is cheap when there is
+        # nothing to do — one journal read, one lock, one log line.
+        OnUnitActiveSec = "1min";
+      };
+    };
+
     # /code-review caught this on the branch that introduced the switch
     # to sessionVariables above: nixos/modules/config/system-
     # environment.nix's own pamVariable writes `NAME   DEFAULT="value"`
@@ -859,6 +1087,51 @@ in
           subdirectory of your flake repo, which would publish the
           journal to the world-readable Nix store on every rebuild. See
           docs/private-layer.md's "The agent's state".
+        '';
+      }
+      {
+        # docs/tasks/0026-apply-validate.md §K, mirroring the dispatch
+        # assertion above it verbatim and for the same reason: an
+        # applier writes result records unattended, and they must land
+        # in the durable, git-tracked journal the resident chose rather
+        # than in whatever per-user fallback the CLI resolves on its
+        # own.
+        assertion = !cfg.apply.enable || cfg.stateDir != null;
+        message = ''
+          castle.agent.apply.enable is true but castle.agent.stateDir is
+          unset. Applying an approved change writes a durable record of
+          what it did to your configuration repository; that record must
+          land in the journal you chose, not in a per-user fallback
+          (~/.local/state/castle) that nothing backs up. Set
+          castle.agent.stateDir — and not to a subdirectory of your
+          flake repo. See docs/private-layer.md's "The agent's state".
+        '';
+      }
+      {
+        # **This one deviates from the neighbouring precedent, and the
+        # deviation is deliberate.** `dispatch.enable` has no matching
+        # assertion on `repo.private`, on the argument that the
+        # errand-time refusal is the right place for it — and that is
+        # right there, where what an unconfigured root burns is one
+        # errand's automatic attempt. Here what it burns is *a
+        # resident's granted authorization*, which is costlier and less
+        # repeatable: any apply result at all, `failed` included, bars a
+        # second automatic attempt on that approval forever.
+        #
+        # Principle 02 consequence 2 is not violated. Nothing
+        # person-shaped is required to evaluate this module; the
+        # requirement exists only inside a branch the resident opted
+        # into, exactly like the stateDir assertion above.
+        assertion = !cfg.apply.enable || cfg.repo.private != null;
+        message = ''
+          castle.agent.apply.enable is true but castle.agent.repo.private
+          is unset, so there is no configuration repository for an
+          approved change to be made in. Unlike a dispatched errand,
+          which can simply be re-run, an approval that gets spent on a
+          failed apply is not automatically retried — the record bars a
+          second attempt. Set castle.agent.repo.private to the absolute
+          path of your own configuration checkout before turning this
+          on.
         '';
       }
       {
