@@ -41,6 +41,12 @@ export GIT_AUTHOR_NAME="castle-approval-fixture"
 export GIT_AUTHOR_EMAIL="fixture@example.invalid"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+# Same defect, same file family, same fix: the identity vars above are
+# not the only thing a developer's git config can decide (see
+# config-target.sh, whose fixture this reuses), so every git call this
+# harness makes is isolated from it too.
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
 
 # This harness is not about window geometry, and a review driven on a
 # pty here has two real ttys, so `_resize_for_review`'s double-tty gate
@@ -250,6 +256,15 @@ log "  -- it is NOT blocking: approving it must never start another worker turn"
 grep -q '^blocking:' "$JOURNAL/$Q1.md" \
   && fail "the proposal question is blocking — approving it would re-run the worker"
 
+log "  -- and it says approving authorizes an apply, which is what makes one possible at all"
+# A positive assertion rather than letting the old ones pass by
+# inertia. docs/tasks/0026-apply-validate.md's applier honours only a
+# decision whose question carries this stamp, so a proposal filed
+# without it is inert forever — and this harness's premise, that every
+# proposal it files is a live one, is exactly the premise that changed.
+grep -q '^authorizes-apply: true$' "$JOURNAL/$Q1.md" \
+  || fail "the proposal question does not say approving it authorizes an apply: $(grep '^authorizes-apply' "$JOURNAL/$Q1.md" || true)"
+
 log "  -- it carries no fact: no rejection may write into the resident model"
 grep -q '^fact:' "$JOURNAL/$Q1.md" \
   && fail "the proposal question elicits a fact — deciding it would write a stated preference"
@@ -365,7 +380,7 @@ grep -q 'APPROVAL-FIXTURE-ORDINARY-QUESTION.*Press Mod4+Shift+a to answer' "$CAS
 
 log "  -- the status surface says approved, and says nothing was applied"
 STATUS_APPROVED="$("$MODAL" --mode status --limit 40)"
-printf '%s\n' "$STATUS_APPROVED" | grep -F "$REQ1" | grep -q 'approved — nothing applied yet' \
+printf '%s\n' "$STATUS_APPROVED" | grep -F "$REQ1" | grep -q 'approved — waiting to be applied' \
   || fail "an approved errand does not read as approved-but-unapplied: $(printf '%s\n' "$STATUS_APPROVED" | grep -F "$REQ1")"
 printf '%s\n' "$STATUS_APPROVED" | grep -F "$REQ1" | grep -q 'waiting on you' \
   && fail "a decided change still reads as waiting on the resident"
@@ -861,7 +876,7 @@ log "a verdict never masks a newer turn, or the retry command that turn needs"
 # This block's own rule is that an errand's state is the state of its
 # newest turn. An unconditional override broke it: approve, run another
 # turn by hand, have it fail, and the surface went on reading
-# "approved — nothing applied yet" while the failure and its
+# "approved — waiting to be applied" while the failure and its
 # `castle work <id> to retry` remedy vanished.
 REQ_RETRY="$("$CASTLE" ask "APPROVAL-FIXTURE-RETRY: an invented complaint whose second turn fails after a decision.")"
 "$CASTLE" work "$REQ_RETRY" >/dev/null
@@ -869,7 +884,7 @@ Q_RETRY="$(proposal_question_for "$REQ_RETRY")"
 [ -n "$Q_RETRY" ] || fail "the retry-case turn proposed nothing"
 "$CASTLE" answer --decision approve "$Q_RETRY" </dev/null >/dev/null
 STATUS_APPROVED_ONLY="$("$MODAL" --mode status --limit 40)"
-printf '%s\n' "$STATUS_APPROVED_ONLY" | grep -F "$REQ_RETRY" | grep -q 'approved — nothing applied yet' \
+printf '%s\n' "$STATUS_APPROVED_ONLY" | grep -F "$REQ_RETRY" | grep -q 'approved — waiting to be applied' \
   || fail "the approved errand does not read as approved before its retry"
 FAILING_TENANT="$WORKDIR/failing-tenant.sh"
 cat > "$FAILING_TENANT" <<'TENANT'
@@ -893,7 +908,7 @@ CASTLE_WORKER_COMMAND="$FAILING_TENANT" "$CASTLE" work "$REQ_RETRY" >/dev/null 2
 STATUS_AFTER_FAIL="$("$MODAL" --mode status --limit 40)"
 printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY" | grep -q "failed — castle work $REQ_RETRY to retry" \
   || fail "a newer failed turn is masked by an older verdict: $(printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY")"
-printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY" | grep -q 'approved — nothing applied yet' \
+printf '%s\n' "$STATUS_AFTER_FAIL" | grep -F "$REQ_RETRY" | grep -q 'approved — waiting to be applied' \
   && fail "the surface still reports a verdict older than the errand's newest turn"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after the retry case"
 assert_checkouts_untouched "after the overlay-keying cases"
@@ -961,8 +976,25 @@ drive_modal "$WORKDIR/review-approve.txt" --mode review --question "$Q_PTY" -- \
   "send:Fine by me.\n.\n" "wait:Press Enter to close" "send:\n"
 REVIEW_OUT="$(cat "$WORKDIR/review-approve.txt")"
 [ "$(transcript_rc "$WORKDIR/review-approve.txt")" = "0" ] || fail "approving through the window did not exit 0"
-printf '%s\n' "$REVIEW_OUT" | tr -d '\r' | grep -qx 'Approved.' \
-  || fail "the confirmation is not a bare 'Approved.': $REVIEW_OUT"
+printf '%s\n' "$REVIEW_OUT" | tr -d '\r' \
+  | grep -qF 'Approved. Castle will make this change in your configuration repository. Nothing will be activated.' \
+  || fail "the confirmation does not say what approving an applyable change does: $REVIEW_OUT"
+
+log "  -- and the boundary statement it was decided under is the one that says an apply follows"
+# The premise this whole harness's proposals now carry
+# (docs/tasks/0026-apply-validate.md §A): every change it files stamps
+# `authorizes-apply`, so every review of one renders the new statement.
+# Both halves are asserted, because each fixes a different thing — that
+# the resident is told an apply follows, and that they are still told
+# nothing is activated.
+printf '%s\n' "$REVIEW_OUT" | grep -q 'APPROVING IT AUTHORIZES CASTLE TO MAKE THIS CHANGE IN YOUR' \
+  || fail "the review does not say approving authorizes the change to be made: $REVIEW_OUT"
+printf '%s\n' "$REVIEW_OUT" | grep -q 'NOTHING IS ACTIVATED AND NOTHING IS REBUILT' \
+  || fail "the review no longer says nothing is activated: $REVIEW_OUT"
+printf '%s\n' "$REVIEW_OUT" | grep -q 'NOTHING ON THIS MACHINE IS EDITED' \
+  && fail "an applyable change was decided under the retired statement that approving edits nothing: $REVIEW_OUT"
+printf '%s\n' "$REVIEW_OUT" | grep -q 'It pushes nothing anywhere' \
+  || fail "the review does not say the commit is not a publication: $REVIEW_OUT"
 # The boundary statement's own account of what "setting it aside" does
 # must not promise a way back to it — defer is as terminal as reject,
 # and this text used to say the opposite outright ("Setting it aside

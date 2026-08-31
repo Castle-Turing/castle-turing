@@ -1100,6 +1100,17 @@ in
     machine.sleep(2)
     machine.send_chars(".\n")  # the optional comment, deliberately left empty
     machine.sleep(2)
+    # The one surface docs/tasks/0026-apply-validate.md changed that a
+    # real compositor can be asked about without racing the scrollback:
+    # the confirmation is the last thing printed and is still on screen.
+    # A change offered since that task says approving authorizes Castle
+    # to make it in the resident's configuration repository, where the
+    # older wording was a bare "Approved." — and the boundary statement
+    # the resident decided it under is asserted, in full and against a
+    # transcript rather than against pixels, in
+    # test/agent-loop/modal-headless-test.sh, for the same reason the
+    # review render above is.
+    machine.wait_for_text("onfiguration repositor")
     machine.screenshot("12-modal-change-approved")
     machine.send_key("ret")  # dismiss ("Press Enter to close.")
     retry(lambda last: not has_modal())
@@ -1128,6 +1139,27 @@ in
         "approving a change activated a new system generation"
     )
     print("OK: nothing was edited, committed, or activated by approving it")
+
+    # And the status surface says which of those two things is true.
+    # `castle.agent.apply.enable` is left at its default here, so no
+    # applier unit exists on this machine and nothing will ever spend
+    # this approval — which is exactly why the label has to say the
+    # change is *waiting* rather than that it is done. Read as text
+    # rather than off the screen: this is a fold's output, and the two
+    # assertions above are the ones that need a real machine.
+    approved_status = machine.succeed(
+        "su - resident -c 'castle-modal --mode status --limit 40'"
+    )
+    assert "approved — waiting to be applied" in approved_status, approved_status
+    # And there is nothing on this machine that could change that, which
+    # is the other half of the same claim: the module declares its
+    # applier units only when a resident opts in, and this VM never
+    # does.
+    assert not machine.succeed(
+        "su - resident -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user "
+        "list-unit-files --no-legend \"castle-apply*\" || true'"
+    ).strip(), "an applier unit exists on a host that never enabled applying"
+    print("OK: the approved change reads as waiting to be applied, and nothing here will apply it")
 
     # --- The notify channel, checked for silence rather than for a
     # popup. `castle route` deliberately never lets a failed

@@ -97,9 +97,19 @@ castle show ID
   own, and demanding prose beside it would train a resident to type
   "ok" before every approval. Whatever they do type is stored
   verbatim, unparsed, and no authorization path ever reads it.
-  **Nothing is applied, committed, or activated by any of the three
-  values**; applying an approved change is `docs/tasks/0026` and
-  activating one is `docs/tasks/0027`.
+  **Nothing is activated by any of the three values**, and rejecting or
+  setting aside does nothing at all. Approving a change offered since
+  `docs/tasks/0026-apply-validate.md` — one whose question carries
+  `authorizes-apply: true` — authorizes the applier to make it in the
+  resident's own configuration checkout and commit it there; approving
+  one offered before that authorizes the record and nothing more,
+  permanently. Activating is still `docs/tasks/0027` and still the
+  resident's alone.
+- **`apply`** — the applier seat's hands
+  (`docs/tasks/0026-apply-validate.md`). `castle apply <answer-id>`
+  spends one approval by hand; `castle apply --sweep` spends every
+  approval nothing has applied yet, at most once each. See "Applying an
+  approved change," below.
 - **`correct`** — also intake, and a second, different kind of speech:
   the resident volunteering how the system is doing, unbidden, rather
   than asking for anything or answering a question it posed
@@ -658,6 +668,13 @@ to query the journal without running any tool at all. The cost is real:
 nobody is putting a paragraph of structured metadata in a frontmatter
 field. That trade is intentional — prose belongs in the body.
 
+**Records are UTF-8 by definition.** `parse_record` and `write_record`
+both pass `encoding="utf-8"` explicitly (docs/tasks/0033-byte-exact-
+proposal.md) — not a new constraint, but the assumption every fixture,
+example and piece of hand-written prose in this repo already made,
+now enforced at the one call site each direction passes through
+instead of left to whatever the host's locale happened to be.
+
 ### Required fields (every record)
 
 | Field        | Meaning                                                              |
@@ -807,7 +824,15 @@ still running is `failed`; only a turn nobody ever finished is
 **This is a named cross-task contract.** Tasks 0026 and 0027 are
 expected to reuse this field name and these four values rather than
 each inventing a sibling field, and 0028 (rendering the errand
-lifecycle) reads it directly. **No surface may ever infer failure by
+lifecycle) reads it directly. **0026 honoured that**, and how it did is
+worth stating because the shape generalises: it kept `outcome` meaning
+exactly what it means here — an observation about the writer's own run
+— and added `apply-outcome` for the different observation it needed, an
+account of what happened to the *change*. The two compose without
+either widening: a validation killed at its bound is `outcome: timeout`
+with `apply-outcome: validation-failed`, and a refusal correctly
+reached is `outcome: completed`, because the applier ran to a recorded
+conclusion and a conclusion is not a failure of the run. **No surface may ever infer failure by
 grepping a body for a word like "FAILED."** The exit code is the fact
 and it lives in this field; the body carries the reasoning. That is
 not hypothetical hygiene — before this field existed, a failed errand's
@@ -842,8 +867,11 @@ relative and can be identical in both checkouts — a private layer
 legitimately carries its own `flake.nix` and its own `hosts/`
 directory. So which repo a proposal is against is a judgment made once,
 at write time, by the only party that knows, and 0025's approval
-binding and 0026's applier will both need it against that exact
-proposal.
+binding and 0026's applier both need it against that exact proposal.
+The applier reads exactly this field to decide what it may do: `private`
+is the one value it acts on, and `mechanism` gets its own named refusal
+(`refused-target-mechanism`) rather than an error, because an
+approved-but-unapplyable change is a terminal state and not a fault.
 
 The field carries a **role**, not a path. A role reads correctly to a
 human or a cold tenant years later; an absolute path reads correctly
@@ -1189,6 +1217,17 @@ The markdown fence stays, *inside* the boundary, so the record still
 renders as a diff wherever a journal is read as markdown. It is
 decoration now, not structure: nothing keys on it.
 
+**As of `docs/tasks/0033-byte-exact-proposal.md`, that "decoration, not
+structure" status extends to the entire body copy of the diff, not
+only the fence around it.** The body is read through a lenient decode
+(`errors="replace"`) and a `splitlines()`-based round trip that both
+lose information a real patch can depend on: a stray non-UTF-8 byte, a
+CRLF line ending, a form feed, a Unicode line separator, or a missing
+trailing newline. None of that matters for what the body is *for* —
+showing a human what changed — but it means the body must never be
+read back for fidelity. The byte-exact copy is a sidecar file next to
+the record; see "The byte-exact sidecar" below.
+
 Validated **when present**, result-only, and shape-checked as sixteen
 lowercase hex characters — `blocking`'s and `target`'s treatment, for
 the same reasons. Absent means "this result embeds no diff", which is
@@ -1275,13 +1314,31 @@ decision per question — the last being an honest backstop for the
 scan-then-write race `file_answer`'s duplicate guard documents about
 itself, not a claim that the race cannot happen.
 
-**Nothing is applied.** Not by approving, not by any of the three
-values, not anywhere in this layer. Applying an approved change is
-`docs/tasks/0026` and activating a generation is `docs/tasks/0027`.
-Until then, `castle-modal --mode status` renders an approved errand as
-`approved — nothing applied yet` rather than `done` — the sentence
-0026 will have to come back and change, which is exactly why it is
-written that way.
+**`authorizes-apply`** is a second field on the proposal *question*,
+from `docs/tasks/0026-apply-validate.md`, and it is what makes an
+approval spendable. The literal `true`, stamped by
+`_file_proposal_question` on every proposal it files from that task
+onward and by nothing else; absent everywhere else, forever.
+
+Absence is not "unknown" — it is a positive fact. Every proposal filed
+before that task was decided under a review screen saying in capitals
+that approving edits, commits and applies nothing, so approving one
+authorized a record and nothing more, and no later change to that
+wording reaches backwards. The applier's fold therefore honours only
+questions carrying the stamp, and because the journal is append-only
+there is no migration, no backfill, and nothing that could ever make an
+old approval applyable. That is the point rather than a limitation.
+
+Drawing the same line by comparing timestamps against the commit that
+changed the wording would be wrong twice over: record ids are
+one-second resolution, and a restored or synced journal has no
+defensible relationship between its stamps and this repository's
+history. The field travels with the record that was shown.
+
+`castle validate` treats it exactly as `blocking`: question-only, the
+one spelling or nothing. A hand-written `authorizes-apply: false` is
+inert — the fold is strict in the other direction — but it is not
+*visible*, and that check is what names it.
 
 **A pending change waits indefinitely.** No expiry, no auto-approve,
 no auto-cancel, no re-ask. That is defensible in this one channel —
@@ -1290,6 +1347,297 @@ reversible by design — and it is a posture rather than a strategy;
 see `docs/backlog/approval-channel-has-no-transfer-of-control-
 strategy.md` before copying it anywhere a third party is on the other
 end.
+
+### Applying an approved change: `castle apply` and `apply-outcome`
+
+From `docs/tasks/0026-apply-validate.md`. `castle apply` is the first
+thing in this system that changes a resident's configuration. It spends
+**exactly one `answer` record** per apply, writes the resident's own
+private checkout and nothing else, commits once, optionally builds the
+resulting host configuration, and writes one `result` saying which of
+those happened. It activates nothing — no `nixos-rebuild`, no `switch`,
+no new generation. It pushes nothing, ever. It never touches a checkout
+of this framework.
+
+Two forms, mirroring `castle work` and `castle dispatch` deliberately.
+`castle apply <answer-id>` is the hand path and is **not** bounded:
+re-running it is the retry, exactly as `castle work <id>` is for an
+errand. `castle apply --sweep` is what the `castle-apply` systemd user
+unit runs, and it is bounded — an approval any result already names is
+never applied automatically again, whatever that result said.
+
+The argument is the **answer** id, never the question's: the
+authorization is the answer, a proposal authorizes nothing on its own,
+and naming the thing being spent is the discipline `refs` already
+follows.
+
+**`seat: applier`** — a new value in the existing category, as
+`dispatch` was. Not `worker`: a seat is what reads and writes, and this
+one reads decisions and sidecars and writes a resident's checkout,
+which is a different set. Keeping the names distinct is what lets a
+reader ask "which seat touched my repository" and get an answer. Like
+dispatch it is plumbing, not a reasoning seat: what it does is a total
+function of the journal and the tree, and a policy about which
+approvals are worth applying is exactly the authority it must never
+acquire.
+
+**What it checks before it touches anything**, in order, each failure
+recorded and stopping: that `CASTLE_PRIVATE_ROOT` names a usable
+checkout; that the result on disk still hashes to what the *answer*
+recorded when authority was granted; that the byte-exact sidecar exists
+and matches `patch-sha256`; that `target` says `private`; that the
+resident has no uncommitted work under the paths the patch touches; and
+that `git apply --check` accepts it. **No fuzz, ever** — no `-3`, no
+`--recount`, no `patch(1)`. A patch that does not apply exactly is not
+the change the resident approved, and a three-way merge would produce a
+change nobody authorized.
+
+Then the commit — **constructed, not collected**. The patch is applied
+to a *private temporary index* seeded from the pre-apply commit, that
+index is written to a tree, and the tree is committed with
+`commit-tree`; only then does one guarded `update-ref` move the branch,
+and only then is the working tree brought to it. The commit's content is
+therefore a pure function of the pre-apply commit and the verified patch
+bytes — the working tree is not an input at all.
+
+That closes a race an apply-to-the-worktree-then-commit-from-it sequence
+cannot: anything writing one of those paths in between got *its* bytes
+committed and certified under the approved patch's digest, with every
+check passing because the committed blob and the working tree agreed.
+Three things follow. Everything before the `update-ref` mutates nothing,
+so a patch that no longer fits is an ordinary refusal with nothing to
+undo. `applied-uncommitted` can no longer occur. And a `.gitattributes`
+`clean` filter can no longer transform the commit, because
+`git apply --cached` does not run one.
+
+The identity is passed with `-c user.name`/`-c user.email`, so the
+resident's `.git/config` is never written, and nothing signs these
+commits: the identity on them is the applier seat, and signing a seat's
+commit with a resident's key would assert authorship they do not have.
+The message names only ids and the patch digest — no paths, no tenant
+prose, nothing that could be resident data — and says in as many words
+that nothing was activated.
+
+**The working tree is then synced per path, and never over anybody's
+work.** If a file's bytes are still what they were before any of this
+began, it is brought to the commit (with the repository's own `smudge`
+filter and modes, so a symlink stays a symlink). If they are not,
+somebody wrote it during the window: it is left exactly as they left it
+and named in the record, so their edit is ordinary visible dirt over an
+approved commit rather than either a lie or destroyed work.
+
+**The resident's git hooks do not run on that commit**, via
+`core.hooksPath=/dev/null`, and neither do their user-level git
+attributes (`core.attributesFile=/dev/null`). `commit-tree` runs no
+hooks of its own either, so this is belt on top of construction. A formatting `pre-commit`
+would otherwise rewrite the very bytes the commit message records a
+digest for, and a `post-commit` can commit again — making `rev-parse
+HEAD` name a commit the applier never made, with `git revert <sha>`
+printed beside it. Their hooks still run on commits they make
+themselves. Afterwards the landing is verified as belt rather than as
+the guarantee: HEAD is the commit this built, its parent is where it
+started, exactly one commit separates them. All three are true by
+construction; what they catch is something moving the reference again
+in between. Cleanliness is deliberately not among them, because a path
+can be legitimately dirty afterwards — a concurrent edit, or a
+repository whose own `clean` filter would store the approved bytes in a
+different canonical form — and gating on it would report `outcome:
+failed` over a commit that is exactly right. Both of those are named in
+the record's body instead. If it is not, the record is `outcome: failed`
+with no `apply-outcome` and no sha — naming an unverified commit beside
+a revert command is worse than naming none.
+
+**Nothing is ever rolled back.** No `git reset --hard`, no auto-revert
+of a change whose check failed. A hard reset would destroy uncommitted
+work the applier did not put there — provably possible, since the
+dirty check is scoped to the patch's own paths — rewinding a resident's
+history is a larger authority than adding one commit they authorized,
+and nothing is activated anyway, so a bad commit is inert until their
+own rebuild. "Recovered" is honoured by naming the commit and the
+`git revert` for it, not by acting again unbidden.
+
+An **`apply-outcome`** field on the `result` it writes, from a closed
+vocabulary, saying what happened to the change:
+
+| Value                      | `outcome`               | The tree | Meaning |
+|----------------------------|-------------------------|----------|---------|
+| `applied-validated`        | `completed`             | one commit | applied, committed, and the host configuration builds |
+| `applied-unvalidated`      | `completed`             | one commit | applied and committed; no evaluation attempted — the body says which of the three gates stopped it |
+| `validation-failed`        | `completed` / `timeout` | one commit | applied and committed; the build failed or outlived its bound |
+| `applied-uncommitted`      | `failed`                | edited, not committed | the patch applied and the commit did not; the body gives both ways out |
+| `refused-target-mechanism` | `completed`             | untouched | the change is to this framework, which this seat has no authority over |
+| `refused-artifact-changed` | `completed`             | untouched | a digest no longer matches |
+| `refused-no-patch`         | `completed`             | untouched | no sidecar, so no exact bytes to apply |
+| `refused-patch-stale`      | `completed`             | untouched | `git apply --check` refused it |
+| `refused-tree-dirty`       | `completed`             | untouched | the resident has uncommitted work under those paths |
+
+An **`apply-commit`** field beside it, also result-only, carrying the
+commit the apply made — stamped **only** where the landing was verified,
+so its meaning is not "a commit happened" but "exactly one commit
+landed, parented where this started, nothing left uncommitted, and this
+is it." Absent on every refusal and every attempt that reached no
+conclusion, matching the body prose, which names no sha there either.
+`castle validate` accepts 40 **or** 64 lowercase hex characters: git's
+sha256 object format is real, and condemning a resident's own
+sha256-format repository would be a validator lying about a perfectly
+good journal.
+
+It exists because the body already said this in prose, and a body is not
+where a machine may read a fact — this file's own rule, stated for
+`outcome` above. `docs/tasks/0027` is the surface that will need it
+mechanically. The prose stays for the resident, beside the `git revert`
+they would actually type.
+
+Several shapes carry `outcome: failed` and **no `apply-outcome` at
+all**, because none of them says anything about the change: an
+environment fault, a `target` naming a role this applier has no
+checkout for, a `git apply` git never finished, and a commit that
+reported success while leaving the repository in a state that
+contradicts it. Those records still name the answer, so they still bar
+it from a second automatic attempt — which is why `castle-modal --mode
+status` renders them as `could not be applied — castle apply
+<answer-id> to try again` rather than leaving the errand reading as
+though something were still coming. The automatic bar is deliberate;
+what the label owes the resident is the hand path.
+`castle validate` holds every result written by this seat to one
+cross-record rule, whether it carries `apply-outcome` or not: its first
+ref must resolve to an `answer` carrying `decision: approve`. An apply
+spends exactly one authorization and names it first, so a record that
+names something else is claiming one that does not exist. The check is
+refs-shape only and deliberately stays that way — it cannot tell a
+forged suppressor from a legitimate dead attempt, because in an
+append-only journal both look identical, and the status fold already
+renders both with the hand-retry remedy. What it owes is that a
+malformed one is *named*.
+
+`interrupted` is never written here and never will be — that value is
+supplied retroactively by a reaper reading a surviving `claim`, and the
+applier deliberately **writes no claim record**, because the reaper
+would then offer `castle work <request-id>` as the retry for an apply
+that died. An applier killed before it writes anything leaves no record,
+and the next sweep finds the approval still eligible and tries once
+more. That is the honest behaviour: nothing was written, so nothing was
+attempted as far as the journal is concerned.
+
+**`refs: [answer-id, question-id]`, and deliberately not the request.**
+`closing_result`'s second clause treats any result naming a claim's
+request, newer than the claim and naming no claim of that request, as
+the account closing it — so an apply result naming the request would
+silently close a genuinely dangling worker claim, and an errand whose
+hand-run retry died would be labelled with the *apply's* outcome and
+never reaped. Leaving the request out makes the apply invisible to both
+that fold and `_errand_state`'s result selection, which is right: an
+apply is not a turn of the errand. Lineage still works —
+`_find_root_request` walks `refs[0]` transitively and reaches the
+request through the answer and the question — so `castle digest`'s
+grouping and the router's evidence sentence need no change.
+
+**Validation, when it runs, means exactly two things**: the flake
+evaluates and `system.build.toplevel` builds. Not that the change did
+what the proposal claimed — nothing anywhere declares that — not that
+secrets will decrypt, and not that the configuration will activate. It
+is gated on `castle.agent.apply.evaluateFlake` (off by default), on the
+state directory not sitting inside the evaluated flake's tracked tree,
+and on `nix` existing at all. The exact command line is recorded
+whether it ran or not; the full output goes to the ephemeral spool and
+forty lines go in the body.
+
+**The forged-approval hole, stated.** `write_record`'s refusal to write
+an `answer` from inside a worker turn keys on an environment variable a
+tenant can unset (`docs/backlog/env-stripping-defeats-write-guards.md`),
+and `castle apply`'s own guard keys on the same variable and is defeated
+the same way. Until this task a forged approval was inert; this is the
+thing that makes it mutate a configuration. Three things bound it, none
+of which is a fix: the tenant is a model this system chose to run rather
+than an attacker, nothing is activated, and a stripped write is visible
+in the journal as a record with no claim link where its siblings have
+one.
+
+### The byte-exact sidecar: `patch-sha256`
+
+From `docs/tasks/0033-byte-exact-proposal.md`. A result's body embeds
+the tenant's diff for a human to read, but getting there costs four
+lossy transforms: a lenient UTF-8 decode with `errors="replace"` that
+destroys any non-UTF-8 byte irreversibly, a `.strip()` that drops the
+patch's trailing newline, locale-dependent I/O on both the read and
+the write back (no `encoding=` at either `path.read_text()` or
+`path.write_text()`), and a `splitlines()`-based round trip that
+treats CR, form feed and the Unicode line separators as line breaks
+the same way `\n` is. None of that is a defect in what the body is
+*for*; it is a defect in trusting the body for anything else. Once an
+applier exists (`docs/tasks/0026`), "anything else" is exactly what it
+needs: the tenant's exact bytes, undisturbed. This task closes the
+locale-dependent I/O transform outright — `parse_record` and
+`write_record` now pass `encoding="utf-8"` explicitly, see "Records
+are UTF-8 by definition" above — and routes around the other two
+(the lenient decode/strip and the `splitlines()` round trip) rather
+than fixing them: the sidecar below is read from the raw bytes before
+either ever runs, so an applier that reads the sidecar instead of the
+body never meets them.
+
+So a turn that embeds a diff writes a second file beside the record,
+`<result-id>.patch`, holding the tenant's diff exactly as it wrote it
+to `$CASTLE_DIFF_FILE` — read once, before the lenient decode ever
+runs, and never modified afterward. `patch-sha256`, stamped on the
+result alongside `diff-boundary`, is that sidecar's SHA-256, and it
+rides the same gate `diff-boundary` already does: any turn whose
+tenant wrote a diff gets one, not only a turn that finished cleanly
+and named a resolvable target. Completed-and-targeted is the normal
+case, not the rule — a turn killed at `CASTLE_WORKER_TIMEOUT` with a
+diff already on disk gets a sidecar too, deliberately: the sidecar
+mirrors the body's own diff treatment (a timed-out turn embeds its
+possibly-partial diff in the body, labelled as such), and the exact
+bytes of a partial diff are precisely what you want when diagnosing a
+timeout. `castle validate` checks it regardless of outcome: the
+sidecar a stamped record names must exist and must hash to the
+stamped value. Absent means "this result embeds no diff," the same
+reading `diff-boundary` already gives absence, and `castle validate`
+does not go looking for a sidecar nothing names.
+
+**A sidecar from a turn that did not complete cleanly can never reach
+the approval channel.** `stamped_target` (`agent/castle:4425`) is set
+from `target_text if (diff_text and finished_cleanly) else ""` — a
+strictly narrower gate than the sidecar's own — and
+`_file_proposal_question` (`agent/castle:4564`) is only ever called
+when `stamped_target` is truthy. So a timed-out or otherwise
+not-cleanly-finished turn's sidecar sits in the journal with a valid
+`patch-sha256`, but no `target` field, no question filed for it, and
+therefore nothing for a resident to approve and nothing for 0026's
+applier to spend: this is the contract 0026 relies on, not an
+incidental consequence.
+
+The sidecar lives inside the journal directory, so `docs/tasks/0030`'s
+state-layout rules already cover it with no separate check, and it is
+invisible to every existing reader: `load_all` and `cmd_validate` both
+glob `*.md` only, so a `.patch` file is never fed to `parse_record` by
+anything that walks the journal today.
+
+**The one-sentence distinction from `proposal-sha256`:**
+`proposal-sha256` is record-tamper evidence — has this exact record
+file changed since the proposal was filed? `patch-sha256` is
+byte-fidelity evidence — are these the exact bytes the tenant
+produced, unmangled by anything this record format's own transforms do
+to a body? The two live on different record types, never the same
+file: `patch-sha256` is stamped on the result, `proposal-sha256` on
+the question filed for it, so a given result carries `patch-sha256`,
+possibly-neither, never `proposal-sha256` itself. A completed, targeted
+turn is the only case that produces both records — the result with
+`patch-sha256` and the question with `proposal-sha256` — of the
+journal entries a single turn can write; a turn that embedded a diff
+but was not cleanly completed-and-targeted produces the result and its
+sidecar alone, no question, ever.
+
+Like `proposal-sha256`, this is tamper/fidelity evidence only — not a
+signature, not an attestation of authorship, and not anything that
+applies a change. **`castle apply` is the consumer it was written for,
+and it is here now** (see "Applying an approved change," above): the
+applier reads the sidecar's bytes and never the body's rendered copy,
+re-derives this digest from disk before it touches the tree, and
+refuses with `refused-artifact-changed` if the two disagree or
+`refused-no-patch` if there is no sidecar at all. `castle validate`
+proves the pair for a whole journal on demand; the applier proves it
+again for the one record it is about to act on, because "validate was
+run at some point" is not the same claim.
 
 ### Corrections and filing-time context
 

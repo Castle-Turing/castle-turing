@@ -140,6 +140,18 @@ jobs:
       # worker contract and reuses that harness's own fixture shape,
       # git prerequisite included.
       - run: test/agent-loop/approval.sh
+      # Making an approved change (docs/tasks/0026-apply-validate.md):
+      # the two trigger forms, the three patch shapes, the once-only
+      # bound, an approval granted before the applier existed staying
+      # inert, all nine refusals, and — after every one of them — the
+      # proof that the framework checkout never moved. Its own file
+      # rather than more scenarios in approval.sh, because it inverts
+      # that file's central assertion for one of the two checkouts. In
+      # this job for the same reason approval.sh is: real `git`, real
+      # `castle work`, no Nix. Every `nix` in it is a stub that logs its
+      # own invocation, which is how the evaluation gate is proved on a
+      # runner that has none.
+      - run: test/agent-loop/apply.sh
 
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and
