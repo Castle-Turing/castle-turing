@@ -44,6 +44,13 @@ Subcommands:
             route once (docs/tasks/0021-auto-dispatch.md). Plumbing,
             not a reasoning seat: it chooses nothing a re-run of the
             same fold over the same journal wouldn't choose again.
+  apply     applier: make one approved change in the resident's own
+            configuration checkout and commit it there, on the strength
+            of exactly one `answer` record whose question said that
+            approving authorizes this. Optionally builds the resulting
+            host configuration. It activates nothing, it pushes nothing,
+            and it never writes the mechanism checkout
+            (docs/tasks/0026-apply-validate.md).
   digest    fold the journal into a human-readable report.
   validate  schema-check a journal (this is what CI asserts with).
   show      print one record, journal or spool.
@@ -343,6 +350,79 @@ PROPOSAL_QUESTION_BODY = (
 # decoration now, not structure: nothing keys on it.
 DIFF_BOUNDARY_FIELD = "diff-boundary"
 
+# The field that says this proposed change, if approved, carries
+# authority to APPLY it (docs/tasks/0026-apply-validate.md §A).
+# Stamped by `_file_proposal_question` on every proposal it files from
+# this task onward, and by nothing else.
+#
+# It exists because the sentence a resident read while deciding is the
+# scope of what they decided. Every proposal filed before this task was
+# decided under a screen saying in capitals that approving edits
+# nothing, so approving one authorized a record and nothing more, and
+# no later change to that wording reaches backwards. Absence is
+# therefore not "unknown": it is the positive fact that this proposal
+# was offered under the older, narrower statement.
+#
+# Drawing the line by comparing timestamps against the commit that
+# changed the wording would be wrong twice over: record ids are
+# one-second resolution
+# (docs/backlog/record-ids-are-only-second-resolution.md), and a
+# restored or synced journal has no defensible relationship between its
+# stamps and this repo's history. The field travels with the record
+# that was shown.
+#
+# Literal "true", the only spelling, following BLOCKING_FIELD's
+# reasoning exactly: absence means no, an unrecognised value means no,
+# and `cmd_validate` names any other spelling rather than letting it
+# sit there looking meaningful.
+AUTHORIZES_APPLY_FIELD = "authorizes-apply"
+
+# What happened to the CHANGE, on a result written by the applier seat
+# (docs/tasks/0026-apply-validate.md §F). Distinct from `outcome`,
+# which stays exactly what agent/README.md reserves it as: an
+# observation about the writer's own run. The two compose — a
+# validation killed at its bound is `outcome: timeout` with
+# `apply-outcome: validation-failed`, and nothing had to widen a
+# vocabulary that four surfaces branch on to say it.
+APPLY_OUTCOME_FIELD = "apply-outcome"
+
+# The commit an apply made, on the result that made it
+# (docs/tasks/0026-apply-validate.md §F). Stamped only on the path where
+# the landing was *verified* — one commit, parented where the applier
+# started, nothing left uncommitted — and absent everywhere else, which
+# is every refusal and every attempt that reached no conclusion.
+#
+# It exists because the body already says this in prose and a body is
+# not where a machine may read a fact. `agent/README.md`'s `outcome`
+# section states that as a named contract: no surface may ever infer a
+# fact by grepping a body. docs/tasks/0027 is the surface that will need
+# this one mechanically — a commit sha is what a rollback route is
+# expressed against — so leaving it as prose would have handed the next
+# task exactly the grep this project has already paid to remove once.
+#
+# The prose stays. It is the resident-facing copy, beside the
+# `git revert` they would actually type; this is the machine-facing
+# fact. Same split as `target` and its resolved path, one record over.
+APPLY_COMMIT_FIELD = "apply-commit"
+
+APPLY_OUTCOME_VALUES = (
+    "applied-validated",
+    "applied-unvalidated",
+    # No longer produced by any path, since the commit is built before
+    # anything in the repository moves — there is no window in which the
+    # working tree can carry the change while the repository does not.
+    # Kept in the vocabulary rather than deleted, because the journal is
+    # append-only and a validator must never condemn a record some
+    # writer of this code could have written.
+    "applied-uncommitted",
+    "validation-failed",
+    "refused-target-mechanism",
+    "refused-artifact-changed",
+    "refused-no-patch",
+    "refused-patch-stale",
+    "refused-tree-dirty",
+)
+
 # The field name a proposal's sidecar digest is stamped under
 # (docs/tasks/0033-byte-exact-proposal.md). Distinct from
 # PROPOSAL_SHA256_FIELD by what each proves: proposal-sha256 is
@@ -414,6 +494,18 @@ FIELD_ORDER = (
     "seat",
     "created",
     "outcome",
+    # Result-only, and beside `outcome` for the same presentation-only
+    # reason, because it is the other half of the same sentence on the
+    # one record type that carries both: `outcome` says what happened
+    # to the applier's own run, `apply-outcome` says what happened to
+    # the change it was spending an authorization on
+    # (docs/tasks/0026-apply-validate.md §F).
+    "apply-outcome",
+    # Beside `apply-outcome` and by the same presentation-only rule: on
+    # an apply result the two together are what the record says about
+    # itself before any prose — what happened to the change, and which
+    # commit is it (docs/tasks/0026-apply-validate.md §F).
+    "apply-commit",
     "target",
     # Result-only, and beside `target` for the same presentation-only
     # reason: it is machine-readable structure about the body below,
@@ -437,6 +529,12 @@ FIELD_ORDER = (
     # about resumption depends on `blocking` sitting here rather than
     # falling out in the sorted remainder the way `channel` does.
     "blocking",
+    # Question-only, beside `blocking` and by the same presentation-only
+    # rule: both are machine-readable facts the question's own writer
+    # stated about what filing it means, and a reader skimming a
+    # proposal should meet them before the prose
+    # (docs/tasks/0026-apply-validate.md §A).
+    "authorizes-apply",
     # Answer-only and question-or-answer respectively
     # (docs/tasks/0025-approval.md §A), placed together and for the
     # same presentation-only reason as everything above them: on the
@@ -666,6 +764,20 @@ def journal_dir() -> pathlib.Path:
 GITLINK_MODE = "160000"
 
 
+def _git_stripped_env() -> dict[str, str]:
+    """The ambient environment with every `GIT_*` variable removed —
+    what every `git` subprocess in this file runs under.
+
+    The blanket is deliberate rather than lazy, and the full argument
+    (including the enumeration that was tried first and proved unsafe)
+    is at `_checkout_fault`'s own probe. In one sentence: git reads that
+    environment to decide what a repository even is, so an inherited
+    GIT_DIR or GIT_WORK_TREE would make the answer a property of
+    whoever happened to export something.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def _state_tracked_in(root: pathlib.Path, path: pathlib.Path) -> tuple[bool | None, str]:
     """Does `root`'s index hold real content under `path`? `None` when
     that could not be established, with a phrase saying why.
@@ -702,7 +814,7 @@ def _state_tracked_in(root: pathlib.Path, path: pathlib.Path) -> tuple[bool | No
     # GIT_DIR or GIT_WORK_TREE would make this answer a property of
     # whoever happened to export something. An enumeration was tried
     # there and proved unsafe; the blanket is deliberate.
-    probe_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    probe_env = _git_stripped_env()
     try:
         probe = subprocess.run(
             [git, "-C", str(root), "ls-files", "-s", "--", rel],
@@ -833,10 +945,21 @@ def _state_layout_finding(path: pathlib.Path) -> str | None:
     `docs/private-layer.md`, and in the brief's non-goals rather than
     silently missed.
 
-    Advisory only. It reports; it never refuses. The store copy is made
-    by `nixos-rebuild`, not by this tool, so refusing to run `validate`
-    or `digest` would prevent nothing and withhold the two commands
-    most likely to carry the news to the resident.
+    **Advisory to its first two callers; a gate to its third.** For
+    `validate` and `digest` — `_warn_state_layout`'s two call sites —
+    this reports and never refuses, because the store copy is made by
+    `nixos-rebuild`, not by this tool, so refusing to run either would
+    prevent nothing and withhold the two commands most likely to carry
+    the news to the resident.
+
+    That argument is about those two callers and does not generalise,
+    which is why this paragraph is now scoped rather than blanket.
+    Since docs/tasks/0026-apply-validate.md §E the applier asks the same
+    question before it evaluates a resident's flake, and there refusing
+    prevents exactly the thing this check is about: *this tool* would be
+    the one making the store copy. A finding at that call site is a
+    refusal to evaluate — the apply itself still happens, since the gate
+    is on evaluation, which is the only step that copies anything.
     """
     # Symlinks resolved, because the store copies what a path really
     # resolves to and not the name the resident typed. Tolerant of a
@@ -1058,6 +1181,139 @@ def spend_lock_path() -> pathlib.Path:
     d = runtime_dir()
     d.mkdir(parents=True, exist_ok=True)
     return d / "spend.lock"
+
+
+def apply_in_flight_dir() -> pathlib.Path:
+    """Where the applier leaves a breadcrumb across a crash
+    (docs/tasks/0026-apply-validate.md §C).
+
+    **In the state directory and not in the runtime one**, which is the
+    whole point: the window this closes includes a reboot, and
+    `runtime_dir()` is wiped by one. It is durable state about an
+    attempt, so it lives beside the journal — but deliberately *outside*
+    it, because it is not a record: nothing folds it, nothing routes it,
+    and it is deleted, which no record ever is.
+
+    **And deliberately not a `claim` record**, which is the obvious
+    alternative and is barred for a verified reason: `_reap_interrupted`
+    walks every claim and hands one whose request has no closing result
+    an `interrupted` result plus a `castle work <request-id>` retry hint
+    — the wrong command for an apply, written by a reaper with no idea
+    what it is reaping. That interlock stands; this is the applier's own
+    crash-recovery note to itself, not an observation about an errand.
+
+    Not a lease and not a lock either. `apply.lock` already excludes
+    concurrent appliers; this says something a lock cannot, because a
+    lock dies with the process that held it: *an attempt got as far as
+    touching the checkout and never wrote its account.*
+    """
+    d = state_dir() / "apply-in-flight"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def apply_in_flight_path(answer_id: str) -> pathlib.Path:
+    return apply_in_flight_dir() / answer_id
+
+
+# The marker's body: two ASCII header lines, a `paths:` line, then the
+# patch's paths NUL-separated. Bytes rather than text throughout,
+# because a path is bytes (see `_patch_paths`) and this file has to hand
+# back exactly what git gave — the same reason `--numstat -z` is read
+# the way it is.
+_IN_FLIGHT_PATHS_HEADER = b"paths:\n"
+
+
+def _write_in_flight(answer_id: str, head_before: str, paths: list[str]) -> None:
+    """Leave the breadcrumb, before the first byte of the checkout moves.
+
+    Best effort in the sense that a failure to write it is not worth
+    refusing an authorized change over — but it is written *before* the
+    mutation, never after, so the window it covers is the whole of the
+    mutation.
+    """
+    payload = b"".join(
+        [
+            f"answer: {answer_id}\n".encode("utf-8"),
+            f"head-before: {head_before}\n".encode("utf-8"),
+            _IN_FLIGHT_PATHS_HEADER,
+        ]
+        + [os.fsencode(path) + b"\0" for path in paths]
+    )
+    try:
+        apply_in_flight_path(answer_id).write_bytes(payload)
+    except OSError as exc:
+        print(
+            f"castle apply: could not write the in-flight marker for {answer_id} "
+            f"({exc}). The change will still be applied; what is lost is the ability "
+            "to tell, after a crash, that an attempt had begun.",
+            file=sys.stderr,
+        )
+
+
+def _read_in_flight(path: pathlib.Path) -> tuple[str, str, list[str]]:
+    """`(answer-id, head-before, paths)` from a marker file, with
+    whatever could not be read coming back empty rather than raising.
+
+    A marker is a breadcrumb, not a record: it is read exactly once, by
+    the reconciliation that is about to delete it, and a malformed one
+    must not be able to stop an applier from running.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "", "", []
+    head, _, tail = raw.partition(_IN_FLIGHT_PATHS_HEADER)
+    answer_id = ""
+    head_before = ""
+    for line in head.decode("utf-8", "replace").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "answer":
+            answer_id = value.strip()
+        elif key.strip() == "head-before":
+            head_before = value.strip()
+    paths = [
+        os.fsdecode(chunk) for chunk in tail.split(b"\0") if chunk
+    ]
+    return answer_id, head_before, paths
+
+
+def _clear_in_flight(answer_id: str) -> None:
+    """Remove the breadcrumb. Called only after the account of the
+    attempt is durable — see `_write_apply_result`, which is the one
+    place that knows that has happened."""
+    try:
+        apply_in_flight_path(answer_id).unlink()
+    except OSError:
+        pass
+
+
+def apply_lock_path() -> pathlib.Path:
+    """The global applier lock (docs/tasks/0026-apply-validate.md §B) —
+    one applier at a time, machine-wide, per login session.
+
+    Global rather than per-answer, and the reason is different from the
+    dispatch sweep's: two appliers would not merely re-decide one fold,
+    they would both be editing and committing **one working tree**. A
+    per-answer lock would let two of them race `git apply` against each
+    other and produce a commit nobody authorized.
+
+    **It is not the dispatch sweep lock and is never taken together with
+    it.** That is the whole point of the applier being its own unit: a
+    validation may legitimately run for half an hour, and holding the
+    global sweep lock across it would escalate
+    docs/backlog/stalled-mount-wedges-a-sweep.md from "one errand hangs"
+    to "the whole mechanism stops, silently."
+
+    **LOCK ORDERING**, extending `spend_lock_path`'s sequence rather
+    than joining it: this lock is a root of its own. Nothing that holds
+    it ever takes the sweep lock, a lease, or the spend lock; the only
+    lock it is ever held across is the router's, at the tail of a sweep,
+    which nothing takes before this one. No cycle exists.
+    """
+    d = runtime_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "apply.lock"
 
 
 def acquire_lock_blocking(path: pathlib.Path):
@@ -3303,7 +3559,7 @@ def _checkout_fault(root: str) -> str | None:
     # and carries its own remedy, which is the direction to fail in —
     # the alternative is a silent false accept, a spent model call and
     # a diff computed against the wrong tree.
-    probe_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    probe_env = _git_stripped_env()
     try:
         probe = subprocess.run(
             [git, "-C", root, "rev-parse", "--show-toplevel"],
@@ -3472,6 +3728,17 @@ def _file_proposal_question(request: Record, result_id: str, target: str) -> Non
     journal is append-only in spirit" becomes something a machine can
     check at the one moment it will matter — 0026 reading these bytes
     to mutate a configuration.
+
+    **`authorizes-apply: true`, unconditionally, on every proposal this
+    files from docs/tasks/0026-apply-validate.md onward.** The applier
+    honours only a decision whose question carries it, and the field is
+    stamped here rather than inferred anywhere because the sentence a
+    resident read while deciding is the scope of what they decided: a
+    proposal filed before this task was offered under a review screen
+    saying in capitals that approving edits nothing, and no later
+    change to that wording reaches backwards. Absence is the positive
+    fact that this was such a proposal, which is why there is no
+    migration and can never be one — see AUTHORIZES_APPLY_FIELD.
     """
     try:
         result_bytes = (journal_dir() / f"{result_id}.md").read_bytes()
@@ -3482,7 +3749,10 @@ def _file_proposal_question(request: Record, result_id: str, target: str) -> Non
             seat="worker",
             refs=[request.id, result_id],
             body=PROPOSAL_QUESTION_BODY.format(target=target),
-            extra={PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest()},
+            extra={
+                PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest(),
+                AUTHORIZES_APPLY_FIELD: "true",
+            },
         )
     except (OSError, RecordError) as exc:
         # `RecordError` as well as `OSError`, which is wider than the
@@ -5552,6 +5822,2213 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         sweep_lock.close()
 
 
+# ---------------------------------------------------------------------------
+# The applier seat (docs/tasks/0026-apply-validate.md)
+#
+# The first thing in this system that changes a resident's
+# configuration. It spends exactly one `answer` record per apply, writes
+# the resident's own private checkout and nothing else, commits once,
+# optionally evaluates the resulting host configuration, and writes one
+# `result` saying which of those happened. It activates nothing: no
+# nixos-rebuild, no switch, no generation change, no sudo, and no path
+# that could reach one. It pushes nothing, ever. It never touches the
+# mechanism checkout.
+#
+# Like dispatch, it is plumbing rather than a reasoning seat: what it
+# does is a total function of the journal and the tree, it holds no
+# judgment, and it must never acquire one — a policy about which
+# approvals are worth applying is exactly the authority this design
+# refuses to invent. The floor it ships is the floor
+# docs/tasks/0025-approval.md shipped: every change gets its own
+# decision, and now every decision gets at most one automatic apply.
+# ---------------------------------------------------------------------------
+
+# The seat value on the one record an apply writes. A new value in the
+# existing `seat` category, not a new category — exactly as `dispatch`
+# was (docs/architecture.md's Seats section). Not `worker`: a seat is
+# what reads and writes, and this one reads decisions and sidecars and
+# writes a resident's checkout, which is a different set from the
+# worker's. Keeping the names distinct is what lets a reader ask "which
+# seat touched my repository" and get an answer.
+APPLIER_SEAT = "applier"
+
+# Thirty minutes, chosen and not derived. The worker's 900s bounds a
+# *model call*; this bounds a *build*, and the one Nix-capable host this
+# ever runs on is the resident's own machine
+# (docs/backlog/no-build-host-but-the-target.md), which may legitimately
+# compile a kernel. `castle.agent.apply.timeoutSeconds` wires
+# CASTLE_APPLY_TIMEOUT to whatever a resident prefers instead.
+DEFAULT_APPLY_TIMEOUT_SECONDS = 1800
+
+# Both off/absent by default, both wired from modules/agent. The gate is
+# named for *evaluation* rather than for "validation" generally, so what
+# is being authorised — copying the flake's tracked tree into the
+# world-readable store — is legible in the option name itself.
+APPLY_EVALUATE_ENV = "CASTLE_APPLY_EVALUATE_FLAKE"
+APPLY_TIMEOUT_ENV = "CASTLE_APPLY_TIMEOUT"
+
+# How much of the validation's output goes into the durable record.
+# About a screen, which is what a resident reading a notification or a
+# digest can absorb, and Nix puts the failing derivation and its final
+# log lines at the end. The whole of it goes to the spool, which is
+# ephemeral and named in the body — the durable journal is not a place
+# to keep build logs.
+APPLY_LOG_TAIL_LINES = 40
+
+# Who `git log` says made the commit. The seat, never a person, and an
+# address that RFC 2606 reserves so it can never be a real one. Passed
+# with `-c` on the one command that needs it: nothing this task does may
+# modify the resident's `.git/config`.
+APPLY_COMMIT_NAME = "Castle applier"
+APPLY_COMMIT_EMAIL = "applier@castle.invalid"
+
+# Where the machine's own name comes from, and it is a fact about the
+# machine running the applier rather than about the proposal. Nothing
+# anywhere declares which host configuration a change was meant for
+# (docs/tasks/0024-config-target.md §9 decided this and its brief
+# explicitly forbids turning it into an option), so the record says the
+# hostname it used and says plainly what that does and does not mean.
+HOSTNAME_PATH = "/proc/sys/kernel/hostname"
+
+# The two characters a path flakeref cannot contain, because Nix reads
+# them as syntax: `#` opens the attribute path and `?` opens the query.
+# Verified against nix 2.34 rather than read off a manual — a private
+# root containing either does not produce a parse error, it silently
+# resolves a shorter, wrong directory and reports that it does not
+# exist, which arrives as an ordinary build failure. There is no
+# escaping rule for them in a path flakeref, which is what makes this a
+# skip rather than something to quote around.
+FLAKEREF_RESERVED = ("#", "?")
+
+# The first line of every apply result's body, per outcome. This is the
+# notification a resident actually receives — `_fire_notification` takes
+# exactly this line — so it is drafted rather than improvised, carries
+# no ids and no paths, and stays well under the 200-character cap
+# `_route_journal_locked` applies. "Nothing was activated" is in most of
+# them on purpose: it is the one fact this whole task turns on.
+APPLY_FIRST_LINES = {
+    "applied-validated": (
+        "The change you approved is now in your configuration repository, and the "
+        "configuration still builds. Nothing was activated."
+    ),
+    "applied-unvalidated": (
+        "The change you approved is now in your configuration repository. It was not "
+        "checked, and nothing was activated."
+    ),
+    "validation-failed": (
+        "The change you approved is now in your configuration repository, but the "
+        "configuration no longer builds. Nothing was activated."
+    ),
+    "applied-uncommitted": (
+        "The change you approved was made in your configuration repository but could "
+        "not be committed there. Nothing was activated."
+    ),
+    "refused-target-mechanism": (
+        "The change you approved is to the Castle Turing framework itself rather than "
+        "to your own configuration, so it was not made."
+    ),
+    "refused-artifact-changed": (
+        "The change you approved could not be made: what is on disk is no longer the "
+        "change you approved."
+    ),
+    "refused-no-patch": (
+        "The change you approved could not be made: no exact copy of it was kept, so "
+        "there is nothing to apply."
+    ),
+    "refused-patch-stale": (
+        "The change you approved no longer fits your configuration repository, so it "
+        "was not made."
+    ),
+    "refused-tree-dirty": (
+        "The change you approved was not made: your configuration repository has "
+        "uncommitted edits to the same files."
+    ),
+}
+
+
+class ApplyRefused(Exception):
+    """The id handed to `castle apply` is not an authorization to spend.
+
+    Raised before anything at all is written, and deliberately: a
+    mistyped id, a record that is not an answer, an answer that is not
+    an approval, one whose proposal was offered before an applier
+    existed. None of those is an event the journal needs an opinion
+    about, and writing one would put a permanent record in an
+    append-only history to describe somebody's typo.
+
+    Unreachable from the sweep, which only ever hands `_apply_one` an
+    answer its own fold has already established all of this about — the
+    same relationship `cmd_work`'s two recordless refusals have with
+    `_eligible_requests`.
+    """
+
+
+class ApplyEnvironmentFault(Exception):
+    """The applier could not use the checkout it was configured with.
+
+    Raised by `_apply_one` *after* it has written the answer's
+    `outcome: failed` result, exactly as `TenantNotRunnable` is — that
+    record still lands, because it is what stops a broken environment
+    producing a silent retry loop.
+
+    What the exception adds is a signal to the sweep, and here it
+    matters more than it does for a worker. A misconfigured
+    `castle.agent.repo.private` is the same for every eligible approval,
+    and any result at all bars a second automatic attempt — so a sweep
+    that shrugged and carried on would burn *every resident
+    authorization in the journal* on `failed` records in a single pass.
+    An authorization is costlier and less repeatable than an errand's
+    automatic attempt, which is why this aborts rather than continues.
+
+    Carries the id of the result it already wrote, so a caller can point
+    at it.
+    """
+
+    def __init__(self, message: str, result_id: str):
+        super().__init__(message)
+        self.result_id = result_id
+
+
+def apply_timeout_seconds() -> int:
+    """CASTLE_APPLY_TIMEOUT, tolerantly.
+
+    `worker_timeout_seconds`' exact shape, for its exact reason: warn on
+    stderr, fall back to the default, never refuse to do the work. A
+    misconfigured timeout must not be the reason an authorized change
+    goes unapplied.
+    """
+    raw = os.environ.get(APPLY_TIMEOUT_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_APPLY_TIMEOUT_SECONDS
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        print(
+            f"castle apply: could not parse {APPLY_TIMEOUT_ENV} ({raw!r}) as a whole "
+            f"number of seconds; using {DEFAULT_APPLY_TIMEOUT_SECONDS}",
+            file=sys.stderr,
+        )
+        return DEFAULT_APPLY_TIMEOUT_SECONDS
+    if value <= 0:
+        print(
+            f"castle apply: {APPLY_TIMEOUT_ENV} ({raw!r}) is not positive; using "
+            f"{DEFAULT_APPLY_TIMEOUT_SECONDS}",
+            file=sys.stderr,
+        )
+        return DEFAULT_APPLY_TIMEOUT_SECONDS
+    return value
+
+
+def _approval_binding(records: dict[str, Record], answer: Record):
+    """The `(question, result)` an approving answer is bound to, or
+    `(None, why)` if it is not an authorization this applier may spend.
+
+    The reason half exists for the hand path only: the sweep's fold
+    discards on the same predicate and says nothing, while a resident
+    who typed an id deserves to be told which of these it failed.
+
+    Three things, all required, and each one is the fold's version of a
+    check `file_answer` already made at write time:
+
+    * `refs[0]` resolves to a `question` carrying `proposal-sha256` —
+      without the stamp there is no proposal here to have authorized,
+      whatever the record says in prose;
+    * that question carries `authorizes-apply: true` — the field
+      docs/tasks/0026-apply-validate.md §A exists for. Its absence is
+      the positive fact that this change was offered under a review
+      screen saying in capitals that approving edits nothing, so the
+      approval authorized a record and nothing more. Old approvals are
+      inert here by construction, forever;
+    * `refs[1]` resolves to a `result` — the same shape `cmd_validate`
+      checks on every decision-bearing answer.
+    """
+    if len(answer.refs) < 2:
+        return None, (
+            "it names fewer than two records: a decision's first ref is the change it "
+            "decides and its second is the exact proposal it was bound to"
+        )
+    question = records.get(answer.refs[0])
+    if question is None or question.type != "question":
+        return None, f"{answer.refs[0]} is not a question record"
+    if not question.fields.get(PROPOSAL_SHA256_FIELD, "").strip():
+        return None, (
+            f"{question.id} carries no '{PROPOSAL_SHA256_FIELD}', so there is no "
+            "proposal here that anything could have authorized"
+        )
+    if question.fields.get(AUTHORIZES_APPLY_FIELD, "").strip() != "true":
+        return None, (
+            f"{question.id} carries no '{AUTHORIZES_APPLY_FIELD}: true'. It was offered "
+            "under the earlier statement that approving edits, commits and applies "
+            "nothing, so approving it authorized the record and nothing more. That is "
+            "not something a later change of wording can reach backwards and widen; "
+            "if you want this change made, ask for it again "
+            "(docs/tasks/0026-apply-validate.md §A)."
+        )
+    result = records.get(answer.refs[1])
+    if result is None or result.type != "result":
+        return None, f"{answer.refs[1]} is not a result record"
+    return (question, result), ""
+
+
+def _eligible_approvals(records: dict[str, Record]) -> list[Record]:
+    """Every approval this sweep may spend, oldest first
+    (docs/tasks/0026-apply-validate.md §B).
+
+    An `answer` is eligible iff it approves, its question carries apply
+    authority and a proposal stamp, its result resolves, and **no
+    `result` record names it anywhere in its refs**. That last clause is
+    the one-attempt bound, and it is structurally the same one
+    `_requests_with_results` gives a request, for the same reason: a
+    bound expressed as "does a record exist" cannot be reset by anything
+    short of writing history. Any apply result at all bars a second
+    automatic attempt, whatever its outcome — a refusal included, since
+    the conditions that produced it do not clear themselves.
+
+    The hand path is deliberately outside this bound. `castle apply
+    <answer-id>` re-runs a spent authorization exactly as `castle work
+    <id>` re-runs a resulted errand, and for the identical reason: that
+    IS the retry path, and it is the only unbounded one.
+
+    **One flat pass, not a per-answer rescan.** One sweep over the
+    journal builds the set of ids any result names, then one filter over
+    the answers: O(records), never answers × records. Stated because the
+    neighbouring fold's cost is a filed backlog entry
+    (docs/backlog/eligibility-fold-rescans-per-request.md, measured at
+    130ms), and a future reader must not "tidy" this into the same
+    shape.
+
+    Nothing this repo writes puts an answer id in a `result`'s refs — a
+    worker result names `[request, claim]` — so the set is exactly "ids
+    some result accounts for", and only answer ids are ever tested
+    against it.
+    """
+    named_by_results = {
+        ref
+        for rec in records.values()
+        if rec.type == "result"
+        for ref in rec.refs
+    }
+    eligible = [
+        rec
+        for rec in records.values()
+        if rec.type == "answer"
+        and rec.fields.get("decision", "").strip() == "approve"
+        and rec.id not in named_by_results
+        and _approval_binding(records, rec)[0] is not None
+    ]
+    eligible.sort(key=lambda rec: rec.id)
+    return eligible
+
+
+def _reconcile_in_flight(records: dict[str, Record]) -> list[str]:
+    """Account for every attempt that touched a checkout and never wrote
+    its result (docs/tasks/0026-apply-validate.md §C). Returns the ids
+    of the records written.
+
+    Runs before any fresh attempt, on both the sweep and the hand path.
+    An answer with a marker is **not** re-attempted in the same
+    invocation: the honest thing to write is what the marker proves,
+    which is that an earlier attempt got as far as touching the
+    checkout and cannot say what it left behind. Re-attempting on top of
+    that is exactly what produces the contradiction — a
+    `refused-tree-dirty` about the applier's own half-finished work, or
+    a `refused-patch-stale` about a change that is already committed.
+
+    The record is the no-conclusion shape: `outcome: failed`, no
+    `apply-outcome`, which §H already renders as
+    `could not be applied — castle apply <id> to try again`. So the
+    answer is barred from automatic retry exactly like every other dead
+    attempt, and the hand path stays open — and a hand retry re-runs the
+    whole check suite, where the dirty and staleness checks refuse a
+    double-apply honestly.
+
+    Two markers get no record at all, and the difference is whether
+    there is anything to say:
+
+    * one naming an answer that does not resolve to an approving
+      authorization — garbage, or a journal that moved underneath it.
+      There is no record to write, because `refs` would have nothing
+      truthful to point at.
+    * one whose answer some result already names. That is a crash in the
+      narrow window *after* the account landed and before the marker was
+      removed, so the account already exists and a second one would be a
+      duplicate claiming the attempt died when it did not.
+
+    Both are removed with a note on stderr. Nothing happened to a
+    checkout that this could name.
+    """
+    written: list[str] = []
+    try:
+        markers = sorted(apply_in_flight_dir().iterdir())
+    except OSError:
+        return written
+    if not markers:
+        return written
+
+    accounted = {
+        ref
+        for rec in records.values()
+        if rec.type == "result"
+        for ref in rec.refs
+    }
+    root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    for marker in markers:
+        if not marker.is_file():
+            continue
+        answer_id, head_before, paths = _read_in_flight(marker)
+        answer_id = answer_id or marker.name
+        answer = records.get(answer_id)
+        binding = (
+            _approval_binding(records, answer)[0]
+            if answer is not None and answer.type == "answer"
+            else None
+        )
+        if binding is None or answer.fields.get("decision", "").strip() != "approve":
+            print(
+                f"castle apply: discarding an in-flight marker for {answer_id}, which "
+                "is not an approval this journal has. Nothing was written.",
+                file=sys.stderr,
+            )
+            _clear_in_flight(marker.name)
+            continue
+        if answer_id in accounted:
+            print(
+                f"castle apply: discarding an in-flight marker for {answer_id}, whose "
+                "attempt is already accounted for by a result. Nothing was written.",
+                file=sys.stderr,
+            )
+            _clear_in_flight(marker.name)
+            continue
+
+        question, _proposal = binding
+        # Both shas, so the resident can see at a glance which side of
+        # the commit the interruption fell on without running anything.
+        head_now = ""
+        if root:
+            probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+            if probe is not None and probe.returncode == 0:
+                head_now = (probe.stdout or "").strip()
+        moved = (
+            "Your repository's head HAS moved since that attempt began, so the "
+            "change was very likely committed."
+            if head_now and head_before and head_now != head_before
+            else "Your repository's head has NOT moved since that attempt began, so "
+            "if anything reached your files it is uncommitted."
+            if head_now and head_before
+            else "Whether your repository's head has moved could not be established "
+            "here."
+        )
+        detail = [
+            f"What this was for: the change `{question.id}`, approved by "
+            f"`{answer.id}`.",
+            "",
+            "An earlier attempt to make it was interrupted after it may have begun "
+            "changing your configuration repository — the process was killed, or the "
+            "machine stopped, before it could record what it had done. This record "
+            "exists so that nothing later claims the change was refused when it may "
+            "in fact be sitting in your repository.",
+            "",
+            f"Where the repository was when that attempt began: "
+            f"`{head_before or '(no commits yet)'}`.",
+            f"Where it is now: `{head_now or '(could not be read)'}`. {moved}",
+        ]
+        if paths:
+            detail += [
+                "",
+                "The files that attempt was going to change:",
+                "",
+            ] + [f"    {_displayable(path)}" for path in paths]
+        detail += [
+            "",
+            "Nothing was activated and nothing was pushed. Look at `git log` and "
+            "`git status` in that repository, and when it says what you expect, "
+            f"`castle apply {answer.id}` runs the whole thing again — every check "
+            "included, so a change that is already there is refused rather than "
+            "made twice.",
+        ]
+        try:
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail,
+            )
+        except (RecordError, OSError) as exc:
+            # The marker stays. Nothing was accounted for, so the next
+            # run must find it again — that is the whole contract.
+            print(
+                f"castle apply: could not record the interrupted attempt for "
+                f"{answer_id} ({exc}); its marker is left in place.",
+                file=sys.stderr,
+            )
+            continue
+        written.append(result_id)
+        print(f"apply: {result_id} accounts for an interrupted attempt on {answer_id}")
+    return written
+
+
+def _hostname() -> str:
+    """This machine's name, for the flake attribute the validation
+    builds. A fact about the machine running the applier, never about
+    the proposal — which is why the record states it and says so."""
+    try:
+        name = pathlib.Path(HOSTNAME_PATH).read_text(encoding="utf-8").strip()
+    except OSError:
+        name = ""
+    return name or os.uname().nodename
+
+
+def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, str]:
+    """The repository paths a patch touches, per git's own parser, or
+    `(None, why)`.
+
+    `git apply --numstat -z` and not a hand-rolled reader of `+++`
+    lines: this is the same code that will apply the patch a moment
+    later, so "which paths does this touch" is answered by the thing
+    that decides it rather than by a second implementation free to
+    disagree. `--numstat` touches nothing on disk.
+
+    `-z` because a path is bytes and a resident's file names are their
+    own business: the NUL-delimited form is the only one that does not
+    quote, escape or mangle a name with a space, a quote or a newline in
+    it. Its shape is `<added>\\t<deleted>\\t<path>NUL`, except for a
+    rename, where the third field is empty and the two paths follow as
+    their own NUL-terminated records — verified against git, not read
+    off a manual page, and handled here because a `git diff`-format
+    patch from some future tenant can carry one.
+
+    **And the output is read as bytes, not as text** (Codex review on
+    docs/tasks/0026-apply-validate.md, P2). `text=True, errors="replace"`
+    turned any byte that is not valid UTF-8 into U+FFFD — in the one
+    function whose whole reason for choosing `-z` was not to mangle a
+    name. The damage was not cosmetic: the dirty check would then
+    inspect a path that does not exist, find it clean, and the pathspec
+    commit would fail *after* the working tree had already been
+    modified. `surrogateescape` is the decode that round-trips: the
+    original bytes come back out when Python encodes these strings into
+    a subprocess argument list, so git receives exactly what it emitted.
+
+    The cost is that these strings are **not safe to render**. A lone
+    surrogate makes `write_text` raise, and records are UTF-8 by
+    definition (docs/tasks/0033-byte-exact-proposal.md), so a path that
+    reaches a record body, an error message or a notification must go
+    through `_displayable` first. Nothing here renders one; the two
+    places that do are marked.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+    try:
+        probe = subprocess.run(
+            [git, "-C", root, *GIT_ISOLATION_ARGS, "apply", "--numstat", "-z", "--", str(sidecar)],
+            capture_output=True,
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=_git_stripped_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"`git apply --numstat` could not be run there ({exc})"
+    if probe.returncode != 0:
+        # git's own message, which may itself name a path, so it is
+        # decoded for display rather than for operation.
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+        return None, detail or f"git exited {probe.returncode}"
+
+    tokens = (probe.stdout or b"").split(b"\0")
+    if tokens and tokens[-1] == b"":
+        tokens.pop()
+    paths: list[str] = []
+    index = 0
+    while index < len(tokens):
+        fields = tokens[index].split(b"\t", 2)
+        if len(fields) != 3:
+            return None, f"could not read git's own numstat output: {tokens[index]!r}"
+        if fields[2] == b"":
+            # A rename: the two paths are the next two records.
+            if index + 2 >= len(tokens):
+                return None, "git's numstat output ended mid-rename"
+            paths.extend(
+                token.decode("utf-8", "surrogateescape")
+                for token in tokens[index + 1 : index + 3]
+            )
+            index += 3
+        else:
+            paths.append(fields[2].decode("utf-8", "surrogateescape"))
+            index += 1
+    return paths, ""
+
+
+def _displayable(value: str) -> str:
+    """A path safe to write into a record, a message or a notification.
+
+    `_patch_paths` decodes with `surrogateescape` so the original bytes
+    survive back into git's argument list, which means a path whose name
+    is not valid UTF-8 carries lone surrogates. Records are UTF-8 by
+    definition, and `write_text` raises on one — so a path that has
+    reached the point of being *shown* has to lose that property, while
+    the value git is handed keeps it.
+
+    `backslashreplace` rather than `replace`: an escape a resident can
+    read back to the actual byte beats a row of U+FFFD that says only
+    "something was here". A path that is ordinary UTF-8 — every path in
+    practice — comes through untouched.
+    """
+    return value.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def _dirty_entries(
+    root: str, paths: list[str]
+) -> tuple[list[tuple[str, str]] | None, str]:
+    """`(status-letters, path)` for everything uncommitted under
+    `paths`, or `(None, why)` if git could not say.
+
+    Two readers, and they are allowed to see different things — see
+    `_dirty_under` below, which is the one that must not name a file.
+
+    **Scoped to the patch's own paths, not repo-wide**, and that is a
+    decision rather than an economy. Three documented layouts leave a
+    perfectly healthy config repo dirty — a `state/` submodule dirties
+    the outer gitlink on every journal commit, an un-gitignored
+    `key.txt` shows as untracked, and the "set nothing" fallback leaves
+    cleanliness unrelated to anything — so a repo-wide check would
+    refuse forever on residents who did nothing wrong, which is worse
+    than no check at all (docs/private-layer.md).
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+    try:
+        probe = subprocess.run(
+            # `-z` here too, and literal pathspecs: this reads only the
+            # two status letters off each record, but a path with a
+            # newline in it would otherwise split one line into two and
+            # inflate the count it reports.
+            [
+                git, "-C", root, *GIT_ISOLATION_ARGS,
+                "status", "--porcelain", "-z", "--", *_literal(paths),
+            ],
+            capture_output=True,
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=_git_stripped_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"`git status` could not be run there ({exc})"
+    if probe.returncode != 0:
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+        return None, detail or f"git exited {probe.returncode}"
+    records = [record for record in (probe.stdout or b"").split(b"\0") if record]
+    entries: list[tuple[str, str]] = []
+    index = 0
+    while index < len(records):
+        raw = records[index]
+        entries.append(
+            (
+                raw[:2].decode("utf-8", "replace").strip() or "??",
+                raw[3:].decode("utf-8", "surrogateescape"),
+            )
+        )
+        # A rename or a copy staged in the index emits its SOURCE path as
+        # its own following record, with no status letters on it.
+        # Skipping that record is what keeps the count a count of paths
+        # rather than of records.
+        index += 2 if raw[:1] in (b"R", b"C") else 1
+    return entries, ""
+
+
+def _dirty_under(root: str, paths: list[str]) -> tuple[str | None, str]:
+    """`_dirty_entries` summarised the way a refusal about the
+    RESIDENT'S OWN work must be: status letters and a count, never file
+    names.
+
+    That distinction is the whole reason there are two functions. A path
+    the approved change touches is one the resident read on the review
+    screen and can be named back to them; a path they happen to be
+    working on is theirs, and this record is durable and leaves the
+    machine more easily than a journal does (CLAUDE.md's hard rule).
+    This is the caller for the second kind.
+    """
+    entries, why = _dirty_entries(root, paths)
+    if entries is None:
+        return None, why
+    if not entries:
+        return "", ""
+    letters = sorted({letter for letter, _path in entries})
+    return f"{len(entries)} path(s), status {', '.join(letters)}", ""
+
+
+# How long one git command that WRITES the resident's checkout may take.
+# Much longer than `CHECKOUT_PROBE_SECONDS`, which bounds a `rev-parse`
+# that answers instantly, because these do real work on real files and
+# may be doing it on a network mount. Bounded at all for the reason
+# every other subprocess here is: an unattended sweep that hangs is
+# indistinguishable from one that is working.
+APPLY_GIT_SECONDS = 120
+
+# **The resident's git hooks do not run on the applier's commit**, and
+# this is a correctness property rather than tidiness (code review on
+# docs/tasks/0026-apply-validate.md, finding 1, reproduced).
+#
+# The whole design rides on a digest chain: the resident approved exact
+# bytes, `patch-sha256` proves the bytes on disk are those bytes, and
+# the commit message records that digest so the commit is checkable
+# against the journal years later with no tooling. An ordinary
+# formatting `pre-commit` hook breaks that chain silently — reproduced:
+# the committed content was the patch's bytes plus the hook's, under a
+# commit message asserting a digest that no longer described it. A
+# `post-commit` hook is worse in a different direction: it can create or
+# commit anything at all, so `rev-parse HEAD` afterwards names a commit
+# the applier did not make, and the record's `git revert <sha>` then
+# reverts the hook's work while leaving the approved change in place.
+#
+# It also closes a hole `_run_git`'s timeout cannot: `subprocess.run`'s
+# timeout kills the direct child, so a hook that daemonises outlives it.
+# A hook that never runs cannot.
+#
+# **Two mechanisms, because one is not enough.** `--no-verify` skips
+# `pre-commit` and `commit-msg` and nothing else; `core.hooksPath` is
+# what stops `post-commit`, `post-index-change` and the rest.
+#
+# `/dev/null` is the hooks path deliberately. Any real directory has to
+# exist and has to be trusted — `/var/empty` is neither guaranteed
+# present nor guaranteed unwritable everywhere this runs, and a
+# directory under the runtime dir would be world-writable on the `/tmp`
+# fallback, which would replace the resident's own hooks with an
+# attacker's. `/dev/null` can never be a directory on any Unix, so
+# `access("/dev/null/pre-commit", X_OK)` fails with ENOTDIR and there is
+# nowhere for anything to be planted. Verified against git 2.55: no
+# warning, no hook, clean exit.
+#
+# None of this touches how the resident's own commits behave. Their
+# hooks are their policy for their own work, and they still run on it.
+# And `core.attributesFile`, for the same class of reason one level
+# over. A `.gitattributes` clean filter runs at `add`/`commit` even with
+# hooks disabled, and a clean/smudge pair can leave `git status`
+# reporting a clean tree while the committed blob differs from the
+# working-tree bytes — verified: with an ordinary
+# `clean = sed s/MARKER:/MARKER:FILTERED/`, the parent, the commit count
+# and the cleanliness check all passed and the commit held bytes nobody
+# approved.
+#
+# **This closes half of it and cannot close the other half.** Git reads
+# attributes from three places: the user's `~/.config/git/attributes`
+# and the `core.attributesFile` it points at, `.git/info/attributes`,
+# and `.gitattributes` files *inside the tree*. The first is switched
+# off here outright. The last cannot be — it is tracked resident
+# content, and the applier reading a resident's own repository has no
+# standing to decide their `.gitattributes` does not apply to it; that
+# file may be the very thing an approved change touches. So the in-repo
+# half is **detected** rather than prevented: `_verify_single_commit`
+# reads the committed blob back and compares it to the bytes on disk.
+GIT_ISOLATION_ARGS = [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
+]
+
+
+def _run_git(
+    root: str,
+    args: list[str],
+    *,
+    config: list[str] | None = None,
+    env_extra: dict[str, str] | None = None,
+    timeout: int = APPLY_GIT_SECONDS,
+):
+    """One `git` in the resident's checkout, with `GIT_*` stripped and
+    the resident's hooks and user-level git attributes disabled (see
+    `GIT_ISOLATION_ARGS`).
+
+    `config` is per-invocation `-c key=value` settings. A parameter
+    rather than something the caller splices into `args`, so `args[0]`
+    is always the subcommand and the two error messages below can name
+    it — and so nothing can accidentally land a `-c` before the hook
+    suppression and shadow it.
+
+    Returns `(CompletedProcess, "")`, or `(None, why)` when git could
+    not be run to completion at all — not on disk, would not exec, or
+    outlived its bound.
+
+    **Never raises, and that is the point.** These run in the middle of
+    a sequence that has already edited a resident's working tree, so an
+    exception escaping here would abort the sweep with a traceback and
+    write no record of what state that tree was left in. The two cases
+    are kept distinct rather than folded into a nonzero return code
+    because they mean different things: git speaking and refusing is a
+    fact about the patch, while git never answering is a fact about the
+    machine, and §F gives those two different records.
+
+    The hook suppression is here, at the one choke point, rather than on
+    the two invocations that run hooks today: a future call site added
+    without it would reintroduce exactly the defect this closes, and
+    `-c core.hooksPath=` costs nothing on a `rev-parse`.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+    settings = [item for value in (config or []) for item in ("-c", value)]
+    # `env_extra` exists for exactly one variable — `GIT_INDEX_FILE`,
+    # which is how the commit below is built without touching the
+    # resident's real index. It is added *after* the strip, deliberately:
+    # the strip is about not inheriting whatever the ambient environment
+    # says a repository is, and this is this process saying it.
+    env = _git_stripped_env()
+    env.update(env_extra or {})
+    try:
+        return (
+            subprocess.run(
+                [git, "-C", root, *GIT_ISOLATION_ARGS, *settings, *args],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
+                env=env,
+            ),
+            "",
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"`git {args[0]}` did not finish within {timeout}s"
+    except OSError as exc:
+        return None, f"`git {args[0]}` could not be run there ({exc})"
+
+
+def _worktree_state(root: str, paths: list[str]) -> dict[str, tuple[str, bytes]]:
+    """What each path looks like on disk right now, in a form two
+    snapshots can be compared by.
+
+    `("absent", b"")`, `("link", <target>)` or `("file", <bytes>)` — a
+    symlink compares by its target, because that is what it *is*, and
+    reading through it would compare whatever it happens to point at.
+    An unreadable file comes back as `("unreadable", b"")`, which the
+    caller treats as "do not touch this": a path it cannot see is one it
+    must not decide it owns.
+    """
+    state: dict[str, tuple[str, bytes]] = {}
+    for path in paths:
+        target = pathlib.Path(root) / path
+        try:
+            if not os.path.lexists(target):
+                state[path] = ("absent", b"")
+            elif os.path.islink(target):
+                state[path] = ("link", os.fsencode(os.readlink(target)))
+            else:
+                state[path] = ("file", target.read_bytes())
+        except OSError:
+            state[path] = ("unreadable", b"")
+    return state
+
+
+def _build_commit(
+    root: str,
+    snapshot: pathlib.Path,
+    head_before: str,
+    message: str,
+) -> tuple[str, str, str]:
+    """Build the commit the approved change produces, without touching
+    the repository. Returns `(sha, failed_stage, detail)`.
+
+    **This is docs/tasks/0026-apply-validate.md §D's landing sequence,
+    and it replaces applying to the working tree and committing from
+    it.** That older sequence had an irreducible race in it: between
+    `git apply` writing the tree and the pathspec commit reading it
+    back, anything at all — the resident, an editor, a formatter on save
+    — could write one of those paths, and the commit then contained
+    *their* bytes, certified under a message asserting the approved
+    patch's digest. Nothing downstream could catch it either, because
+    the committed blob and the working tree agreed: both held the
+    concurrent edit (Codex review on this PR, round 4; reproduced).
+
+    Constructing the commit from `head_before`'s tree plus the verified
+    patch bytes, in a private index, removes the race rather than
+    narrowing it. The content of the commit is a pure function of two
+    things already verified, and the working tree is not one of them.
+    Nothing here mutates anything: the temp index is a temp file, and
+    the objects `write-tree`/`commit-tree` create are unreferenced until
+    the caller moves a ref — which is why a failure at any stage below
+    is a clean refusal with nothing to undo.
+
+    **`git apply --cached` does not run `clean` filters** — established
+    by running it, not by reading — so the tree holds the approved bytes
+    exactly. That is strictly stronger than the blob comparison it
+    replaces: a `.gitattributes` filter can no longer transform the
+    commit at all, rather than being caught after the fact. The cost is
+    stated where a resident meets it: in a repository whose filter would
+    have canonicalised those bytes differently, git reports the file as
+    modified until they decide what they want, and the record says so.
+
+    **Nothing signs these commits, and that is right rather than
+    incidental.** `commit-tree` does not sign, so a resident whose
+    `commit.gpgsign` is on gets an unsigned commit here — as they
+    should. The identity on it is the applier seat, not them, and
+    signing a seat's commit with a resident's key would assert
+    authorship they do not have.
+
+    The stage name comes back so the caller can tell "this patch does
+    not fit that tree" — a fact about the change, and a refusal — from
+    "git would not run" — a fact about the machine.
+    """
+    index_fd, index_path = tempfile.mkstemp(prefix="castle-apply-index-")
+    os.close(index_fd)
+    index_env = {"GIT_INDEX_FILE": index_path}
+    try:
+        seed = ["read-tree", "--empty"] if not head_before else ["read-tree", head_before]
+        for stage, args in (
+            ("read-tree", seed),
+            ("apply", ["apply", "--cached", "--", str(snapshot)]),
+        ):
+            probe, fault = _run_git(root, args, env_extra=index_env)
+            if probe is None:
+                return "", stage, fault
+            if probe.returncode != 0:
+                return "", stage, (probe.stderr or probe.stdout or "").strip()
+
+        probe, fault = _run_git(root, ["write-tree"], env_extra=index_env)
+        if probe is None or probe.returncode != 0:
+            return "", "write-tree", (
+                fault if probe is None else (probe.stderr or "").strip()
+            )
+        tree = (probe.stdout or "").strip()
+        if not tree:
+            return "", "write-tree", "git named no tree"
+
+        # `-p` only when there is a parent: a repository with no commits
+        # yet takes a root commit, which is a legitimate state — a patch
+        # that only creates files applies to a fresh `git init`.
+        commit_args = ["commit-tree", tree]
+        if head_before:
+            commit_args += ["-p", head_before]
+        commit_args += ["-m", message]
+        probe, fault = _run_git(
+            root,
+            commit_args,
+            config=[
+                f"user.name={APPLY_COMMIT_NAME}",
+                f"user.email={APPLY_COMMIT_EMAIL}",
+            ],
+            env_extra=index_env,
+        )
+        if probe is None or probe.returncode != 0:
+            return "", "commit-tree", (
+                fault if probe is None else (probe.stderr or "").strip()
+            )
+        sha = (probe.stdout or "").strip()
+        if not sha:
+            return "", "commit-tree", "git named no commit"
+        return sha, "", ""
+    finally:
+        try:
+            os.unlink(index_path)
+        except OSError:
+            pass
+
+
+def _paths_in_commit(
+    root: str, sha: str, paths: list[str]
+) -> tuple[set[str] | None, str]:
+    """Which of `paths` the commit `sha` contains, or `(None, why)`.
+
+    One `ls-tree` rather than a `cat-file` each, and `-z` for the same
+    reason every other path-reading call here uses it: a name is bytes,
+    and this must hand back exactly what git holds so the sync below can
+    hand it straight back to git.
+
+    Only presence is asked. Content is not compared against anything,
+    and that is a change: the commit is built in a private index from
+    `head_before` plus the verified bytes, so its content is a pure
+    function of two already-verified inputs. Comparing it to a
+    separately-derived post-image would mean re-implementing patch
+    application here — a second implementation of the thing whose whole
+    virtue is that git does it — and comparing it to the working tree is
+    exactly the check the apply-to-commit race defeated.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+    try:
+        probe = subprocess.run(
+            [
+                git, "-C", root, *GIT_ISOLATION_ARGS,
+                "ls-tree", "-r", "-z", "--name-only", sha, "--", *_literal(paths),
+            ],
+            capture_output=True,
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=_git_stripped_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"`git ls-tree` could not be run there ({exc})"
+    if probe.returncode != 0:
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+        return None, detail or f"git exited {probe.returncode}"
+    return {
+        record.decode("utf-8", "surrogateescape")
+        for record in (probe.stdout or b"").split(b"\0")
+        if record
+    }, ""
+
+
+def _sync_worktree(
+    root: str,
+    sha: str,
+    paths: list[str],
+    pre_images: dict[str, tuple[str, bytes]],
+) -> tuple[list[str], list[str]]:
+    """Bring the working tree and the index to the commit just made,
+    without ever writing over somebody else's edit. Returns
+    `(diverged, faults)`.
+
+    The commit is already durable and already correct by the time this
+    runs, which is what makes this step safe to do carefully rather than
+    atomically. For each path, `pre_images` says what was on disk before
+    any of this began:
+
+    * unchanged since then — nobody else touched it — so the file is
+      brought to what the commit says, by `checkout-index`, which
+      applies the repository's own `smudge` filter and restores modes
+      (a symlink comes back a symlink). That is exactly what the
+      resident's own `git checkout` would produce.
+    * changed since then — somebody wrote it during the window — so it
+      is **left exactly as they left it** and named to the caller. Their
+      edit becomes ordinary visible dirt over an approved commit, which
+      `git status` will show them. Nothing is clobbered and nothing is
+      claimed.
+
+    The index is reset to the commit first, for both kinds of path,
+    because otherwise every path would read as staged-for-reversal:
+    nothing has updated the real index, so it still holds
+    `head_before`'s entries while HEAD holds the new commit.
+
+    A residual, stated rather than engineered around: an edit landing
+    between the comparison and the write is still last-writer-wins on
+    that one file. It cannot be closed without holding a lock on a
+    resident's filesystem, and it no longer matters for the thing this
+    task guarantees — the *commit* is the approved change either way.
+    """
+    diverged: list[str] = []
+    faults: list[str] = []
+
+    reset, fault = _run_git(root, ["reset", "-q", "--", *_literal(paths)])
+    if reset is None or reset.returncode != 0:
+        faults.append(
+            "the index could not be brought to the new commit "
+            f"({fault or (reset.stderr or '').strip()}), so `git status` will show "
+            "these files as though the change were being undone until you run "
+            "`git reset`"
+        )
+
+    present, why = _paths_in_commit(root, sha, paths)
+    if present is None:
+        faults.append(
+            f"which files the commit contains could not be established ({why}), so "
+            "the working tree was left alone"
+        )
+        return diverged, faults
+
+    now = _worktree_state(root, paths)
+    to_restore: list[str] = []
+    for path in paths:
+        if now.get(path) != pre_images.get(path):
+            diverged.append(path)
+            continue
+        if path in present:
+            to_restore.append(path)
+        else:
+            try:
+                (pathlib.Path(root) / path).unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                faults.append(f"{_displayable(path)} could not be removed ({exc})")
+
+    if to_restore:
+        checked_out, fault = _run_git(
+            root, ["checkout-index", "-f", "--", *to_restore]
+        )
+        if checked_out is None or checked_out.returncode != 0:
+            faults.append(
+                "the working tree could not be brought to the new commit "
+                f"({fault or (checked_out.stderr or '').strip()}); the commit itself "
+                "is unaffected, and `git checkout HEAD -- .` in that repository "
+                "finishes the job"
+            )
+    return diverged, faults
+
+
+def _verify_single_commit(
+    root: str, head_before: str, expected_sha: str
+) -> tuple[str, str]:
+    """Confirm the repository's head really is the commit this applier
+    built, or `("", why)`.
+
+    **Belt, since the construction moved.** These questions used to be
+    the only thing standing between a hook and a false record; now the
+    commit is built in a private index from `head_before` plus the
+    verified patch bytes, and the ref moved under an old-value guard, so
+    "exactly one commit, parented where this started, containing the
+    approved bytes" is true by construction rather than by inspection.
+    What is left for these to catch is the narrow thing construction
+    cannot: something moving the ref again between that guarded update
+    and this read.
+
+    They are kept because they cost three `rev-parse`-class commands and
+    the alternative is a record asserting a commit id it never looked
+    at, printed beside a `git revert`.
+
+    **Cleanliness is deliberately no longer among them.** The working
+    tree is synced separately and per path, and there are two ordinary
+    reasons for a path to be dirty afterwards that say nothing bad about
+    the commit: a concurrent edit, which the caller records by name, and
+    a repository whose own `clean` filter would canonicalise the
+    approved bytes differently. Gating on cleanliness would turn either
+    into `outcome: failed` over a commit that is exactly right.
+    """
+    head_probe, fault = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+    if head_probe is None or head_probe.returncode != 0:
+        return "", (
+            fault
+            or "the repository has no HEAD after the reference was moved to one"
+        )
+    commit_sha = (head_probe.stdout or "").strip()
+    if not commit_sha:
+        return "", "git named no commit after the reference was moved to one"
+    if commit_sha != expected_sha:
+        return "", (
+            "the repository's head is not the commit this built, so something else "
+            "has moved it since"
+        )
+
+    if head_before:
+        parent_probe, _ = _run_git(
+            root, ["rev-parse", f"{commit_sha}^"], timeout=CHECKOUT_PROBE_SECONDS
+        )
+        parent = (
+            (parent_probe.stdout or "").strip()
+            if parent_probe is not None and parent_probe.returncode == 0
+            else ""
+        )
+        if parent != head_before:
+            return "", (
+                "the new commit's parent is not where this started, so something "
+                "other than this applier has committed here as well"
+            )
+        span = [f"{head_before}..{commit_sha}"]
+    else:
+        span = [commit_sha]
+    count_probe, fault = _run_git(
+        root, ["rev-list", "--count", *span], timeout=CHECKOUT_PROBE_SECONDS
+    )
+    if count_probe is None or count_probe.returncode != 0:
+        return "", fault or "git could not count the commits this made"
+    count = (count_probe.stdout or "").strip()
+    if count != "1":
+        return "", f"{count} commits landed where exactly one was expected"
+    return commit_sha, ""
+
+
+def _literal(paths: list[str]) -> list[str]:
+    """Repository paths as **literal** pathspecs.
+
+    `--` separates options from pathspecs; it does not stop git reading
+    what follows as a pathspec *pattern*. So a resident's file called
+    `weird*.nix` glob-matches other files, and one whose name begins
+    with a colon is read as pathspec magic — in commands that add,
+    commit and status exactly the set of paths a patch touched, where
+    matching anything else is the failure. Every shape traced fails
+    safe today (a wider match makes the commit contain more than the
+    patch, which the verification above then refuses), but "fails safe
+    by luck" is not a property to leave standing.
+
+    `:(literal)` is git's own answer and takes no escaping rules of our
+    own: everything after it is the path, byte for byte (code review on
+    docs/tasks/0026-apply-validate.md).
+    """
+    return [f":(literal){path}" for path in paths]
+
+
+def _write_apply_result(
+    answer: Record,
+    question: Record,
+    *,
+    outcome: str,
+    apply_outcome: str,
+    detail_lines: list[str],
+    commit_sha: str = "",
+) -> str:
+    """The one record an apply writes (docs/tasks/0026-apply-validate.md
+    §F).
+
+    **A `result`, and no new record type.** `RECORD_TYPES` is a schema
+    surface the router's `to_route` tuple, every fold, `cmd_digest` and
+    the README's vocabulary all key on, and nothing here needs a type
+    that `result` does not already mean: an account of a turn a seat
+    ran.
+
+    **`refs: [answer-id, question-id]`, and deliberately NOT the
+    request.** `closing_result`'s clause (b) treats any result naming a
+    claim's request, newer than the claim and naming no claim of that
+    request, as the account closing that claim — and the reaper passes
+    it every result in the journal. An apply result naming the request
+    would therefore silently close a genuinely dangling worker claim, so
+    an errand whose hand-run retry died would be labelled with the
+    *apply's* outcome and never reaped. Leaving the request out makes
+    the apply invisible to both `closing_result` and `_errand_state`'s
+    result selection, which is exactly right: an apply is not a turn of
+    the errand. Lineage is unharmed — `_find_root_request` walks
+    `refs[0]` transitively and reaches the request through the answer
+    and the question — so `castle digest`'s grouping and the router's
+    evidence sentence are correct with no change anywhere.
+
+    **`outcome` is not widened, and never will be by this task.**
+    agent/README.md reserves the field name *and* its four values for
+    0026 and 0027 by name. The split that makes reusing them honest:
+    `outcome` is an observation about the applier's own run — the
+    epistemic shape the field already has — and `apply-outcome` is an
+    observation about the change. A refusal is `outcome: completed`
+    because the applier ran to a recorded conclusion, and a conclusion
+    correctly reached is not a failure of the run.
+
+    **No `claim` record, ever.** `_reap_interrupted` walks every claim
+    and hands one whose request has no closing result an `interrupted`
+    result and a `castle work <request-id>` retry hint — the wrong
+    command for an apply that died, written by a reaper with no idea
+    what it is reaping. An applier killed before it writes anything
+    therefore leaves no record at all, and the next sweep simply finds
+    the approval still eligible and tries once more. That is the honest
+    behaviour: nothing was written, so nothing was attempted as far as
+    the journal is concerned.
+
+    Provenance is inherited from the answer, which `file_answer` always
+    writes as `requested`, so the router notifies. That is intended: the
+    resident authorized something, and the push channel is how they
+    learn what happened to it. Which is why the body's first line is
+    harness prose drafted in `APPLY_FIRST_LINES` — `_fire_notification`
+    takes exactly that line, and a result's first line has leaked a
+    store path onto the notification channel before.
+    """
+    first_line = APPLY_FIRST_LINES.get(apply_outcome)
+    if first_line is None:
+        # The two `outcome: failed` shapes that carry no `apply-outcome`
+        # at all: an environment fault, and a target naming a role this
+        # applier has no checkout for. Neither is a statement about the
+        # change, which is precisely why neither gets a field that would
+        # make one.
+        first_line = (
+            "Castle could not act on the change you approved, and nothing in your "
+            "configuration repository was touched."
+        )
+    body_lines = [first_line, ""] + list(detail_lines)
+    extra = {"outcome": outcome}
+    if apply_outcome:
+        extra[APPLY_OUTCOME_FIELD] = apply_outcome
+    # Only ever passed by the one call site that got here through
+    # `_verify_single_commit`, which is what makes the field's meaning
+    # exact: not "a commit happened" but "exactly one commit landed,
+    # parented where this started, with nothing left uncommitted, and
+    # this is it." Every refusal and every attempt that reached no
+    # conclusion passes nothing, matching the body prose, which names no
+    # sha on those paths either.
+    if commit_sha:
+        extra[APPLY_COMMIT_FIELD] = commit_sha
+    record_id = write_record(
+        journal_dir(),
+        type="result",
+        provenance=answer.fields.get("provenance", "requested"),
+        seat=APPLIER_SEAT,
+        refs=[answer.id, question.id],
+        body="\n".join(body_lines),
+        extra=extra,
+    )
+    # The account of this attempt is durable as of the line above, so
+    # the crash breadcrumb has nothing left to say. Cleared HERE, at the
+    # one place that knows the record landed, rather than in a `finally`
+    # around the apply: a `finally` also runs when `write_record` itself
+    # raises, which is precisely the window the marker exists to cover.
+    # Pre-mutation refusals never wrote one, so this is a no-op for them.
+    _clear_in_flight(answer.id)
+    return record_id
+
+
+def _validation_command(private_root: str, host: str) -> list[str]:
+    """The one command this task ever runs against Nix
+    (docs/tasks/0026-apply-validate.md §E).
+
+    Every flag is load-bearing rather than stylistic:
+
+    * `--no-write-lock-file --no-update-lock-file` because 0024 verified
+      by running it that a bare evaluation of a path flake creates or
+      updates `flake.lock` in that directory, and `flake.lock` is the
+      audit artifact Principle 02's third consequence names. A validator
+      that silently updated a resident's lock would be making an
+      unauthorized change while checking an authorized one.
+    * `--no-link` so no `result` symlink, no GC root and nothing at all
+      is left behind in the checkout.
+    * `build`, never `nix flake check` — which builds every
+      resident-authored `checks` output, unbounded work nobody asked for
+      — and never a bare `nix eval`, which proves less than this task's
+      own title claims: a configuration can evaluate and still fail to
+      build.
+
+    Never as root and never under `sudo`. An unprivileged process can
+    evaluate and build a secrets-bearing configuration (sops-nix's
+    evaluation-time check and its build-time `checkPhase` both need the
+    sops file readable and neither needs the private key); what it can
+    never confirm is that decryption would succeed, and the record must
+    not imply otherwise.
+    """
+    return [
+        "nix",
+        "build",
+        "--no-link",
+        "--no-write-lock-file",
+        "--no-update-lock-file",
+        f"{private_root}#nixosConfigurations.{host}.config.system.build.toplevel",
+    ]
+
+
+def _evaluate_configuration(
+    private_root: str, answer_id: str, detail_lines: list[str]
+) -> tuple[str, str]:
+    """Evaluate and build this machine's host configuration, if all
+    three gates allow it. Returns `(state, outcome)` where `state` is
+    one of "skipped" / "ok" / "failed" and `outcome` is the `outcome`
+    field this contributes.
+
+    Appends its own account to `detail_lines`, including — always,
+    whether it ran or not — the exact command line, shell-quoted. That
+    line is the dry-run seam this task's harness asserts argv against
+    with no environment variable and no injection point that could drift
+    from what production does, and it is also the one command a resident
+    can paste to check the thing themselves.
+
+    **Four gates, all required before `nix` is invoked at all.** The
+    option, off by default; a state layout where evaluating would not
+    publish the resident's whole decision history to the world-readable
+    store; a private root whose path can be expressed as a flakeref at
+    all; and `nix` actually being on PATH, which a host running the
+    agent layer without `modules/dev` genuinely may not have. None of
+    the four is a refusal to *apply*: the change is already committed
+    by the time this runs, and the gate is on evaluation, which is the
+    only step that copies anything anywhere.
+    """
+    host = _hostname()
+
+    # **Before anything is built into a flakeref: can this path even be
+    # one?** A flakeref splits the attribute path at `#` and the query
+    # at `?`, so a private checkout whose own path contains either makes
+    # `nix` resolve some shorter, wrong directory. Reproduced against
+    # nix 2.34: it does not fail as a malformed argument, it fails as
+    # "getting status of ... No such file or directory" — which arrived
+    # here as a nonzero exit and was recorded as `validation-failed`, a
+    # false claim that the resident's configuration no longer builds
+    # (code review on docs/tasks/0026-apply-validate.md).
+    #
+    # Escaping was considered and there is nothing to escape *to*: a
+    # path flakeref has no quoting rule for these, which is why they are
+    # reserved. So this is a skip and not a refusal — the apply and the
+    # commit are fine, and only the check is inexpressible.
+    flakeref_reserved = sorted({char for char in FLAKEREF_RESERVED if char in private_root})
+
+    def skip(reason: str, *, command: str | None) -> tuple[str, str]:
+        detail_lines.append("")
+        detail_lines.append(f"No evaluation was attempted: {reason}")
+        if command is not None:
+            detail_lines.append("")
+            detail_lines.append("The check that would have run is:")
+            detail_lines.append("")
+            detail_lines.append(f"    {command}")
+        return "skipped", "completed"
+
+    if flakeref_reserved:
+        # Deliberately BEFORE the hostname sentence and with no command
+        # line printed: there is no command to print. Printing the one
+        # that cannot work would be this record recommending the thing
+        # that produced the wrong answer.
+        return skip(
+            "your configuration repository's own path contains "
+            + " and ".join(f"`{char}`" for char in flakeref_reserved)
+            + ", which Nix reads as flakeref syntax rather than as part of the "
+            "path — so there is no way to name this repository to `nix build` at "
+            "all. Nothing is wrong with the change, and nothing about it was "
+            "checked. Moving the checkout to a path without those characters is "
+            "the only fix; there is no escaping rule for them.",
+            command=None,
+        )
+
+    argv = _validation_command(private_root, host)
+    printable = shlex.join(argv)
+
+    detail_lines.append("")
+    detail_lines.append(
+        f"The configuration checked is the one named by this machine's own hostname "
+        f"(`{host}`), read from `{HOSTNAME_PATH}`. That is a fact about the machine "
+        "this applier ran on, not about the change: nothing anywhere records which "
+        "host configuration a proposal was meant for, and nothing here checked "
+        "whether the change did what the proposal claimed."
+    )
+
+    if os.environ.get(APPLY_EVALUATE_ENV, "").strip() != "true":
+        return skip(
+            f"`castle.agent.apply.evaluateFlake` is off (it is off by default, and "
+            f"wires ${APPLY_EVALUATE_ENV}). Turning it on lets this build the host "
+            "configuration your change produces. Nothing is activated either way.",
+            command=printable,
+        )
+
+    finding = _state_layout_finding(state_dir())
+    if finding:
+        return skip(
+            "evaluating this flake would publish your own decision history, and "
+            "unlike a rebuild it is this tool that would be making the copy — so it "
+            f"declines rather than reports. What was found: {finding}",
+            command=printable,
+        )
+
+    nix = shutil.which("nix")
+    if nix is None:
+        return skip(
+            "`nix` is not on this session's PATH, so there is nothing here to "
+            "evaluate with. Nothing about the change is in question; it simply was "
+            "not checked.",
+            command=printable,
+        )
+
+    timeout = apply_timeout_seconds()
+    detail_lines.append("")
+    detail_lines.append("The check that ran:")
+    detail_lines.append("")
+    detail_lines.append(f"    {printable}")
+
+    timed_out = False
+    try:
+        proc = subprocess.Popen(
+            [nix, *argv[1:]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            # Its own process group, so the kill below reaches the
+            # builders `nix build` spawns. Killing only the parent
+            # leaves them running, which is the failure the worker seat
+            # already learned once.
+            start_new_session=True,
+            env=_git_stripped_env(),
+        )
+    except OSError as exc:
+        detail_lines.append("")
+        detail_lines.append(f"It could not be started at all: {exc}")
+        return "failed", "completed"
+
+    pgid = proc.pid
+    try:
+        output, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_tenant_group(pgid)
+        try:
+            output, _ = proc.communicate(timeout=TENANT_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            output = ""
+    output = output or ""
+
+    # The whole of it to the spool, best effort. The spool is ephemeral,
+    # lives under $XDG_RUNTIME_DIR, and is the named answer to "full
+    # build logs and progress belong outside the durable journal". A
+    # failure writing it is printed and ignored — it is never the reason
+    # an apply is reported as failed.
+    spool_path = spool_dir() / f"apply-{answer_id}.log"
+    try:
+        spool_path.write_text(output, encoding="utf-8")
+        detail_lines.append("")
+        detail_lines.append(f"Its full output is at `{spool_path}` until the next reboot.")
+    except OSError as exc:
+        print(
+            f"castle apply: the validation's full output could not be spooled to "
+            f"{spool_path} ({exc}); the record still carries its last "
+            f"{APPLY_LOG_TAIL_LINES} lines.",
+            file=sys.stderr,
+        )
+
+    tail = output.splitlines()[-APPLY_LOG_TAIL_LINES:]
+    if tail:
+        detail_lines.append("")
+        detail_lines.append(
+            f"The last {len(tail)} line(s) of its output:"
+            if len(tail) < APPLY_LOG_TAIL_LINES
+            else f"The last {APPLY_LOG_TAIL_LINES} lines of its output:"
+        )
+        detail_lines.append("```")
+        detail_lines.extend(tail)
+        detail_lines.append("```")
+
+    if timed_out:
+        detail_lines.append("")
+        detail_lines.append(
+            f"It outlived its {timeout}s bound and its whole process group was "
+            "killed. Raise `castle.agent.apply.timeoutSeconds` if this machine "
+            "legitimately needs longer."
+        )
+        return "failed", "timeout"
+    if proc.returncode != 0:
+        detail_lines.append("")
+        detail_lines.append(f"It exited {proc.returncode}: the configuration does not build.")
+        return "failed", "completed"
+    return "ok", "completed"
+
+
+def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
+    """Spend one authorization. Returns `(result_id, apply_outcome)`.
+
+    Raises `ApplyRefused` before writing anything when the id is not an
+    authorization at all, and `ApplyEnvironmentFault` — after writing
+    the `outcome: failed` record — when the configured checkout cannot
+    be used.
+
+    The order of the pre-flight is docs/tasks/0026-apply-validate.md
+    §C's, with one deliberate departure: the checks that resolve the
+    decision run **before** the environment check, rather than after it
+    as the brief lists them. They are the two that write no record, so
+    running them first is what keeps a mistyped id from putting a
+    permanent `failed` result in an append-only journal to describe
+    somebody's typo. The brief carries the correction.
+    """
+    binding, why = _approval_binding(records, answer)
+    if binding is None:
+        raise ApplyRefused(why)
+    question, proposal = binding
+    if answer.fields.get("decision", "").strip() != "approve":
+        raise ApplyRefused(
+            f"it records `{answer.fields.get('decision', '').strip() or 'no decision'}`, "
+            "not an approval. Only an approval authorizes anything to be made."
+        )
+
+    detail_lines: list[str] = []
+
+    # ---------------------------------------------------------------
+    # C.1 — the environment.
+    # ---------------------------------------------------------------
+    root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    fault = _checkout_fault(root) if root else "it is not configured at all"
+    if fault:
+        # An **environment** fault, not a property of the proposal, so
+        # it takes `outcome: failed` with no `apply-outcome` — exactly
+        # what `_write_worker_result` does for a tenant that could not
+        # be run. `_checkout_fault` is reused rather than
+        # re-implemented, and the case that matters most here is the one
+        # its own docstring says nothing downstream could detect: a root
+        # that is a *subdirectory* of a checkout, whose diffs carry
+        # paths relative to a root the applier will not be using. This
+        # is that downstream step, and it detects it.
+        detail_lines.append(
+            f"Castle has no usable private checkout to make it in: {fault}. Set "
+            "`castle.agent.repo.private` to the root of your own configuration "
+            "checkout (it wires $" + PRIVATE_ROOT_ENV + ")."
+        )
+        detail_lines.append("")
+        detail_lines.append(
+            f"Nothing was read or written anywhere. The change you approved "
+            f"(`{question.id}`) is untouched and can be applied by hand with "
+            f"`castle apply {answer.id}` once the checkout is configured."
+        )
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="failed",
+            apply_outcome="",
+            detail_lines=detail_lines,
+        )
+        raise ApplyEnvironmentFault(fault, result_id)
+
+    detail_lines.append(
+        f"What this applies: the change `{question.id}`, proposed by `{proposal.id}` "
+        f"and approved by `{answer.id}`."
+    )
+
+    def refuse(apply_outcome: str, lines: list[str]) -> tuple[str, str]:
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="completed",
+            apply_outcome=apply_outcome,
+            detail_lines=detail_lines + [""] + lines,
+        )
+        return result_id, apply_outcome
+
+    # ---------------------------------------------------------------
+    # C.3 — the record is still the record that was authorized.
+    # ---------------------------------------------------------------
+    # Compared against the ANSWER's stamp, not the question's: the
+    # answer's is the value that was verified at the moment authority
+    # was granted (`file_answer` writes it only after it matched).
+    # Re-derived from disk right now, for `file_answer`'s own stated
+    # reason — a check that re-reads from disk holds with no state
+    # carried between the process that displayed something and the
+    # process that acts on it.
+    authorized_hash = answer.fields.get(PROPOSAL_SHA256_FIELD, "").strip()
+    try:
+        current_hash = hashlib.sha256(proposal.path.read_bytes()).hexdigest()
+    except OSError as exc:
+        return refuse(
+            "refused-artifact-changed",
+            [
+                f"The proposal it was bound to could not be read ({exc}), so there is "
+                "no way to confirm that what is on disk is what you approved."
+            ],
+        )
+    if not authorized_hash or current_hash != authorized_hash:
+        return refuse(
+            "refused-artifact-changed",
+            [
+                "The proposal you approved is not the one on disk now: its contents "
+                "hash differently than they did when your approval was recorded. "
+                "Nothing here rewrites a record, so there is no version to prefer — "
+                "it refuses rather than guessing which one you meant. Ask for the "
+                "change again if you still want it."
+            ],
+        )
+
+    # ---------------------------------------------------------------
+    # C.4 — the exact bytes exist, and they are the exact bytes.
+    # ---------------------------------------------------------------
+    patch_digest = proposal.fields.get(PATCH_SHA256_FIELD, "").strip()
+    sidecar = journal_dir() / f"{proposal.id}.patch"
+    if not patch_digest or not sidecar.exists():
+        # Not an exception but a named outcome: a result carrying no
+        # diff boundary and no sidecar is approvable today — the review
+        # surface deliberately renders such a body whole — so an
+        # authorization can legitimately resolve to no bytes at all.
+        return refuse(
+            "refused-no-patch",
+            [
+                "No exact copy of the change was kept beside the proposal, so there "
+                "is nothing to apply. The rendered copy in the proposal itself is for "
+                "reading, not for applying: it has been through this format's own "
+                "line handling and is not guaranteed byte-for-byte "
+                "(docs/tasks/0033-byte-exact-proposal.md). Ask for the change again "
+                "and it will be kept exactly this time."
+            ],
+        )
+    try:
+        sidecar_bytes = sidecar.read_bytes()
+    except OSError as exc:
+        return refuse(
+            "refused-no-patch",
+            [f"The exact copy of the change could not be read ({exc})."],
+        )
+    if hashlib.sha256(sidecar_bytes).hexdigest() != patch_digest:
+        return refuse(
+            "refused-artifact-changed",
+            [
+                "The exact copy of the change no longer matches the digest recorded "
+                "beside it, so what is on disk is not what you approved."
+            ],
+        )
+
+    # ---------------------------------------------------------------
+    # C.5 — which checkout it is for.
+    # ---------------------------------------------------------------
+    target = proposal.fields.get(TARGET_FIELD, "").strip()
+    detail_lines.append("")
+    detail_lines.append(f"It was proposed against the **{target or 'unstated'}** checkout.")
+    if target == "mechanism":
+        return refuse(
+            "refused-target-mechanism",
+            [
+                "That is the Castle Turing framework itself — the public project this "
+                "machine's mechanism comes from — rather than your own configuration. "
+                "This seat only ever writes your own checkout, and it has no "
+                "authority over that one, so the change was not made anywhere. Your "
+                "approval is recorded and remains the record of what you thought; the "
+                "change is yours to carry upstream if you want it. Nothing about this "
+                "says the change belongs somewhere else than where it was proposed."
+            ],
+        )
+    if target != "private":
+        # No third value is reachable through any writer here — a result
+        # with no `target` never produced a proposal question at all,
+        # and an unresolvable role is discarded before it is stamped —
+        # so this is not given a refusal it could never earn. It takes
+        # the same posture one layer down as the worker's own refusal to
+        # record a role it cannot resolve: `outcome: failed`, and no
+        # `apply-outcome`, because this says nothing about the change.
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="failed",
+            apply_outcome="",
+            detail_lines=detail_lines
+            + [
+                "",
+                "That is not a checkout this applier has: it only ever writes the one "
+                "you configured as your own. Nothing was touched anywhere.",
+            ],
+        )
+        return result_id, ""
+
+    # ---------------------------------------------------------------
+    # C.5b — freeze the verified bytes.
+    # ---------------------------------------------------------------
+    # `sidecar_bytes` was hashed and checked against `patch-sha256`
+    # above, but every git invocation from here on named `sidecar` —
+    # the mutable path in the journal directory — rather than those
+    # verified bytes. A sync or an edit landing in the window between
+    # that check and `git apply` could substitute different bytes
+    # under the same digest: a replacement patch touching the same
+    # paths would then commit successfully under a commit message
+    # still asserting the OLD patch's digest (Codex review on this PR,
+    # finding 1). Snapshotting the verified bytes into a private temp
+    # file — read by nothing else, never resynced — closes that
+    # window: everything below reads only the copy this just wrote.
+    snapshot_fd, snapshot_path_str = tempfile.mkstemp(
+        prefix="castle-apply-patch-", suffix=".patch"
+    )
+    try:
+        with os.fdopen(snapshot_fd, "wb") as fh:
+            fh.write(sidecar_bytes)
+        snapshot = pathlib.Path(snapshot_path_str)
+
+        # -----------------------------------------------------------
+        # C.6 — the resident's own uncommitted work, under these paths only.
+        # -----------------------------------------------------------
+        paths, why_paths = _patch_paths(root, snapshot)
+        if paths is None:
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "Git could not even read the change as a patch, so it certainly "
+                    "cannot be made:",
+                    "",
+                    "```",
+                    why_paths,
+                    "```",
+                ],
+            )
+        if not paths:
+            return refuse(
+                "refused-no-patch",
+                ["The kept copy of the change touches no files at all."],
+            )
+        dirty, why_dirty = _dirty_under(root, paths)
+        if dirty is None:
+            return refuse(
+                "refused-tree-dirty",
+                [
+                    "Whether you have uncommitted work under those files could not be "
+                    f"established ({why_dirty}), and this will not write over work it "
+                    "cannot see."
+                ],
+            )
+        if dirty:
+            return refuse(
+                "refused-tree-dirty",
+                [
+                    f"You have uncommitted edits under the files it touches ({dirty}), and "
+                    "it will not write over them. Your own `git status` will say which "
+                    "files — they are deliberately not named here, because this record is "
+                    "durable and your file names are yours. Commit or set aside that work "
+                    f"and run `castle apply {answer.id}` again.",
+                ],
+            )
+
+        # -----------------------------------------------------------
+        # C.7 — does it still fit? Exactly, or not at all.
+        # -----------------------------------------------------------
+        # No fuzz, ever: no `-3`, no `--recount`, no `patch(1)` fallback. A
+        # patch that does not apply exactly is not the change you approved,
+        # and a three-way merge would produce a change nobody authorized.
+        # This also stands in for the absent proposal-time revision stamp:
+        # "has the tree moved since approval" is answerable only by asking
+        # git whether the patch still fits, which is a more precise question
+        # than comparing revisions anyway, since a revision that moved for
+        # unrelated reasons is not staleness.
+        check, check_fault = _run_git(root, ["apply", "--check", "--", str(snapshot)])
+        if check is None:
+            # git never answered, so nothing is known about the patch and
+            # nothing was written. An environment fault, not a property of
+            # the change — the same shape §C.1 takes, and it aborts the
+            # sweep for the same reason: the next approval would meet the
+            # identical broken machine.
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail_lines
+                + [
+                    "",
+                    f"Castle could not ask git whether the change still fits: "
+                    f"{check_fault}. Nothing was written anywhere.",
+                ],
+            )
+            raise ApplyEnvironmentFault(check_fault, result_id)
+        if check.returncode != 0:
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "It no longer fits your configuration repository — the files it "
+                    "changes are not in the state they were in when it was proposed. It "
+                    "is applied exactly or not at all; nothing here merges, fuzzes or "
+                    "guesses, because the result of that would be a change you never saw. "
+                    "Git's own account:",
+                    "",
+                    "```",
+                    (check.stderr or check.stdout or "").strip(),
+                    "```",
+                ],
+            )
+
+        # -----------------------------------------------------------
+        # D — build the commit, move the ref, then sync the tree.
+        # -----------------------------------------------------------
+        # **The commit is constructed, not collected**, and that is the
+        # change round 4 of review forced. The old sequence applied the
+        # patch to the working tree and committed from it, which left an
+        # irreducible window: anything writing one of those paths in
+        # between — the resident, an editor, a formatter on save — got
+        # its bytes committed and certified under a message asserting
+        # the approved patch's digest, with the committed blob and the
+        # working tree agreeing because both held the concurrent edit.
+        # Reproduced. See `_build_commit`, which removes the race rather
+        # than narrowing it: the commit's content is a pure function of
+        # `head_before` and the verified patch bytes, and the working
+        # tree is not an input to it at all.
+        #
+        # What is on disk right now, per path, so the sync below can
+        # tell "nobody touched this" from "somebody did".
+        pre_images = _worktree_state(root, paths)
+
+        # An empty string is a legitimate answer: a repository with no
+        # commits yet has no HEAD, and a patch that only creates files
+        # applies to one perfectly well.
+        head_probe, _ = _run_git(root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS)
+        head_before = (
+            (head_probe.stdout or "").strip()
+            if head_probe is not None and head_probe.returncode == 0
+            else ""
+        )
+
+        # Ids only, and never a path or a word of tenant prose: this
+        # message is durable and leaves the machine more easily than a
+        # journal does. The digest is what makes the commit checkable
+        # against the journal years later with no tooling at all.
+        errand = _find_root_request(records, question)
+        message = "\n".join(
+            [
+                "castle: apply an approved change",
+                "",
+                f"errand:   {errand.id if errand is not None else '(none recorded)'}",
+                f"change:   {question.id}",
+                f"decision: {answer.id}",
+                f"proposal: {proposal.id}",
+                f"patch-sha256: {patch_digest}",
+                "",
+                "Applied by `castle apply` on the resident's recorded approval",
+                "(docs/tasks/0026-apply-validate.md). Nothing was activated: no",
+                "nixos-rebuild, no switch, no new generation.",
+            ]
+        )
+
+        # Nothing below this line has touched the repository yet: a temp
+        # index and some unreferenced objects. A failure here is a clean
+        # refusal with nothing to undo, which is why the patch not
+        # fitting is an ordinary named refusal rather than the alarming
+        # "it passed a dry run and then would not apply" the old
+        # sequence had to write.
+        built_sha, failed_stage, build_detail = _build_commit(
+            root, snapshot, head_before, message
+        )
+        if failed_stage == "apply":
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "It no longer fits the commit it would be made on top of. Nothing "
+                    "was touched: the change is built against your repository's "
+                    "history before anything is written, so a change that does not "
+                    "fit simply is not made. Git's own account:",
+                    "",
+                    "```",
+                    build_detail,
+                    "```",
+                ],
+            )
+        if failed_stage:
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail_lines
+                + [
+                    "",
+                    f"Castle could not build the commit for it (`git {failed_stage}`: "
+                    f"{build_detail}). Nothing in your configuration repository was "
+                    "touched — the change is assembled before anything is written, "
+                    "so a failure here changes nothing.",
+                ],
+            )
+            raise ApplyEnvironmentFault(build_detail, result_id)
+
+        # **The last line before anything in the resident's repository
+        # moves**, and the window it covers is now only the reference
+        # update and the working-tree sync below. If this process dies
+        # in that window — killed, rebooted, or with `write_record`
+        # itself failing — no result names this answer, so it stays
+        # eligible and the next sweep would attempt it afresh: on a
+        # landed commit, which refuses `refused-patch-stale`. A durable
+        # record saying the applier declined a change that is in fact in
+        # the resident's repository. The marker is what the next run
+        # reads instead of guessing.
+        _write_in_flight(answer.id, head_before, paths)
+
+        # One guarded move. `--old-value` semantics: an empty
+        # `head_before` means "this reference must not exist yet", which
+        # is the root-commit case. Anything else committing here in the
+        # meantime makes this fail loudly rather than splice a commit
+        # onto history that moved.
+        moved, moved_fault = _run_git(
+            root, ["update-ref", "HEAD", built_sha, head_before]
+        )
+        if moved is None or moved.returncode != 0:
+            return refuse(
+                "refused-patch-stale",
+                [
+                    "Something else committed to your configuration repository while "
+                    "this was being prepared, so the change was not made — it will "
+                    "not splice a commit onto history that moved underneath it. "
+                    "Nothing was touched. Git's own account:",
+                    "",
+                    "```",
+                    moved_fault if moved is None else (moved.stderr or "").strip(),
+                    "```",
+                ],
+            )
+
+        diverged, sync_faults = _sync_worktree(root, built_sha, paths, pre_images)
+    finally:
+        # Best-effort: a leftover temp file is a cleanup nit, never a
+        # correctness question.
+        try:
+            pathlib.Path(snapshot_path_str).unlink()
+        except OSError:
+            pass
+
+    # Belt, not the guarantee — see `_verify_single_commit`. The commit
+    # is right by construction; this catches something moving the
+    # reference again between the guarded update and this read.
+    commit_sha, landing_fault = _verify_single_commit(root, head_before, built_sha)
+    if landing_fault:
+        detail_lines.append("")
+        detail_lines.append(
+            "The commit was made, and the repository is not in the state that "
+            f"implies: {landing_fault}"
+        )
+        detail_lines.append("")
+        detail_lines.append(
+            f"The commit this built is `{built_sha}` — it contains exactly the change "
+            "you approved, because it was assembled from your repository's history "
+            "plus those exact bytes. What cannot be vouched for is what your "
+            "repository's history looks like now, so no commit is named here as "
+            "*the* one to revert. Look at `git log` and `git status` before doing "
+            "anything else. Nothing was rolled back, nothing was activated, and "
+            "nothing was pushed anywhere."
+        )
+        result_id = _write_apply_result(
+            answer,
+            question,
+            outcome="failed",
+            apply_outcome="",
+            detail_lines=detail_lines,
+        )
+        return result_id, ""
+
+    detail_lines.append("")
+    detail_lines.append(
+        f"It is now one commit in your configuration repository: `{commit_sha}`, "
+        f"on the branch that was checked out. It holds exactly the change you "
+        f"approved: it was built from your repository's history plus those exact "
+        f"bytes, so nothing that happened while it was being made could get into "
+        f"it. Nothing was pushed anywhere, and nothing was activated — no rebuild, "
+        f"no new generation, no change to the machine you are using. To undo it: "
+        f"`git revert {commit_sha}`."
+    )
+    if diverged:
+        # The unavoidable last-writer race, turned into visible dirt
+        # rather than into either a lie or destroyed work.
+        detail_lines.append("")
+        detail_lines.append(
+            "Something changed these files while the change was being made, so they "
+            "have been left exactly as you left them rather than being overwritten:"
+        )
+        detail_lines.append("")
+        detail_lines += [f"    {_displayable(path)}" for path in diverged]
+        detail_lines.append("")
+        detail_lines.append(
+            "The commit above is still the change you approved. Your edits are on "
+            "top of it, uncommitted, and `git status` will show them — `git diff` "
+            "says what they are and nothing here has decided anything about them."
+        )
+    for fault in sync_faults:
+        detail_lines.append("")
+        detail_lines.append(
+            f"The commit was made and one step of bringing your working files to it "
+            f"did not finish: {fault}"
+        )
+
+    # Information, never a gate. The paths this synced should read clean
+    # afterwards; when they do not, the likeliest reason by far is a
+    # `.gitattributes` `clean` filter that would store those bytes in a
+    # different canonical form than the ones that were approved. The
+    # commit is still exactly the approved change — `git apply --cached`
+    # does not filter — but git will go on reporting the file as
+    # modified until the resident decides which form they want, and
+    # meeting that with no explanation would be its own small failure.
+    synced = [path for path in paths if path not in diverged]
+    if synced:
+        residue, _why_residue = _dirty_entries(root, synced)
+        if residue:
+            detail_lines.append("")
+            detail_lines.append(
+                "Your repository still reports these files as changed, even though "
+                "the commit holds exactly the bytes you approved:"
+            )
+            detail_lines.append("")
+            detail_lines += [
+                f"    {_displayable(path)}" for _letters, path in residue
+            ]
+            detail_lines.append("")
+            detail_lines.append(
+                "That usually means a content filter in that repository (a "
+                "`.gitattributes` `clean` rule) would store them in a different form "
+                "than the one that was proposed to you. Nothing here decided between "
+                "the two: the change you approved is what was committed, and git will "
+                "keep showing the difference until you say which you want. These are "
+                "files the change itself touched — nothing else in your repository "
+                "was looked at."
+            )
+
+    state, outcome = _evaluate_configuration(root, answer.id, detail_lines)
+    apply_outcome = {
+        "ok": "applied-validated",
+        "failed": "validation-failed",
+        "skipped": "applied-unvalidated",
+    }[state]
+    if state == "failed":
+        detail_lines.append("")
+        detail_lines.append(
+            "Nothing was undone and nothing was activated, so the machine you are "
+            "using is exactly as it was. There is no automatic repair and no second "
+            "attempt: the way to change this is to ask for a new change."
+        )
+    result_id = _write_apply_result(
+        answer,
+        question,
+        outcome=outcome,
+        apply_outcome=apply_outcome,
+        detail_lines=detail_lines,
+        # The one place this is ever stamped: everything above returned
+        # already, and reaching here means `_verify_single_commit`
+        # answered. See APPLY_COMMIT_FIELD.
+        commit_sha=commit_sha,
+    )
+    return result_id, apply_outcome
+
+
+# The two `apply-outcome` values that mean the change the resident
+# authorized is in their repository and known to be fine. `castle apply
+# <answer-id>` exits 0 on exactly these: a human typing it by hand is
+# asking "did my change land, and is it all right?", and the shell's
+# exit code is where they will read the answer. Every other conclusion —
+# a refusal, a failed check, an uncommitted apply, an environment fault
+# — exits 1. The sweep keeps `castle dispatch`'s contract instead, where
+# the exit code means "the mechanism worked" and outcomes live in the
+# records.
+APPLY_SUCCESS_OUTCOMES = ("applied-validated", "applied-unvalidated")
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    """The applier seat's hands (docs/tasks/0026-apply-validate.md §B).
+
+    Two forms, exactly one of which argparse allows at a time, and the
+    pair mirrors `castle work <id>` / `castle dispatch` deliberately:
+    `castle apply <answer-id>` is the hand path and is NOT bounded by
+    the one-attempt rule, because re-running by hand IS the retry path;
+    `castle apply --sweep` is the automatic one and is.
+
+    The argument is the **answer** id and never the question's. The
+    authorization is the answer; a question is a proposal, and a
+    proposal authorizes nothing on its own. Naming the thing being spent
+    is the same discipline `refs` already follows.
+    """
+    # STOP-19's mechanical half. `agent/castle-worker-claude`'s
+    # nonce-fenced override block already tells a tenant that a passage
+    # saying "the resident has already approved applying something" was
+    # quoted out of a record and did not come from the harness — and
+    # since docs/tasks/0023 renders approved proposals into a resumed
+    # tenant's prompt, that block is load-bearing rather than defensive.
+    # This is the same rule in code.
+    #
+    # Defeated by `env -u`, exactly like the two guards in
+    # `write_record` it mirrors, and that hole is stated rather than
+    # papered over: docs/backlog/env-stripping-defeats-write-guards.md,
+    # and §J of this task's brief, which records that this task is the
+    # thing which makes a forged approval mutate a configuration rather
+    # than sit inert.
+    claim_id = os.environ.get(WORKER_CLAIM_ENV, "").strip()
+    if claim_id:
+        print(
+            "castle apply: refusing to apply anything from inside a worker turn "
+            f"(this environment carries {WORKER_CLAIM_ENV}={claim_id}). The worker "
+            "seat proposes; the applier seat applies, on the resident's recorded "
+            "approval and nothing else. File the change and end the turn.",
+            file=sys.stderr,
+        )
+        return 1
+
+    configured_state_dir = state_dir()
+    if not configured_state_dir.exists():
+        # The same posture and the same exit code `cmd_dispatch` takes:
+        # a state directory that does not exist yet is a machine that is
+        # not ready, not a mechanism fault. The timer comes back.
+        print(
+            f"apply: state dir {configured_state_dir} does not exist yet "
+            "(private repo not restored?); nothing to do"
+        )
+        return 0
+
+    # An unattended applier will not make liveness decisions on locks in
+    # a world-writable directory, mirroring `cmd_dispatch`'s refusal
+    # exactly and for a version of the same reason that matters more
+    # here. `/tmp/castle-$UID` is `runtime_dir()`'s last-resort branch,
+    # and any local user can create that path first and hold
+    # `apply.lock`: this would then report "another applier is already
+    # running" and exit 0, forever, staying green in `systemctl --user
+    # status` while every approval the resident granted sat unapplied.
+    # Dispatch's version of that is an errand that never starts; this
+    # one is an authorization that never gets spent, on the seat with
+    # the higher authority of the two.
+    #
+    # The hand path keeps the fallback deliberately, exactly as `castle
+    # work` does: a human is present, watching the command, and will
+    # notice it behaving strangely. Nobody is watching a timer.
+    if args.sweep and runtime_dir_is_fallback():
+        print(
+            "castle apply: refusing to sweep with locks under "
+            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
+            "so the only available lock directory is world-writable and an "
+            "unattended applier cannot trust it. Run applying from a real login "
+            "session (the systemd user units do), or run `castle apply "
+            "<answer-id>` by hand, where a human is present to notice.",
+            file=sys.stderr,
+        )
+        return 1
+
+    lock = acquire_lock(apply_lock_path())
+    if lock is None:
+        # One applier at a time, machine-wide: they would all be writing
+        # one working tree. Not an error — the other one is doing this.
+        print("apply: another applier is already running; nothing to do")
+        return 0
+    try:
+        try:
+            records = load_all(journal_dir())
+        except OSError as exc:
+            print(f"castle apply: cannot read the journal: {exc}", file=sys.stderr)
+            return 1
+
+        # **Before anything fresh, on both paths.** An attempt that
+        # touched a checkout and never wrote its account is the one
+        # thing a re-attempt must not run on top of, so it is settled
+        # first and the answers it settles are barred by their own
+        # results from the fold below.
+        reconciled = _reconcile_in_flight(records)
+        if reconciled:
+            records = load_all(journal_dir())
+
+        if not args.sweep:
+            if args.answer_id in {
+                rec.refs[0]
+                for rid in reconciled
+                for rec in (records.get(rid),)
+                if rec is not None and rec.refs
+            }:
+                # This invocation just wrote the account of an
+                # interrupted attempt on the very id it was asked to
+                # apply. It does NOT then proceed: the whole point is
+                # that nothing knows what that attempt left behind, and
+                # re-running on top of it is what manufactures the
+                # contradiction. Running it again is one command away,
+                # and the record says so.
+                print(
+                    f"castle apply: an earlier attempt on {args.answer_id} was "
+                    "interrupted after it may have begun changing your configuration "
+                    "repository; that is now recorded. Look at it, then run this "
+                    "again.",
+                    file=sys.stderr,
+                )
+                for rid in reconciled:
+                    print(rid)
+                return 1
+            answer = records.get(args.answer_id)
+            if answer is None or answer.type != "answer":
+                print(
+                    f"castle apply: {args.answer_id} is not an approval in this "
+                    "journal. The argument is the id of the decision that approved a "
+                    "change, not of the change itself.",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                result_id, apply_outcome = _apply_one(answer, records)
+            except ApplyRefused as exc:
+                print(f"castle apply: {args.answer_id} cannot be spent: {exc}", file=sys.stderr)
+                return 1
+            except ApplyEnvironmentFault as exc:
+                print(f"castle apply: {exc}", file=sys.stderr)
+                print(exc.result_id)
+                return 1
+            print(result_id)
+            return 0 if apply_outcome in APPLY_SUCCESS_OUTCOMES else 1
+
+        approvals = _eligible_approvals(records)
+        if not approvals:
+            print("apply: nothing eligible")
+        applied = 0
+        for answer in approvals:
+            try:
+                result_id, apply_outcome = _apply_one(answer, records)
+            except ApplyRefused as exc:
+                # Unreachable: the fold established every one of these.
+                # Reported rather than crashed on, and never fatal to
+                # the rest of the sweep.
+                print(f"castle apply: skipping {answer.id}: {exc}", file=sys.stderr)
+                continue
+            except ApplyEnvironmentFault as exc:
+                print(
+                    f"castle apply: {exc}. Aborting the sweep rather than spending "
+                    "every remaining authorization on the same broken checkout — see "
+                    f"{exc.result_id}.",
+                    file=sys.stderr,
+                )
+                return 1
+            applied += 1
+            print(f"apply: {result_id} spends {answer.id} -> {apply_outcome or 'failed'}")
+        if applied or reconciled:
+            # Exactly one route pass after the loop, the same tail step
+            # `cmd_dispatch` runs and for the same reason: `route_journal`
+            # is an idempotent whole-journal fold, so per-record routing
+            # would buy nothing. It matters here rather than being left
+            # to dispatch because a host may enable applying without
+            # enabling dispatch, and then nothing else would ever fire
+            # the notification that tells the resident what happened to
+            # the change they authorized.
+            #
+            # The hand path deliberately does NOT route, exactly as
+            # `castle work` does not: a human at a terminal can see what
+            # happened, and `castle route` is one command away.
+            return route_journal()
+        return 0
+    finally:
+        lock.close()
+
+
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
     """Every record reachable from `root_id` along the lineage edge,
     plus anything naming `root_id` directly.
@@ -5923,6 +8400,90 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "other value."
             )
 
+        # `authorizes-apply` (question-only,
+        # docs/tasks/0026-apply-validate.md §I), word for word
+        # `blocking`'s two checks above and for word-for-word the same
+        # reasons: type-scoped because nothing reads it off any other
+        # record, and strict about the one spelling because the
+        # applier's fold is strict in the other direction. A
+        # hand-written `authorizes-apply: false` is inert rather than
+        # dangerous — what it is not is *visible*, and this check is
+        # what names it. No `cmd_record` writer guard is paired with it,
+        # unlike `--blocking`'s, for the simple reason that
+        # `cmd_record` has no generic field flag and so cannot write
+        # this field at all.
+        authorizes_raw = rec.fields.get(AUTHORIZES_APPLY_FIELD)
+        if authorizes_raw is not None and rtype != "question":
+            errors.append(
+                f"{path.name}: '{AUTHORIZES_APPLY_FIELD}' is a question-record field "
+                f"and this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+        elif authorizes_raw is not None and authorizes_raw != "true":
+            errors.append(
+                f"{path.name}: '{AUTHORIZES_APPLY_FIELD}' ({authorizes_raw!r}) is "
+                "present but is not the literal 'true' — the only spelling "
+                "`_file_proposal_question` writes. Absent means this proposal was "
+                "offered under the older statement that approving applies nothing; "
+                "there is no other value."
+            )
+
+        # `apply-outcome` (result-only, docs/tasks/0026-apply-validate.md
+        # §I), the same "well-formed if present, never required"
+        # treatment as everything above it. A membership test rather
+        # than `target`'s open non-blank check, because unlike `target`
+        # this vocabulary is closed by construction: exactly one writer
+        # exists (`_apply_one`) and every surface that reads it
+        # branches on the value.
+        apply_outcome_raw = rec.fields.get(APPLY_OUTCOME_FIELD)
+        if apply_outcome_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{APPLY_OUTCOME_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+        elif apply_outcome_raw is not None and apply_outcome_raw not in APPLY_OUTCOME_VALUES:
+            errors.append(
+                f"{path.name}: '{APPLY_OUTCOME_FIELD}' ({apply_outcome_raw!r}) is not "
+                f"one of {', '.join(APPLY_OUTCOME_VALUES)}"
+            )
+
+        # `apply-commit` (result-only,
+        # docs/tasks/0026-apply-validate.md §F), the same "well-formed
+        # if present, never required" treatment as everything above.
+        # Absent means this result made no commit it can vouch for,
+        # which is true of every refusal, every attempt that reached no
+        # conclusion, and every result written before the field existed.
+        #
+        # **Forty OR sixty-four hex characters, and hard-coding forty
+        # would have been a latent lie.** Git's sha256 object format is
+        # real — `git init --object-format=sha256` — and a resident's
+        # configuration repository is theirs to create however they
+        # like. A validator that condemned a perfectly good sha256
+        # commit id would be this project telling a resident their own
+        # repository is malformed, which is exactly the shape of
+        # false-refusal the path-scoped dirty check exists to avoid one
+        # layer over. Both lengths, no third.
+        apply_commit_raw = rec.fields.get(APPLY_COMMIT_FIELD)
+        if apply_commit_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{APPLY_COMMIT_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+        elif apply_commit_raw is not None and (
+            len(apply_commit_raw) not in (40, 64)
+            or any(char not in "0123456789abcdef" for char in apply_commit_raw)
+        ):
+            errors.append(
+                f"{path.name}: '{APPLY_COMMIT_FIELD}' ({apply_commit_raw!r}) is not 40 "
+                "or 64 lowercase hex characters — the two shapes a git commit id has "
+                "(sha1 and sha256 object formats)."
+            )
+
         # `target` (result-only, docs/tasks/0024 §6), same append-only
         # treatment again: checked when present, never required, so no
         # result written before this field existed is failed
@@ -6222,6 +8783,67 @@ def cmd_validate(args: argparse.Namespace) -> int:
             else:
                 decided[first] = rec.id
 
+    # The cross-record half of docs/tasks/0026-apply-validate.md §I, and
+    # it is deliberately narrower than "at most one apply per
+    # authorization." That bound is structural in the fold
+    # (`_eligible_approvals` skips any answer some result already
+    # names), but a hand-run `castle apply <answer-id>` is deliberately
+    # allowed to retry — it is the retry path, exactly as `castle work`
+    # is for an errand — so two apply results naming one answer are a
+    # legitimate journal and not an error.
+    #
+    # What is checked instead is the one shape nobody should be able to
+    # hand-write into a journal and have validate call clean: an apply
+    # result claiming an authorization that does not exist. `refs[0]` is
+    # the answer the apply spent, so it has to resolve to an `answer`
+    # carrying `decision: approve`.
+    #
+    # **Keyed on the seat OR the field, and the "or" is a fix.** This
+    # gated on `apply-outcome` alone, which silently exempted the shape
+    # this same task introduced: an apply that reached no conclusion
+    # about the change — an unusable checkout, an unresolvable target
+    # role, a `git apply` git never finished, a commit whose landing did
+    # not verify — writes `seat: applier` with `outcome: failed` and no
+    # `apply-outcome` at all. So a hand-written `seat: applier` result
+    # naming any real record at all passed clean, while
+    # `_eligible_approvals` still counted it as having spent whatever
+    # answer it names and `castle-modal`'s fold still recognised it by
+    # seat. Fail-closed, and invisible to the one command whose job is
+    # to name a broken journal (Codex review on
+    # docs/tasks/0026-apply-validate.md).
+    #
+    # **Refs-shape only, deliberately, and it must stay that way.** This
+    # cannot tell a forged suppressor from a legitimate dead attempt and
+    # nothing appended-only ever could: both are `seat: applier`
+    # results naming a real approving answer, which is exactly what a
+    # genuine environment fault writes. The status fold already renders
+    # both with the hand-retry remedy. All this owes is that a
+    # *malformed* one is named rather than passed over.
+    for rec in sorted(records.values(), key=lambda r: r.id):
+        if rec.type != "result":
+            continue
+        if (
+            rec.fields.get(APPLY_OUTCOME_FIELD) is None
+            and rec.fields.get("seat") != APPLIER_SEAT
+        ):
+            continue
+        authorization = records.get(rec.refs[0]) if rec.refs else None
+        if (
+            authorization is None
+            or authorization.type != "answer"
+            or authorization.fields.get("decision", "").strip() != "approve"
+        ):
+            # Wording true of both shapes it now covers. Saying "carries
+            # 'apply-outcome' but…" would be a false statement about the
+            # no-conclusion record, which is the half that was missing.
+            errors.append(
+                f"{rec.path.name}: an applier-seat result must spend a real "
+                "authorization: its first ref has to resolve to an answer carrying "
+                f"'decision: approve', and this one names "
+                f"{rec.refs[0] if rec.refs else 'nothing'} "
+                "(docs/tasks/0026-apply-validate.md)."
+            )
+
     # Unconditionally, and outside the pass/fail branch below: an unsafe
     # state layout is a fact about the environment, not a malformed
     # record, so it must print whether or not the journal is
@@ -6417,6 +9039,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_dispatch.set_defaults(func=cmd_dispatch)
+
+    p_apply = sub.add_parser(
+        "apply",
+        help="applier: make one approved change in your configuration repository",
+    )
+    # Exactly one of the two forms, enforced by argparse rather than by
+    # a hand-written check: an apply with neither an id nor --sweep has
+    # no defensible default (applying "the obvious one" is a judgment
+    # this seat must never hold), and one with both would have to
+    # silently prefer one.
+    p_apply_form = p_apply.add_mutually_exclusive_group(required=True)
+    p_apply_form.add_argument(
+        "answer_id",
+        nargs="?",
+        help=(
+            "id of the ANSWER that approved the change — the authorization being "
+            "spent, not the change itself. This is the hand path and it is "
+            "deliberately unbounded: re-running it on an approval that already has "
+            "an apply record is the retry, exactly as `castle work <id>` is for an "
+            "errand."
+        ),
+    )
+    p_apply_form.add_argument(
+        "--sweep",
+        action="store_true",
+        help=(
+            "apply every approval nothing has applied yet, oldest first, at most "
+            "once each. What the castle-apply systemd unit runs "
+            "(docs/tasks/0026-apply-validate.md)."
+        ),
+    )
+    p_apply.set_defaults(func=cmd_apply)
 
     p_digest = sub.add_parser("digest", help="fold the journal into a report")
     p_digest.add_argument("--since", default=None, help="only errands created at/after this timestamp")

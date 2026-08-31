@@ -80,7 +80,7 @@ The exported modules:
   gh, ripgrep, fd, claude-code, python3). No private data, no assertions.
 - `nixosModules.agent` — the agent layer's CLI (`castle`, plus
   `castle-modal` and the default `castle-worker-claude` worker tenant)
-  and seven options: `castle.agent.stateDir` (wired into
+  and ten options: `castle.agent.stateDir` (wired into
   `CASTLE_STATE_DIR`), `castle.agent.worker.command` (wired into
   `CASTLE_WORKER_COMMAND` — which tenant holds the worker seat),
   `castle.agent.worker.timeoutSeconds` (`CASTLE_WORKER_TIMEOUT`),
@@ -90,8 +90,12 @@ The exported modules:
   works, with a deprecation warning naming the new one),
   `castle.agent.notify.command`
   (wired into `CASTLE_NOTIFY_COMMAND` — what the router's `notify`
-  channel actually runs), and `castle.agent.dispatch.enable` (whether
-  filed errands start themselves). See "The agent's state" below and
+  channel actually runs), `castle.agent.dispatch.enable` (whether
+  filed errands start themselves), and the three that decide what
+  happens to a change you approve — `castle.agent.apply.enable`,
+  `castle.agent.apply.evaluateFlake` and
+  `castle.agent.apply.timeoutSeconds`. See "The agent's state" and
+  "What happens to a change you approve" below, and
   `agent/README.md`. An unset `stateDir`/`notify.command` just falls
   back to a per-user or built-in default rather than failing
   evaluation, since the agent layer is optional the way `desktop`/`dev`
@@ -297,8 +301,12 @@ The values this repo may never contain:
   turn; it degrades that checkout for the turn and says so in every
   result the turn writes, so a typo cannot go quiet.
 - **Your real checkout path may appear in the journal, and must never
-  appear in the public repo.** The journal lives inside this
-  repository, so a path in a result body is fine. A path pasted out of
+  appear in the public repo.** A path in a result body is fine — the
+  journal is yours, wherever you keep it. (It is deliberately *not*
+  inside this repository any more, since
+  `docs/tasks/0030-state-outside-the-flake.md`; the sentence that used
+  to say otherwise here predated that task and was missed by its sweep.
+  See "The agent's state" below.) A path pasted out of
   a journal into a framework PR, a test fixture, a doc or a commit
   message is not — that is the hard rule in the public repo's own
   `CLAUDE.md`, and the placeholders it publishes (`/home/resident/...`)
@@ -312,6 +320,29 @@ The values this repo may never contain:
   knowing before you decide where your private repo lives.
 - `castle.agent.dispatch.enable` — whether filed errands start
   themselves. Default `false`. See "Automatic dispatch" below.
+- `castle.agent.apply.enable` — whether a change **you have approved**
+  gets made in this repository, with no command typed by hand. Default
+  `false`. It never activates anything and never pushes anything; see
+  "What happens to a change you approve" below before turning it on.
+  Requires `stateDir` and `repo.private`, both asserted at evaluation
+  time — unlike dispatch, which only warns you at errand time, because
+  what an unconfigured root costs here is an approval you gave rather
+  than an errand that can simply be re-run.
+- `castle.agent.apply.evaluateFlake` — whether, after making such a
+  change, `castle` checks that the configuration it produces still
+  evaluates and builds. Default `false`. This is the only thing in the
+  agent layer that ever evaluates your flake, which is why it is named
+  for evaluation and gated separately: evaluating copies this
+  repository's whole tracked tree into the world-readable Nix store.
+  That is safe as long as your journal is not in that tree — and
+  `castle` checks exactly that before evaluating, declining rather than
+  publishing your decision history.
+- `castle.agent.apply.timeoutSeconds` — how long that check may run
+  before its whole process group is killed. Default 1800 (thirty
+  minutes), deliberately much longer than the worker's: that one bounds
+  a model call, this one bounds a build that may compile a kernel. The
+  change is already made and committed by the time the clock starts, so
+  a timeout costs you the check, never the change.
 - `castle.agent.notify.command` — what the router's `notify` channel
   actually runs (docs/architecture.md). Defaults to plain `notify-send`
   on `$PATH`, which is real once `nixosModules.desktop` is imported
@@ -723,11 +754,21 @@ ignored or uncommitted, the warning does not apply to you. Warning
 with a caveat is the deliberate direction to fail in: reading an extra
 paragraph is cheap, and a published journal is not.
 
-It is advisory throughout: the exit code does not change, and nothing
-refuses to run. The copy is made by `nixos-rebuild`, not by `castle`,
-so refusing would prevent nothing and would withhold the two commands
-most likely to bring you the news. Deliberately not wired into `castle
-dispatch`, which a timer runs once a minute.
+It is advisory **for `validate` and `digest`**: their exit codes do not
+change and neither refuses to run. The copy is made by `nixos-rebuild`,
+not by `castle`, so refusing there would prevent nothing and would
+withhold the two commands most likely to bring you the news.
+Deliberately not wired into `castle dispatch`, which a timer runs once
+a minute.
+
+There is now one place where the same finding is a **refusal** rather
+than a warning, and the difference is who would be making the copy.
+With `castle.agent.apply.evaluateFlake` on, `castle apply` evaluates
+your flake itself — so here the check is not reporting on somebody
+else's rebuild, it is deciding whether to publish your journal. It
+declines, quotes this finding in the record, and points at "Migrating
+state out of the flake" below. The change is still made; only the check
+is skipped.
 
 One case it does **not** catch: a repository whose `flake.nix` lives in
 a subdirectory, evaluated as `git+file:///your/repo?dir=nix`. That
@@ -988,11 +1029,150 @@ two dispatchers over a synced journal yet, and this task does not
 pretend to; it is work for whatever design gives the journal a sync
 story.
 
+The same instruction covers `castle.agent.apply.enable`, for a sharper
+reason: two enabled hosts would make the same approved change in two
+different checkouts, and only one of them is the one you meant. Turn
+applying on for the same single host you turned dispatch on for, or for
+none.
+
 The units run only while you are logged in: this repo deliberately
 does **not** enable `loginctl` lingering, since a mechanism whose only
 visible output today is a desktop notification has nothing useful to
 do while nobody is at the keyboard. Running dispatch between logins is
 a further authority decision, and it is yours to make separately.
+
+## What happens to a change you approve (optional, off by default)
+
+`castle.agent.apply.enable = true` (`docs/tasks/0026-apply-validate.md`)
+is the second opt-in on this page, and it is a larger one than the
+first. Automatic dispatch lets a tenant start work and spend money.
+This lets Castle change **this repository**.
+
+Here is exactly what appears, and what does not.
+
+**What appears.** For each change you approve, and once for each: the
+files that change are edited here, and one commit is made on whatever
+branch you have checked out. Its author and committer are
+`Castle applier <applier@castle.invalid>` — the seat, never a person,
+at an address RFC 2606 guarantees can never be real — so `git log`
+answers "who made this" in the vocabulary the journal uses. Its message
+names the errand, the change, your decision, the proposal and the
+patch's digest, and says in as many words that nothing was activated.
+No file paths, no prose from the tenant, nothing that could be your
+data. To undo one: `git revert <sha>`, which is what the record says
+too.
+
+**What does not appear.** No push, anywhere, ever — not built, not
+configurable, not left a seam for. No `nixos-rebuild`, no `switch`, no
+new generation, no change to the machine you are using. Switching to
+the new configuration stays yours to do, by hand. Nothing writes a
+checkout of the Castle Turing framework itself: a change proposed
+against it is refused by name, your approval is still recorded, and
+carrying it upstream is yours if you want it.
+
+**What it refuses, and what each refusal means.** The refusals are the
+part worth reading, because they are what makes this safe to leave on:
+
+- Your approval was granted before this existed. Permanently inert, and
+  deliberately: what you were told at the moment you approved is the
+  scope of what you approved, and no later wording reaches backwards.
+  Approve the change again if you still want it.
+- The proposal, or the exact copy of the change kept beside it, is not
+  what it was when you approved. Nothing here rewrites a record, so
+  there is no version to prefer and it refuses rather than guessing.
+- No exact copy was kept at all. The rendered diff in the record is for
+  reading, not for applying.
+- The change no longer fits: the files moved since it was proposed. It
+  is applied exactly or not at all — nothing merges, fuzzes or
+  recounts, because the result of that would be a change you never saw.
+- You have uncommitted edits to the same files. It will not write over
+  them. The record says how many paths and what kind of edit, never
+  which files — that record is durable and your file names are yours.
+  Uncommitted work *elsewhere* in the repository does not stop it, and
+  neither does an ignored file: a check that refused forever on a
+  perfectly ordinary layout would be worse than no check.
+
+**Your git hooks do not run on its commits.** Not `pre-commit`, not
+`post-commit`, not any of them — they are disabled for exactly the
+commands Castle runs, and they still run on every commit you make
+yourself. This is not tidiness: the commit message records the digest
+of the exact bytes you approved, and a formatting hook that rewrites
+them would leave that record asserting a digest for content it no
+longer describes.
+
+**The commit is built, not taken from your working files.** Castle
+assembles it from your repository's history plus the exact bytes you
+approved, in a scratch area of its own, and only then moves your branch
+to it. Two things follow that are worth knowing.
+
+If you (or your editor, or a formatter on save) change one of those
+files while this is happening, **your edit cannot get into the commit**
+— the commit was already assembled from what you approved. And your
+edit is not thrown away either: Castle notices the file is no longer as
+it found it, leaves it exactly as you left it, and says so in the
+record. Your change sits on top of the approved commit as ordinary
+uncommitted work, and `git status` shows it.
+
+If your repository runs a `.gitattributes` content filter, that filter
+also cannot reach the commit. That is usually what you want — you
+approved specific bytes, and those are what get committed. It does mean
+git may report the file as modified afterwards, because your filter
+would store it in a different form than the one you were shown. Castle
+does not pick between the two: it commits what you approved, tells you
+which files git will keep flagging, and leaves the choice to you.
+
+Nothing signs these commits, whatever your `commit.gpgsign` says. The
+author on them is `Castle applier`, not you, and signing them with your
+key would claim you wrote them. Afterwards it checks what actually landed — one
+commit, parented where it started, nothing left uncommitted — and if
+the repository is not in that state it says so and names **no** commit
+sha, rather than printing a `git revert` for a commit it cannot vouch
+for.
+
+**When something goes half-right.** There is no longer a state where
+the change is in your files but not committed — the commit is built
+before anything moves, so it either happened or it did not. What can
+still be left half-done is the mild opposite: the commit is there and
+your working files have not caught up to it yet. The record says so and
+names the commit, because the change is durable and only the files on
+disk are behind. **Nothing is rolled back** on its own, ever: rewinding
+your history is a larger authority than adding one commit you asked
+for.
+
+**And if it could not act at all** — no usable checkout, git not
+answering — the change is untouched and the status surface says
+`could not be applied — castle apply <id> to try again`, naming the
+command. It will not try again by itself: one automatic attempt per
+approval, whatever happened. Fix whatever was in the way and run that.
+
+**The check, if you turn it on.** With
+`castle.agent.apply.evaluateFlake = true`, one `nix build --no-link` of
+this machine's own `system.build.toplevel` runs afterwards,
+unprivileged, with your `flake.lock` explicitly not written or updated.
+It says the configuration evaluates and builds. It does not say the
+change did what it claimed — nothing anywhere declares that — it does
+not say your secrets will decrypt, and it does not say the
+configuration will activate. If it fails, the change stays where it is
+and the record says the check failed; nothing repairs it, re-proposes
+it or asks again. The remedy is a fresh `castle ask`.
+
+One thing it cannot check at all, and says so rather than guessing: if
+this repository's own path contains a `#` or a `?`, Nix reads those as
+flakeref syntax rather than as part of the path, so there is no way to
+name the repository to it. Your change is still made and committed;
+only the check is skipped, and the record names the character. There is
+no escaping rule for them — moving the checkout is the only fix.
+
+**One host, and one attempt.** Turn this on for at most one machine per
+journal, for the reason "Automatic dispatch" above gives. And each
+approval is applied automatically at most once, whatever the outcome —
+if you want another attempt after fixing whatever was in the way, run
+it yourself:
+
+    castle apply <the id of the decision that approved it>
+
+That hand path is deliberately unbounded, exactly as `castle work <id>`
+is for an errand.
 
 ## The installer image (optional, per host)
 

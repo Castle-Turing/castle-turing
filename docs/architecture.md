@@ -222,6 +222,27 @@ already a non-reasoning surface seat. Giving dispatch a policy for
 all, would make it a reasoning seat; that is precisely what this
 paragraph exists to stop a later agent from "completing" it into.
 
+**Applier** (plumbing, not a reasoning seat). The mechanism that spends
+one recorded approval: it makes the exact change a resident authorized
+in the resident's own configuration checkout and commits it there,
+naming the authorization in the commit message. It **activates
+nothing** — no rebuild, no new generation, no change to the running
+system — it **pushes nothing**, and it never writes a checkout of this
+framework, which it refuses by name rather than by error. Every apply
+spends exactly one `answer` record, whose question said at the moment
+it was shown that approving authorizes this; an approval granted under
+any earlier wording is inert forever, by construction, because the
+scope of an authority is what the person was told when they granted it.
+`seat: applier` is a new value in an existing category, not a new
+category, exactly as `dispatch` was — and it is a distinct name from
+`worker` because a seat is what reads and writes, and this one writes a
+resident's repository, so "which seat touched my configuration" has an
+answer. Like dispatch, what it does is a total function of the journal
+and the tree. Giving it a policy about which approvals are worth
+applying, or a say in whether to apply one at all, would make it a
+reasoning seat; that is precisely what this paragraph exists to stop a
+later agent from "completing" it into.
+
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers
 "right now" and forgets; an observation becomes durable only by being
@@ -279,7 +300,16 @@ as its own document:
 - The agent committing to the private repo is a **standing
   authority** — the first entry in the authority taxonomy, in the
   made-then-reported category: commits are routine, and the diff is
-  part of the audit trail.
+  part of the audit trail. Note that the applier
+  (`docs/tasks/0026-apply-validate.md`) does **not** rely on this
+  sentence and this bullet is unamended by it: every commit that task
+  makes is authorized *individually*, by a specific answer record the
+  commit message names, under a screen that says in capitals what
+  approving authorizes. A per-change authorization needs no standing
+  one — which matters, because the only document that scopes this
+  standing authority scopes it to whichever repository holds `state/`
+  (docs/private-layer.md), and under the recommended layout that is a
+  different repository from the config repo the applier writes.
 - The push cadence (and the credential that enables pushing from a
   host) is an open design item. Secrets tooling has landed since this
   was written (docs/tasks/0031-secrets-tooling.md), so such a
