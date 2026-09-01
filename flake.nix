@@ -477,12 +477,21 @@
                   # unaffected by the override above by construction — this
                   # assertion is a regression guard on that construction,
                   # not a live risk today.
+                  #
+                  # The exec string is `--mode inbox`, not `--mode
+                  # compose`, since docs/tasks/0034-inbox-modal.md made
+                  # the one chord open the inbox layout (which opens into
+                  # compose by default, but is a different flag) rather
+                  # than compose mode directly. Confirmed against the
+                  # generated attrset with `nix eval`, not read off the
+                  # module source, for the same reason the comment two
+                  # assertions up already gives for this whole block.
                   assertion =
                     (keybindings."Mod4+Shift+Return" or null)
-                    == "exec foot --app-id=castle-modal -e castle-modal --mode compose";
+                    == "exec foot --app-id=castle-modal -e castle-modal --mode inbox";
                   message = ''
                     nixosConfigurations.example-mod4: keybindings."Mod4+Shift+Return"
-                    is not the ambient-intake exec command. modules/home/default.nix
+                    is not the inbox-modal exec command. modules/home/default.nix
                     hardcodes the modal chord under a literal Mod4 prefix
                     (docs/tasks/0019) specifically so it keeps working
                     regardless of a resident's own `modifier` setting — this
@@ -490,29 +499,32 @@
                   '';
                 }
                 {
-                  # The same guarantee for the answer chord
-                  # (docs/tasks/0022-answer-in-ui.md §5). It is a
-                  # separate assertion rather than a loop over both
-                  # chords so a failure names which one broke, and it
-                  # matters slightly more here than for the compose
-                  # chord: `Shift+a` is a letter chord, and the stock
-                  # set does bind `${modifier}+Shift+<direction>` with
-                  # the directions defaulting to home-row letters — so
-                  # this is also the proof that this repo's chord and a
-                  # Mod4 resident's stock move-window bindings still
-                  # both survive the per-key merge.
-                  assertion =
-                    (keybindings."Mod4+Shift+a" or null)
-                    == "exec foot --app-id=castle-modal -e castle-modal --mode answer";
+                  # docs/tasks/0034-inbox-modal.md removed the answer
+                  # chord outright — "one chord for everything," the
+                  # resident's own direction, and `Mod4+Shift+a` is
+                  # deliberately not kept as an alias for its own three-
+                  # week-old habit. This assertion used to guard the
+                  # binding's PRESENCE (docs/tasks/0022-answer-in-ui.md
+                  # §5); it now guards its ABSENCE, so a later change
+                  # that quietly reintroduces a second Castle chord — or
+                  # a merge conflict that resurrects the old
+                  # `modules/home` entry — is caught the same way the
+                  # original binding's disappearance would have been.
+                  # `Shift+a` is still worth asserting on by name rather
+                  # than folding into a generic "no second Castle
+                  # binding" scan: the stock keybinding set binds
+                  # `${modifier}+Shift+<direction>` with the directions
+                  # defaulting to home-row letters, and "a" is not one of
+                  # them, so this also stays the proof that removing the
+                  # chord did not silently repurpose the key for
+                  # something else in the per-key merge.
+                  assertion = (keybindings."Mod4+Shift+a" or null) == null;
                   message = ''
                     nixosConfigurations.example-mod4: keybindings."Mod4+Shift+a"
-                    is not the answer-mode exec command. modules/home/default.nix
-                    hardcodes it under a literal Mod4 prefix, in the same
-                    lib.mkOptionDefault attrset as the compose chord
-                    (docs/tasks/0022), so it keeps working regardless of a
-                    resident's own `modifier` setting — this means that broke,
-                    or the binding landed in a second keybindings definition
-                    and took home-manager's defaults down with it.
+                    exists. docs/tasks/0034-inbox-modal.md removed the answer-mode
+                    chord — Mod4+Shift+Return is the only Castle chord now, and
+                    Mod4+Shift+a is deliberately not kept as an alias. If this
+                    assertion is red, something reintroduced a second chord.
                   '';
                 }
                 {

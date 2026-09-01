@@ -363,22 +363,75 @@ castle show ID
 
 ## `castle-modal` — the ambient intake
 
-A floating `foot` terminal (bound to `Mod4+Shift+Return` for compose
-and `Mod4+Shift+a` for answer in `modules/home`'s Sway config — see that
-module for why these chords and not others) running
-`agent/castle-modal`, a second stdlib-only Python script that imports
-`agent/castle` in-process rather than shelling out to it. Four modes,
-though only three have a chord — review is reached from answer's own
-picker:
+A floating `foot` terminal (bound to `Mod4+Shift+Return`, the **one**
+Castle chord, in `modules/home`'s Sway config — see that module for why
+this chord and not another) running `agent/castle-modal --mode inbox`,
+a second stdlib-only Python script that imports `agent/castle`
+in-process rather than shelling out to it. `docs/tasks/0034-inbox-
+modal.md` collapsed what used to be two bound chords into one: a
+separate answer-mode chord, `Mod4+Shift+a`, is **retired outright and
+not kept as an alias** — the resident's own direction was one chord
+for everything, and a one-user system does not owe its own three-
+week-old habits compatibility. Answering, reviewing and checking status
+are all reached from inside the one window the remaining chord opens,
+rather than each having a chord of its own. Five modes, one bound to a
+chord — the other four remain reachable as flags, for scripts, CI and
+a resident at a bare terminal:
 
 ```
+castle-modal --mode inbox   [--focus ID]
 castle-modal --mode compose [--limit N] [--kind request|correction]
 castle-modal --mode status  [--limit N]
 castle-modal --mode answer  [--question ID]
 castle-modal --mode review  [--question ID]
 ```
 
-- **compose** (the default) — reads multi-line free text from stdin
+- **inbox** (`Mod4+Shift+Return`) — the surface the chord opens: two
+  views in one window, `Tab` toggling between them
+  (`docs/tasks/0034-inbox-modal.md`). **Compose** is what the chord
+  opens into — the chord itself carries no information about *why* it
+  was pressed, so it opens the thing most often wanted, speaking —
+  identical to `--mode compose` below, plus one static line above the
+  prompt when items are waiting: `N ready — Tab to view`. A count and a
+  key, nothing else; no summaries, no suggestions. **Inbox**, a `Tab`
+  away, lists everything waiting on the resident, derived with almost
+  no new state: every unanswered non-proposal question first (blocking
+  ones — the turn is suspended on the resident — ahead of the rest,
+  but *every* unanswered question, not blocking ones alone, so a
+  question the answer picker offers is never hidden from here by
+  construction), then every undecided proposed change, then every
+  `result` a **read cursor** has not seen. Nothing else: closed items
+  belong to `castle digest`, not here. An empty inbox says so and
+  offers compose.
+
+  The read cursor is the one piece of genuinely new state this task
+  added: `$CASTLE_STATE_DIR/inbox-seen`, one record id per line,
+  appended — **never rewritten** — the instant a result's body is
+  actually rendered, not when a list merely mentioning it is shown.
+  Questions and proposals never touch it: their pending-ness is already
+  derivable (no `answer`/`decision` record names them), and deriving
+  beats recording wherever it can. It lives beside `journal/`, not
+  inside it, because unlike anything in the journal it is not a durable
+  claim — losing it costs a few once-read results reappearing as
+  unread, the cheap direction to fail in.
+
+  A digit opens the item at that position — a question opens answer
+  mode's own flow below, a proposal opens review mode's, a result
+  renders its body whole, which is what spends the read cursor.
+  **Digits only, deliberately not `Enter`**: opening a result marks it
+  read, so the one keypress a resident reaches for by reflex must never
+  be the one that does that. `Esc` backs out one level — out of an
+  opened result, back to the list; at the top of the list, any key
+  (`Esc` included) closes the window, writing nothing, the same
+  dismissal-is-a-success posture answer and review mode already take.
+  `--focus ID` — the notification's own deep link
+  (`docs/tasks/0034` §3 below), never typed by a resident — skips the
+  list and opens straight on that record, expanded: the one case where
+  the surface knows in advance why it was opened, so it opens there
+  rather than into compose.
+
+- **compose** (the default, and what the inbox chord's window opens
+  into) — reads multi-line free text from stdin
   until a line containing exactly `.` or EOF. No category picker, no
   priority field while typing: the whole premise is that the resident
   describes what's on their mind in their own words and doesn't know
@@ -433,8 +486,11 @@ castle-modal --mode review  [--question ID]
   here: they aren't errands, and there's nothing about one to "come
   back and check" on.
 
-- **answer** (`Mod4+Shift+a`) — the questions the system is waiting on,
-  and one of them answered (`docs/tasks/0022-answer-in-ui.md`). A
+- **answer** (no chord of its own since `docs/tasks/0034-inbox-modal.md`
+  retired `Mod4+Shift+a` — reached today by pressing a digit in the
+  inbox above, which drops into the identical flow described here) —
+  the questions the system is waiting on, and one of them answered
+  (`docs/tasks/0022-answer-in-ui.md`). A
   question is **pending iff no `answer` record's `refs` names it** —
   a fold recomputed on every invocation, not a stored flag, which is
   why nothing about a question is ever edited when it gets answered.
@@ -501,11 +557,12 @@ castle-modal --mode review  [--question ID]
 - **review** (no chord of its own) — the first place a resident grants
   Castle anything (`docs/tasks/0025-approval.md`). A question the
   harness filed to propose a configuration change appears in answer
-  mode's picker like any other — that fold has never cared what a
-  question is about — and picking it branches here instead of into the
-  free-text grammar. No second chord, deliberately: a resident who
-  pressed the "what is waiting on me" chord should not have needed to
-  know in advance which of two kinds of waiting it was.
+  mode's picker, and in the inbox above, like any other question —
+  neither fold has ever cared what a question is about — and picking
+  it branches here instead of into the free-text grammar. No chord of
+  its own, deliberately: a resident who opened the inbox to see what is
+  waiting on them should not have needed to know in advance which of
+  two kinds of waiting a given item was.
 
   Four things are shown, in this order and for this reason: **where
   the change applies** (the harness's own resolved-path sentence,
