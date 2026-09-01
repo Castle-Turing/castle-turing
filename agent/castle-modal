@@ -1520,8 +1520,35 @@ def _inbox_items(castle, records: dict, seen: set) -> list:
         ),
     )
     proposals = [q for q in pending if _is_proposal(castle, q)]
+    # A proposal's own backing result (`refs[1]` on any question ever
+    # stamped `proposal-sha256`, decided or not) is never an "unread
+    # result" in this list's sense, and is excluded from `unread` below
+    # rather than merely left to sort after it. `_open_inbox_item`'s
+    # result path renders `rec.body` whole through `_result_view` —
+    # none of review mode's filtering applies there: no diff-boundary
+    # scoping (`_split_proposal_body`), none of review's vocabulary
+    # rule, no boundary statement, no decision recorded. A proposal's
+    # result reaching this path would print a tenant's raw turn output
+    # — a store path, an unredacted diagnosis, the works — with no
+    # review framing at all, and the single digit keypress that opened
+    # it would mark it "read" in the same instant, silently absorbing
+    # what review mode exists to gate behind an explicit decision.
+    # Found by this task's own headless test: every ordinary proposal
+    # fixture produced a duplicate "an answer to read" entry the moment
+    # it was filed, because nothing here had ever excluded it.
+    proposal_results = {
+        q.refs[1]
+        for q in records.values()
+        if q.type == "question"
+        and q.fields.get(castle.PROPOSAL_SHA256_FIELD, "").strip()
+        and len(q.refs) >= 2
+    }
     unread = sorted(
-        (rec for rec in records.values() if rec.type == "result" and rec.id not in seen),
+        (
+            rec
+            for rec in records.values()
+            if rec.type == "result" and rec.id not in seen and rec.id not in proposal_results
+        ),
         key=lambda rec: rec.id,
     )
     return (
