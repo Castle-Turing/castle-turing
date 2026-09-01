@@ -2882,13 +2882,39 @@ def _route_journal_locked() -> int:
         appended.append((decision_id, rec.id, channel))
         if channel == "notify":
             # docs/tasks/0034 §3: the notification names what kind of
-            # thing is waiting and — for a result — carries the
+            # thing is waiting and — for a WORKER result — carries the
             # request's OWN words, because the resident should never
             # have to remember what they asked from a bare "result".
             # The router already holds the originating request (root,
             # above); a record whose refs chain reaches none falls back
             # to its own first line, the pre-0034 body.
-            if rec.type == "result":
+            #
+            # **Scoped to `seat: worker`, not every result.** An
+            # applier-seat result's own first line is not a fallback —
+            # it is the whole point of `APPLY_FIRST_LINES`
+            # (docs/tasks/0026-apply-validate.md §H), harness prose
+            # drafted specifically to be what this notification says;
+            # `_write_apply_result`'s own docstring already states the
+            # contract this task's blanket "prefer the request's words"
+            # rule broke: "the body's first line is harness prose
+            # drafted in APPLY_FIRST_LINES — `_fire_notification` takes
+            # exactly that line." An apply result's `refs` chain reaches
+            # the same root request its ORIGINAL worker result did, so
+            # unscoped this rule silently replaced "The change you
+            # approved is now in your configuration repository..." with
+            # the request's first line again — the exact words the
+            # resident already saw notified once, when the worker
+            # finished, now standing in for an entirely different
+            # event. Found by `test/agent-loop/apply.sh`'s own
+            # notification assertion once it was fixed to poll instead
+            # of reading the log immediately (the detached waiter this
+            # task added made the old synchronous read racy, and fixing
+            # the race is what let the assertion actually run and
+            # catch this). Any future seat with a comparably drafted
+            # first line belongs in this same exclusion, not a growing
+            # list of what to override case by case — worker results
+            # are the one kind this rule was written for.
+            if rec.type == "result" and rec.fields.get("seat") == "worker":
                 if root is not None:
                     title = "Castle: your request has an answer"
                     source = root.body
@@ -2896,6 +2922,16 @@ def _route_journal_locked() -> int:
                     title = "Castle: an answer for you"
                     source = rec.body
                 summary = source.strip().splitlines()[0] if source.strip() else rec.type
+                notification_body = summary[:200]
+            elif rec.type == "result":
+                # Every non-worker result seat (today: only the
+                # applier), and any result with no `seat` field at all
+                # (none should exist, but an absent field must not
+                # crash the router): its own first line, the pre-0034
+                # body and the only line `_write_apply_result` ever
+                # drafted this text to be shown as.
+                title = "Castle: your request has an answer"
+                summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
                 notification_body = summary[:200]
             else:
                 # A question's own words are the actionable text, so
