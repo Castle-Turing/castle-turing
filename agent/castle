@@ -62,6 +62,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+import json
 import os
 import pathlib
 import shlex
@@ -2593,21 +2594,29 @@ def _provenance_explanation(provenance: str) -> str:
     return "the system undertook this on its own initiative, so it defaults to the digest rather than an interruption"
 
 
-def _fire_notification(title: str, body: str) -> None:
+def _fire_notification(title: str, body: str, record_id: str) -> None:
     """Best-effort delivery on the router's `notify` channel
-    (docs/tasks/0009-ambient-intake.md item 5). Never raises: a failed
-    or missing notification daemon must not corrupt or block routing —
-    the decision record is already durable by the time this runs, so
-    the worst case is a silent (or, below, warned-about) missed ping,
-    never a bad journal.
+    (docs/tasks/0009 item 5, reshaped by docs/tasks/0034). Never raises
+    and never blocks: the decision record is already durable, and the
+    sweep must not wait on a notification daemon — so the whole
+    invocation moves into a detached waiter process (setsid), whose job
+    is to run the notify command with an `open` action attached, block
+    on it (`--action` implies `--wait`: the command exits when the
+    notification is activated, dismissed, or expires, printing the
+    chosen action name to stdout), and — only if `open` was chosen —
+    put the record in front of the resident: focus an already-open
+    castle-modal window if Sway reports one, else exec
+    `foot ... castle-modal --mode inbox --focus <record_id>`. An
+    unclicked notification costs one idle waiter until expiry, which is
+    the accepted price of a click that deep-links.
 
     CASTLE_NOTIFY_COMMAND, unset, defaults to plain `notify-send` on
-    $PATH — real on a desktop that imported modules/desktop (which
-    installs mako + libnotify), a harmless failed exec anywhere else.
-    Set explicitly to an empty string to no-op silently (a headless
-    host's way of saying "don't even try"); modules/agent wires
-    castle.agent.notify.command into this same variable — see
-    modules/agent/default.nix.
+    $PATH; set to the empty string it no-ops silently. The waiter
+    appends `--app-name=castle` (so daemons can address Castle's
+    notifications as a class) and the action flag before the title and
+    body, so a stub command sees exactly the argv the real thing would.
+    The parse check here is only for the warning — the waiter re-reads
+    the same environment itself.
     """
     raw = os.environ.get("CASTLE_NOTIFY_COMMAND")
     if raw is None:
@@ -2615,14 +2624,108 @@ def _fire_notification(title: str, body: str) -> None:
     if not raw.strip():
         return
     try:
-        argv = shlex.split(raw) + [title, body]
+        shlex.split(raw)
     except ValueError as exc:
         print(f"castle route: could not parse CASTLE_NOTIFY_COMMAND ({raw!r}): {exc}", file=sys.stderr)
         return
     try:
-        subprocess.run(argv, check=False, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            [sys.executable, str(pathlib.Path(__file__).resolve()),
+             "notify-waiter", record_id, title, body],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"castle route: notify command {raw!r} failed (non-fatal): {exc}", file=sys.stderr)
+
+
+NOTIFY_ACTION_NAME = "open"
+
+
+def _tree_has_app_id(node, app_id: str) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if node.get("app_id") == app_id:
+        return True
+    for group in ("nodes", "floating_nodes"):
+        for child in node.get(group, []) or []:
+            if _tree_has_app_id(child, app_id):
+                return True
+    return False
+
+
+def cmd_notify_waiter(args: argparse.Namespace) -> int:
+    """The detached half of `_fire_notification` (docs/tasks/0034 §3).
+    Internal: spawned by the router, never typed by a human. Silent on
+    every failure — this is the same best-effort channel, one process
+    later.
+
+    The already-open check asks Sway rather than reaching into a live
+    modal (a control socket or a signal is more machinery than the case
+    earns): two modals would mean two compose buffers and a read cursor
+    written from two processes, so an existing window is focused
+    instead of duplicated, accepting that it stays on whatever view it
+    was on — the clicked item is one Tab away, at the top of the list.
+    `swaymsg` and `foot` are resolved on $PATH, which is also what lets
+    the headless harness stand fakes in for both.
+    """
+    raw = os.environ.get("CASTLE_NOTIFY_COMMAND")
+    if raw is None:
+        raw = "notify-send"
+    if not raw.strip():
+        return 0
+    try:
+        base = shlex.split(raw)
+    except ValueError:
+        return 0
+    if not base:
+        return 0
+    argv = base + [
+        "--app-name=castle",
+        f"--action={NOTIFY_ACTION_NAME}=Open",
+        args.title,
+        args.body,
+    ]
+    try:
+        # No timeout, deliberately: mako's default keeps a notification
+        # until it is dismissed, and a waiter killed early is a click
+        # that silently does nothing. The accepted cost is one idle
+        # process per unclicked notification until expiry.
+        proc = subprocess.run(argv, check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    chosen = proc.stdout.decode("utf-8", errors="replace").strip() if proc.stdout else ""
+    if chosen != NOTIFY_ACTION_NAME:
+        return 0
+    modal_exists = False
+    try:
+        tree = subprocess.run(
+            ["swaymsg", "-t", "get_tree"], check=False, timeout=5,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        if tree.returncode == 0:
+            modal_exists = _tree_has_app_id(
+                json.loads(tree.stdout.decode("utf-8", errors="replace")), "castle-modal"
+            )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        modal_exists = False
+    if modal_exists:
+        try:
+            subprocess.run(
+                ["swaymsg", '[app_id="castle-modal"] focus'], check=False, timeout=5,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return 0
+    try:
+        os.execvp("foot", [
+            "foot", "--app-id=castle-modal", "-e",
+            "castle-modal", "--mode", "inbox", "--focus", args.record_id,
+        ])
+    except OSError:
+        return 0
+    return 0
 
 
 def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None:
@@ -2778,66 +2881,40 @@ def _route_journal_locked() -> int:
         )
         appended.append((decision_id, rec.id, channel))
         if channel == "notify":
-            summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
-            # 200 characters is the cap on the whole body, not on the
-            # part before the hint: appending after the slice would let
-            # a question notification run to 230 and defeat the limit
-            # rather than spend it. The hint is the part worth keeping
-            # whole, so the summary yields the room.
-            notification_body = summary[:200]
-            if rec.type == "question":
-                # The notification is the only *push* channel this system
-                # has, so a resident who never opens a surface on their
-                # own would otherwise learn that a question exists but
-                # not how to close it — and would fall back to `castle
-                # answer <id>`, the exact CLI dependency
-                # docs/tasks/0022-answer-in-ui.md exists to remove. Only
-                # `question` gets the suffix: there is nothing for a
-                # `result` to be answered, and an unconditional suffix
-                # would be noise on the case it does not apply to.
-                #
-                # CHORD COUPLING: "Mod4+Shift+a" is prose here and a real
-                # binding in modules/home/default.nix's keybindings
-                # attrset. Change one and grep for the other — two
-                # hardcoded mentions of the *compose* chord went stale
-                # exactly this way when docs/tasks/0019 moved it, and
-                # were only found two tasks later. run_status's "Press
-                # Mod4+Shift+Return and describe one." line and
-                # castle-modal's answer mode carry the same coupling.
-                #
-                # Appended with a space rather than a newline: the
-                # notify command is invoked as `<command> <title>
-                # <body>`, and a body carrying an embedded newline is
-                # one argument to the daemon but two lines to anything
-                # logging it — test/agent-loop/notify-stub.sh counts
-                # lines to prove the channel fired exactly twice. A
-                # notification body is wrapped by the daemon anyway, so
-                # the newline bought nothing and cost a false failure in
-                # a harness this task does not otherwise touch.
-                #
-                # **The verb names the act, and a proposal is not
-                # answered.** Selected from `PROPOSAL_SHA256_FIELD`, the
-                # same predicate `_errand_state`'s three-way overlay
-                # and castle-modal's picker use — never from the
-                # wording. This is the surface `PROPOSAL_QUESTION_BODY`
-                # calls "bound hardest by no internal vocabulary", and
-                # it is the only push channel this system has, so
-                # telling a resident to go and *answer* a change they
-                # are being asked to approve, reject or set aside is
-                # the wrong instruction on the one line they may read
-                # without opening anything.
-                #
-                # Two-way here, not three-way: a notification is fired
-                # per record, so there is exactly one question in view
-                # and no mixed case to fall back for.
-                verb = (
-                    "review"
-                    if rec.fields.get(PROPOSAL_SHA256_FIELD, "").strip()
-                    else "answer"
-                )
-                hint = f" Press Mod4+Shift+a to {verb}."
+            # docs/tasks/0034 §3: the notification names what kind of
+            # thing is waiting and — for a result — carries the
+            # request's OWN words, because the resident should never
+            # have to remember what they asked from a bare "result".
+            # The router already holds the originating request (root,
+            # above); a record whose refs chain reaches none falls back
+            # to its own first line, the pre-0034 body.
+            if rec.type == "result":
+                if root is not None:
+                    title = "Castle: your request has an answer"
+                    source = root.body
+                else:
+                    title = "Castle: an answer for you"
+                    source = rec.body
+                summary = source.strip().splitlines()[0] if source.strip() else rec.type
+                notification_body = summary[:200]
+            else:
+                # A question's own words are the actionable text, so
+                # they stay the body; the request's words already sit
+                # behind the click. The hint names the one chord that
+                # remains — CHORD COUPLING: Mod4+Shift+Return is prose
+                # here and a real binding in modules/home/default.nix;
+                # change one and grep for the other. The verb comes
+                # from the proposal stamp, never the wording, exactly
+                # as before.
+                summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
+                if rec.fields.get(PROPOSAL_SHA256_FIELD, "").strip():
+                    title = "Castle: a change for you to review"
+                    hint = " Press Mod4+Shift+Return to review."
+                else:
+                    title = "Castle: a question for you"
+                    hint = " Press Mod4+Shift+Return to answer."
                 notification_body = summary[: 200 - len(hint)] + hint
-            _fire_notification(f"Castle Turing — {rec.type}", notification_body)
+            _fire_notification(title, notification_body, rec.id)
 
     if not appended:
         print("route: nothing unrouted; no decision records appended")
@@ -9071,6 +9148,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_apply.set_defaults(func=cmd_apply)
+
+    p_waiter = sub.add_parser(
+        "notify-waiter",
+        help=(
+            "internal: the detached notification-action waiter the router "
+            "spawns (docs/tasks/0034); not for humans"
+        ),
+    )
+    p_waiter.add_argument("record_id")
+    p_waiter.add_argument("title")
+    p_waiter.add_argument("body")
+    p_waiter.set_defaults(func=cmd_notify_waiter)
 
     p_digest = sub.add_parser("digest", help="fold the journal into a report")
     p_digest.add_argument("--since", default=None, help="only errands created at/after this timestamp")

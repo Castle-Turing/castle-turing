@@ -9,4 +9,13 @@
 # really fired, not just that a decision record claimed it would.
 set -euo pipefail
 : "${CASTLE_NOTIFY_LOG:?notify-stub.sh: CASTLE_NOTIFY_LOG must be set}"
-printf '%s :: %s\n' "$1" "$2" >> "$CASTLE_NOTIFY_LOG"
+# Since docs/tasks/0034 the invocation is `<command> <flags...>
+# <title> <body>` (app-name and the open action ride in front), and it
+# arrives from a detached waiter rather than the router's own process.
+# The log line stays `<title> :: <body>` so every existing assertion
+# still reads it; the flags land in a sibling log for the assertions
+# that are about them.
+printf '%s\n' "$*" >> "${CASTLE_NOTIFY_ARGS_LOG:-/dev/null}"
+title="${@: -2:1}"
+body="${@: -1}"
+printf '%s :: %s\n' "$title" "$body" >> "$CASTLE_NOTIFY_LOG"
