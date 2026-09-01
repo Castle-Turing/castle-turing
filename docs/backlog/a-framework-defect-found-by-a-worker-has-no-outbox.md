@@ -24,7 +24,9 @@ its reasoning naturally takes), the router routes it like a proposal
 — the resident approves it in review mode — and an approved finding
 becomes a file in the framework repo via a seat that owns a mechanism
 checkout and a PR, keeping the existing rule that no worker touches
-the development tree directly. Overlaps deliberately with
+the development tree directly. What the outbox emits is settled separately —
+[[work-leaves-the-os-in-a-boring-format]] — so this entry owes only the
+lane, not the format. Overlaps deliberately with
 [[mechanism-proposals-are-approvable-but-unapplyable]] (that entry is
 about *diffs* targeting mechanism; this one is about *reports*), and
 the two should probably be specced together.
