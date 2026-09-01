@@ -9,10 +9,25 @@ binary. It is deliberately NOT a GTK app, a wofi/fuzzel script, or
 written in a second language; it's a terminal program because the
 terminal is already the substrate this whole project is built on.
 
-Four modes, all just callers of agent/castle's own record-writing and
+Five modes, all just callers of agent/castle's own record-writing and
 record-reading functions — this file adds no judgment of its own,
 exactly like `castle ask`/`castle digest` add none (Proposal 03):
 
+  inbox    The one surface the one chord opens (docs/tasks/0034). Two
+           views inside one window: compose (what the chord opens
+           into, because the most common act is speaking) and an inbox
+           list — `Tab` toggles between them. The list is everything
+           waiting on the resident, derived with almost no new state:
+           unanswered questions, undecided proposed changes, and
+           results a read cursor (`$CASTLE_STATE_DIR/inbox-seen`, one
+           id per line, append-only, appended only when a result's
+           body is actually rendered) has not seen. A number opens an
+           item — a question opens answer mode's flow, a change opens
+           review mode's, a result renders its own body whole. Esc
+           backs out one level; at the top it closes the window.
+           `--focus ID` (scripts and the notification's deep link, the
+           one caller that knows *why* the window opened) opens the
+           inbox expanded on that record instead of opening compose.
   compose  Multi-line free text describing a problem, nothing else — no
            category picker, no priority dropdown. Ends on a lone '.'
            line or EOF. Becomes a `request` record via the same
@@ -32,7 +47,10 @@ exactly like `castle ask`/`castle digest` add none (Proposal 03):
            appear here — they aren't errands, and there's nothing for
            the resident to check back on.
   answer   The questions the system is waiting on, and one of them
-           answered (Mod4+Shift+a; docs/tasks/0022-answer-in-ui.md).
+           answered (docs/tasks/0022-answer-in-ui.md; since
+           docs/tasks/0034 this mode has no chord of its own — the
+           inbox reaches the same flow, and this flag remains for
+           scripts, CI, and a resident at a bare terminal).
            Oldest first, chosen by a single keypress, answered in the
            same text-entry grammar compose uses, filed through castle's
            file_answer() — the same write `castle answer` performs. The
@@ -40,8 +58,8 @@ exactly like `castle ask`/`castle digest` add none (Proposal 03):
            and nothing at all is written unless a question was chosen
            and a body typed.
   review   The first place a resident grants Castle anything
-           (docs/tasks/0025-approval.md). Reached from the same
-           Mod4+Shift+a picker rather than a chord of its own: a
+           (docs/tasks/0025-approval.md). Reached from the inbox (and
+           from answer mode's picker) rather than a chord of its own: a
            question the harness filed to propose a configuration
            change branches out of answer mode's free-text grammar and
            into this, which shows where the change applies, says in
@@ -180,7 +198,7 @@ def _classify_interactively(out=sys.stdout) -> str:
     return "correction" if answer.lower() == "t" else "request"
 
 
-def _read_typed_body() -> str:
+def _read_typed_body(prefix: str = "") -> str:
     """This surface's one text-entry grammar: read stdin until a line
     containing exactly '.' (or EOF), then strip.
 
@@ -188,25 +206,58 @@ def _read_typed_body() -> str:
     window, one way to type into it — a second grammar would be a second
     thing to learn about the same box, and the '.' terminator is already
     the thing a resident's fingers know.
+
+    `prefix` is the inbox layout's one intrusion (docs/tasks/0034): its
+    compose view peeks one keypress in cbreak to see whether the
+    resident pressed Tab, and a peeked character that turns out to be
+    ordinary text belongs at the front of the first line. The kernel's
+    canonical line editing never buffered that character, so a
+    backspace cannot erase it — consistent, as it happens, with what
+    the terminal shows: the echo stays on screen and the character
+    stays in the body.
     """
     lines: list[str] = []
+    pending = prefix
     for raw_line in sys.stdin:
-        line = raw_line.rstrip("\n")
+        line = pending + raw_line.rstrip("\n")
+        pending = ""
         if line.strip() == ".":
             break
         lines.append(line)
+    if pending:
+        # EOF arrived immediately after the peeked character.
+        lines.append(pending)
     return "\n".join(lines).strip()
 
 
+# The compose prompt, in one place because two views print it (--mode
+# compose and the inbox layout's compose view). "What do you need?"
+# rather than "Describe the problem": the first real request through
+# the system was a feature wish, not a problem, and the resident
+# flagged the framing (docs/tasks/0034 §4). Same free-text,
+# no-category-picker discipline as ever — only the presumption goes.
+COMPOSE_PROMPT = "What do you need? Describe it in your own words."
+
+
+def _print_compose_prompt(out) -> None:
+    print(COMPOSE_PROMPT, file=out)
+    print("End with a line containing just '.' (or Ctrl-D).", file=out)
+    print(file=out)
+
+
 def run_compose(castle, out=sys.stdout, kind: str = "request") -> int:
+    if sys.stdin.isatty():
+        _print_compose_prompt(out)
+    return _file_composed(castle, _read_typed_body(), out, kind)
+
+
+def _file_composed(castle, body: str, out, kind: str = "request") -> int:
+    """The half of compose that happens after the body is captured:
+    classify (interactively), write, confirm, pause. Split from
+    run_compose so the inbox layout's compose view (docs/tasks/0034)
+    files through the identical path rather than a second copy of it.
+    """
     interactive = sys.stdin.isatty()
-    if interactive:
-        print("Describe the problem in your own words.", file=out)
-        print("End with a line containing just '.' (or Ctrl-D).", file=out)
-        print(file=out)
-
-    body = _read_typed_body()
-
     if not body:
         print("castle-modal: empty request, nothing filed.", file=sys.stderr)
         _pause_for_dismissal(out)
@@ -623,6 +674,15 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
     if _is_proposal(castle, question):
         return run_review_for(castle, question, records, out, interactive=True)
 
+    return _answer_flow(castle, question, records, out)
+
+
+def _answer_flow(castle, question, records: dict, out=sys.stdout) -> int:
+    """Show one chosen question whole and file the typed answer — the
+    half of answer mode that runs after a question is in hand. Split
+    from run_answer so the inbox (docs/tasks/0034) opens the identical
+    flow rather than a second copy of it; every behavior below predates
+    the split and is unchanged by it."""
     # The full body, verbatim, never truncated. The picker's first-line
     # preview is a convenience for choosing among several; letting a
     # resident answer on a truncated understanding of the question is a
@@ -1294,13 +1354,14 @@ def run_review_for(castle, question, records: dict, out=sys.stdout, *, interacti
         # Said, and then this exits — it does not loop into the next
         # one. Looping would be the spray of decisions again, and
         # reopening the list is one chord away. CHORD COUPLING:
-        # Mod4+Shift+a is prose here and a real binding in
+        # Mod4+Shift+Return is prose here and a real binding in
         # modules/home/default.nix's keybindings attrset; change one
-        # and grep for the other.
+        # and grep for the other (docs/tasks/0034 removed the answer
+        # chord this line used to name).
         noun = "change" if len(remaining) == 1 else "changes"
         print(
-            f"{len(remaining)} more proposed {noun} waiting — press Mod4+Shift+a "
-            "again to see them.",
+            f"{len(remaining)} more proposed {noun} waiting — press "
+            "Mod4+Shift+Return to see them.",
             file=out,
         )
     _pause_for_dismissal(out)
@@ -1378,6 +1439,385 @@ def _answer_refusal_for_missing(question) -> str:
     if question is None:
         return "castle-modal: no such question, nothing filed."
     return "castle-modal: that is not a question, nothing filed."
+
+
+# ---------------------------------------------------------------------------
+# Inbox layout (docs/tasks/0034-inbox-modal.md). One chord, one
+# surface: compose view (what the chord opens into) and an inbox list,
+# `Tab` between them. The list is derived, not stored — with one
+# deliberate exception, the read cursor below, because "unread result"
+# is a notion the append-only journal cannot hold.
+#
+# The same vocabulary rule as answer mode binds everything this layout
+# adds: no record ids, and none of the internal words. Bodies are shown
+# verbatim, as everywhere else.
+# ---------------------------------------------------------------------------
+
+def _inbox_seen_path(castle):
+    """$CASTLE_STATE_DIR/inbox-seen — beside journal/, never inside it.
+    It is state, not a record: nothing about a result changes when the
+    resident reads it, so seen-ness lives with the surface that owns
+    it, the same shape as the dispatch watermark's "began here" fact.
+    It syncs with the state repo (seen-ness follows the resident, not
+    the machine), and losing it costs a few once-read results
+    reappearing as unread — the cheap direction to fail in."""
+    return castle.state_dir() / "inbox-seen"
+
+
+def _read_seen(castle) -> set:
+    try:
+        text = _inbox_seen_path(castle).read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def _mark_seen(castle, record_id: str, seen: set) -> None:
+    """Append-only, like the journal it sits beside: one id per line,
+    never rewritten, appended only when a result's body was actually
+    rendered — never merely because a list containing it was shown.
+    Skipping an id already present is not a rewrite; it just keeps a
+    re-read from growing the file."""
+    if record_id in seen:
+        return
+    path = _inbox_seen_path(castle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(record_id + "\n")
+    seen.add(record_id)
+
+
+# The resident-facing label for each kind of waiting thing. "an answer
+# to read" for a result, matching the notification's own noun ("your
+# request has an answer") — the journal's word `result` is not this
+# surface's to use.
+_INBOX_LABELS = {
+    "question": "needs your answer",
+    "proposal": "a change to review",
+    "result": "an answer to read",
+}
+
+
+def _inbox_items(castle, records: dict, seen: set) -> list:
+    """Everything waiting on the resident, in the brief's order:
+    questions first (the turn may be suspended on you — blocking ones
+    ahead of the rest, oldest first within each), then undecided
+    proposed changes, then results the read cursor has not seen.
+    Nothing else: closed items belong to `castle digest`, not here.
+
+    Questions and proposals reuse `_pending_questions`' fold — pending
+    iff no answer names it — so this list, the answer picker, and the
+    status overlay can never disagree about one question. The cursor is
+    consulted for results only: pending-ness of the other two kinds is
+    derivable, and deriving beats recording wherever possible.
+    """
+    pending = _pending_questions(records)
+    questions = sorted(
+        (q for q in pending if not _is_proposal(castle, q)),
+        key=lambda q: (
+            q.fields.get(castle.BLOCKING_FIELD, "").strip() != "true",
+            q.id,
+        ),
+    )
+    proposals = [q for q in pending if _is_proposal(castle, q)]
+    unread = sorted(
+        (rec for rec in records.values() if rec.type == "result" and rec.id not in seen),
+        key=lambda rec: rec.id,
+    )
+    return (
+        [("question", rec) for rec in questions]
+        + [("proposal", rec) for rec in proposals]
+        + [("result", rec) for rec in unread]
+    )
+
+
+def _print_inbox_entries(castle, records: dict, shown: list, out) -> None:
+    for index, (kind, rec) in enumerate(shown, start=1):
+        label = _INBOX_LABELS[kind]
+        if kind == "result":
+            # A result's own first line is the harness's turn header —
+            # a record id and a store path, the two things this surface
+            # may never print. The originating request's words identify
+            # it instead, exactly as the notification does.
+            print(f"  [{index}] {label}", file=out)
+        else:
+            print(f"  [{index}] {label}: {_first_line(rec.body) or '(no text)'}", file=out)
+        about = _about_line(castle, records, rec)
+        if about:
+            print(f"      about: {about}", file=out)
+
+
+def _render_result_body(castle, rec, seen: set, out) -> None:
+    """The record body, whole and verbatim (defanged of control bytes,
+    for the reason review mode documents on `_defang_for_terminal` — a
+    keypress is read from this same terminal moments later). Since
+    docs/tasks/0023 and 0033 the body already carries everything a cold
+    reader needs. Rendering it is what spends the read cursor: the id
+    is appended the moment the body is on screen, not when a list
+    mentioning it was."""
+    print(_defang_for_terminal(rec.body.strip() or "(no text)"), file=out)
+    _mark_seen(castle, rec.id, seen)
+
+
+def _read_one_key_cbreak(out, *lines) -> str:
+    """Print `lines` and read one keypress, cbreak engaged before the
+    first print — the same discipline `_classify_interactively`
+    documents at length and every keypress reader in this file obeys."""
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        for line in lines:
+            print(line, file=out)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _result_view(castle, rec, seen: set, out) -> None:
+    """One result, read in place. Esc backs out to the list — one level,
+    per the brief — and every other key is ignored rather than acting:
+    a reflex keypress on a reading surface must not do anything, the
+    same posture the review keys take."""
+    import termios
+    import tty
+
+    print(file=out)
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        _render_result_body(castle, rec, seen, out)
+        print(file=out)
+        print("Esc to go back.", file=out)
+        while sys.stdin.read(1) != "\x1b":
+            pass
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    print(file=out)
+
+
+def _show_inbox_list(castle, records: dict, items: list, out):
+    """Print the inbox and read the keypress that acts on it. Returns
+    ("open", (kind, rec)), ("compose", None) or ("close", None).
+
+    The grammar is the picker's, extended by exactly one key: digits
+    pick, `m` pages past nine, `Tab` switches to compose, and any other
+    key closes the window writing nothing — the keypress is the
+    dismissal, as everywhere else in this file. There is deliberately
+    no key that opens an item without naming it: opening a result
+    spends the read cursor, and a reflex Enter must not mark something
+    read that nobody read.
+    """
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    pages = max(1, (len(items) + ANSWER_PICKER_LIMIT - 1) // ANSWER_PICKER_LIMIT)
+    page = 0
+    try:
+        tty.setcbreak(fd)
+        if not items:
+            # An empty inbox says so and offers compose
+            # (docs/tasks/0034 §1): the friendly line answer mode
+            # already uses, plus the way back to the common act.
+            print("Nothing is waiting on you.", file=out)
+            print(file=out)
+            print("Press Tab to write something, or any other key to close.", file=out)
+            key = sys.stdin.read(1)
+            return ("compose", None) if key == "\t" else ("close", None)
+        while True:
+            start = page * ANSWER_PICKER_LIMIT
+            shown = items[start : start + ANSWER_PICKER_LIMIT]
+            rest = len(items) - len(shown)
+            print("Waiting on you:", file=out)
+            print(file=out)
+            _print_inbox_entries(castle, records, shown, out)
+            if rest:
+                print(file=out)
+                print(f"…and {rest} more waiting — press m to see them.", file=out)
+            print(file=out)
+            if pages > 1:
+                print(
+                    "Press a number to open, Tab to write something, m for more, "
+                    "or any other key to close.",
+                    file=out,
+                )
+            else:
+                print(
+                    "Press a number to open, Tab to write something, or any other "
+                    "key to close.",
+                    file=out,
+                )
+            key = sys.stdin.read(1)
+            if len(key) == 1 and key in "123456789"[: len(shown)]:
+                return ("open", shown[int(key) - 1])
+            if key == "\t":
+                return ("compose", None)
+            if pages > 1 and key == "m":
+                page = (page + 1) % pages
+                print(file=out)
+                continue
+            return ("close", None)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _open_inbox_item(castle, kind: str, rec, records: dict, seen: set, out):
+    """Open the view an item needs (docs/tasks/0034 §1): a question is
+    answer mode's flow, a change is review mode's, a result is its own
+    body. Returns an exit code to end the invocation with, or None to
+    return to the list (only the result view backs out — the two
+    writing flows keep their existing close-when-done semantics, and
+    the chord is one keypress away)."""
+    if kind == "question":
+        return _answer_flow(castle, rec, records, out)
+    if kind == "proposal":
+        return run_review_for(castle, rec, records, out, interactive=True)
+    _result_view(castle, rec, seen, out)
+    return None
+
+
+def _open_focus_target(castle, focus: str, records: dict, seen: set, out):
+    """What `--focus ID` opens — the one case where the surface knows
+    why it was opened, so it opens there. Returns an exit code, or None
+    to fall through to the inbox list (a focused result backs out to it;
+    anything unopenable degrades to the list with one plain line, never
+    an error — the notification that carried this id may be hours old,
+    and the world may have moved on)."""
+    rec = records.get(focus) or castle.load_journal_record(focus)
+    if rec is None:
+        print("That one isn't here any more.", file=out)
+        print(file=out)
+        return None
+    if rec.type == "result":
+        _result_view(castle, rec, seen, out)
+        return None
+    if rec.type == "question":
+        answered = {
+            ref for other in records.values() if other.type == "answer" for ref in other.refs
+        }
+        if rec.id in answered:
+            print("That one is already handled.", file=out)
+            print(file=out)
+            return None
+        if _is_proposal(castle, rec):
+            return run_review_for(castle, rec, records, out, interactive=True)
+        return _answer_flow(castle, rec, records, out)
+    print("That one isn't something to open.", file=out)
+    print(file=out)
+    return None
+
+
+def _compose_view(castle, waiting_count: int, out):
+    """The inbox layout's compose view: today's compose mode plus one
+    static line above the prompt when items are waiting — a count and a
+    key, nothing else. Static information, not initiative; where the
+    boundary to volunteering help lies is recorded in
+    docs/backlog/the-modal-could-choose-its-opening-view.md.
+
+    One keypress is peeked in cbreak before the line grammar starts:
+    Tab switches to the inbox, Esc closes (compose's discard semantics
+    — nothing typed, nothing written, exit 0, the keypress is the
+    dismissal), and anything else is the first character of the body,
+    handed to `_read_typed_body` as its prefix. Once typing has begun,
+    Tab is just a character — text may legitimately contain one.
+
+    Returns ("inbox", None) or ("exit", code).
+    """
+    lines = []
+    if waiting_count:
+        lines.append(f"{waiting_count} ready — Tab to view")
+        lines.append("")
+    lines.append(COMPOSE_PROMPT)
+    lines.append("End with a line containing just '.' (or Ctrl-D).")
+    lines.append("")
+    first = _read_one_key_cbreak(out, *lines)
+    if first == "\t":
+        print(file=out)
+        return ("inbox", None)
+    if first == "\x1b":
+        return ("exit", 0)
+    if first in ("\x04", ""):
+        # Ctrl-D (or EOF) straight away: the existing empty-body
+        # refusal path, unchanged.
+        return ("exit", _file_composed(castle, "", out))
+    prefix = "" if first in ("\n", "\r") else first
+    return ("exit", _file_composed(castle, _read_typed_body(prefix), out))
+
+
+def _run_inbox_piped(castle, records: dict, seen: set, focus: str | None, out) -> int:
+    """The no-tty half of inbox mode: the list, printed once, or the
+    focused record's body. Read-only with one exception — rendering a
+    focused result's body spends the read cursor, piped or not, because
+    "appended when the body is rendered" is a rule about the mechanism,
+    not about who is watching (the same headless-by-construction
+    posture the whole file takes). Scripts that want to *act* on an
+    item already have --mode answer and --mode review."""
+    if focus:
+        rec = records.get(focus) or castle.load_journal_record(focus)
+        if rec is None:
+            print("castle-modal: nothing to open there.", file=sys.stderr)
+            return 1
+        if rec.type == "result":
+            _render_result_body(castle, rec, seen, out)
+            return 0
+        print(rec.body.strip() or "(no text)", file=out)
+        return 0
+    items = _inbox_items(castle, records, seen)
+    if not items:
+        print("Nothing is waiting on you.", file=out)
+        return 0
+    print("Waiting on you:", file=out)
+    print(file=out)
+    _print_inbox_entries(castle, records, items, out)
+    return 0
+
+
+def run_inbox(castle, out=sys.stdout, focus: str | None = None) -> int:
+    seen = _read_seen(castle)
+    records = castle.load_all(castle.journal_dir())
+    if not sys.stdin.isatty():
+        return _run_inbox_piped(castle, records, seen, focus, out)
+
+    # The chord opens compose — the most common act is speaking, and
+    # the chord carries no information about why it was pressed. A
+    # --focus caller is the one opener that does know why, so it opens
+    # the inbox instead, expanded on the record it was told about.
+    view = "compose"
+    if focus:
+        code = _open_focus_target(castle, focus, records, seen, out)
+        if code is not None:
+            return code
+        view = "inbox"
+        records = castle.load_all(castle.journal_dir())
+
+    while True:
+        items = _inbox_items(castle, records, seen)
+        if view == "compose":
+            outcome, code = _compose_view(castle, len(items), out)
+            if outcome == "exit":
+                return code
+            view = "inbox"
+            continue
+        action, picked = _show_inbox_list(castle, records, items, out)
+        if action == "close":
+            return 0
+        if action == "compose":
+            print(file=out)
+            view = "compose"
+            continue
+        code = _open_inbox_item(castle, picked[0], picked[1], records, seen, out)
+        if code is not None:
+            return code
+        # Back from a result view: re-derive before redrawing, so a
+        # question answered from another window meanwhile is not still
+        # offered here.
+        records = castle.load_all(castle.journal_dir())
 
 
 def _stamp_of(record_id: str) -> str:
@@ -1853,12 +2293,14 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # docs/tasks/0015's rule is that a label must not cause the inaction
     # it describes, and "waiting on you" was the one label on this
     # surface that told the resident something was wrong without telling
-    # them what to do about it. CHORD COUPLING: Mod4+Shift+a is prose
-    # here and a real binding in modules/home/default.nix's keybindings
-    # attrset — change one and grep for the other (agent/castle's
-    # notification carries the identical coupling, and the compose
-    # chord's own mentions went stale exactly this way once already,
-    # docs/tasks/0019).
+    # them what to do about it. CHORD COUPLING: Mod4+Shift+Return is
+    # prose here and a real binding in modules/home/default.nix's
+    # keybindings attrset — change one and grep for the other
+    # (agent/castle's notification carries the identical coupling, and
+    # the compose chord's own mentions went stale exactly this way once
+    # already, docs/tasks/0019). Since docs/tasks/0034 there is only
+    # the one chord: it opens compose, and the waiting item is one Tab
+    # away, which the inbox's own count line points at.
     if waiting:
         # "answer" names the wrong act on a proposal: `_show_picker`
         # grew an `action` parameter for exactly this reason
@@ -1882,7 +2324,7 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             verb = "answer"
         else:
             verb = "see what's waiting"
-        hint = f"waiting on you — press Mod4+Shift+a to {verb}"
+        hint = f"waiting on you — press Mod4+Shift+Return to {verb}"
         return f"{base}, {hint}" if base else hint
     return base or "awaiting a worker"
 
@@ -1941,7 +2383,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="castle-modal", description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("compose", "status", "answer", "review"),
+        choices=("inbox", "compose", "status", "answer", "review"),
         default="compose",
         help=(
             "compose a new request, fold recent errands, answer a question the "
@@ -1949,7 +2391,19 @@ def build_parser() -> argparse.ArgumentParser:
             "approve, reject or defer it (default: compose). Review mode is "
             "normally reached from answer mode's own picker rather than named "
             "here — a proposed change picked there branches into it "
-            "(docs/tasks/0025-approval.md)"
+            "(docs/tasks/0025-approval.md). Inbox is the layout the one chord "
+            "opens (docs/tasks/0034): compose and a list of everything waiting, "
+            "Tab between them"
+        ),
+    )
+    parser.add_argument(
+        "--focus",
+        default=None,
+        help=(
+            "inbox mode: open the inbox expanded on this record id. The "
+            "notification's own deep link — the one opener that knows why the "
+            "window opened — and scripts; never typed by the resident "
+            "(docs/tasks/0034)."
         ),
     )
     parser.add_argument(
@@ -1992,6 +2446,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     castle = _load_castle_module()
+    if args.mode == "inbox":
+        return run_inbox(castle, focus=args.focus)
     if args.mode == "compose":
         return run_compose(castle, kind=args.kind)
     if args.mode == "answer":
