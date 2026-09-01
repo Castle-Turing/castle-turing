@@ -2133,6 +2133,13 @@ chmod +x "$NW_BIN/swaymsg"
 cat > "$NW_BIN/foot" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FOOT_LOG"
+# The two-waiter race test below needs the fake tree to start
+# reporting a window only once a launch has actually happened — the
+# same "foot's own startup is what creates the window" causality a
+# real compositor provides, faked here rather than the test pre-seeding
+# SWAY_HAS_MODAL_FILE by hand. Harmless for the single-waiter launch
+# test above: nothing there re-checks the tree after this point.
+: > "$SWAY_HAS_MODAL_FILE"
 exit 0
 STUB
 chmod +x "$NW_BIN/foot"
@@ -2223,5 +2230,38 @@ PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="" \
 [ ! -s "$NW_SWAYMSG_LOG" ] || fail "notify-waiter queried Sway with the notify channel disabled"
 [ ! -s "$NW_FOOT_LOG" ] || fail "notify-waiter launched a window with the notify channel disabled"
 
+log "notify-waiter: two notifications clicked at once with no modal open race for the launch — exactly one foot, never two (Codex cross-model review on this task's PR, agreed as real)"
+# Both waiters share one $XDG_RUNTIME_DIR (inherited from this shell,
+# unchanged by either), so both resolve notify_waiter_lock_path() to
+# the identical file and genuinely contend for it — this is not two
+# independent runs asserted on separately, it is the actual race.
+: > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
+rm -f "$NW_HAS_MODAL_FILE"
+printf 'open\n' > "$NW_ACTION_FILE"
+RACE_START=$SECONDS
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwrace1" \
+    "Castle: your request has an answer" "Race fixture: the first of two clicks." &
+RACE_PID_1=$!
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwrace2" \
+    "Castle: your request has an answer" "Race fixture: the second of two clicks." &
+RACE_PID_2=$!
+wait "$RACE_PID_1" || fail "the first racing notify-waiter exited nonzero"
+wait "$RACE_PID_2" || fail "the second racing notify-waiter exited nonzero"
+RACE_ELAPSED=$((SECONDS - RACE_START))
+log "  -- race resolved in ${RACE_ELAPSED}s of wall clock (whole seconds) — acquire_lock_bounded's 5s fallback did not fire; a fired fallback would show as a jump to ~5s or more, not $RACE_ELAPSED"
+[ "$RACE_ELAPSED" -lt 4 ] \
+  || fail "the race took ${RACE_ELAPSED}s — suspiciously close to acquire_lock_bounded's 5s bound; the fallback path may have fired unexpectedly"
+FOOT_LAUNCHES="$(grep -c . "$NW_FOOT_LOG" || true)"
+[ "$FOOT_LAUNCHES" -eq 1 ] \
+  || fail "two notifications clicked at once with no modal open produced $FOOT_LAUNCHES foot launches, expected exactly 1 — the check-then-launch step raced: $(cat "$NW_FOOT_LOG")"
+FOCUS_CALLS="$(grep -cE '\[app_id="castle-modal"\].*focus' "$NW_SWAYMSG_LOG" || true)"
+[ "$FOCUS_CALLS" -eq 1 ] \
+  || fail "expected exactly one focus call — the waiter that lost the race should have found the window the winner just launched — got $FOCUS_CALLS: $(cat "$NW_SWAYMSG_LOG")"
 
 log "all assertions passed"

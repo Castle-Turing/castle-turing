@@ -1317,6 +1317,24 @@ def apply_lock_path() -> pathlib.Path:
     return d / "apply.lock"
 
 
+def notify_waiter_lock_path() -> pathlib.Path:
+    """Serializes `cmd_notify_waiter`'s check-then-launch step
+    (docs/tasks/0034-inbox-modal.md §3, caught by Codex's cross-model
+    review on this task's PR): asking Sway whether a `castle-modal`
+    window exists and acting on the answer is a check-then-act, and two
+    waiters running that sequence unsynchronized can both see "none"
+    and both launch one — the exact double-modal the brief's own
+    edge-case paragraph says must not happen (two compose buffers, a
+    read cursor written from two processes). One waiter at a time gets
+    to ask and act; the rest queue on `acquire_lock_bounded`, not
+    `acquire_lock_blocking` — see that function's own docstring for why
+    unbounded is wrong here specifically.
+    """
+    d = runtime_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "notify-waiter.lock"
+
+
 def acquire_lock_blocking(path: pathlib.Path):
     """Take `flock(LOCK_EX)` on `path`, waiting for it if held.
 
@@ -1372,6 +1390,47 @@ def acquire_lock(path: pathlib.Path):
         handle.close()
         raise
     return handle
+
+
+def acquire_lock_bounded(path: pathlib.Path, timeout: float):
+    """Take `flock(LOCK_EX)` on `path`, waiting up to `timeout` seconds
+    (polled at 0.1s), then giving up and returning `None` — proceeding
+    as though unlocked — if it is still held.
+
+    A third policy beside the two above, for `notify_waiter_lock_path`,
+    the one caller neither fits. `acquire_lock_blocking` is wrong there:
+    an unbounded wait behind a stuck waiter (a hung `foot`, a dead
+    compositor) would pile up idle processes and eventually turn a
+    resident's click into nothing happening at all, silently, for as
+    long as the holder stays stuck. `acquire_lock` is wrong too:
+    declining outright on contention would swallow the click that got
+    this far — a cost this best-effort channel has never accepted (an
+    unclicked notification costing one idle waiter is the one it does
+    accept). Falling through unlocked after a bounded wait accepts a
+    narrower version of the exact failure the caller exists to close —
+    a rare double `castle-modal` window, recoverable by hand — rather
+    than the unrecoverable one: a click that silently did nothing.
+
+    On success the returned handle is the caller's to close when it is
+    done; on a timeout there is nothing to close, and no lock was ever
+    taken — the caller's own check-then-act proceeds exactly as it
+    would with no lock in the file at all.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                handle.close()
+                return None
+            time.sleep(0.1)
+        except BaseException:
+            handle.close()
+            raise
 
 
 def lock_is_held(path: pathlib.Path) -> bool:
@@ -2641,6 +2700,18 @@ def _fire_notification(title: str, body: str, record_id: str) -> None:
 
 NOTIFY_ACTION_NAME = "open"
 
+# How long a waiter (below) will wait for `notify_waiter_lock_path` before
+# giving up and proceeding unlocked, and how long it will then wait for
+# a `foot` it just launched to actually register with Sway before
+# releasing the lock it DID get. Both "~N seconds" in the brief's own
+# code-review finding, not measured constants — the failure modes on
+# either side of each bound are asymmetric enough (a rare double modal
+# vs. a click that silently does nothing; a slightly longer lock hold
+# vs. releasing before the window that hold exists to protect actually
+# appears) that precision past "a few seconds" buys nothing.
+NOTIFY_WAITER_LOCK_TIMEOUT = 5.0
+NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT = 2.0
+
 
 def _tree_has_app_id(node, app_id: str) -> bool:
     if not isinstance(node, dict):
@@ -2654,18 +2725,88 @@ def _tree_has_app_id(node, app_id: str) -> bool:
     return False
 
 
+def _sway_modal_exists(timeout: float = 5) -> bool:
+    """One `swaymsg -t get_tree` round trip, answering whether a
+    `castle-modal` window exists right now.
+
+    Silent on every failure — no `swaymsg`, no Sway, a malformed or
+    truncated tree, anything — which is what lets `cmd_notify_waiter`
+    treat "cannot tell" the same as "does not exist" rather than
+    crashing a best-effort channel over a `swaymsg` hiccup. Shared by
+    the one check that used to be inline here and the launch-poll loop
+    below it, which is a second caller for exactly the same question,
+    not a coincidence: both are "does the window I am about to act on
+    the presence or absence of actually exist right now," asked at two
+    different moments.
+    """
+    try:
+        tree = subprocess.run(
+            ["swaymsg", "-t", "get_tree"], check=False, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if tree.returncode != 0:
+        return False
+    try:
+        return _tree_has_app_id(
+            json.loads(tree.stdout.decode("utf-8", errors="replace")), "castle-modal"
+        )
+    except ValueError:
+        return False
+
+
 def cmd_notify_waiter(args: argparse.Namespace) -> int:
     """The detached half of `_fire_notification` (docs/tasks/0034 §3).
     Internal: spawned by the router, never typed by a human. Silent on
     every failure — this is the same best-effort channel, one process
     later.
 
-    The already-open check asks Sway rather than reaching into a live
-    modal (a control socket or a signal is more machinery than the case
-    earns): two modals would mean two compose buffers and a read cursor
-    written from two processes, so an existing window is focused
-    instead of duplicated, accepting that it stays on whatever view it
-    was on — the clicked item is one Tab away, at the top of the list.
+    **The check-then-launch step is serialized, not merely checked**
+    (Codex's cross-model review on this task's PR, agreed as real): two
+    notifications clicked close together with no modal open could both
+    run `_sway_modal_exists()`, both see `False` before either had
+    launched a window, and both exec `foot` — the double modal the
+    brief's own edge-case paragraph says must not happen (two compose
+    buffers, a read cursor written from two processes). Everything from
+    the re-check onward runs under `notify_waiter_lock_path`, taken
+    with `acquire_lock_bounded` (~5s, then proceeds unlocked — see that
+    function's docstring for why a bounded wait, not `acquire_lock` or
+    `acquire_lock_blocking`, is the right shape here). The check asks
+    Sway rather than reaching into a live modal (a control socket or a
+    signal is more machinery than the case earns): two modals would
+    mean two compose buffers and a read cursor written from two
+    processes, so an existing window is focused instead of duplicated,
+    accepting that it stays on whatever view it was on — the clicked
+    item is one Tab away, at the top of the list.
+
+    **`foot` is launched with `Popen`, not `os.execvp`.** The old code
+    exec'd it — replacing this process's own image with `foot`'s,
+    which is why there was nothing left afterward to release a lock
+    with. Serializing the check-then-launch step means something has
+    to stay alive to hold the lock across the launch and release it
+    only once the launch is confirmed (or given up on) — `exec` cannot
+    do that by construction, since the process holding the lock is
+    gone the instant it runs. `Popen` keeps this process alive exactly
+    long enough to do that, then exits normally; the spawned `foot`
+    survives that exit the ordinary way an orphaned child does
+    (reparented, not killed), and is started with `start_new_session`
+    for the same reason `_fire_notification` starts this whole waiter
+    that way — detached from whatever session spawned it, so nothing
+    about this process exiting can signal it.
+
+    **The lock is held until the new window is confirmed, not merely
+    until `foot` is launched.** A waiter that released the instant
+    `Popen` returned would still let a second waiter, next in line for
+    the lock, run its own check before the new `foot` window has
+    actually registered with Sway — the identical race one layer later.
+    So the launch is followed by a bounded poll
+    (`NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT`, ~2s) for `_sway_modal_exists`
+    to turn true, and the lock is released only after that poll ends,
+    successfully or not — a waiter that gives up waiting still
+    releases the lock rather than holding it for the bounded 5s a
+    queued waiter would then also spend.
+
     `swaymsg` and `foot` are resolved on $PATH, which is also what lets
     the headless harness stand fakes in for both.
     """
@@ -2697,35 +2838,47 @@ def cmd_notify_waiter(args: argparse.Namespace) -> int:
     chosen = proc.stdout.decode("utf-8", errors="replace").strip() if proc.stdout else ""
     if chosen != NOTIFY_ACTION_NAME:
         return 0
-    modal_exists = False
+
+    lock = acquire_lock_bounded(notify_waiter_lock_path(), NOTIFY_WAITER_LOCK_TIMEOUT)
     try:
-        tree = subprocess.run(
-            ["swaymsg", "-t", "get_tree"], check=False, timeout=5,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )
-        if tree.returncode == 0:
-            modal_exists = _tree_has_app_id(
-                json.loads(tree.stdout.decode("utf-8", errors="replace")), "castle-modal"
-            )
-    except (OSError, subprocess.SubprocessError, ValueError):
-        modal_exists = False
-    if modal_exists:
+        if _sway_modal_exists():
+            try:
+                subprocess.run(
+                    ["swaymsg", '[app_id="castle-modal"] focus'], check=False, timeout=5,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+            return 0
         try:
-            subprocess.run(
-                ["swaymsg", '[app_id="castle-modal"] focus'], check=False, timeout=5,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            subprocess.Popen(
+                [
+                    "foot", "--app-id=castle-modal", "-e",
+                    "castle-modal", "--mode", "inbox", "--focus", args.record_id,
+                ],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True,
             )
-        except (OSError, subprocess.SubprocessError):
-            pass
+        except OSError:
+            return 0
+        # Bounded, not indefinite: a `foot` that never registers (a
+        # dead compositor, a hung binary) must not hold this lock
+        # forever — every OTHER waiter queued behind it inherits that
+        # hang otherwise. Each `_sway_modal_exists` call is itself
+        # capped to whatever of the budget remains, so one slow
+        # `swaymsg` round trip cannot alone blow past the bound.
+        deadline = time.monotonic() + NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if _sway_modal_exists(timeout=min(1.0, remaining)):
+                break
+            time.sleep(0.1)
         return 0
-    try:
-        os.execvp("foot", [
-            "foot", "--app-id=castle-modal", "-e",
-            "castle-modal", "--mode", "inbox", "--focus", args.record_id,
-        ])
-    except OSError:
-        return 0
-    return 0
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None:
