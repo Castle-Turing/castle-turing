@@ -260,3 +260,22 @@ left you to make.
   (they are the actionable text; the request's words sit behind the
   click) plus a hint naming the one remaining chord; the request-words
   body applies to results, as specified.
+- The request-words body for a result is scoped to `seat: worker`
+  results, not every result: this brief's §3 wording ("a result
+  carries the request's own words") did not anticipate an applier-seat
+  result, whose own first line is not a fallback but the entire point
+  of `APPLY_FIRST_LINES` (docs/tasks/0026-apply-validate.md §H) —
+  harness prose drafted specifically to be what the resident is told an
+  approval did. Applied unscoped, an apply notification silently became
+  the ORIGINAL request's first line again (an apply result's `refs`
+  chain reaches the same root request its earlier worker result did) —
+  the words the resident already saw once when the worker finished,
+  standing in for a completely different event ("your change was
+  applied") they were then told nothing about. Caught by
+  `test/agent-loop/apply.sh`'s own notification assertion once fixed to
+  poll for the detached waiter instead of reading the log immediately
+  (the immediate read was racy on its own, and fixing that race is what
+  let the assertion actually run long enough to catch this). Every
+  other seat's result (today: only the applier) keeps using its own
+  body — the pre-0034 behavior `_write_apply_result`'s own docstring
+  already documented as the contract.

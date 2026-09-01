@@ -205,11 +205,30 @@ castle show ID
   suppressed that result's routing, since nothing distinguished "the
   router looked at this" from "some record merely points at this." For
   each unrouted record it appends a `decision` deciding its channel
-  from provenance alone (see below) — `requested` routes to **notify**
-  (a real interruption: `castle route` shells out to
-  `CASTLE_NOTIFY_COMMAND`, default `notify-send` on `$PATH`, best-effort
-  and non-fatal if it fails or isn't installed), `initiated` routes to
-  **digest**. Idempotent: run it again over an already-routed journal
+  from provenance alone (see below) — `requested` routes to **notify**,
+  `initiated` routes to **digest**.
+
+  Notify is a real interruption, not a shell-out the sweep waits on:
+  `castle route` spawns a detached waiter (`castle notify-waiter`,
+  internal, never typed by a resident) and returns immediately — the
+  dispatch sweep must never block on notification interaction
+  (`docs/tasks/0034-inbox-modal.md` §3). The waiter itself shells out to
+  `CASTLE_NOTIFY_COMMAND` (default `notify-send` on `$PATH`,
+  best-effort and non-fatal if it fails or isn't installed) with
+  `--app-name=castle` and `--action=open=Open`, then blocks on the
+  daemon's own `--wait`, which returns the chosen action's name the
+  instant the notification is activated, dismissed, or expires. A click
+  (`open` on stdout) makes the waiter ask Sway whether a `castle-modal`
+  window already exists (`swaymsg -t get_tree`) and focus it if so;
+  otherwise it launches one, deep-linked to the record (`foot
+  --app-id=castle-modal -e castle-modal --mode inbox --focus
+  <record-id>`) — never both, since two windows would mean two compose
+  buffers and a read cursor written from two processes. Dismissal or
+  expiry prints anything else, and the waiter simply exits, with
+  nothing left to do; an unclicked notification costs one idle waiter
+  process until the daemon expires it.
+
+  Idempotent: run `route` again over an already-routed journal
   and it does nothing. There is no code path in `cmd_route` that picks
   a channel without also writing the decision record for it — "no
   routing without an appended decision record" isn't a rule the tool
