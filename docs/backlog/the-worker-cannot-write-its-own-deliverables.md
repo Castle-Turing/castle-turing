@@ -24,10 +24,16 @@ is what is broken.
 **Fix direction, for the brief to argue.** Allocate the output files
 somewhere the tenant can provably write — beside the journal under
 `$CASTLE_STATE_DIR` (a `work/` scratch area, cleaned by the sweep) is
-the natural candidate, since the state dir is already required,
-already private, and already home-anchored on every real layout. An
-alternative is for the worker wrapper to declare its sandbox to
-`castle work` and refuse the turn early when the paths are unwritable
-— loud beats improvised. Whatever is chosen: the degraded behavior
-must never again be "deliverables scattered in `$HOME`, channel
-empty, result says completed."
+the natural candidate, since the state dir is already required and
+already private, and is home-anchored on every documented layout in
+`docs/private-layer.md`. That last property isn't enforced, though:
+`castle.agent.stateDir` (`modules/agent/default.nix`) is an
+unconstrained `nullOr str`, so a deployment is free to point it
+outside home and hit this same failure again. The brief should either
+have `castle work` verify the chosen output directory is writable
+before dispatch, or treat that as its own preflight rather than
+inherit the assumption. An alternative is for the worker wrapper to
+declare its sandbox to `castle work` and refuse the turn early when
+the paths are unwritable — loud beats improvised. Whatever is chosen:
+the degraded behavior must never again be "deliverables scattered in
+`$HOME`, channel empty, result says completed."
