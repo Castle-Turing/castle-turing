@@ -2691,8 +2691,24 @@ def _fire_notification(title: str, body: str, record_id: str) -> None:
         subprocess.Popen(
             [sys.executable, str(pathlib.Path(__file__).resolve()),
              "notify-waiter", record_id, title, body],
+            # stderr is deliberately NOT discarded, unlike stdin/stdout:
+            # it inherits this process's own stderr, which for a
+            # systemd-triggered sweep is the unit's own journal stream
+            # (`journalctl _SYSTEMD_USER_UNIT=castle-dispatch.service`,
+            # the exact scoping test/desktop-loop/test.nix's notify
+            # assertion already reads) and for a hand-run `castle
+            # route` is the terminal it was typed at. The waiter stays
+            # detached either way — inheriting an fd is not the same as
+            # being tied to this process's lifetime, and the "Unit
+            # process remains running after unit stopped" cgroup
+            # bookkeeping `castle-dispatch.service`'s KillMode=process
+            # exists for is unaffected by which file descriptors a
+            # surviving process happens to hold open. What this buys:
+            # `cmd_notify_waiter`'s one non-silent failure (see its own
+            # docstring) has somewhere to land instead of nowhere at
+            # all.
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True,
+            start_new_session=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"castle route: notify command {raw!r} failed (non-fatal): {exc}", file=sys.stderr)
@@ -2725,7 +2741,66 @@ def _tree_has_app_id(node, app_id: str) -> bool:
     return False
 
 
-def _sway_modal_exists(timeout: float = 5) -> bool:
+def _resolve_wayland_env() -> dict[str, str]:
+    """Best-effort fallback for `WAYLAND_DISPLAY` and `SWAYSOCK` when
+    this process's own environment does not already have them — only
+    ever consulted for what is missing, never overriding a value
+    already present.
+
+    The defensive half of a two-part fix (code review finding on this
+    task's PR): `foot`, launched by a detached waiter with no
+    controlling terminal to notice it failing, cannot connect to a
+    compositor it cannot find, and exits immediately and silently —
+    indistinguishable, from a resident's side of the click, from
+    nothing happening at all. The mechanism this project actually
+    relies on is `modules/home`'s explicit `wayland.windowManager.sway.
+    systemd.enable`, which imports both variables into the systemd user
+    manager's environment as one of Sway's own first startup commands,
+    so every unit the manager starts afterward inherits them the
+    ordinary way. This function exists for the unit that starts before
+    that import lands, the host where it is disabled, or a session this
+    project did not anticipate — recovering enough to still act, rather
+    than failing exactly as silently as the problem it exists to catch.
+
+    Globs `/run/user/$UID` — the parent of `runtime_dir()`'s own `castle`
+    subdirectory, not that subdirectory itself — for the two socket
+    shapes Sway and the Wayland compositor libraries actually create
+    there: `wayland-N` (excluding its own `.lock` sibling) and
+    `sway-ipc.<uid>.<pid>.sock`. Newest by mtime wins when more than one
+    exists (a stale socket from a crashed or preceding session is the
+    plausible case) — a guess, not a guarantee: nothing here can ask
+    Sway which socket is live without already having SWAYSOCK to ask
+    with, and the newest is the best single one available without it.
+    """
+    resolved: dict[str, str] = {}
+    try:
+        uid_dir = pathlib.Path(f"/run/user/{os.getuid()}")
+        if "WAYLAND_DISPLAY" not in os.environ:
+            candidates = sorted(
+                (p for p in uid_dir.glob("wayland-*") if not p.name.endswith(".lock")),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                resolved["WAYLAND_DISPLAY"] = candidates[0].name
+        if "SWAYSOCK" not in os.environ:
+            candidates = sorted(
+                uid_dir.glob("sway-ipc.*.sock"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                resolved["SWAYSOCK"] = str(candidates[0])
+    except OSError:
+        # No /run/user/$UID at all, a permissions fault, anything —
+        # this function's whole contract is "best effort," and an
+        # empty result here is indistinguishable from a host with no
+        # sockets to find, which every caller already handles.
+        return {}
+    return resolved
+
+
+def _sway_modal_exists(timeout: float = 5, env: dict[str, str] | None = None) -> bool:
     """One `swaymsg -t get_tree` round trip, answering whether a
     `castle-modal` window exists right now.
 
@@ -2738,11 +2813,17 @@ def _sway_modal_exists(timeout: float = 5) -> bool:
     not a coincidence: both are "does the window I am about to act on
     the presence or absence of actually exist right now," asked at two
     different moments.
+
+    `env`, when given, is the process environment `swaymsg` runs under
+    — `cmd_notify_waiter` passes its own `_resolve_wayland_env()`-
+    augmented environment so this check can find a `SWAYSOCK` neither
+    of them started with. `None` (the default) inherits this process's
+    own environment unchanged, `subprocess.run`'s ordinary behavior.
     """
     try:
         tree = subprocess.run(
             ["swaymsg", "-t", "get_tree"], check=False, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -2759,8 +2840,12 @@ def _sway_modal_exists(timeout: float = 5) -> bool:
 def cmd_notify_waiter(args: argparse.Namespace) -> int:
     """The detached half of `_fire_notification` (docs/tasks/0034 §3).
     Internal: spawned by the router, never typed by a human. Silent on
-    every failure — this is the same best-effort channel, one process
-    later.
+    every failure but one — this is the same best-effort channel, one
+    process later — with a single exception: a `foot` that was launched
+    but never registers a `castle-modal` window with Sway prints one
+    line to stderr instead of returning silently (see the launch-poll
+    loop below). Every other early return here is either the expected
+    shape of an ordinary run or a genuine "nothing more to say."
 
     **The check-then-launch step is serialized, not merely checked**
     (Codex's cross-model review on this task's PR, agreed as real): two
@@ -2839,13 +2924,20 @@ def cmd_notify_waiter(args: argparse.Namespace) -> int:
     if chosen != NOTIFY_ACTION_NAME:
         return 0
 
+    # Only what was actually missing is added, so a real host's own
+    # environment (in particular one where modules/home's session
+    # import already did this job) is never second-guessed — see
+    # `_resolve_wayland_env`'s own docstring for the mechanism this is
+    # a fallback for, not a replacement of.
+    waiter_env = {**os.environ, **_resolve_wayland_env()}
+
     lock = acquire_lock_bounded(notify_waiter_lock_path(), NOTIFY_WAITER_LOCK_TIMEOUT)
     try:
-        if _sway_modal_exists():
+        if _sway_modal_exists(env=waiter_env):
             try:
                 subprocess.run(
                     ["swaymsg", '[app_id="castle-modal"] focus'], check=False, timeout=5,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=waiter_env,
                 )
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -2857,7 +2949,7 @@ def cmd_notify_waiter(args: argparse.Namespace) -> int:
                     "castle-modal", "--mode", "inbox", "--focus", args.record_id,
                 ],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True,
+                stderr=subprocess.DEVNULL, start_new_session=True, env=waiter_env,
             )
         except OSError:
             return 0
@@ -2868,13 +2960,45 @@ def cmd_notify_waiter(args: argparse.Namespace) -> int:
         # capped to whatever of the budget remains, so one slow
         # `swaymsg` round trip cannot alone blow past the bound.
         deadline = time.monotonic() + NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT
+        registered = False
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            if _sway_modal_exists(timeout=min(1.0, remaining)):
+            if _sway_modal_exists(timeout=min(1.0, remaining), env=waiter_env):
+                registered = True
                 break
             time.sleep(0.1)
+        if not registered:
+            # The one failure this otherwise-silent channel is worth
+            # breaking silence for (code-review finding on this task's
+            # PR): every other early return above is either the
+            # expected shape of an ordinary run (dismissed, expired, no
+            # Sway to ask) or has nothing more to say than the OSError
+            # already would. This one is different — a resident clicked
+            # "open," a window was launched, and swaymsg never once
+            # reported it existing, which is indistinguishable from the
+            # resident's perspective from the click doing nothing at
+            # all, and would otherwise leave zero trace anywhere to
+            # investigate from. Reaches wherever this process's own
+            # stderr goes (see `_fire_notification`'s Popen call) —
+            # a systemd-triggered sweep's own unit journal, or a
+            # hand-run `castle route`'s terminal. Names one concrete,
+            # checkable cause rather than staying generic: a foot
+            # spawned from a systemd user unit with no WAYLAND_DISPLAY
+            # or SWAYSOCK in its environment cannot connect to the
+            # compositor and dies immediately, silently, on its own —
+            # this is the one thing standing between "launched" and
+            # "registered" that this waiter cannot see from here.
+            print(
+                f"castle notify-waiter: launched foot for {args.record_id} but no "
+                f"castle-modal window registered with Sway within "
+                f"{NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT:g}s — the click may have done "
+                "nothing visible. A missing WAYLAND_DISPLAY or SWAYSOCK in this "
+                "process's environment is one known cause (foot cannot connect to "
+                "a compositor it cannot find, and exits before mapping a window).",
+                file=sys.stderr,
+            )
         return 0
     finally:
         if lock is not None:

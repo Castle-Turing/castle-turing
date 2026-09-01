@@ -176,6 +176,27 @@ in
       wayland.windowManager.sway = lib.mkIf swayEnabled {
         enable = true;
         wrapperFeatures.gtk = true;
+        # Home-manager's own default (true on Linux) already does this;
+        # written out explicitly rather than left to that default
+        # because a real caller now depends on it by name. Sway's own
+        # startup imports WAYLAND_DISPLAY, SWAYSOCK and friends into the
+        # systemd user manager's environment (`systemctl --user import-
+        # environment` / `dbus-update-activation-environment --systemd`,
+        # sway's own recommended mechanism — see home-manager's sway
+        # module) as one of its first startup commands, so any unit the
+        # user manager starts afterward — in particular
+        # `castle-dispatch.service`'s detached notify waiter
+        # (docs/tasks/0034-inbox-modal.md §3), launching `foot` with no
+        # controlling terminal to notice it failing — inherits a real
+        # Wayland connection rather than launching into an environment
+        # with nothing to connect to. `agent/castle`'s notify waiter
+        # also resolves both sockets defensively when they are absent
+        # (globbing /run/user/$UID), for a host where this import
+        # mechanism is disabled, races, or is configured differently —
+        # this setting is the mechanism this project believes in;
+        # the waiter's fallback is what keeps a misconfigured or
+        # unusual session from failing silently instead of loudly.
+        systemd.enable = true;
         config = {
           # mako (installed by modules/desktop) is the notification
           # daemon that renders the router's `notify` channel on
