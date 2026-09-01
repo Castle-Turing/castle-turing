@@ -478,16 +478,26 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        The command `castle route` runs to fire a real interruption on
-        the router's `notify` channel (docs/tasks/0009-ambient-intake.md
-        item 5) — invoked as `<command> <title> <body>`. Wired into
-        `CASTLE_NOTIFY_COMMAND`. Default `null`: agent/castle's own
-        fallback (`notify-send` on `$PATH`) applies instead, which is
-        real on any host that also imports `modules/desktop` (which
-        installs mako + libnotify) and a harmless failed exec anywhere
-        else. Set explicitly to `""` on a headless host to no-op the
-        attempt outright rather than let every `castle route` warn on
-        stderr about a missing `notify-send`.
+        The notification command for the router's `notify` channel
+        (docs/tasks/0009-ambient-intake.md item 5). Since
+        docs/tasks/0034-inbox-modal.md §3 it is no longer invoked
+        directly by `castle route`: the router spawns a detached
+        waiter (`castle notify-waiter`) and returns immediately, and
+        the *waiter* runs this command with `--app-name=castle`,
+        `--action=open=Open`, the title, and the body appended — so
+        the value must be a `notify-send`-compatible command, not an
+        arbitrary `<command> <title> <body>` sink. The waiter blocks
+        on the notification's fate: a click focuses an existing
+        castle-modal window or launches one deep-linked to the
+        record; dismissal or expiry ends the waiter silently. Wired
+        into `CASTLE_NOTIFY_COMMAND`. Default `null`: the waiter's
+        own fallback (`notify-send` on `$PATH`) applies instead,
+        which is real on any host that also imports `modules/desktop`
+        (which installs mako + libnotify). A missing notify binary is
+        silent since 0034 (the waiter is best-effort in every branch);
+        only an unparseable value or a failed waiter spawn still warns
+        on `castle route`'s stderr. Set explicitly to `""` on a
+        headless host to skip even spawning the waiter.
 
         Must not contain a literal `"` character — see `stateDir`'s
         description for why (this option is wired through
