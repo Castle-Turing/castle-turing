@@ -552,6 +552,43 @@ in
     def has_modal():
         return any(node.get("app_id") == "castle-modal" for node in walk(swaymsg("get_tree")))
 
+    def picker_index_for(label_substring, about_substring):
+        # Asks castle-modal itself where an item sits in the inbox list,
+        # rather than re-deriving _inbox_items's ordering by hand
+        # (docs/tasks/0034-inbox-modal.md §1): blocking questions sort
+        # ahead of non-blocking ones and all non-proposal questions sort
+        # ahead of every proposal, which a flat id-sort — this file's
+        # own pre-0034 assumption — does not reproduce. A second, piped
+        # invocation rather than reading the live interactive window:
+        # read-only (docs/tasks/0034 §1's --mode inbox piped path
+        # touches nothing but the journal already on disk, which is
+        # already settled by the time either caller below reaches this
+        # point), and immune to any race with the real window's own
+        # cbreak-engaged rendering.
+        #
+        # Matched on the entry's own bracket-line label (e.g. "a change
+        # to review") together with its very next "about:" line (the
+        # originating request's first line) rather than either alone:
+        # two pending questions from different errands can carry the
+        # identical label, and two pending items from the SAME errand
+        # (an ordinary question and that errand's own proposal) can
+        # carry the identical about-line — only the pair is unique.
+        lines = machine.succeed(
+            "su - resident -c 'castle-modal --mode inbox' </dev/null"
+        ).splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not (stripped.startswith("[") and label_substring in stripped):
+                continue
+            following_about = ""
+            if i + 1 < len(lines) and lines[i + 1].strip().startswith("about:"):
+                following_about = lines[i + 1].strip()
+            if about_substring in following_about:
+                return int(stripped.split("]")[0][1:])
+        raise AssertionError(
+            f"no inbox entry matched label={label_substring!r} about={about_substring!r}: {lines}"
+        )
+
     machine.send_key("meta_l-shift-ret")
     retry(lambda last: has_modal())
     machine.screenshot("04-modal-open")
@@ -822,11 +859,14 @@ in
     second_question_id = second_question_path.rsplit("/", 1)[-1][: -len(".md")]
     print(f"OK: a second errand ran itself and raised {second_question_id}")
 
-    # The real chord, on the real Sway session — same naming convention
-    # as "meta_l-shift-ret" above (modules/home/default.nix binds
-    # Mod4+Shift+a to castle-modal --mode answer).
-    machine.send_key("meta_l-shift-a")
+    # The real chord, on the real Sway session — there is only the one
+    # now (docs/tasks/0034-inbox-modal.md): Mod4+Shift+a, the old
+    # answer-mode chord, was removed outright and is not kept as an
+    # alias. The chord opens compose; Tab is what reaches the inbox
+    # list an ordinary question is answered from.
+    machine.send_key("meta_l-shift-ret")
     retry(lambda last: has_modal())
+    machine.send_key("tab")
     # Waited for on screen, not slept past (review round 1, finding 6).
     # has_modal() only proves the foot window exists, and a fixed sleep
     # can lose the keypress outright: `tty.setcbreak` defaults to
@@ -842,24 +882,18 @@ in
     # actually looks like on screen.
     machine.screenshot("08-modal-answer-picker")
 
-    # Oldest first, so four things are waiting by now and this errand's
-    # own question is the third of them: the first errand's question,
-    # the change that errand's turn proposed, this errand's question,
-    # and the change this errand's turn proposed. Pressing a number is
-    # the whole assertion — a resident choosing one thing out of
-    # several by a number they can see, never by a record id they had
-    # to find first.
-    #
-    # Computed rather than hardcoded, and asserted before it is
-    # pressed. The index used to be a literal `2`, back when a turn
-    # filed one question; docs/tasks/0025-approval.md gave every
-    # targeted turn a second, and a literal that silently means a
-    # different record after a future change would answer the wrong
-    # one rather than fail. This fails with a sentence instead.
-    #
-    # The same fold the picker itself applies, re-derived here rather
-    # than imported: a question is pending iff no answer's refs names
-    # it, ordered by full record id.
+    # Four things are waiting by now: the first errand's question, the
+    # change that errand's turn proposed, this errand's question, and
+    # the change this errand's turn proposed. This errand's own question
+    # is the SECOND of them, not the third this file asserted before
+    # 0034: both questions were filed `--blocking` (see dispatchWorker
+    # above), so the inbox's ordering rule — blocking questions first,
+    # non-proposal questions ahead of every proposal
+    # (docs/tasks/0034-inbox-modal.md §1) — does not reorder these two
+    # relative to each other; it moves proposal_id (the FIRST errand's
+    # own proposed change) from second place to third, behind both
+    # questions rather than between them. `picker_index_for` asks the
+    # tool rather than assuming that stays true.
     all_questions = machine.succeed(
         "su - resident -c 'ls ${testStateDir}/journal/*-question-*.md'"
     ).split()
@@ -873,10 +907,11 @@ in
         if path.rsplit("/", 1)[-1][: -len(".md")] not in answered_refs
     )
     assert second_question_id in pending_order, pending_order
-    picker_index = pending_order.index(second_question_id) + 1
-    assert picker_index == 3, (
-        f"expected this errand's question to be third in the picker, got "
-        f"{picker_index} of {pending_order}"
+    picker_index = picker_index_for("needs your answer", "${answerComplaintBody}")
+    assert picker_index == 2, (
+        f"expected this errand's question to be second in the inbox list "
+        f"(both questions are blocking, filed in order, and no proposal "
+        f"outranks a question), got {picker_index}"
     )
     machine.send_key(str(picker_index))
     # The sleeps below stay: once the keypress is read, the tty is
@@ -1051,8 +1086,12 @@ in
     checkout_state_before = machine.succeed(checkout_probe)
     generation_before = machine.succeed("readlink -f /run/current-system")
 
-    machine.send_key("meta_l-shift-a")
+    # The one remaining chord opens compose; Tab reaches the inbox list
+    # a proposed change is reviewed from (docs/tasks/0034-inbox-modal.md
+    # — Mod4+Shift+a is gone, not aliased).
+    machine.send_key("meta_l-shift-ret")
     retry(lambda last: has_modal())
+    machine.send_key("tab")
     machine.wait_for_text("aiting on you")
     machine.screenshot("10-modal-picker-with-changes")
 
@@ -1074,9 +1113,16 @@ in
     )
     assert len(still_pending) == 4, still_pending
     assert proposal_id in still_pending, (still_pending, proposal_id)
-    review_index = still_pending.index(proposal_id) + 1
+    # Still second, but for a different reason than the flat id-sort
+    # this file relied on before 0034: the ONLY pending non-proposal
+    # question left (the first errand's own, never answered) fills
+    # position one, and proposal_id — chronologically the first change
+    # any turn ever proposed — is the earliest of the three pending
+    # proposals, which is what actually puts it second rather than a
+    # coincidence of filing order surviving intact.
+    review_index = picker_index_for("a change to review", "${complaintBody}")
     assert review_index == 2, (
-        f"expected the first errand's change to be second in the picker, got "
+        f"expected the first errand's change to be second in the inbox list, got "
         f"{review_index} of {still_pending}"
     )
     machine.send_key(str(review_index))
