@@ -279,3 +279,45 @@ left you to make.
   other seat's result (today: only the applier) keeps using its own
   body — the pre-0034 behavior `_write_apply_result`'s own docstring
   already documented as the contract.
+
+## Post-review fixes (recorded by the session answering Codex's PR review)
+
+- **`castle-dispatch.service` needed `KillMode = "process"`.** The
+  detached waiter's `setsid` leaves the unit's *process group* but not
+  its *cgroup*, and systemd's default `KillMode` (`control-group`)
+  kills every process remaining in a oneshot's cgroup the moment its
+  `ExecStart` exits — not only on an explicit `systemctl stop`. Every
+  waiter spawned by an automatic (systemd-triggered) sweep was
+  therefore killed out from under it the instant `castle dispatch`
+  returned, silently discarding the notification's click handler; only
+  a manually invoked `castle route` (no enclosing unit) worked as
+  designed. `KillMode = "process"` confines the kill to the tracked
+  main process, already exited by the time this matters, and nothing
+  else in the sweep depended on the wider net — a runaway worker
+  tenant is reined in by `castle work`'s own `start_new_session=True` +
+  `os.killpg` on timeout, not by systemd.
+- **A `--focus`ed result that backs a proposal now opens that
+  proposal's review flow, not its own raw body.** The router notifies
+  for both records a proposal files (the worker result and the
+  proposal question wrapping it), so clicking the *result*
+  notification reached `_open_focus_target`'s unconditional result
+  branch — rendering a tenant's raw turn output with none of review
+  mode's diff-boundary scoping, vocabulary rule, or decision framing,
+  and marking it "read" the instant it was shown, silently bypassing
+  the same exclusion `_inbox_items` already applies when listing
+  proposals' backing results as unread.
+- **Esc now backs a resident out to the inbox list, not out of the
+  modal entirely, when an item was opened by digit from that list.**
+  `_answer_flow` and `run_review_for` always returned a plain exit
+  code, which `run_inbox` read as "end the invocation" regardless of
+  where the call came from — so dismissing a question or proposal
+  opened from the list closed the whole modal, contrary to this
+  brief's own §1 ("`Esc` backs out one level; `Esc` at the top closes
+  the modal"), while Esc inside answer mode's free-text entry had no
+  meaning at all and was typed as a literal character. Both flows now
+  take an opt-in `from_inbox` flag, peeking one keypress the same way
+  the compose view already does; only `_open_inbox_item` (items opened
+  from the list itself) passes it. `_open_focus_target` deliberately
+  does not: a dismissed `--focus` target keeps its existing,
+  already-tested close-when-done behavior, since that invocation opens
+  directly on one item and has no list yet to back out to.

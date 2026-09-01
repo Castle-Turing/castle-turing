@@ -718,6 +718,27 @@ in
       unitConfig.ConditionUser = "!@system";
       serviceConfig = {
         Type = "oneshot";
+        # The default KillMode (control-group) kills every process left
+        # in this unit's cgroup the moment the oneshot's ExecStart
+        # process exits — not just on an explicit `systemctl stop`, but
+        # on the ordinary transition out of "active" that follows a
+        # completed sweep. `agent/castle`'s notify path deliberately
+        # detaches a waiter (setsid) precisely so it can outlive the
+        # sweep and block on a notification for as long as the daemon
+        # keeps it up, but `start_new_session=True` only leaves the
+        # unit's *process group* — it stays in the unit's *cgroup*,
+        # which is what control-group cleanup acts on, so every waiter
+        # spawned by an automatic (systemd-triggered) sweep was killed
+        # out from under it the instant `castle dispatch` returned,
+        # silently discarding the notification's click handler. `process`
+        # confines the kill to the tracked main process — already exited
+        # by the time this matters — leaving the waiter to run to its
+        # own completion, exactly as a manually invoked `castle route`
+        # (with no enclosing unit at all) already does. Nothing else in
+        # this sweep depends on control-group's wider net: a runaway
+        # worker tenant is reined in by `castle work`'s own
+        # start_new_session=True + os.killpg on timeout, not by systemd.
+        KillMode = "process";
         ExecStart = "${castleCli}/bin/castle dispatch";
         # %h — the resident's home directory. It used to be load-
         # bearing in the worst way: `castle work` fell back to its

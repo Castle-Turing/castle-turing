@@ -677,12 +677,17 @@ def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
     return _answer_flow(castle, question, records, out)
 
 
-def _answer_flow(castle, question, records: dict, out=sys.stdout) -> int:
+def _answer_flow(castle, question, records: dict, out=sys.stdout, *, from_inbox: bool = False) -> int:
     """Show one chosen question whole and file the typed answer — the
     half of answer mode that runs after a question is in hand. Split
     from run_answer so the inbox (docs/tasks/0034) opens the identical
     flow rather than a second copy of it; every behavior below predates
-    the split and is unchanged by it."""
+    the split and is unchanged by it, except `from_inbox`: the inbox's
+    own navigation contract ("Esc backs out one level", docs/tasks/0034
+    §1) is opt-in, because the standalone `--mode answer` picker this
+    flow also serves has no list to back out to, and Esc there is
+    ordinary typed text, as it always was.
+    """
     # The full body, verbatim, never truncated. The picker's first-line
     # preview is a convenience for choosing among several; letting a
     # resident answer on a truncated understanding of the question is a
@@ -693,12 +698,30 @@ def _answer_flow(castle, question, records: dict, out=sys.stdout) -> int:
     if about:
         print(f"about: {about}", file=out)
     print(file=out)
-    print("Answer in your own words.", file=out)
-    print("End with a line containing just '.' (or Ctrl-D).", file=out)
-    print(file=out)
+
+    if from_inbox:
+        # One keypress peeked in cbreak, the same trick the compose view
+        # uses: Esc backs out to the inbox list without filing anything,
+        # and anything else is the first character of the answer, handed
+        # to `_read_typed_body` as its prefix.
+        first = _read_one_key_cbreak(
+            out,
+            "Answer in your own words.",
+            "End with a line containing just '.' (or Ctrl-D).",
+            "",
+        )
+        if first == "\x1b":
+            return _BACK_TO_INBOX
+        prefix = "" if first in ("\n", "\r", "\x04", "") else first
+        body = _read_typed_body(prefix)
+    else:
+        print("Answer in your own words.", file=out)
+        print("End with a line containing just '.' (or Ctrl-D).", file=out)
+        print(file=out)
+        body = _read_typed_body()
 
     try:
-        _, recorded_fact = castle.file_answer(question_id=question.id, body=_read_typed_body())
+        _, recorded_fact = castle.file_answer(question_id=question.id, body=body)
     except castle.AnswerRefused as exc:
         # Empty body, or the raced case: the question was answered by
         # another window or another process between the picker showing
@@ -1255,7 +1278,9 @@ def _review_confirmation(decision: str, *, authorizes_apply: bool) -> str:
     return REVIEW_CONFIRMATIONS[decision]
 
 
-def run_review_for(castle, question, records: dict, out=sys.stdout, *, interactive: bool) -> int:
+def run_review_for(
+    castle, question, records: dict, out=sys.stdout, *, interactive: bool, from_inbox: bool = False
+) -> int:
     """Decide exactly one proposed change, and never more than one per
     invocation (no batching, no approve-all: a keypress that spans more
     than one authorization is the "spray of decisions" this project's
@@ -1263,7 +1288,12 @@ def run_review_for(castle, question, records: dict, out=sys.stdout, *, interacti
 
     Returns 0 for a decision and for a dismissal alike — looking and
     choosing not to decide is a successful use of this surface, and it
-    writes nothing at all.
+    writes nothing at all. `from_inbox` changes only the dismissal case
+    (docs/tasks/0034 §1, "Esc backs out one level"): opened from the
+    inbox, dismissing returns the caller to the list instead of ending
+    the invocation. A decision still ends it either way — the two
+    writing flows' close-when-done semantics on completion are
+    unchanged, and the chord is one keypress away.
 
     **A proposal that resolves to nothing is refused before the keys
     are offered, not after they are pressed.** `file_answer` refuses it
@@ -1303,7 +1333,7 @@ def run_review_for(castle, question, records: dict, out=sys.stdout, *, interacti
         # observation window nothing here declared in advance
         # (Proposal 06).
         print(file=out)
-        return 0
+        return _BACK_TO_INBOX if from_inbox else 0
 
     body = ""
     if decision != "defer":
@@ -1694,17 +1724,45 @@ def _show_inbox_list(castle, records: dict, items: list, out):
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+# Returned by `_answer_flow`/`run_review_for` when `from_inbox=True` and
+# the resident dismissed without deciding or answering (docs/tasks/0034
+# §1, "Esc backs out one level"): `run_inbox` treats it exactly like the
+# `None` `_open_inbox_item` already returns for a read result — redraw
+# the list. Only `_open_inbox_item` (items opened by digit from the list
+# itself) ever passes `from_inbox=True`; a plain int return still means
+# "end the invocation" everywhere else — the standalone `--mode answer`/
+# `--mode review` entry points, and `_open_focus_target`'s own writing
+# flows, which keep their existing close-when-done behavior on a
+# dismissal (there is no list in this invocation yet to back out to).
+_BACK_TO_INBOX = object()
+
+
+def _proposal_question_for_result(castle, records: dict, result_id: str):
+    """The proposal question a result backs, if any (the reverse of the
+    exclusion `_inbox_items` applies to the same `refs[1]` relationship)
+    — `refs[1]` on any question ever stamped `proposal-sha256`, decided
+    or not. None for an ordinary result."""
+    for other in records.values():
+        if (
+            other.type == "question"
+            and other.fields.get(castle.PROPOSAL_SHA256_FIELD, "").strip()
+            and len(other.refs) >= 2
+            and other.refs[1] == result_id
+        ):
+            return other
+    return None
+
+
 def _open_inbox_item(castle, kind: str, rec, records: dict, seen: set, out):
     """Open the view an item needs (docs/tasks/0034 §1): a question is
     answer mode's flow, a change is review mode's, a result is its own
-    body. Returns an exit code to end the invocation with, or None to
-    return to the list (only the result view backs out — the two
-    writing flows keep their existing close-when-done semantics, and
-    the chord is one keypress away)."""
+    body. Returns an exit code to end the invocation with, `_BACK_TO_INBOX`
+    to redraw the list, or None to return to the list directly (the
+    result view's own way of backing out)."""
     if kind == "question":
-        return _answer_flow(castle, rec, records, out)
+        return _answer_flow(castle, rec, records, out, from_inbox=True)
     if kind == "proposal":
-        return run_review_for(castle, rec, records, out, interactive=True)
+        return run_review_for(castle, rec, records, out, interactive=True, from_inbox=True)
     _result_view(castle, rec, seen, out)
     return None
 
@@ -1715,15 +1773,27 @@ def _open_focus_target(castle, focus: str, records: dict, seen: set, out):
     to fall through to the inbox list (a focused result backs out to it;
     anything unopenable degrades to the list with one plain line, never
     an error — the notification that carried this id may be hours old,
-    and the world may have moved on)."""
+    and the world may have moved on).
+
+    A result that backs a proposal is routed to that proposal's review
+    flow instead of being shown raw: the notification that carries a
+    proposal's own backing result id (the router notifies for both
+    records `_file_proposal_question` links) must land on the same
+    decision-framed view the inbox list's own filtering already sends
+    every other path to, never on an unredacted worker turn body with
+    no boundary statement and no decision recorded.
+    """
     rec = records.get(focus) or castle.load_journal_record(focus)
     if rec is None:
         print("That one isn't here any more.", file=out)
         print(file=out)
         return None
     if rec.type == "result":
-        _result_view(castle, rec, seen, out)
-        return None
+        proposal_question = _proposal_question_for_result(castle, records, rec.id)
+        if proposal_question is None:
+            _result_view(castle, rec, seen, out)
+            return None
+        rec = proposal_question
     if rec.type == "question":
         answered = {
             ref for other in records.values() if other.type == "answer" for ref in other.refs
@@ -1817,6 +1887,12 @@ def run_inbox(castle, out=sys.stdout, focus: str | None = None) -> int:
     # the inbox instead, expanded on the record it was told about.
     view = "compose"
     if focus:
+        # `_open_focus_target` never returns `_BACK_TO_INBOX` — it does
+        # not pass `from_inbox` to the writing flows, on purpose: a
+        # dismissed --focus target keeps its own tested close-when-done
+        # behavior rather than falling into a list this invocation never
+        # otherwise showed (only a read result, or an id degrading to
+        # "not found"/"already handled", returns plain None here).
         code = _open_focus_target(castle, focus, records, seen, out)
         if code is not None:
             return code
@@ -1839,6 +1915,8 @@ def run_inbox(castle, out=sys.stdout, focus: str | None = None) -> int:
             view = "compose"
             continue
         code = _open_inbox_item(castle, picked[0], picked[1], records, seen, out)
+        if code is _BACK_TO_INBOX:
+            code = None
         if code is not None:
             return code
         # Back from a result view: re-derive before redrawing, so a
