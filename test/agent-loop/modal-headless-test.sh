@@ -619,8 +619,8 @@ log "status mode: an unanswered question still overlays every one of these state
 "$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
   --body "Should I try a different approach?" >/dev/null
 STATUS_OVERLAY="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you — press Mod4+Shift+a to answer$" \
-  || fail "the ', waiting on you — press Mod4+Shift+a to answer' overlay did not compose with an outcome label"
+echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you — press Mod4+Shift+Return to answer$" \
+  || fail "the ', waiting on you — press Mod4+Shift+Return to answer' overlay did not compose with an outcome label"
 "$CASTLE" validate || fail "the journal did not validate after the outcome/claim fixtures"
 
 # ---------------------------------------------------------------------
@@ -657,16 +657,16 @@ REQ_TWOQ="$("$CASTLE" ask "An errand whose worker asks twice.")"
 Q_FIRST="$("$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_TWOQ" --body "First question?")"
 STATUS_Q1="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
+echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+Return to answer$" \
   || fail "an unanswered question did not raise the overlay: $(echo "$STATUS_Q1" | grep "$REQ_TWOQ" || true)"
 "$CASTLE" answer "$Q_FIRST" "Yes, go ahead." >/dev/null
 STATUS_Q1A="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
+echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+Return to answer$" \
   && fail "an answered question still reads as waiting on the resident"
 "$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_TWOQ" --body "Second question, after the first was answered?" >/dev/null
 STATUS_Q2="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
+echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+Return to answer$" \
   || fail "a SECOND question went unnoticed because an earlier one had been answered — the overlay is not pairing answers with questions"
 "$CASTLE" validate || fail "the journal does not validate after the two-question fixture"
 
@@ -1069,7 +1069,7 @@ drive_modal "$WORKDIR/status-pause.txt" --mode status -- \
 [ "$(transcript_rc "$WORKDIR/status-pause.txt")" = "0" ] || fail "status mode did not exit 0 after dismissal"
 grep -q "asked: Answer-mode errand nine" "$WORKDIR/status-pause.txt" \
   || fail "the status listing did not render before the pause"
-grep -q "waiting on you — press Mod4+Shift+a to answer" "$WORKDIR/status-pause.txt" \
+grep -q "waiting on you — press Mod4+Shift+Return to answer" "$WORKDIR/status-pause.txt" \
   || fail "the status overlay does not name the chord that answers the question it is reporting"
 EMPTY_STATUS_STATE="$WORKDIR/empty-status-state"
 mkdir -p "$EMPTY_STATUS_STATE"
@@ -1798,7 +1798,7 @@ REQ_ALLPROP="$("$CASTLE" ask "ALLPROP-FIXTURE: an errand whose only unanswered q
 plant_bare_proposal "$REQ_ALLPROP" >/dev/null
 "$CASTLE" validate || fail "the all-proposal overlay fixture does not validate"
 STATUS_ALLPROP="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_ALLPROP" | grep -q "^\[$REQ_ALLPROP\] requested — waiting on you — press Mod4+Shift+a to review\$" \
+echo "$STATUS_ALLPROP" | grep -q "^\[$REQ_ALLPROP\] requested — waiting on you — press Mod4+Shift+Return to review\$" \
   || fail "an errand waiting on a proposal alone did not say 'review': $(echo "$STATUS_ALLPROP" | grep "$REQ_ALLPROP" || true)"
 
 REQ_MIXED="$("$CASTLE" ask "MIXED-FIXTURE: an errand waiting on both a proposal and an ordinary question.")"
@@ -1807,7 +1807,7 @@ REQ_MIXED="$("$CASTLE" ask "MIXED-FIXTURE: an errand waiting on both a proposal 
 plant_bare_proposal "$REQ_MIXED" >/dev/null
 "$CASTLE" validate || fail "the mixed overlay fixture does not validate"
 STATUS_MIXED="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_MIXED" | grep -q "^\[$REQ_MIXED\] requested — waiting on you — press Mod4+Shift+a to see what's waiting\$" \
+echo "$STATUS_MIXED" | grep -q "^\[$REQ_MIXED\] requested — waiting on you — press Mod4+Shift+Return to see what's waiting\$" \
   || fail "an errand waiting on both a proposal and an ordinary question did not use the neutral wording: $(echo "$STATUS_MIXED" | grep "$REQ_MIXED" || true)"
 
 log "all assertions passed"

@@ -241,3 +241,22 @@ exact new wording. The read cursor is append-only too: never rewrite
 with what you find in the code, stop and say so in your report rather
 than resolving it silently; record every judgment call this brief
 left you to make.
+
+## Implementation deviations (recorded by the implementing session)
+
+- `notify-send`'s action flag is spelled `--action=open=Open`, not
+  `--action=open,Open` as this brief wrote: the real syntax is
+  `[NAME=]Text` (verified against notify-send 0.8.8's own help). The
+  mechanism is otherwise exactly as designed.
+- "`Enter` on an item" is realized as the established one-keypress
+  digit grammar: the list is numbered and a digit opens an item. A
+  bare Enter deliberately opens nothing — opening a result spends the
+  read cursor, and a reflex key must not mark something read.
+- Inbox category 1 lists every unanswered non-proposal question,
+  blocking ones first, not blocking questions alone: a non-blocking
+  question the answer picker offers must not be absent from the inbox,
+  or the surface could hide a question by construction.
+- Question notifications keep the question's own words as the body
+  (they are the actionable text; the request's words sit behind the
+  click) plus a hint naming the one remaining chord; the request-words
+  body applies to results, as specified.
