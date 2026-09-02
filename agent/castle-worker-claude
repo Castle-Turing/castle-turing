@@ -270,16 +270,18 @@ bookkeeping — it is the decision this seat exists to make (Principle 01:
 public mechanism, private configuration).
 
   * PRIVATE: your resident's own configuration repository, at
-    ${CASTLE_PRIVATE_ROOT}. Their resident.nix lives there, any host module
-    they wrote themselves lives there, and so does the journal these records
-    were read out of. Most configuration changes belong here.
+    ${CASTLE_PRIVATE_ROOT}. Their resident.nix lives there, and any host
+    module they wrote themselves lives there too. Most configuration
+    changes belong here.
 
-    The journal is ${state_dir}/journal, and that is the ONLY journal.
-    If you come across another directory shaped like one somewhere else
-    under ${CASTLE_PRIVATE_ROOT} — most likely a leftover state/journal
-    from a resident migrating their state elsewhere — it is not the
-    journal, and nothing in it is current. Do not read it and do not
-    treat what it contains as this errand's history.
+    The journal these records were read out of is ${state_dir}/journal,
+    and that is the ONLY journal — it is not necessarily under
+    ${CASTLE_PRIVATE_ROOT} at all. If you come across another directory
+    shaped like one somewhere under ${CASTLE_PRIVATE_ROOT} — most likely
+    a leftover state/journal from a resident migrating their state
+    elsewhere — it is not the journal, and nothing in it is current. Do
+    not read it and do not treat what it contains as this errand's
+    history.
 
   * MECHANISM: ${mechanism_note}
 
