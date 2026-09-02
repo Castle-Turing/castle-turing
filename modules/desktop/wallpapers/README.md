@@ -33,14 +33,10 @@ loader in `modules/desktop`.
 
 ## Licensing
 
-This repository does not currently have a top-level `LICENSE` file (as
-of this writing, the license question is otherwise unresolved for the
-whole tree — see the top-level `README.md`'s non-negotiables, which is
-silent on it too). Until that's settled, this artwork carries no license
-grant beyond whatever applies to the rest of the repo by default. Do not
-treat it as more freely reusable than the code around it just because
-it's an image; if you need a real answer, ask before redistributing it
-outside this project.
+Covered by the repository's top-level MIT `LICENSE`, same as the code
+around it — artwork is deliberately not licensed separately (see
+`docs/tasks/0037-mit-license.md`). The image is AI-generated, so there
+is no third-party rights holder behind it.
 
 ## Where it lands
 

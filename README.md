@@ -58,3 +58,7 @@ documented in [`docs/private-layer.md`](docs/private-layer.md).
    Nothing personal is ever committed to this tree, including in history.
 2. A feature that can't split into public mechanism + private configuration
    is a design smell; its design is not done.
+
+## License
+
+Everything in this repo is [MIT-licensed](LICENSE), artwork included.
