@@ -7,7 +7,8 @@ reserved — the stated principle and the legal reality were opposites.
 
 **Decision (resident, 2026-09-01): MIT.** Permissive fits "open by
 construction": a stranger adopting the framework this weekend should
-face no obligations beyond attribution. Copyleft (GPL/AGPL) was the
+face no obligation beyond preserving the copyright and license notices
+in copies or substantial portions they redistribute. Copyleft (GPL/AGPL) was the
 considered alternative and was not chosen — the private-layer split
 already makes a resident's own configuration a separate repo, not a
 derivative work in most readings, so copyleft's leverage over the case
