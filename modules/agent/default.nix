@@ -478,16 +478,26 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        The command `castle route` runs to fire a real interruption on
-        the router's `notify` channel (docs/tasks/0009-ambient-intake.md
-        item 5) — invoked as `<command> <title> <body>`. Wired into
-        `CASTLE_NOTIFY_COMMAND`. Default `null`: agent/castle's own
-        fallback (`notify-send` on `$PATH`) applies instead, which is
-        real on any host that also imports `modules/desktop` (which
-        installs mako + libnotify) and a harmless failed exec anywhere
-        else. Set explicitly to `""` on a headless host to no-op the
-        attempt outright rather than let every `castle route` warn on
-        stderr about a missing `notify-send`.
+        The notification command for the router's `notify` channel
+        (docs/tasks/0009-ambient-intake.md item 5). Since
+        docs/tasks/0034-inbox-modal.md §3 it is no longer invoked
+        directly by `castle route`: the router spawns a detached
+        waiter (`castle notify-waiter`) and returns immediately, and
+        the *waiter* runs this command with `--app-name=castle`,
+        `--action=open=Open`, the title, and the body appended — so
+        the value must be a `notify-send`-compatible command, not an
+        arbitrary `<command> <title> <body>` sink. The waiter blocks
+        on the notification's fate: a click focuses an existing
+        castle-modal window or launches one deep-linked to the
+        record; dismissal or expiry ends the waiter silently. Wired
+        into `CASTLE_NOTIFY_COMMAND`. Default `null`: the waiter's
+        own fallback (`notify-send` on `$PATH`) applies instead,
+        which is real on any host that also imports `modules/desktop`
+        (which installs mako + libnotify). A missing notify binary is
+        silent since 0034 (the waiter is best-effort in every branch);
+        only an unparseable value or a failed waiter spawn still warns
+        on `castle route`'s stderr. Set explicitly to `""` on a
+        headless host to skip even spawning the waiter.
 
         Must not contain a literal `"` character — see `stateDir`'s
         description for why (this option is wired through
@@ -708,6 +718,27 @@ in
       unitConfig.ConditionUser = "!@system";
       serviceConfig = {
         Type = "oneshot";
+        # The default KillMode (control-group) kills every process left
+        # in this unit's cgroup the moment the oneshot's ExecStart
+        # process exits — not just on an explicit `systemctl stop`, but
+        # on the ordinary transition out of "active" that follows a
+        # completed sweep. `agent/castle`'s notify path deliberately
+        # detaches a waiter (setsid) precisely so it can outlive the
+        # sweep and block on a notification for as long as the daemon
+        # keeps it up, but `start_new_session=True` only leaves the
+        # unit's *process group* — it stays in the unit's *cgroup*,
+        # which is what control-group cleanup acts on, so every waiter
+        # spawned by an automatic (systemd-triggered) sweep was killed
+        # out from under it the instant `castle dispatch` returned,
+        # silently discarding the notification's click handler. `process`
+        # confines the kill to the tracked main process — already exited
+        # by the time this matters — leaving the waiter to run to its
+        # own completion, exactly as a manually invoked `castle route`
+        # (with no enclosing unit at all) already does. Nothing else in
+        # this sweep depends on control-group's wider net: a runaway
+        # worker tenant is reined in by `castle work`'s own
+        # start_new_session=True + os.killpg on timeout, not by systemd.
+        KillMode = "process";
         ExecStart = "${castleCli}/bin/castle dispatch";
         # %h — the resident's home directory. It used to be load-
         # bearing in the worst way: `castle work` fell back to its

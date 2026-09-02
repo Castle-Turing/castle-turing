@@ -35,6 +35,27 @@ trap 'rm -rf "$WORKDIR"' EXIT
 log() { printf '>>> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# docs/tasks/0034-inbox-modal.md §3 moved the whole notify-send
+# invocation into a detached waiter process (`castle notify-waiter`)
+# that the router does not wait on — "the dispatch sweep must never
+# block on notification interaction" — so `$CASTLE_NOTIFY_LOG` can lag
+# a few milliseconds behind `castle dispatch`/`castle route` returning,
+# where every assertion below used to read it the instant control came
+# back. Polls rather than sleeping a fixed amount: bounded at ~10s so a
+# genuine failure still fails promptly, and fast on the happy path
+# (0.1s granularity) since the notify-stub this file uses is a
+# synchronous script with no real --wait to block on. Returns 1 rather
+# than failing itself, so callers keep the existing "$(cat log)" in
+# their own failure message.
+wait_for_notify_log() {
+  local pattern="$1" tries=100 i
+  for ((i = 0; i < tries; i++)); do
+    grep -q -- "$pattern" "$CASTLE_NOTIFY_LOG" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  grep -q -- "$pattern" "$CASTLE_NOTIFY_LOG" 2>/dev/null
+}
+
 # Committing needs an identity, and a developer's own git config must
 # not decide whether this test passes. Scoped to this process only.
 export GIT_AUTHOR_NAME="castle-approval-fixture"
@@ -280,18 +301,20 @@ STAMP="$(sed -n 's/^proposal-sha256: //p' "$JOURNAL/$Q1.md")"
   || fail "the stamped hash $STAMP is not sha256sum's $(sha256_of "$R1") of the result file"
 
 log "  -- the notification a resident receives says what it is and that nothing was applied"
-grep -q 'Nothing has been applied' "$CASTLE_NOTIFY_LOG" \
+wait_for_notify_log 'Nothing has been applied' \
   || fail "no notification carried the proposal's own first line: $(cat "$CASTLE_NOTIFY_LOG")"
 # "answer" names the wrong act on a proposed change, on the only push
 # channel this system has and the one surface bound hardest by "no
 # internal vocabulary" — the same defect `_show_picker`'s `action`
 # parameter and `_errand_state`'s three-way verb already fix one screen
-# over. The chord itself is unchanged and must stay unchanged:
-# `Mod4+Shift+a` is a real binding in the `modules/home` keybindings
-# attrset — CHORD COUPLING, same as the two in `agent/castle`.
-grep -q 'Press Mod4+Shift+a to review' "$CASTLE_NOTIFY_LOG" \
+# over. The chord ITSELF changed since this test was written:
+# docs/tasks/0034-inbox-modal.md removed `Mod4+Shift+a` outright —
+# "one chord for everything" — so the hint below names the one chord
+# that remains, `Mod4+Shift+Return`. CHORD COUPLING, same as the two
+# in `agent/castle`: change the wording there and grep for it here.
+grep -q 'Press Mod4+Shift+Return to review' "$CASTLE_NOTIFY_LOG" \
   || fail "the proposal notification does not tell the resident how to reach it, in the right verb: $(cat "$CASTLE_NOTIFY_LOG")"
-grep -q 'Press Mod4+Shift+a to answer' "$CASTLE_NOTIFY_LOG" \
+grep -q 'Press Mod4+Shift+Return to answer' "$CASTLE_NOTIFY_LOG" \
   && fail "the proposal notification still tells the resident to ANSWER a change: $(cat "$CASTLE_NOTIFY_LOG")"
 
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after a proposal is filed"
@@ -374,7 +397,7 @@ REQ_ORDINARY="$("$CASTLE" ask "APPROVAL-FIXTURE-ORDINARY: an invented complaint 
 ORDINARY_Q="$("$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_ORDINARY" --body "APPROVAL-FIXTURE-ORDINARY-QUESTION: an invented ordinary question, not a change.")"
 "$CASTLE" route >/dev/null
-grep -q 'APPROVAL-FIXTURE-ORDINARY-QUESTION.*Press Mod4+Shift+a to answer' "$CASTLE_NOTIFY_LOG" \
+wait_for_notify_log 'APPROVAL-FIXTURE-ORDINARY-QUESTION.*Press Mod4+Shift+Return to answer' \
   || fail "an ordinary question's notification no longer names answering: $(cat "$CASTLE_NOTIFY_LOG")"
 "$CASTLE" answer "$ORDINARY_Q" "An invented reply." >/dev/null
 

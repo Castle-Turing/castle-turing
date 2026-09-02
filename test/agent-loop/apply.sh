@@ -43,6 +43,25 @@ WORKDIR="$(cd "$WORKDIR" && pwd -P)"
 log() { printf '>>> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# docs/tasks/0034-inbox-modal.md §3 moved the whole notify-send
+# invocation into a detached waiter process (`castle notify-waiter`)
+# that the router does not wait on — "the dispatch sweep must never
+# block on notification interaction" — so `$CASTLE_NOTIFY_LOG` can lag
+# a few milliseconds behind the command that triggers it returning.
+# Polls rather than sleeping a fixed amount: bounded at ~10s so a
+# genuine failure still fails promptly, and fast on the happy path
+# (0.1s granularity) since the notify-stub this file uses is a
+# synchronous script with no real --wait to block on. Returns 1 rather
+# than failing itself, so callers keep their own "$(cat log)" message.
+wait_for_notify_log() {
+  local pattern="$1" tries=100 i
+  for ((i = 0; i < tries; i++)); do
+    grep -q -- "$pattern" "$CASTLE_NOTIFY_LOG" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  grep -q -- "$pattern" "$CASTLE_NOTIFY_LOG" 2>/dev/null
+}
+
 # Committing needs an identity, and a developer's own git config must
 # not decide whether this test passes.
 export GIT_AUTHOR_NAME="castle-apply-fixture"
@@ -357,8 +376,7 @@ log "  -- and the commit it made is a FIELD, not a sentence something would have
   || fail "the record's apply-commit is not the commit the apply made: field says [$(field_of "$AP1" apply-commit)], repository says [$(git -C "$PRIVATE" rev-parse HEAD)]"
 
 log "  -- and the resident is told, in the words drafted for that one line"
-grep -q 'The change you approved is now in your configuration repository. It was not checked, and nothing was activated.' \
-  "$CASTLE_NOTIFY_LOG" \
+wait_for_notify_log 'The change you approved is now in your configuration repository. It was not checked, and nothing was activated.' \
   || fail "the apply's notification is not the drafted line: $(cat "$CASTLE_NOTIFY_LOG")"
 
 log "  -- and the status surface stops saying it is waiting, and says what happened instead"

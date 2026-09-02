@@ -619,8 +619,8 @@ log "status mode: an unanswered question still overlays every one of these state
 "$CASTLE" record --type question --provenance requested --seat worker --refs "$REQ_FAILED" \
   --body "Should I try a different approach?" >/dev/null
 STATUS_OVERLAY="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you — press Mod4+Shift+a to answer$" \
-  || fail "the ', waiting on you — press Mod4+Shift+a to answer' overlay did not compose with an outcome label"
+echo "$STATUS_OVERLAY" | grep -q "^\[$REQ_FAILED\] requested — failed — castle work $REQ_FAILED to retry, waiting on you — press Mod4+Shift+Return to answer$" \
+  || fail "the ', waiting on you — press Mod4+Shift+Return to answer' overlay did not compose with an outcome label"
 "$CASTLE" validate || fail "the journal did not validate after the outcome/claim fixtures"
 
 # ---------------------------------------------------------------------
@@ -657,16 +657,16 @@ REQ_TWOQ="$("$CASTLE" ask "An errand whose worker asks twice.")"
 Q_FIRST="$("$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_TWOQ" --body "First question?")"
 STATUS_Q1="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
+echo "$STATUS_Q1" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+Return to answer$" \
   || fail "an unanswered question did not raise the overlay: $(echo "$STATUS_Q1" | grep "$REQ_TWOQ" || true)"
 "$CASTLE" answer "$Q_FIRST" "Yes, go ahead." >/dev/null
 STATUS_Q1A="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
+echo "$STATUS_Q1A" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+Return to answer$" \
   && fail "an answered question still reads as waiting on the resident"
 "$CASTLE" record --type question --provenance requested --seat worker \
   --refs "$REQ_TWOQ" --body "Second question, after the first was answered?" >/dev/null
 STATUS_Q2="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+a to answer$" \
+echo "$STATUS_Q2" | grep -q "^\[$REQ_TWOQ\] requested — waiting on you — press Mod4+Shift+Return to answer$" \
   || fail "a SECOND question went unnoticed because an earlier one had been answered — the overlay is not pairing answers with questions"
 "$CASTLE" validate || fail "the journal does not validate after the two-question fixture"
 
@@ -1069,7 +1069,7 @@ drive_modal "$WORKDIR/status-pause.txt" --mode status -- \
 [ "$(transcript_rc "$WORKDIR/status-pause.txt")" = "0" ] || fail "status mode did not exit 0 after dismissal"
 grep -q "asked: Answer-mode errand nine" "$WORKDIR/status-pause.txt" \
   || fail "the status listing did not render before the pause"
-grep -q "waiting on you — press Mod4+Shift+a to answer" "$WORKDIR/status-pause.txt" \
+grep -q "waiting on you — press Mod4+Shift+Return to answer" "$WORKDIR/status-pause.txt" \
   || fail "the status overlay does not name the chord that answers the question it is reporting"
 EMPTY_STATUS_STATE="$WORKDIR/empty-status-state"
 mkdir -p "$EMPTY_STATUS_STATE"
@@ -1798,7 +1798,7 @@ REQ_ALLPROP="$("$CASTLE" ask "ALLPROP-FIXTURE: an errand whose only unanswered q
 plant_bare_proposal "$REQ_ALLPROP" >/dev/null
 "$CASTLE" validate || fail "the all-proposal overlay fixture does not validate"
 STATUS_ALLPROP="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_ALLPROP" | grep -q "^\[$REQ_ALLPROP\] requested — waiting on you — press Mod4+Shift+a to review\$" \
+echo "$STATUS_ALLPROP" | grep -q "^\[$REQ_ALLPROP\] requested — waiting on you — press Mod4+Shift+Return to review\$" \
   || fail "an errand waiting on a proposal alone did not say 'review': $(echo "$STATUS_ALLPROP" | grep "$REQ_ALLPROP" || true)"
 
 REQ_MIXED="$("$CASTLE" ask "MIXED-FIXTURE: an errand waiting on both a proposal and an ordinary question.")"
@@ -1807,7 +1807,461 @@ REQ_MIXED="$("$CASTLE" ask "MIXED-FIXTURE: an errand waiting on both a proposal 
 plant_bare_proposal "$REQ_MIXED" >/dev/null
 "$CASTLE" validate || fail "the mixed overlay fixture does not validate"
 STATUS_MIXED="$("$MODAL" --mode status --limit 40)"
-echo "$STATUS_MIXED" | grep -q "^\[$REQ_MIXED\] requested — waiting on you — press Mod4+Shift+a to see what's waiting\$" \
+echo "$STATUS_MIXED" | grep -q "^\[$REQ_MIXED\] requested — waiting on you — press Mod4+Shift+Return to see what's waiting\$" \
   || fail "an errand waiting on both a proposal and an ordinary question did not use the neutral wording: $(echo "$STATUS_MIXED" | grep "$REQ_MIXED" || true)"
+
+# ---------------------------------------------------------------------
+# docs/tasks/0034-inbox-modal.md — the inbox layout (--mode inbox).
+# ---------------------------------------------------------------------
+#
+# A fresh state dir, for the same reason every other section here takes
+# one: these assertions are about a specific, known ordering and a
+# specific, known set of pending items, which cannot be made against a
+# journal every earlier section in this file already wrote into.
+export CASTLE_STATE_DIR="$WORKDIR/inbox-state"
+export XDG_RUNTIME_DIR="$WORKDIR/inbox-runtime"
+mkdir -p "$CASTLE_STATE_DIR/journal" "$XDG_RUNTIME_DIR"
+INBOX_SEEN="$CASTLE_STATE_DIR/inbox-seen"
+
+# Raw bytes for the two keys pty-drive.py's textual "\n" substitution
+# does not cover: Tab (0x09) and Esc (0x1b). "\n" survives as literal
+# backslash-n text through bash and is converted by pty-drive.py itself
+# (the same mechanism every existing "send:...\n.\n" step in this file
+# already relies on); Tab and Esc have no such textual escape there, so
+# the real bytes are embedded directly, the same technique this file's
+# own $ESC_BYTE (review-mode section, above) already uses to grep for
+# a raw Esc in a transcript.
+TAB_KEY="key:$(printf '\t')"
+ESC_KEY="key:$(printf '\033')"
+
+plant_inbox_proposal() {
+  # Usage: plant_inbox_proposal <request-id> <question-body>
+  # Echoes the question id. A minimal but RESOLVABLE proposal (a result
+  # naming <request-id>, and a question stamped with that result's real
+  # hash) — enough for both `_is_proposal` and `_proposal_result` to
+  # accept it, unlike plant_bare_proposal above, which is deliberately
+  # unresolvable and exists only for review mode's refusal-before-keys
+  # path. The inbox digit-open and --focus assertions below need a
+  # proposal that actually opens into review mode's rendering.
+  local request_id="$1" body="$2"
+  local result_id="20260401T000100Z-result-${request_id: -6}"
+  local question_id="20260401T000200Z-question-${request_id: -6}"
+  cat > "$CASTLE_STATE_DIR/journal/$result_id.md" <<EOF
+---
+id: $result_id
+type: result
+provenance: requested
+refs: $request_id
+seat: worker
+created: 2026-04-01T00:01:00Z
+outcome: completed
+target: private
+---
+
+Inbox-proposal fixture result body — not rendered by the picker.
+EOF
+  cat > "$CASTLE_STATE_DIR/journal/$question_id.md" <<EOF
+---
+id: $question_id
+type: question
+provenance: requested
+refs: $request_id,$result_id
+seat: worker
+created: 2026-04-01T00:02:00Z
+proposal-sha256: $(sha256sum "$CASTLE_STATE_DIR/journal/$result_id.md" | cut -d' ' -f1)
+---
+
+$body
+EOF
+  echo "$question_id"
+}
+
+log "inbox: no read cursor exists in a fresh state dir, and listing an empty inbox does not create one"
+[ ! -e "$INBOX_SEEN" ] || fail "inbox-seen already exists in a fresh state dir"
+INBOX_EMPTY="$("$MODAL" --mode inbox </dev/null)"
+echo "$INBOX_EMPTY" | grep -q "Nothing is waiting on you." \
+  || fail "an empty inbox did not say nothing is waiting: $INBOX_EMPTY"
+[ ! -e "$INBOX_SEEN" ] || fail "listing an empty inbox created a read cursor — the cursor must be written only on render, not on list"
+
+log "inbox: fixtures — a blocking question, a non-blocking question, a resolvable proposal, and two finished results"
+IX_REQ_BLOCKING="$("$CASTLE" ask "Inbox fixture: an errand needing a blocking answer.")"
+IX_Q_BLOCKING="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$IX_REQ_BLOCKING" --blocking --body "BLOCKING-Q-MARKER: needs your answer now.")"
+IX_REQ_NONBLOCK="$("$CASTLE" ask "Inbox fixture: an errand needing a non-blocking answer.")"
+IX_Q_NONBLOCK="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$IX_REQ_NONBLOCK" --body "NONBLOCK-Q-MARKER: needs your answer eventually.")"
+IX_REQ_PROP="$("$CASTLE" ask "Inbox fixture: an errand that produced a change to review.")"
+IX_Q_PROP="$(plant_inbox_proposal "$IX_REQ_PROP" "PROPOSAL-MARKER: a change worth reviewing.")"
+IX_REQ_UNREAD="$("$CASTLE" ask "Inbox fixture: FRESH-RESULT-MARKER, an errand whose worker just finished.")"
+IX_RESULT_UNREAD="$("$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$IX_REQ_UNREAD" --body "FRESH-BODY-MARKER: here is the answer you were waiting for.")"
+IX_REQ_READ="$("$CASTLE" ask "Inbox fixture: STALE-RESULT-MARKER, an errand already read.")"
+IX_RESULT_READ="$("$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$IX_REQ_READ" --body "STALE-BODY-MARKER: this one has already been read.")"
+"$CASTLE" validate || fail "the inbox fixtures do not validate"
+
+log "inbox: the read cursor is appended only when a RESULT's body is actually rendered — never for a question or a proposal"
+"$MODAL" --mode inbox --focus "$IX_Q_BLOCKING" </dev/null >/dev/null \
+  || fail "piped --focus on a question exited nonzero"
+[ ! -e "$INBOX_SEEN" ] || fail "opening a QUESTION through --focus wrote to the read cursor"
+"$MODAL" --mode inbox --focus "$IX_Q_PROP" </dev/null >/dev/null \
+  || fail "piped --focus on a proposal exited nonzero"
+[ ! -e "$INBOX_SEEN" ] || fail "opening a PROPOSAL through --focus wrote to the read cursor"
+
+log "inbox: rendering a result's body through --focus appends its id to the read cursor"
+FOCUS_READ_OUT="$("$MODAL" --mode inbox --focus "$IX_RESULT_READ" </dev/null)"
+echo "$FOCUS_READ_OUT" | grep -q "STALE-BODY-MARKER" \
+  || fail "--focus on a result did not render its body: $FOCUS_READ_OUT"
+[ -f "$INBOX_SEEN" ] || fail "rendering a result's body did not create the read cursor"
+grep -qx "$IX_RESULT_READ" "$INBOX_SEEN" || fail "the read cursor does not name the result that was rendered"
+[ "$(wc -l < "$INBOX_SEEN" | tr -d ' ')" = "1" ] || fail "the read cursor has more than one line after exactly one result was rendered"
+
+log "inbox: reading the same result again does not duplicate its line — append-only, never rewritten"
+"$MODAL" --mode inbox --focus "$IX_RESULT_READ" </dev/null >/dev/null \
+  || fail "re-focusing an already-read result exited nonzero"
+[ "$(wc -l < "$INBOX_SEEN" | tr -d ' ')" = "1" ] || fail "re-reading an already-seen result duplicated its line in the cursor"
+
+log "inbox ordering, piped: blocking questions first, then non-blocking, then proposals, then unread results — a read result is absent entirely"
+IX_LIST="$("$MODAL" --mode inbox </dev/null)"
+echo "$IX_LIST"
+echo "$IX_LIST" | grep -q "needs your answer: BLOCKING-Q-MARKER" \
+  || fail "the blocking question is not labelled 'needs your answer' in the inbox list"
+echo "$IX_LIST" | grep -q "a change to review: PROPOSAL-MARKER" \
+  || fail "the proposal is not labelled 'a change to review' in the inbox list"
+echo "$IX_LIST" | grep -q "FRESH-RESULT-MARKER" \
+  || fail "the unread result's originating request is not named in its 'about:' line"
+echo "$IX_LIST" | grep -q "STALE-RESULT-MARKER" \
+  && fail "a result the cursor has already seen still appears in the inbox list"
+LINE_BLOCKING="$(echo "$IX_LIST" | grep -n "BLOCKING-Q-MARKER" | head -1 | cut -d: -f1)"
+LINE_NONBLOCK="$(echo "$IX_LIST" | grep -n "NONBLOCK-Q-MARKER" | head -1 | cut -d: -f1)"
+LINE_PROP="$(echo "$IX_LIST" | grep -n "PROPOSAL-MARKER" | head -1 | cut -d: -f1)"
+LINE_UNREAD="$(echo "$IX_LIST" | grep -n "FRESH-RESULT-MARKER" | head -1 | cut -d: -f1)"
+[ -n "$LINE_BLOCKING" ] && [ -n "$LINE_NONBLOCK" ] && [ -n "$LINE_PROP" ] && [ -n "$LINE_UNREAD" ] \
+  || fail "one of the four expected inbox entries did not appear at all"
+[ "$LINE_BLOCKING" -lt "$LINE_NONBLOCK" ] \
+  || fail "the blocking question did not sort ahead of the non-blocking one"
+[ "$LINE_NONBLOCK" -lt "$LINE_PROP" ] \
+  || fail "a question sorted after the proposal — questions must come first (docs/tasks/0034 §1)"
+[ "$LINE_PROP" -lt "$LINE_UNREAD" ] \
+  || fail "the proposal did not sort ahead of the unread result"
+
+log "inbox: --focus lands on and expands a QUESTION directly, skipping the list"
+IX_REQ_FOCUS_Q="$("$CASTLE" ask "Focus fixture: a non-blocking question to land on directly.")"
+IX_Q_FOCUS="$("$CASTLE" record --type question --provenance requested --seat worker \
+  --refs "$IX_REQ_FOCUS_Q" --body "FOCUS-Q-MARKER: direct landing question.")"
+"$CASTLE" validate || fail "the focus-question fixture does not validate"
+drive_modal "$WORKDIR/ix-focus-question.txt" --mode inbox --focus "$IX_Q_FOCUS" -- \
+  "wait:Answer in your own words." "send:.\n" "wait:Press Enter to close" "send:\n"
+FOCUS_Q_OUT="$(tr -d '\r' < "$WORKDIR/ix-focus-question.txt")"
+echo "$FOCUS_Q_OUT" | grep -q "FOCUS-Q-MARKER" \
+  || fail "--focus on a question did not show that question's own text: $FOCUS_Q_OUT"
+refute "$FOCUS_Q_OUT" "Waiting on you:" "--focus on a question showed the inbox list first instead of landing directly on it"
+
+log "inbox: --focus lands on and expands a PROPOSAL directly, skipping the list"
+IX_REQ_FOCUS_PROP="$("$CASTLE" ask "Focus fixture: a proposal to land on directly.")"
+IX_Q_FOCUS_PROP="$(plant_inbox_proposal "$IX_REQ_FOCUS_PROP" "FOCUS-PROP-MARKER: direct landing proposal.")"
+"$CASTLE" validate || fail "the focus-proposal fixture does not validate"
+drive_modal "$WORKDIR/ix-focus-proposal.txt" --mode inbox --focus "$IX_Q_FOCUS_PROP" -- \
+  "wait:any other key closes this" "key:x"
+FOCUS_PROP_OUT="$(tr -d '\r' < "$WORKDIR/ix-focus-proposal.txt")"
+echo "$FOCUS_PROP_OUT" | grep -q "FOCUS-PROP-MARKER" \
+  || fail "--focus on a proposal did not show that proposal's own text: $FOCUS_PROP_OUT"
+echo "$FOCUS_PROP_OUT" | grep -q "\[a\]pprove" \
+  || fail "--focus on a proposal did not open review mode's rendering"
+refute "$FOCUS_PROP_OUT" "Waiting on you:" "--focus on a proposal showed the inbox list first instead of landing directly on it"
+
+log "inbox: --focus lands on and expands a RESULT directly, and Esc backs out ONE level to the list rather than closing the modal"
+IX_REQ_FOCUS_RESULT="$("$CASTLE" ask "Focus fixture: a result to land on directly.")"
+IX_RESULT_FOCUS="$("$CASTLE" record --type result --provenance requested --seat worker \
+  --refs "$IX_REQ_FOCUS_RESULT" --body "FOCUS-RESULT-MARKER: the answer text.")"
+"$CASTLE" validate || fail "the focus-result fixture does not validate"
+drive_modal "$WORKDIR/ix-focus-result.txt" --mode inbox --focus "$IX_RESULT_FOCUS" -- \
+  "wait:Esc to go back." "$ESC_KEY" "wait:Press a number to open" "key:z"
+FOCUS_RESULT_OUT="$(tr -d '\r' < "$WORKDIR/ix-focus-result.txt")"
+[ "$(transcript_rc "$WORKDIR/ix-focus-result.txt")" = "0" ] \
+  || fail "focused result view did not exit 0 after backing out and closing"
+echo "$FOCUS_RESULT_OUT" | grep -q "FOCUS-RESULT-MARKER" \
+  || fail "--focus on a result did not render its body: $FOCUS_RESULT_OUT"
+echo "$FOCUS_RESULT_OUT" | grep -q "Waiting on you:" \
+  || fail "Esc from a focused result view did not back out to the inbox list — it closed the whole modal instead"
+grep -qx "$IX_RESULT_FOCUS" "$INBOX_SEEN" \
+  || fail "the read cursor does not name the focused result after its body was rendered"
+
+log "inbox: the compose view's waiting-count line names the count, and the compose prompt carries the exact new wording (docs/tasks/0034 §4)"
+# Six items are pending at this point, not the four the ordering fold
+# above showed: the blocking question, the non-blocking question, the
+# proposal and IX_RESULT_UNREAD from that fixture set, PLUS the
+# question and the proposal from the two --focus "lands directly"
+# assertions just above (IX_Q_FOCUS and IX_Q_FOCUS_PROP) — each was
+# only VIEWED there (an empty-body refusal, a dismissing keypress),
+# never answered or decided, so both are still pending. IX_RESULT_FOCUS
+# is the one fixture genuinely excluded: its body was rendered, so the
+# read cursor already has it.
+JOURNAL_COUNT_BEFORE_ESC="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+drive_modal "$WORKDIR/ix-ready-line.txt" --mode inbox -- \
+  "wait:ready — Tab to view" "$ESC_KEY"
+READY_OUT="$(tr -d '\r' < "$WORKDIR/ix-ready-line.txt")"
+[ "$(transcript_rc "$WORKDIR/ix-ready-line.txt")" = "0" ] \
+  || fail "Esc on a fresh compose view (nothing typed) did not exit 0 — compose's discard semantics should carry over to the inbox layout"
+echo "$READY_OUT" | grep -q "^6 ready — Tab to view\$" \
+  || fail "the compose view's waiting-count line is wrong: $READY_OUT"
+echo "$READY_OUT" | grep -qF "What do you need? Describe it in your own words." \
+  || fail "the compose prompt's exact new wording is missing from the inbox layout's compose view"
+echo "$READY_OUT" | grep -qF "Describe the problem" \
+  && fail "the OLD compose wording ('Describe the problem in your own words') is still present"
+JOURNAL_COUNT_AFTER_ESC="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_BEFORE_ESC" = "$JOURNAL_COUNT_AFTER_ESC" ] \
+  || fail "Esc on the compose view (nothing typed) filed a record anyway"
+
+log "inbox: with nothing pending, the compose view shows no waiting-count line at all"
+IX_EMPTY_STATE="$(mktemp -d)"
+mkdir -p "$IX_EMPTY_STATE/journal"
+CASTLE_STATE_DIR="$IX_EMPTY_STATE" drive_modal "$WORKDIR/ix-empty-ready.txt" --mode inbox -- \
+  "wait:What do you need?" "$ESC_KEY"
+EMPTY_READY_OUT="$(tr -d '\r' < "$WORKDIR/ix-empty-ready.txt")"
+echo "$EMPTY_READY_OUT" | grep -q "ready — Tab to view" \
+  && fail "the compose view showed a waiting-count line with nothing pending"
+
+log "inbox: Tab from compose reaches an empty inbox list, which says so and offers compose"
+CASTLE_STATE_DIR="$IX_EMPTY_STATE" drive_modal "$WORKDIR/ix-empty-list.txt" --mode inbox -- \
+  "wait:What do you need?" "$TAB_KEY" "wait:Nothing is waiting on you." \
+  "wait:Press Tab to write something, or any other key to close." "key:z"
+[ "$(transcript_rc "$WORKDIR/ix-empty-list.txt")" = "0" ] \
+  || fail "closing an empty inbox list did not exit 0"
+rm -rf "$IX_EMPTY_STATE"
+
+log "inbox: Tab toggles compose -> inbox and back to compose"
+drive_modal "$WORKDIR/ix-tab-toggle.txt" --mode inbox -- \
+  "wait:What do you need?" "$TAB_KEY" "wait:Waiting on you:" "$TAB_KEY" "wait:What do you need?" "$ESC_KEY"
+[ "$(transcript_rc "$WORKDIR/ix-tab-toggle.txt")" = "0" ] \
+  || fail "Tab -> Tab -> Esc did not exit cleanly"
+
+log "inbox: at the top of the list, Esc closes the whole modal — nothing opened, nothing written to the read cursor"
+SEEN_LINES_BEFORE="$(wc -l < "$INBOX_SEEN" | tr -d ' ')"
+drive_modal "$WORKDIR/ix-list-esc.txt" --mode inbox -- \
+  "wait:What do you need?" "$TAB_KEY" "wait:Waiting on you:" "$ESC_KEY"
+[ "$(transcript_rc "$WORKDIR/ix-list-esc.txt")" = "0" ] \
+  || fail "Esc at the top of the inbox list did not exit 0"
+[ "$(wc -l < "$INBOX_SEEN" | tr -d ' ')" = "$SEEN_LINES_BEFORE" ] \
+  || fail "closing the list with Esc wrote to the read cursor"
+
+log "inbox: a bare Enter at the list opens nothing (deviation: digit grammar, not Enter) — a reflex key must not mark a result read"
+drive_modal "$WORKDIR/ix-list-enter.txt" --mode inbox -- \
+  "wait:What do you need?" "$TAB_KEY" "wait:Waiting on you:" "key:\n"
+[ "$(transcript_rc "$WORKDIR/ix-list-enter.txt")" = "0" ] \
+  || fail "a bare Enter at the inbox list did not exit 0"
+[ "$(wc -l < "$INBOX_SEEN" | tr -d ' ')" = "$SEEN_LINES_BEFORE" ] \
+  || fail "a bare Enter at the inbox list wrote to the read cursor — it must open nothing"
+
+log "inbox: a digit opens the item at that position — 1 is the blocking question"
+drive_modal "$WORKDIR/ix-digit-1.txt" --mode inbox -- \
+  "wait:What do you need?" "$TAB_KEY" "wait:Waiting on you:" "key:1" \
+  "wait:Answer in your own words." "send:.\n" "wait:Press Enter to close" "send:\n"
+DIGIT1_OUT="$(tr -d '\r' < "$WORKDIR/ix-digit-1.txt")"
+echo "$DIGIT1_OUT" | grep -q "BLOCKING-Q-MARKER" \
+  || fail "pressing 1 in the inbox list did not open the blocking question: $DIGIT1_OUT"
+
+log "inbox: a digit opens the item at that position — 6 is the unread result (two more pending items now sit ahead of it: IX_Q_FOCUS and IX_Q_FOCUS_PROP from the --focus assertions above), and opening it spends the read cursor"
+drive_modal "$WORKDIR/ix-digit-6.txt" --mode inbox -- \
+  "wait:What do you need?" "$TAB_KEY" "wait:Waiting on you:" "key:6" \
+  "wait:Esc to go back." "$ESC_KEY" "wait:Press a number to open" "key:z"
+DIGIT6_OUT="$(tr -d '\r' < "$WORKDIR/ix-digit-6.txt")"
+[ "$(transcript_rc "$WORKDIR/ix-digit-6.txt")" = "0" ] \
+  || fail "digit-open on the unread result did not exit 0"
+echo "$DIGIT6_OUT" | grep -q "FRESH-BODY-MARKER" \
+  || fail "pressing 6 in the inbox list did not open the unread result: $DIGIT6_OUT"
+grep -qx "$IX_RESULT_UNREAD" "$INBOX_SEEN" \
+  || fail "opening the unread result through the inbox list did not append it to the read cursor"
+
+log "inbox: with that result now read, it no longer appears in the list"
+IX_LIST_2="$("$MODAL" --mode inbox </dev/null)"
+echo "$IX_LIST_2" | grep -q "FRESH-RESULT-MARKER" \
+  && fail "a result the cursor has now seen still appears in the inbox list"
+
+log "inbox: the compose view files a record exactly like --mode compose (the chord's default view)"
+JOURNAL_COUNT_BEFORE_COMPOSE="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+drive_modal "$WORKDIR/ix-compose-file.txt" --mode inbox -- \
+  "wait:What do you need?" "send:Filed via the inbox view.\n.\n" \
+  "wait:something to fix" "send:\n" "wait:Filed as" "send:\n"
+IX_COMPOSE_OUT="$(tr -d '\r' < "$WORKDIR/ix-compose-file.txt")"
+[ "$(transcript_rc "$WORKDIR/ix-compose-file.txt")" = "0" ] \
+  || fail "composing through the inbox layout did not exit 0"
+echo "$IX_COMPOSE_OUT" | grep -q "Filed as" \
+  || fail "composing through the inbox layout did not confirm a filed record: $IX_COMPOSE_OUT"
+JOURNAL_COUNT_AFTER_COMPOSE="$(find "$CASTLE_STATE_DIR/journal" -name '*.md' | wc -l | tr -d ' ')"
+[ "$JOURNAL_COUNT_AFTER_COMPOSE" -gt "$JOURNAL_COUNT_BEFORE_COMPOSE" ] \
+  || fail "composing through the inbox layout did not add a journal record"
+IX_FILED_ID="$(echo "$IX_COMPOSE_OUT" | grep -oE '[0-9]{8}T[0-9]{6}Z-request-[a-z0-9]+' | tail -1)"
+[ -n "$IX_FILED_ID" ] || fail "could not recover the filed record id from the inbox compose transcript"
+grep -q "Filed via the inbox view." "$CASTLE_STATE_DIR/journal/$IX_FILED_ID.md" \
+  || fail "the record filed through the inbox compose view does not carry the typed body"
+
+"$CASTLE" validate || fail "the journal does not validate after the inbox-layout assertions"
+
+# ---------------------------------------------------------------------
+# docs/tasks/0034-inbox-modal.md §3 — the notification action-waiter
+# (`castle notify-waiter`), the detached half of `_fire_notification`.
+# ---------------------------------------------------------------------
+#
+# Faked `swaymsg` and `foot` on $PATH stand in for a real Sway session
+# and a real terminal — the brief's own words: "The headless harness
+# covers the decision logic (a fake swaymsg on $PATH); the two real-
+# window behaviors are part of the one human verification click."
+# CASTLE_NOTIFY_COMMAND points at a fake notify-send that logs its argv
+# and prints back a controllable action name, the same lever
+# notify-stub.sh already gives the router's OWN invocation one process
+# earlier — this is the waiter's own invocation, tested directly via
+# `castle notify-waiter`, the same internal subcommand the router
+# spawns detached.
+NW_BIN="$WORKDIR/notify-waiter-bin"
+mkdir -p "$NW_BIN"
+
+cat > "$NW_BIN/swaymsg" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SWAYMSG_LOG"
+if [ "$1" = "-t" ] && [ "$2" = "get_tree" ]; then
+  if [ -f "$SWAY_HAS_MODAL_FILE" ]; then
+    printf '%s' '{"app_id": null, "nodes": [], "floating_nodes": [{"app_id": "castle-modal", "nodes": [], "floating_nodes": []}]}'
+  else
+    printf '%s' '{"app_id": null, "nodes": [], "floating_nodes": []}'
+  fi
+fi
+exit 0
+STUB
+chmod +x "$NW_BIN/swaymsg"
+
+cat > "$NW_BIN/foot" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FOOT_LOG"
+# The two-waiter race test below needs the fake tree to start
+# reporting a window only once a launch has actually happened — the
+# same "foot's own startup is what creates the window" causality a
+# real compositor provides, faked here rather than the test pre-seeding
+# SWAY_HAS_MODAL_FILE by hand. Harmless for the single-waiter launch
+# test above: nothing there re-checks the tree after this point.
+: > "$SWAY_HAS_MODAL_FILE"
+exit 0
+STUB
+chmod +x "$NW_BIN/foot"
+
+NW_NOTIFY="$WORKDIR/notify-waiter-notify.sh"
+cat > "$NW_NOTIFY" <<'STUB'
+#!/usr/bin/env bash
+# Stands in for notify-send under CASTLE_NOTIFY_COMMAND: logs its full
+# argv (so the exact --app-name=castle and --action=open=Open spelling
+# can be asserted on) and prints back whatever action name
+# NOTIFY_ACTION_FILE names — faking the "activated/dismissed/expired"
+# contract the real notify-send's own --wait gives.
+printf '%s\n' "$*" >> "$NOTIFY_ARGS_LOG"
+[ -f "$NOTIFY_ACTION_FILE" ] && cat "$NOTIFY_ACTION_FILE"
+exit 0
+STUB
+chmod +x "$NW_NOTIFY"
+
+NW_SWAYMSG_LOG="$WORKDIR/nw-swaymsg.log"
+NW_FOOT_LOG="$WORKDIR/nw-foot.log"
+NW_ARGS_LOG="$WORKDIR/nw-notify-args.log"
+NW_ACTION_FILE="$WORKDIR/nw-action"
+NW_HAS_MODAL_FILE="$WORKDIR/nw-has-modal"
+
+log "notify-waiter: an existing castle-modal window is focused, not duplicated"
+: > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
+printf 'open\n' > "$NW_ACTION_FILE"
+: > "$NW_HAS_MODAL_FILE"
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwfix1" \
+    "Castle: your request has an answer" "Fixture notification body." \
+  || fail "notify-waiter exited nonzero when an existing window was found"
+grep -q -- '--app-name=castle' "$NW_ARGS_LOG" \
+  || fail "notify-waiter did not pass --app-name=castle to the notify command"
+grep -q -- '--action=open=Open' "$NW_ARGS_LOG" \
+  || fail "notify-waiter did not use the --action=open=Open spelling (docs/tasks/0034, implementation deviations)"
+grep -q "Castle: your request has an answer" "$NW_ARGS_LOG" \
+  || fail "notify-waiter did not pass the title through to the notify command"
+grep -qE '\[app_id="castle-modal"\].*focus' "$NW_SWAYMSG_LOG" \
+  || fail "notify-waiter did not focus the existing castle-modal window: $(cat "$NW_SWAYMSG_LOG")"
+[ ! -s "$NW_FOOT_LOG" ] \
+  || fail "notify-waiter launched a second castle-modal window when one already existed: $(cat "$NW_FOOT_LOG")"
+
+log "notify-waiter: with no existing window, it launches one via foot, focused on the record"
+: > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
+rm -f "$NW_HAS_MODAL_FILE"
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwfix2" \
+    "Castle: your request has an answer" "Fixture notification body." \
+  || fail "notify-waiter exited nonzero when no existing window was found"
+[ -s "$NW_FOOT_LOG" ] \
+  || fail "notify-waiter did not launch a new castle-modal window when none existed"
+grep -q -- '--app-id=castle-modal' "$NW_FOOT_LOG" || fail "the launched window is not tagged app-id=castle-modal"
+grep -q -- '--mode inbox' "$NW_FOOT_LOG" || fail "the launched window did not open in inbox mode"
+grep -q -- '--focus 20260401T000000Z-result-nwfix2' "$NW_FOOT_LOG" \
+  || fail "the launched window was not focused on the record the notification was about"
+if grep -qE '\[app_id="castle-modal"\].*focus' "$NW_SWAYMSG_LOG"; then
+  fail "notify-waiter tried to focus a window that does not exist"
+fi
+
+log "notify-waiter: dismissing or letting the notification expire launches nothing and never touches Sway"
+: > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
+printf 'dismiss\n' > "$NW_ACTION_FILE"
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwfix3" \
+    "Castle: your request has an answer" "Fixture notification body." \
+  || fail "notify-waiter exited nonzero on a dismissal"
+[ ! -s "$NW_SWAYMSG_LOG" ] \
+  || fail "notify-waiter queried Sway even though the notification was dismissed, not clicked: $(cat "$NW_SWAYMSG_LOG")"
+[ ! -s "$NW_FOOT_LOG" ] \
+  || fail "notify-waiter launched a window even though the notification was dismissed, not clicked"
+
+log "notify-waiter: CASTLE_NOTIFY_COMMAND set to the empty string opts out silently, same as the router's own invocation"
+: > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwfix4" \
+    "Castle: your request has an answer" "Fixture notification body." \
+  || fail "notify-waiter exited nonzero with CASTLE_NOTIFY_COMMAND=''"
+[ ! -s "$NW_ARGS_LOG" ] || fail "notify-waiter ran a notify command even though CASTLE_NOTIFY_COMMAND was set empty"
+[ ! -s "$NW_SWAYMSG_LOG" ] || fail "notify-waiter queried Sway with the notify channel disabled"
+[ ! -s "$NW_FOOT_LOG" ] || fail "notify-waiter launched a window with the notify channel disabled"
+
+log "notify-waiter: two notifications clicked at once with no modal open race for the launch — exactly one foot, never two (Codex cross-model review on this task's PR, agreed as real)"
+# Both waiters share one $XDG_RUNTIME_DIR (inherited from this shell,
+# unchanged by either), so both resolve notify_waiter_lock_path() to
+# the identical file and genuinely contend for it — this is not two
+# independent runs asserted on separately, it is the actual race.
+: > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
+rm -f "$NW_HAS_MODAL_FILE"
+printf 'open\n' > "$NW_ACTION_FILE"
+RACE_START=$SECONDS
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwrace1" \
+    "Castle: your request has an answer" "Race fixture: the first of two clicks." &
+RACE_PID_1=$!
+PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
+  SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
+  NOTIFY_ARGS_LOG="$NW_ARGS_LOG" NOTIFY_ACTION_FILE="$NW_ACTION_FILE" \
+  "$CASTLE" notify-waiter "20260401T000000Z-result-nwrace2" \
+    "Castle: your request has an answer" "Race fixture: the second of two clicks." &
+RACE_PID_2=$!
+wait "$RACE_PID_1" || fail "the first racing notify-waiter exited nonzero"
+wait "$RACE_PID_2" || fail "the second racing notify-waiter exited nonzero"
+RACE_ELAPSED=$((SECONDS - RACE_START))
+log "  -- race resolved in ${RACE_ELAPSED}s of wall clock (whole seconds) — acquire_lock_bounded's 5s fallback did not fire; a fired fallback would show as a jump to ~5s or more, not $RACE_ELAPSED"
+[ "$RACE_ELAPSED" -lt 4 ] \
+  || fail "the race took ${RACE_ELAPSED}s — suspiciously close to acquire_lock_bounded's 5s bound; the fallback path may have fired unexpectedly"
+FOOT_LAUNCHES="$(grep -c . "$NW_FOOT_LOG" || true)"
+[ "$FOOT_LAUNCHES" -eq 1 ] \
+  || fail "two notifications clicked at once with no modal open produced $FOOT_LAUNCHES foot launches, expected exactly 1 — the check-then-launch step raced: $(cat "$NW_FOOT_LOG")"
+FOCUS_CALLS="$(grep -cE '\[app_id="castle-modal"\].*focus' "$NW_SWAYMSG_LOG" || true)"
+[ "$FOCUS_CALLS" -eq 1 ] \
+  || fail "expected exactly one focus call — the waiter that lost the race should have found the window the winner just launched — got $FOCUS_CALLS: $(cat "$NW_SWAYMSG_LOG")"
 
 log "all assertions passed"

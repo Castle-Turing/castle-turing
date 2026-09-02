@@ -63,6 +63,46 @@ export CASTLE_WORKER_COMMAND="$WORKER_OK"
 log() { printf '>>> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# docs/tasks/0034-inbox-modal.md §3 moved the whole notify-send
+# invocation into a detached waiter process (`castle notify-waiter`)
+# that the router does not wait on — "the dispatch sweep must never
+# block on notification interaction" — so `$CASTLE_NOTIFY_LOG` can lag
+# a few milliseconds behind `castle dispatch` returning, where every
+# notify-log assertion below used to read it the instant control came
+# back. Duplicated from approval.sh and apply.sh rather than shared —
+# this directory has no sourced-lib convention, only per-file helpers
+# and, where the logic is genuinely subtle, a standalone script two
+# files invoke as a subprocess (pty-drive.py). This one is neither
+# subtle enough nor shared by enough callers to earn that; three
+# near-identical copies with the same comment is what the directory
+# already does elsewhere. Polls rather than sleeping a fixed amount:
+# bounded at ~10s so a genuine failure still fails promptly, and fast
+# on the happy path (0.1s granularity) since the notify-stub this file
+# uses is a synchronous script with no real --wait to block on.
+wait_for_notify_log() {
+  local pattern="$1" tries=100 i
+  for ((i = 0; i < tries; i++)); do
+    grep -q -- "$pattern" "$CASTLE_NOTIFY_LOG" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  grep -q -- "$pattern" "$CASTLE_NOTIFY_LOG" 2>/dev/null
+}
+
+# A parallel poll for the LINE-COUNT assertions in this file (did
+# routing fire N-more notifications, not "does this text now appear"):
+# waits until `wc -l` reaches at least `$2`, the same bounded/fast
+# shape as wait_for_notify_log above, for the identical reason. Prints
+# nothing and changes nothing on timeout — the caller's own assertion,
+# run immediately after, is what reports the actual count.
+wait_for_notify_count() {
+  local min="$1" tries=100 i
+  for ((i = 0; i < tries; i++)); do
+    [ "$(wc -l < "$CASTLE_NOTIFY_LOG" 2>/dev/null | tr -d ' ')" -ge "$min" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 # All three helpers below tolerate "no such file" (an empty journal, or
 # no record of that type yet) rather than letting a non-matching glob
 # or grep kill the script under `set -e` before the assertion that was
@@ -263,8 +303,8 @@ grep -q "$WORKER_OK" "$CLAIM1_FILE" || fail "$CLAIM1_FILE does not name the tena
 DECISION_FOR_RESULT1="$(referencing decision "$RESULT1")"
 [ -n "$DECISION_FOR_RESULT1" ] || fail "the auto-produced result was not routed by the same sweep"
 grep -q '^channel: notify$' "$DECISION_FOR_RESULT1" || fail "the requested-provenance result did not route to notify: $DECISION_FOR_RESULT1"
-NOTIFY_AFTER="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
-[ "$NOTIFY_AFTER" -gt "$NOTIFY_BEFORE" ] || fail "routing the auto-produced result fired no notification"
+wait_for_notify_count "$((NOTIFY_BEFORE + 1))" \
+  || fail "routing the auto-produced result fired no notification"
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
@@ -329,12 +369,27 @@ DECISIONS_FOR_RACE="$(referencing decision "$RESULT_RACE" | grep -c . || true)"
 # each, which is correct and would have made a bare "delta == 1" fail
 # for a reason having nothing to do with routing twice. Asserted from
 # both sides so neither half can rot.
+#
+# Waits for BOTH lines before reading, not just the first: each is
+# written by its own detached waiter (docs/tasks/0034 §3), so reading
+# the moment the log grows by one would race the second exactly as
+# reading immediately raced both.
+#
+# Title strings updated for docs/tasks/0034: `_fire_notification` used
+# to be called with a bare `f"Castle Turing — {rec.type}"`; since that
+# task it names what kind of thing is waiting instead — a worker
+# result reads "Castle: your request has an answer" (`seat: worker`,
+# scoped there since the applier-notification fix below this task also
+# landed), and a proposal question (which is what `contract-worker.sh`
+# always produces — a resolved target and a real diff) reads "Castle: a
+# change for you to review".
+wait_for_notify_count "$((NOTIFY_BEFORE_RACE + 2))"
 NOTIFIED_IN_RACE="$(tail -n "+$(( NOTIFY_BEFORE_RACE + 1 ))" "$CASTLE_NOTIFY_LOG")"
-RESULT_NOTIFIES="$(printf '%s\n' "$NOTIFIED_IN_RACE" | grep -c 'Castle Turing — result' || true)"
-[ "$RESULT_NOTIFIES" -eq 1 ] || fail "the raced result fired $RESULT_NOTIFIES notifications, expected exactly 1"
-QUESTION_NOTIFIES="$(printf '%s\n' "$NOTIFIED_IN_RACE" | grep -c 'Castle Turing — question' || true)"
+RESULT_NOTIFIES="$(printf '%s\n' "$NOTIFIED_IN_RACE" | grep -c 'Castle: your request has an answer' || true)"
+[ "$RESULT_NOTIFIES" -eq 1 ] || fail "the raced result fired $RESULT_NOTIFIES notifications, expected exactly 1: $NOTIFIED_IN_RACE"
+QUESTION_NOTIFIES="$(printf '%s\n' "$NOTIFIED_IN_RACE" | grep -c 'Castle: a change for you to review' || true)"
 [ "$QUESTION_NOTIFIES" -eq 1 ] \
-  || fail "the proposal question the raced turn filed fired $QUESTION_NOTIFIES notifications, expected exactly 1"
+  || fail "the proposal question the raced turn filed fired $QUESTION_NOTIFIES notifications, expected exactly 1: $NOTIFIED_IN_RACE"
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
@@ -822,6 +877,22 @@ grep -q '^outcome: completed$' "$(referencing result "$REQ_ABORT_B")" || fail "t
 log "corrections are never routed, even when dispatch is what triggers the router"
 # ---------------------------------------------------------------------
 CORRECTION="$("$CASTLE" correct "Dispatch test: the resident says how the system is doing.")"
+# This is a NEGATIVE assertion — "nothing fires" — which
+# wait_for_notify_count cannot poll for the same way the positive sites
+# above do: there is no target count to wait to reach, and waiting the
+# full ~10s bound every time just to be sure would make the one
+# assertion in this file that should be fast the slowest. The dispatch
+# call below is what the assertion is really about, and it is provably
+# race-free on its own terms: `_fire_notification` (and the detached
+# waiter it spawns) is only ever reached from the same loop iteration
+# that appends a decision record, and the very next line confirms no
+# decision was appended by THIS call — so this call cannot have spawned
+# a new waiter, detached or not. The only real residual risk is a SLOW
+# waiter from an unrelated, EARLIER dispatch/route call in this same
+# file still being in flight and landing after the baseline below is
+# captured — a brief settle first drains that into the baseline instead
+# of past it, converting a possible spurious failure into nothing.
+sleep 0.3
 NOTIFY_BEFORE_CORRECTION="$(wc -l < "$CASTLE_NOTIFY_LOG" | tr -d ' ')"
 DECISIONS_BEFORE_CORRECTION="$(count_of_type decision)"
 "$CASTLE" dispatch >/dev/null

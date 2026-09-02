@@ -62,6 +62,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+import json
 import os
 import pathlib
 import shlex
@@ -1316,6 +1317,24 @@ def apply_lock_path() -> pathlib.Path:
     return d / "apply.lock"
 
 
+def notify_waiter_lock_path() -> pathlib.Path:
+    """Serializes `cmd_notify_waiter`'s check-then-launch step
+    (docs/tasks/0034-inbox-modal.md §3, caught by Codex's cross-model
+    review on this task's PR): asking Sway whether a `castle-modal`
+    window exists and acting on the answer is a check-then-act, and two
+    waiters running that sequence unsynchronized can both see "none"
+    and both launch one — the exact double-modal the brief's own
+    edge-case paragraph says must not happen (two compose buffers, a
+    read cursor written from two processes). One waiter at a time gets
+    to ask and act; the rest queue on `acquire_lock_bounded`, not
+    `acquire_lock_blocking` — see that function's own docstring for why
+    unbounded is wrong here specifically.
+    """
+    d = runtime_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "notify-waiter.lock"
+
+
 def acquire_lock_blocking(path: pathlib.Path):
     """Take `flock(LOCK_EX)` on `path`, waiting for it if held.
 
@@ -1371,6 +1390,47 @@ def acquire_lock(path: pathlib.Path):
         handle.close()
         raise
     return handle
+
+
+def acquire_lock_bounded(path: pathlib.Path, timeout: float):
+    """Take `flock(LOCK_EX)` on `path`, waiting up to `timeout` seconds
+    (polled at 0.1s), then giving up and returning `None` — proceeding
+    as though unlocked — if it is still held.
+
+    A third policy beside the two above, for `notify_waiter_lock_path`,
+    the one caller neither fits. `acquire_lock_blocking` is wrong there:
+    an unbounded wait behind a stuck waiter (a hung `foot`, a dead
+    compositor) would pile up idle processes and eventually turn a
+    resident's click into nothing happening at all, silently, for as
+    long as the holder stays stuck. `acquire_lock` is wrong too:
+    declining outright on contention would swallow the click that got
+    this far — a cost this best-effort channel has never accepted (an
+    unclicked notification costing one idle waiter is the one it does
+    accept). Falling through unlocked after a bounded wait accepts a
+    narrower version of the exact failure the caller exists to close —
+    a rare double `castle-modal` window, recoverable by hand — rather
+    than the unrecoverable one: a click that silently did nothing.
+
+    On success the returned handle is the caller's to close when it is
+    done; on a timeout there is nothing to close, and no lock was ever
+    taken — the caller's own check-then-act proceeds exactly as it
+    would with no lock in the file at all.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                handle.close()
+                return None
+            time.sleep(0.1)
+        except BaseException:
+            handle.close()
+            raise
 
 
 def lock_is_held(path: pathlib.Path) -> bool:
@@ -2593,21 +2653,29 @@ def _provenance_explanation(provenance: str) -> str:
     return "the system undertook this on its own initiative, so it defaults to the digest rather than an interruption"
 
 
-def _fire_notification(title: str, body: str) -> None:
+def _fire_notification(title: str, body: str, record_id: str) -> None:
     """Best-effort delivery on the router's `notify` channel
-    (docs/tasks/0009-ambient-intake.md item 5). Never raises: a failed
-    or missing notification daemon must not corrupt or block routing —
-    the decision record is already durable by the time this runs, so
-    the worst case is a silent (or, below, warned-about) missed ping,
-    never a bad journal.
+    (docs/tasks/0009 item 5, reshaped by docs/tasks/0034). Never raises
+    and never blocks: the decision record is already durable, and the
+    sweep must not wait on a notification daemon — so the whole
+    invocation moves into a detached waiter process (setsid), whose job
+    is to run the notify command with an `open` action attached, block
+    on it (`--action` implies `--wait`: the command exits when the
+    notification is activated, dismissed, or expires, printing the
+    chosen action name to stdout), and — only if `open` was chosen —
+    put the record in front of the resident: focus an already-open
+    castle-modal window if Sway reports one, else exec
+    `foot ... castle-modal --mode inbox --focus <record_id>`. An
+    unclicked notification costs one idle waiter until expiry, which is
+    the accepted price of a click that deep-links.
 
     CASTLE_NOTIFY_COMMAND, unset, defaults to plain `notify-send` on
-    $PATH — real on a desktop that imported modules/desktop (which
-    installs mako + libnotify), a harmless failed exec anywhere else.
-    Set explicitly to an empty string to no-op silently (a headless
-    host's way of saying "don't even try"); modules/agent wires
-    castle.agent.notify.command into this same variable — see
-    modules/agent/default.nix.
+    $PATH; set to the empty string it no-ops silently. The waiter
+    appends `--app-name=castle` (so daemons can address Castle's
+    notifications as a class) and the action flag before the title and
+    body, so a stub command sees exactly the argv the real thing would.
+    The parse check here is only for the warning — the waiter re-reads
+    the same environment itself.
     """
     raw = os.environ.get("CASTLE_NOTIFY_COMMAND")
     if raw is None:
@@ -2615,14 +2683,326 @@ def _fire_notification(title: str, body: str) -> None:
     if not raw.strip():
         return
     try:
-        argv = shlex.split(raw) + [title, body]
+        shlex.split(raw)
     except ValueError as exc:
         print(f"castle route: could not parse CASTLE_NOTIFY_COMMAND ({raw!r}): {exc}", file=sys.stderr)
         return
     try:
-        subprocess.run(argv, check=False, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            [sys.executable, str(pathlib.Path(__file__).resolve()),
+             "notify-waiter", record_id, title, body],
+            # stderr is deliberately NOT discarded, unlike stdin/stdout:
+            # it inherits this process's own stderr, which for a
+            # systemd-triggered sweep is the unit's own journal stream
+            # (`journalctl _SYSTEMD_USER_UNIT=castle-dispatch.service`,
+            # the exact scoping test/desktop-loop/test.nix's notify
+            # assertion already reads) and for a hand-run `castle
+            # route` is the terminal it was typed at. The waiter stays
+            # detached either way — inheriting an fd is not the same as
+            # being tied to this process's lifetime, and the "Unit
+            # process remains running after unit stopped" cgroup
+            # bookkeeping `castle-dispatch.service`'s KillMode=process
+            # exists for is unaffected by which file descriptors a
+            # surviving process happens to hold open. What this buys:
+            # `cmd_notify_waiter`'s one non-silent failure (see its own
+            # docstring) has somewhere to land instead of nowhere at
+            # all.
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"castle route: notify command {raw!r} failed (non-fatal): {exc}", file=sys.stderr)
+
+
+NOTIFY_ACTION_NAME = "open"
+
+# How long a waiter (below) will wait for `notify_waiter_lock_path` before
+# giving up and proceeding unlocked, and how long it will then wait for
+# a `foot` it just launched to actually register with Sway before
+# releasing the lock it DID get. Both "~N seconds" in the brief's own
+# code-review finding, not measured constants — the failure modes on
+# either side of each bound are asymmetric enough (a rare double modal
+# vs. a click that silently does nothing; a slightly longer lock hold
+# vs. releasing before the window that hold exists to protect actually
+# appears) that precision past "a few seconds" buys nothing.
+NOTIFY_WAITER_LOCK_TIMEOUT = 5.0
+NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT = 2.0
+
+
+def _tree_has_app_id(node, app_id: str) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if node.get("app_id") == app_id:
+        return True
+    for group in ("nodes", "floating_nodes"):
+        for child in node.get(group, []) or []:
+            if _tree_has_app_id(child, app_id):
+                return True
+    return False
+
+
+def _resolve_wayland_env() -> dict[str, str]:
+    """Best-effort fallback for `WAYLAND_DISPLAY` and `SWAYSOCK` when
+    this process's own environment does not already have them — only
+    ever consulted for what is missing, never overriding a value
+    already present.
+
+    The defensive half of a two-part fix (code review finding on this
+    task's PR): `foot`, launched by a detached waiter with no
+    controlling terminal to notice it failing, cannot connect to a
+    compositor it cannot find, and exits immediately and silently —
+    indistinguishable, from a resident's side of the click, from
+    nothing happening at all. The mechanism this project actually
+    relies on is `modules/home`'s explicit `wayland.windowManager.sway.
+    systemd.enable`, which imports both variables into the systemd user
+    manager's environment as one of Sway's own first startup commands,
+    so every unit the manager starts afterward inherits them the
+    ordinary way. This function exists for the unit that starts before
+    that import lands, the host where it is disabled, or a session this
+    project did not anticipate — recovering enough to still act, rather
+    than failing exactly as silently as the problem it exists to catch.
+
+    Globs `/run/user/$UID` — the parent of `runtime_dir()`'s own `castle`
+    subdirectory, not that subdirectory itself — for the two socket
+    shapes Sway and the Wayland compositor libraries actually create
+    there: `wayland-N` (excluding its own `.lock` sibling) and
+    `sway-ipc.<uid>.<pid>.sock`. Newest by mtime wins when more than one
+    exists (a stale socket from a crashed or preceding session is the
+    plausible case) — a guess, not a guarantee: nothing here can ask
+    Sway which socket is live without already having SWAYSOCK to ask
+    with, and the newest is the best single one available without it.
+    """
+    resolved: dict[str, str] = {}
+    try:
+        uid_dir = pathlib.Path(f"/run/user/{os.getuid()}")
+        if "WAYLAND_DISPLAY" not in os.environ:
+            candidates = sorted(
+                (p for p in uid_dir.glob("wayland-*") if not p.name.endswith(".lock")),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                resolved["WAYLAND_DISPLAY"] = candidates[0].name
+        if "SWAYSOCK" not in os.environ:
+            candidates = sorted(
+                uid_dir.glob("sway-ipc.*.sock"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                resolved["SWAYSOCK"] = str(candidates[0])
+    except OSError:
+        # No /run/user/$UID at all, a permissions fault, anything —
+        # this function's whole contract is "best effort," and an
+        # empty result here is indistinguishable from a host with no
+        # sockets to find, which every caller already handles.
+        return {}
+    return resolved
+
+
+def _sway_modal_exists(timeout: float = 5, env: dict[str, str] | None = None) -> bool:
+    """One `swaymsg -t get_tree` round trip, answering whether a
+    `castle-modal` window exists right now.
+
+    Silent on every failure — no `swaymsg`, no Sway, a malformed or
+    truncated tree, anything — which is what lets `cmd_notify_waiter`
+    treat "cannot tell" the same as "does not exist" rather than
+    crashing a best-effort channel over a `swaymsg` hiccup. Shared by
+    the one check that used to be inline here and the launch-poll loop
+    below it, which is a second caller for exactly the same question,
+    not a coincidence: both are "does the window I am about to act on
+    the presence or absence of actually exist right now," asked at two
+    different moments.
+
+    `env`, when given, is the process environment `swaymsg` runs under
+    — `cmd_notify_waiter` passes its own `_resolve_wayland_env()`-
+    augmented environment so this check can find a `SWAYSOCK` neither
+    of them started with. `None` (the default) inherits this process's
+    own environment unchanged, `subprocess.run`'s ordinary behavior.
+    """
+    try:
+        tree = subprocess.run(
+            ["swaymsg", "-t", "get_tree"], check=False, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if tree.returncode != 0:
+        return False
+    try:
+        return _tree_has_app_id(
+            json.loads(tree.stdout.decode("utf-8", errors="replace")), "castle-modal"
+        )
+    except ValueError:
+        return False
+
+
+def cmd_notify_waiter(args: argparse.Namespace) -> int:
+    """The detached half of `_fire_notification` (docs/tasks/0034 §3).
+    Internal: spawned by the router, never typed by a human. Silent on
+    every failure but one — this is the same best-effort channel, one
+    process later — with a single exception: a `foot` that was launched
+    but never registers a `castle-modal` window with Sway prints one
+    line to stderr instead of returning silently (see the launch-poll
+    loop below). Every other early return here is either the expected
+    shape of an ordinary run or a genuine "nothing more to say."
+
+    **The check-then-launch step is serialized, not merely checked**
+    (Codex's cross-model review on this task's PR, agreed as real): two
+    notifications clicked close together with no modal open could both
+    run `_sway_modal_exists()`, both see `False` before either had
+    launched a window, and both exec `foot` — the double modal the
+    brief's own edge-case paragraph says must not happen (two compose
+    buffers, a read cursor written from two processes). Everything from
+    the re-check onward runs under `notify_waiter_lock_path`, taken
+    with `acquire_lock_bounded` (~5s, then proceeds unlocked — see that
+    function's docstring for why a bounded wait, not `acquire_lock` or
+    `acquire_lock_blocking`, is the right shape here). The check asks
+    Sway rather than reaching into a live modal (a control socket or a
+    signal is more machinery than the case earns): two modals would
+    mean two compose buffers and a read cursor written from two
+    processes, so an existing window is focused instead of duplicated,
+    accepting that it stays on whatever view it was on — the clicked
+    item is one Tab away, at the top of the list.
+
+    **`foot` is launched with `Popen`, not `os.execvp`.** The old code
+    exec'd it — replacing this process's own image with `foot`'s,
+    which is why there was nothing left afterward to release a lock
+    with. Serializing the check-then-launch step means something has
+    to stay alive to hold the lock across the launch and release it
+    only once the launch is confirmed (or given up on) — `exec` cannot
+    do that by construction, since the process holding the lock is
+    gone the instant it runs. `Popen` keeps this process alive exactly
+    long enough to do that, then exits normally; the spawned `foot`
+    survives that exit the ordinary way an orphaned child does
+    (reparented, not killed), and is started with `start_new_session`
+    for the same reason `_fire_notification` starts this whole waiter
+    that way — detached from whatever session spawned it, so nothing
+    about this process exiting can signal it.
+
+    **The lock is held until the new window is confirmed, not merely
+    until `foot` is launched.** A waiter that released the instant
+    `Popen` returned would still let a second waiter, next in line for
+    the lock, run its own check before the new `foot` window has
+    actually registered with Sway — the identical race one layer later.
+    So the launch is followed by a bounded poll
+    (`NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT`, ~2s) for `_sway_modal_exists`
+    to turn true, and the lock is released only after that poll ends,
+    successfully or not — a waiter that gives up waiting still
+    releases the lock rather than holding it for the bounded 5s a
+    queued waiter would then also spend.
+
+    `swaymsg` and `foot` are resolved on $PATH, which is also what lets
+    the headless harness stand fakes in for both.
+    """
+    raw = os.environ.get("CASTLE_NOTIFY_COMMAND")
+    if raw is None:
+        raw = "notify-send"
+    if not raw.strip():
+        return 0
+    try:
+        base = shlex.split(raw)
+    except ValueError:
+        return 0
+    if not base:
+        return 0
+    argv = base + [
+        "--app-name=castle",
+        f"--action={NOTIFY_ACTION_NAME}=Open",
+        args.title,
+        args.body,
+    ]
+    try:
+        # No timeout, deliberately: mako's default keeps a notification
+        # until it is dismissed, and a waiter killed early is a click
+        # that silently does nothing. The accepted cost is one idle
+        # process per unclicked notification until expiry.
+        proc = subprocess.run(argv, check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    chosen = proc.stdout.decode("utf-8", errors="replace").strip() if proc.stdout else ""
+    if chosen != NOTIFY_ACTION_NAME:
+        return 0
+
+    # Only what was actually missing is added, so a real host's own
+    # environment (in particular one where modules/home's session
+    # import already did this job) is never second-guessed — see
+    # `_resolve_wayland_env`'s own docstring for the mechanism this is
+    # a fallback for, not a replacement of.
+    waiter_env = {**os.environ, **_resolve_wayland_env()}
+
+    lock = acquire_lock_bounded(notify_waiter_lock_path(), NOTIFY_WAITER_LOCK_TIMEOUT)
+    try:
+        if _sway_modal_exists(env=waiter_env):
+            try:
+                subprocess.run(
+                    ["swaymsg", '[app_id="castle-modal"] focus'], check=False, timeout=5,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=waiter_env,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+            return 0
+        try:
+            subprocess.Popen(
+                [
+                    "foot", "--app-id=castle-modal", "-e",
+                    "castle-modal", "--mode", "inbox", "--focus", args.record_id,
+                ],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True, env=waiter_env,
+            )
+        except OSError:
+            return 0
+        # Bounded, not indefinite: a `foot` that never registers (a
+        # dead compositor, a hung binary) must not hold this lock
+        # forever — every OTHER waiter queued behind it inherits that
+        # hang otherwise. Each `_sway_modal_exists` call is itself
+        # capped to whatever of the budget remains, so one slow
+        # `swaymsg` round trip cannot alone blow past the bound.
+        deadline = time.monotonic() + NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT
+        registered = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if _sway_modal_exists(timeout=min(1.0, remaining), env=waiter_env):
+                registered = True
+                break
+            time.sleep(0.1)
+        if not registered:
+            # The one failure this otherwise-silent channel is worth
+            # breaking silence for (code-review finding on this task's
+            # PR): every other early return above is either the
+            # expected shape of an ordinary run (dismissed, expired, no
+            # Sway to ask) or has nothing more to say than the OSError
+            # already would. This one is different — a resident clicked
+            # "open," a window was launched, and swaymsg never once
+            # reported it existing, which is indistinguishable from the
+            # resident's perspective from the click doing nothing at
+            # all, and would otherwise leave zero trace anywhere to
+            # investigate from. Reaches wherever this process's own
+            # stderr goes (see `_fire_notification`'s Popen call) —
+            # a systemd-triggered sweep's own unit journal, or a
+            # hand-run `castle route`'s terminal. Names one concrete,
+            # checkable cause rather than staying generic: a foot
+            # spawned from a systemd user unit with no WAYLAND_DISPLAY
+            # or SWAYSOCK in its environment cannot connect to the
+            # compositor and dies immediately, silently, on its own —
+            # this is the one thing standing between "launched" and
+            # "registered" that this waiter cannot see from here.
+            print(
+                f"castle notify-waiter: launched foot for {args.record_id} but no "
+                f"castle-modal window registered with Sway within "
+                f"{NOTIFY_WAITER_LAUNCH_POLL_TIMEOUT:g}s — the click may have done "
+                "nothing visible. A missing WAYLAND_DISPLAY or SWAYSOCK in this "
+                "process's environment is one known cause (foot cannot connect to "
+                "a compositor it cannot find, and exits before mapping a window).",
+                file=sys.stderr,
+            )
+        return 0
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def _find_root_request(records: dict[str, Record], rec: Record) -> Record | None:
@@ -2778,66 +3158,76 @@ def _route_journal_locked() -> int:
         )
         appended.append((decision_id, rec.id, channel))
         if channel == "notify":
-            summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
-            # 200 characters is the cap on the whole body, not on the
-            # part before the hint: appending after the slice would let
-            # a question notification run to 230 and defeat the limit
-            # rather than spend it. The hint is the part worth keeping
-            # whole, so the summary yields the room.
-            notification_body = summary[:200]
-            if rec.type == "question":
-                # The notification is the only *push* channel this system
-                # has, so a resident who never opens a surface on their
-                # own would otherwise learn that a question exists but
-                # not how to close it — and would fall back to `castle
-                # answer <id>`, the exact CLI dependency
-                # docs/tasks/0022-answer-in-ui.md exists to remove. Only
-                # `question` gets the suffix: there is nothing for a
-                # `result` to be answered, and an unconditional suffix
-                # would be noise on the case it does not apply to.
-                #
-                # CHORD COUPLING: "Mod4+Shift+a" is prose here and a real
-                # binding in modules/home/default.nix's keybindings
-                # attrset. Change one and grep for the other — two
-                # hardcoded mentions of the *compose* chord went stale
-                # exactly this way when docs/tasks/0019 moved it, and
-                # were only found two tasks later. run_status's "Press
-                # Mod4+Shift+Return and describe one." line and
-                # castle-modal's answer mode carry the same coupling.
-                #
-                # Appended with a space rather than a newline: the
-                # notify command is invoked as `<command> <title>
-                # <body>`, and a body carrying an embedded newline is
-                # one argument to the daemon but two lines to anything
-                # logging it — test/agent-loop/notify-stub.sh counts
-                # lines to prove the channel fired exactly twice. A
-                # notification body is wrapped by the daemon anyway, so
-                # the newline bought nothing and cost a false failure in
-                # a harness this task does not otherwise touch.
-                #
-                # **The verb names the act, and a proposal is not
-                # answered.** Selected from `PROPOSAL_SHA256_FIELD`, the
-                # same predicate `_errand_state`'s three-way overlay
-                # and castle-modal's picker use — never from the
-                # wording. This is the surface `PROPOSAL_QUESTION_BODY`
-                # calls "bound hardest by no internal vocabulary", and
-                # it is the only push channel this system has, so
-                # telling a resident to go and *answer* a change they
-                # are being asked to approve, reject or set aside is
-                # the wrong instruction on the one line they may read
-                # without opening anything.
-                #
-                # Two-way here, not three-way: a notification is fired
-                # per record, so there is exactly one question in view
-                # and no mixed case to fall back for.
-                verb = (
-                    "review"
-                    if rec.fields.get(PROPOSAL_SHA256_FIELD, "").strip()
-                    else "answer"
-                )
-                hint = f" Press Mod4+Shift+a to {verb}."
+            # docs/tasks/0034 §3: the notification names what kind of
+            # thing is waiting and — for a WORKER result — carries the
+            # request's OWN words, because the resident should never
+            # have to remember what they asked from a bare "result".
+            # The router already holds the originating request (root,
+            # above); a record whose refs chain reaches none falls back
+            # to its own first line, the pre-0034 body.
+            #
+            # **Scoped to `seat: worker`, not every result.** An
+            # applier-seat result's own first line is not a fallback —
+            # it is the whole point of `APPLY_FIRST_LINES`
+            # (docs/tasks/0026-apply-validate.md §H), harness prose
+            # drafted specifically to be what this notification says;
+            # `_write_apply_result`'s own docstring already states the
+            # contract this task's blanket "prefer the request's words"
+            # rule broke: "the body's first line is harness prose
+            # drafted in APPLY_FIRST_LINES — `_fire_notification` takes
+            # exactly that line." An apply result's `refs` chain reaches
+            # the same root request its ORIGINAL worker result did, so
+            # unscoped this rule silently replaced "The change you
+            # approved is now in your configuration repository..." with
+            # the request's first line again — the exact words the
+            # resident already saw notified once, when the worker
+            # finished, now standing in for an entirely different
+            # event. Found by `test/agent-loop/apply.sh`'s own
+            # notification assertion once it was fixed to poll instead
+            # of reading the log immediately (the detached waiter this
+            # task added made the old synchronous read racy, and fixing
+            # the race is what let the assertion actually run and
+            # catch this). Any future seat with a comparably drafted
+            # first line belongs in this same exclusion, not a growing
+            # list of what to override case by case — worker results
+            # are the one kind this rule was written for.
+            if rec.type == "result" and rec.fields.get("seat") == "worker":
+                if root is not None:
+                    title = "Castle: your request has an answer"
+                    source = root.body
+                else:
+                    title = "Castle: an answer for you"
+                    source = rec.body
+                summary = source.strip().splitlines()[0] if source.strip() else rec.type
+                notification_body = summary[:200]
+            elif rec.type == "result":
+                # Every non-worker result seat (today: only the
+                # applier), and any result with no `seat` field at all
+                # (none should exist, but an absent field must not
+                # crash the router): its own first line, the pre-0034
+                # body and the only line `_write_apply_result` ever
+                # drafted this text to be shown as.
+                title = "Castle: your request has an answer"
+                summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
+                notification_body = summary[:200]
+            else:
+                # A question's own words are the actionable text, so
+                # they stay the body; the request's words already sit
+                # behind the click. The hint names the one chord that
+                # remains — CHORD COUPLING: Mod4+Shift+Return is prose
+                # here and a real binding in modules/home/default.nix;
+                # change one and grep for the other. The verb comes
+                # from the proposal stamp, never the wording, exactly
+                # as before.
+                summary = rec.body.strip().splitlines()[0] if rec.body.strip() else rec.type
+                if rec.fields.get(PROPOSAL_SHA256_FIELD, "").strip():
+                    title = "Castle: a change for you to review"
+                    hint = " Press Mod4+Shift+Return to review."
+                else:
+                    title = "Castle: a question for you"
+                    hint = " Press Mod4+Shift+Return to answer."
                 notification_body = summary[: 200 - len(hint)] + hint
-            _fire_notification(f"Castle Turing — {rec.type}", notification_body)
+            _fire_notification(title, notification_body, rec.id)
 
     if not appended:
         print("route: nothing unrouted; no decision records appended")
@@ -9071,6 +9461,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_apply.set_defaults(func=cmd_apply)
+
+    p_waiter = sub.add_parser(
+        "notify-waiter",
+        help=(
+            "internal: the detached notification-action waiter the router "
+            "spawns (docs/tasks/0034); not for humans"
+        ),
+    )
+    p_waiter.add_argument("record_id")
+    p_waiter.add_argument("title")
+    p_waiter.add_argument("body")
+    p_waiter.set_defaults(func=cmd_notify_waiter)
 
     p_digest = sub.add_parser("digest", help="fold the journal into a report")
     p_digest.add_argument("--since", default=None, help="only errands created at/after this timestamp")
