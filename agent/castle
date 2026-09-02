@@ -1227,7 +1227,9 @@ def apply_in_flight_path(answer_id: str) -> pathlib.Path:
 # the process it must not disturb did not use is not safe. No turn
 # outlives its own timeout — `run_worker_turn` kills the tenant's
 # process group and unlinks both files — so a day cannot reach a live
-# turn's scratch under any timeout a resident would set.
+# turn's scratch under any timeout `worker_timeout_seconds()` can
+# return; that function clamps below this constant for exactly that
+# reason.
 WORK_SCRATCH_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
@@ -3555,6 +3557,16 @@ def worker_timeout_seconds() -> int:
     CASTLE_NOTIFY_COMMAND: warn on stderr, fall back to the default,
     never refuse to do the work. A misconfigured timeout must not be
     the reason an errand doesn't run.
+
+    Clamped below `WORK_SCRATCH_MAX_AGE_SECONDS`: `work_scratch_dir()`
+    argues that a sweep's age-based prune can never reach a live
+    turn's scratch files because no turn outlives its own timeout.
+    That argument is only true if every value this function can
+    return stays under the prune's cutoff — `worker.timeoutSeconds`
+    (modules/agent) is an unbounded `ints.positive`, so without this
+    clamp a resident configuring a turn longer than a day would let a
+    concurrent sweep delete that turn's own scratch files while it is
+    still running, out from under it.
     """
     raw = os.environ.get("CASTLE_WORKER_TIMEOUT")
     if raw is None or not raw.strip():
@@ -3575,6 +3587,16 @@ def worker_timeout_seconds() -> int:
             file=sys.stderr,
         )
         return DEFAULT_WORKER_TIMEOUT_SECONDS
+    if value >= WORK_SCRATCH_MAX_AGE_SECONDS:
+        clamped = WORK_SCRATCH_MAX_AGE_SECONDS - 1
+        print(
+            f"castle work: CASTLE_WORKER_TIMEOUT ({raw!r}) is not less than the "
+            f"worker scratch retention window ({WORK_SCRATCH_MAX_AGE_SECONDS}s); "
+            f"using {clamped} so a live turn's scratch files cannot age past a "
+            "sweep's prune cutoff before the turn ends",
+            file=sys.stderr,
+        )
+        return clamped
     return value
 
 

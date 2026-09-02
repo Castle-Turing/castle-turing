@@ -907,6 +907,28 @@ touch -d '2020-01-01T00:00:00Z' "$STALE_SCRATCH"
 rm -f "$FRESH_SCRATCH"
 
 # ---------------------------------------------------------------------
+log "  -- and a worker timeout at or beyond the prune's cutoff is clamped below it, not honored"
+# ---------------------------------------------------------------------
+# The bug this proves fixed: `worker.timeoutSeconds` (modules/agent) is
+# an unbounded `ints.positive`. `work_scratch_dir()`'s prune argument —
+# no turn outlives its own timeout, so a sweep's age-based cutoff can
+# never reach a live turn's scratch — only holds if every timeout this
+# tool can act on stays under that cutoff. Without the clamp, a
+# resident configuring a turn longer than a day would let a concurrent
+# sweep delete that turn's own scratch files while it was still
+# running.
+REQ_LONGTIMEOUT="$("$CASTLE" ask "Dispatch test: a worker timeout beyond the scratch retention window is clamped.")"
+CASTLE_WORKER_TIMEOUT=100000 CASTLE_WORKER_COMMAND="$WORKER_SCRATCH" \
+  SCRATCH_WITNESS_OUT="$WORKDIR/longtimeout-witness.txt" \
+  "$CASTLE" dispatch >/dev/null 2>"$WORKDIR/longtimeout-sweep.err" \
+  || fail "the long-timeout sweep exited nonzero"
+grep -qF 'CASTLE_WORKER_TIMEOUT' "$WORKDIR/longtimeout-sweep.err" \
+  || fail "a CASTLE_WORKER_TIMEOUT of 100000s (over a day) was not flagged as clamped"
+RESULT_LONGTIMEOUT_FILE="$(referencing result "$REQ_LONGTIMEOUT")"
+[ -n "$RESULT_LONGTIMEOUT_FILE" ] || fail "the long-timeout turn left no result"
+grep -q '^outcome: completed$' "$RESULT_LONGTIMEOUT_FILE" || fail "$RESULT_LONGTIMEOUT_FILE does not carry outcome: completed"
+
+# ---------------------------------------------------------------------
 log "the reference tenant declares its sandbox and refuses paths outside it, without spending a model call"
 # ---------------------------------------------------------------------
 # The half neither of the cases above can reach: `castle work` is not
