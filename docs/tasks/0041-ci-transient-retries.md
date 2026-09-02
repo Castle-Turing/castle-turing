@@ -28,19 +28,40 @@ signature and 1 otherwise. Signatures land here only once actually
 observed and confirmed transient; a real regression that happens to
 print a similar string must not get a free retry.
 
-`vm-install-test.yml`'s "Run the install-loop harness" step and
-`desktop-loop-test.yml`'s "Build and run the desktop-loop test" step
-each wrap their real work in a two-attempt loop: run once, and only if
-it fails AND the failure's log matches the script above, run exactly
-once more. A second failure — matched or not — is surfaced as the
-step's real exit code; nothing retries twice. These are the two jobs
-the incident actually hit and the two slow enough (30–40 minute
-budgets) that a wasted run is expensive; `check.yml`'s nix-using jobs
+`test/ci/retry-on-known-transient.sh` is the loop itself, shared by
+both jobs rather than duplicated inline in each workflow file (an
+earlier draft inlined a near-identical ~12-line loop separately in
+`vm-install-test.yml` and `desktop-loop-test.yml`; `/code-review`
+caught the duplication — see "Judgment calls and course corrections"
+below). `vm-install-test.yml`'s "Run the install-loop harness" step
+and `desktop-loop-test.yml`'s "Build and run the desktop-loop test"
+step now just call it: run once, and only if it fails AND the
+failure's log matches the signature script above, run exactly once
+more. A second failure — matched or not — is surfaced as the step's
+real exit code; nothing retries twice. These are the two jobs the
+incident actually hit and the two slow enough (30–40 minute budgets)
+that a wasted run is expensive; `check.yml`'s nix-using jobs
 (`flake-check`, `sway-config-check`) touch the same cache and could in
 principle hit the same signature, but they finish in under a minute,
-so a human's own manual re-run costs little and extending the same
-script to them is a mechanical follow-up, not something this brief
-scopes in.
+so a human's own manual re-run costs little, and pointing them at the
+same shared script is a one-line mechanical follow-up, not something
+this brief scopes in.
+
+The script's `--stdout FILE` option covers `desktop-loop-test.yml`'s
+special case: `nix build --print-out-paths` writes a store path to
+stdout that the next step trusts unconditionally (see that step's own
+comment, added after a real incident where a masked build failure
+turned an empty out-path file into `cp -r "$OUT"/.` copying the
+runner's entire filesystem). With `--stdout` given, only the command's
+stderr — the `-L` log — is captured and grepped for a signature match;
+stdout is redirected straight to the named file, untouched by the
+retry's own bookkeeping. Verified locally end to end against a mock
+command standing in for both `run.sh` and `nix build`: success on the
+first try; fail + signature match + succeed on retry (including that
+`--stdout`'s file ends up holding only the successful attempt's
+output, not the failed attempt's); fail + match twice, still surfaces
+the real exit code with no third attempt; fail with no signature
+match, gives up immediately.
 
 **A subtlety that cost real iteration:** GitHub's default shell for a
 `run:` step with no `shell:` key is `bash -e {0}` — `-e` only, no
@@ -48,28 +69,15 @@ scopes in.
 `desktop-loop-test.yml` from an earlier incident. `-e` does not abort
 on a command that is the test-part of an `if`/`while`/`until`, but it
 does abort on a bare pipeline statement. A first draft of the retry
-loop wrote the pipeline as a bare statement before checking
-`${PIPESTATUS[0]}` on the next line, which meant the *first* transient
-failure would `exit` the whole script (via `-e`) before the retry
-logic on the next line ever ran — no error message, just the job going
-red on attempt one, retry code dead on arrival. Both loops now put the
-pipeline directly inside the `if` condition, which both keeps `-e`
-from firing and (with `pipefail` set) makes the `if`'s own truthiness
-reflect the real command's exit code rather than `tee`'s. Verified
-locally with a mock command run under `bash -e` for all four
-transitions (succeeds first try; fails once + matches + succeeds on
-retry; fails twice + matches, still surfaces the real code; fails once
-+ doesn't match, gives up immediately) — see the brief's Verification
-section for what wasn't and couldn't be checked this way.
-
-`desktop-loop-test.yml`'s step additionally groups the `nix build`
-invocation in `{ ...; }` so `--print-out-paths`'s stdout still lands in
-its own clean file untouched by the retry's pipe (the next step trusts
-that file unconditionally — see its own comment, added after a real
-incident where a masked build failure turned an empty out-path file
-into `cp -r "$OUT"/.` copying the runner's entire filesystem). Only the
-group's stderr — the `-L` log — flows through the pipe to `tee`, which
-is what gets grepped for a signature match.
+loop (before it was factored into the shared script) wrote the
+pipeline as a bare statement before checking `${PIPESTATUS[0]}` on the
+next line, which meant the *first* transient failure would `exit` the
+whole script (via `-e`) before the retry logic on the next line ever
+ran — no error message, just the job going red on attempt one, retry
+code dead on arrival. The shared script's loop puts the pipeline
+directly inside the `if` condition instead, which both keeps `-e` from
+firing and (with `pipefail` set) makes the `if`'s own truthiness
+reflect the real command's exit code rather than `tee`'s.
 
 ## KVM audit
 
@@ -123,6 +131,31 @@ backlog entry if it recurs).
   merge — the in-step retry chosen here can be, which matters given
   this repo's verification plan below.
 
+## Judgment calls and course corrections
+
+`/code-review` (scoped against `origin/main`, per this repo's
+convention) ran on an earlier version of this branch where the retry
+loop was written inline, separately, in each of the two workflow
+files. It found two things, both fixed in this version:
+
+1. The retry-notice line (`echo "$msg" | tee -a
+   "$GITHUB_STEP_SUMMARY"`) was a bare pipeline, not the test-part of
+   an `if`/`while`, so — under the same `-e`+`pipefail` combination
+   this task's whole design has to work around — a failure to write
+   `$GITHUB_STEP_SUMMARY` (disk pressure, a GH runner quirk, anything)
+   would abort the step via `tee`'s own exit code instead of
+   proceeding to the retry the task exists to guarantee. Fixed by
+   switching to a plain `>>` redirect guarded by `[ -n
+   "${GITHUB_STEP_SUMMARY:-}" ]` and `|| true`, in
+   `test/ci/retry-on-known-transient.sh`.
+2. The ~12-line loop was duplicated near-verbatim between the two
+   workflow files, unlike the signature list, which already lived in
+   one script. Fixed by factoring the loop itself into
+   `test/ci/retry-on-known-transient.sh` and having both workflow
+   steps call it (with a `--stdout FILE` option covering
+   `desktop-loop-test.yml`'s need to keep the build's stdout clean of
+   the retry's own capture/logging).
+
 ## Verification
 
 Nix workflow YAML cannot be fully proven locally — this development
@@ -133,15 +166,19 @@ locally:
 - Careful manual review of both edited workflow files for YAML
   structure (consistent indentation, no tabs, `run: |` blocks read
   correctly with `cat -A`).
-- `bash -n` on `test/ci/known-transient-ci-failure.sh`, plus direct
-  execution against a matching and a non-matching fixture log,
-  confirming exit 0 / exit 1 respectively.
-- The `-e`/`if`-condition control flow (the subtlety above) was proven
-  against a mock command run under `bash -e {0}` — the exact shell
-  invocation GitHub Actions uses — covering all four attempt/outcome
-  combinations described above.
+- `bash -n` on both `test/ci/known-transient-ci-failure.sh` and
+  `test/ci/retry-on-known-transient.sh`.
+- `known-transient-ci-failure.sh` run directly against a matching and
+  a non-matching fixture log, confirming exit 0 / exit 1 respectively.
+- `retry-on-known-transient.sh` run end to end under `bash -e {0}` —
+  the exact shell invocation GitHub Actions uses for a `run:` step —
+  against a mock command covering all four attempt/outcome
+  combinations described above, in both its plain and `--stdout` modes
+  (the latter confirmed to leave the out-path file holding only the
+  successful attempt's output, not a failed attempt's).
 - The KVM audit above: read every job in every workflow file and
   traced which ones can reach `/dev/kvm`.
+- `/code-review` against `origin/main`, findings addressed above.
 
 What only a real CI run on this PR proves, and what a reviewer should
 look for:

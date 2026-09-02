@@ -106,43 +106,17 @@ jobs:
       # deserve-retries-not-vigilance.md's PR #63 incident (FlakeHub's
       # login endpoint returning a transient auth error, then the GitHub
       # Actions cache rate-limiting narinfo downloads into HTTP 418s).
-      # test/ci/known-transient-ci-failure.sh holds the one commented
-      # signature list this checks against; a failure that doesn't match
-      # is a real regression and gets exactly zero retries, surfaced as
-      # this step's real exit code. At most one retry, ever: a second
-      # failure — matched or not — is surfaced as-is, because two
-      # failures on the same runner are no longer "transient" by this
-      # entry's own definition.
-      #
-      # `${PIPESTATUS[0]}` is what makes the retry below trust run.sh's
-      # own exit code rather than `tee`'s — the same class of bug
-      # vm-install-test.yml's sibling workflow (desktop-loop-test.yml,
-      # "Build and run" step) already carries a scar from. `pipefail` is
-      # set so the `if` condition's own truthiness reflects run.sh's
-      # exit code too (without it, `tee` succeeding would make the `if`
-      # true regardless of run.sh). The pipeline sits in an `if`
-      # condition on purpose: this runner's default shell is `bash -e
-      # {0}` (see the comment on desktop-loop-test.yml's analogous step
-      # for how that was confirmed) and `-e` does not abort on a
-      # command that is the test-part of an `if`/`while`, which is the
-      # only reason a failing run.sh doesn't kill this script before the
-      # retry logic below ever runs.
+      # test/ci/retry-on-known-transient.sh (shared with the sibling
+      # desktop-loop-test.yml workflow's identical need) holds the retry
+      # loop itself; test/ci/known-transient-ci-failure.sh holds the one
+      # commented signature list it checks a failure's log against. A
+      # failure that doesn't match is a real regression and gets
+      # exactly zero retries, surfaced as this step's real exit code. At
+      # most one retry, ever: a second failure — matched or not — is
+      # surfaced as-is, because two failures on the same runner are no
+      # longer "transient" by this entry's own definition.
       - name: Run the install-loop harness
-        run: |
-          set -uo pipefail
-          attempt=1
-          while :; do
-            if test/vm-install/run.sh 2>&1 | tee /tmp/vm-install-run.log; then
-              exit 0
-            fi
-            status="${PIPESTATUS[0]}"
-            if [ "$attempt" -ge 2 ] || ! test/ci/known-transient-ci-failure.sh /tmp/vm-install-run.log; then
-              exit "$status"
-            fi
-            msg="Attempt $attempt failed with a known-transient CI signature (see test/ci/known-transient-ci-failure.sh); retrying once."
-            echo "$msg" | tee -a "$GITHUB_STEP_SUMMARY"
-            attempt=$((attempt + 1))
-          done
+        run: test/ci/retry-on-known-transient.sh -- test/vm-install/run.sh
         env:
           CASTLE_HARNESS_LOG_DIR: ${{ github.workspace }}/test/vm-install/harness-logs
 
