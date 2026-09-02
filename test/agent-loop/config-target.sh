@@ -784,18 +784,28 @@ log "the rendered prompt never contradicts itself about the mechanism checkout"
 # only reliable fix is to stop matching against wrapped prose.
 PROMPT_RENDER="$WORKDIR/render-tenant.sh"
 sed 's|^exec claude.*|cat <\&3|' "$REPO_ROOT/agent/castle-worker-claude" > "$PROMPT_RENDER"
+# The deliverable paths this probe hands over, and the home directory
+# the tenant is told to measure them against. Since docs/tasks/0039 the
+# reference tenant declares its sandbox — writes only beneath the
+# resident home directory it is given — and refuses before rendering
+# anything when the two output files fall outside it. These were
+# /dev/null, which is outside any home; the probe never writes either
+# file (the exec is replaced by `cat <&3` above), so what they need to
+# be is inside the declared sandbox, not real.
+RENDER_HOME="$WORKDIR/render-home"
+mkdir -p "$RENDER_HOME"
 render_prompt() {
   # $1 is one of: usable | invalid | absent
   local packet='CASTLE-PACKET-0123456789abcdef a rendering probe, not a real packet'
   case "$1" in
-    usable)  env CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE=/dev/null CASTLE_TARGET_FILE=/dev/null \
+    usable)  env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT="$MECHANISM" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
-    invalid) env CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE=/dev/null CASTLE_TARGET_FILE=/dev/null \
+    invalid) env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT_INVALID="$NOT_A_CHECKOUT" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
     absent)  env -u CASTLE_MECHANISM_ROOT -u CASTLE_MECHANISM_ROOT_INVALID \
-               CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE=/dev/null CASTLE_TARGET_FILE=/dev/null \
+               HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
   esac

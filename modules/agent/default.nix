@@ -85,7 +85,13 @@ in
       description = ''
         Where the `castle` CLI's journal (and the resident model) live
         — see docs/architecture.md's "Where runtime state lives" and
-        docs/private-layer.md. This is a path to a durable, git-tracked
+        docs/private-layer.md. A `work/` subdirectory appears here too,
+        holding a worker turn's two output files while it runs: they
+        have to sit somewhere the worker tenant can write, and the
+        default tenant is sandboxed to the resident's home directory
+        (docs/tasks/0039-worker-writable-deliverables.md). It is
+        scratch, not records — emptied as each turn ends, and swept of
+        anything a killed turn left behind. This is a path to a durable, git-tracked
         directory on the host, never a value this repo can guess
         correctly, so the default is `null`: the CLI then falls back to
         its own `$XDG_STATE_HOME/castle` / `~/.local/state/castle`

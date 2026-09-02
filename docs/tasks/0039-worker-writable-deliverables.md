@@ -255,6 +255,38 @@ Automated, and all of it must pass before this is proposed:
   test of the wrapper's pre-exec guard; it needs no model.
 - `nix flake check`.
 
+- One assertion that the *rendered* prompt carries change 4's rule,
+  in the same harness, since a prompt rule nothing checks is a
+  comment.
+
+## Smaller decisions, recorded during implementation
+
+**Two existing harnesses set `HOME` to their own workdir rather than
+being exempted from the wrapper's guard.** `resume.sh` and
+`config-target.sh` both invoke `agent/castle-worker-claude` directly
+with stub deliverable paths under a `/tmp` workdir, so change 3
+correctly refused them and their E2BIG and prompt-rendering
+assertions stopped running. Saying `HOME=$WORKDIR` on those
+invocations states "this fixture is configured the way this task
+requires"; pointing the guard somewhere it cannot look would be a
+test that disables the mechanism standing next to it.
+
+**Every sweep creates `<stateDir>/work/`, including
+`--watermark-only`.** The prune runs under the sweep lock before
+anything else, and `work_scratch_dir()` creates the directory as a
+side effect of being asked what is in it. That is after
+`cmd_dispatch`'s "does the state directory exist at all" guard, so it
+cannot defeat the pre-creation hazard docs/tasks/0021 built that
+guard for. The visible consequence is an empty `work/` beside the
+journal on a host that has never run a turn, which is honest about
+the layout and costs nothing.
+
+**The new location is documented where a resident would look for
+it:** `agent/README.md`'s `work` subcommand entry and
+`castle.agent.stateDir`'s own option description. A directory that
+appears in the resident's private state without explanation is the
+kind of thing `castle validate` gets asked about later.
+
 **Read the artifacts, not the exit statuses.** Change 4 edits the
 generated prompt: render it and read the rule in place, confirming
 also that the added prose introduces no backtick and no unbalanced
