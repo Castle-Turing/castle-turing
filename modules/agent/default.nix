@@ -206,7 +206,12 @@ in
         measurement: long enough for a real `claude -p` errand, short
         enough that a hung tenant does not silently occupy the worker
         seat for the rest of the day. Raise it if your tenant
-        legitimately takes longer.
+        legitimately takes longer — but not to 24 hours or beyond:
+        `castle work` clamps the value below the worker scratch
+        retention window (with a warning on stderr), because a turn
+        that outlived the dispatch sweep's age-based prune would have
+        its own output files deleted out from under it
+        (docs/tasks/0039-worker-writable-deliverables.md §5).
 
         The guard lives in the tool, not as `RuntimeMaxSec=` on the
         dispatch unit, for one reason wearing two hats: a unit-level

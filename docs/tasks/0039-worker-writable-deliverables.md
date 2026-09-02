@@ -181,8 +181,18 @@ a sweep and a hand-run `castle work` can disagree about it, and a
 prune that computes its own safety margin from a number the process
 being protected did not use is not safe. No turn survives its own
 timeout — `run_worker_turn` kills the tenant's process group and
-unlinks — so 24 hours cannot reach a live turn's files by any
-configuration of that option a resident would set.
+unlinks — so 24 hours cannot reach a live turn's files.
+
+That last sentence was originally an assumption, and the cross-model
+review on this branch's PR caught it unenforced:
+`castle.agent.worker.timeoutSeconds` is an unbounded `ints.positive`
+whose own doc invites raising it, so a timeout past 24 hours would
+have let a concurrent sweep unlink a live turn's files. It is now
+enforced where the timeout is read: `worker_timeout_seconds()` clamps
+below `WORK_SCRATCH_MAX_AGE_SECONDS` with a stderr warning, the same
+tolerant posture it already takes toward an unparseable value. The
+clamp lives in the reader, not the Nix option, so a hand-run turn
+with an exported oversized timeout is clamped identically.
 
 Pruning is best-effort: an `OSError` on any entry is ignored and
 never fails a sweep. A scratch file this cannot delete is untidy; a

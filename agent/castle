@@ -4819,9 +4819,16 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # unlinked in the same `finally` as the diff — a tenant that
             # already knows how to write one output file needs no second
             # mechanism explained to it.
-            target_fd, target_path_str = tempfile.mkstemp(
-                prefix="castle-work-target-", dir=scratch_dir
-            )
+            try:
+                target_fd, target_path_str = tempfile.mkstemp(
+                    prefix="castle-work-target-", dir=scratch_dir
+                )
+            except OSError:
+                # The diff file exists by now; without this it would sit
+                # in the scratch directory until the age-based prune,
+                # orphaned by a turn that never started.
+                diff_path.unlink(missing_ok=True)
+                raise
             os.close(target_fd)
             target_path = pathlib.Path(target_path_str)
         except OSError as exc:
