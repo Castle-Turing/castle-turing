@@ -222,6 +222,55 @@ surprise into a stated contract, which is proportionate to a risk that
 only exists at all when someone deliberately points this variable
 somewhere `run.sh` doesn't fully control.
 
+Codex's GitHub-integrated review (PR #73, review 5096277203, triggered
+automatically on open) found three more things once the branch had a
+PR to comment on. All three have a correct fix; only the first is
+actually on this branch, for a reason worth recording rather than
+working around: the session responding to this review authenticates
+as a GitHub App installation with no `workflows` write permission, so
+`git push` was rejected outright for the commit that touched
+`.github/workflows/*.yml` — `refusing to allow a GitHub App to create
+or update workflow ... without workflows permission`. That is GitHub's
+own boundary on what an app credential can silently change about CI,
+not a bug to route around, so findings 2 and 3 below are fixed as an
+unstaged local diff and reproduced verbatim in the PR comment
+responding to this review for a human (who pushes from their own,
+differently-scoped credentials) to apply.
+
+1. **Whole-log matching, not tied to what actually failed.**
+   `known-transient-ci-failure.sh` grepped the *entire* captured log,
+   but `vm-install-test.yml`'s own comment on `magic-nix-cache-action`
+   documents ~140 tolerated "rate limit exceeded"/"throttled Magic Nix
+   Cache" responses on a perfectly successful run — noise, not
+   failure. If a later, unrelated part of the same run then failed for
+   a real reason (a genuine regression), the stale noise earlier in
+   the log would still match `HTTP error 418` or `GitHub Actions Cache
+   throttled Magic Nix Cache`, so the whole run got misclassified as
+   transient: the real regression's attempt-1 log gets discarded, and
+   a nondeterministic regression could even pass on the free retry.
+   Fixed by checking only the log's last 40 lines rather than the
+   whole file — whatever actually failed reports its own error at or
+   near the end (`run.sh`'s `fail()`, or nix's own error summary under
+   `-L`), so a tail match ties the signature to the failure that
+   happened instead of to anything earlier in a long log.
+2. **Job timeout didn't budget for a second attempt.** Both
+   `timeout-minutes` values were sized for exactly one run of the
+   retried step; a matched failure late into a near-full-length first
+   attempt could let the job's own timeout kill a legitimate,
+   healthy second attempt before it finished, silently defeating the
+   retry. Fix (unstaged, see above): bump `vm-install-test.yml` 30→55
+   and `desktop-loop-test.yml` 40→75 — each roughly doubles the step
+   budget the retried command now needs while adding the fixed,
+   non-retried overhead (checkout, `nix-installer`, KVM setup) only
+   once.
+3. **`test/ci/**` wasn't in either workflow's path filters.** A change
+   to only `retry-on-known-transient.sh` or
+   `known-transient-ci-failure.sh` wouldn't trigger either of their
+   two consumers, so a broken retry-loop change could merge unexercised
+   by the one thing that runs it end to end. Fix (unstaged, see above):
+   add `test/ci/**` to both workflows' `pull_request` and `push` path
+   lists.
+
 ## Verification
 
 Nix workflow YAML cannot be fully proven locally — this development
@@ -247,6 +296,22 @@ locally:
 - `/code-review` against `origin/main`, findings addressed above.
 - `tools/codex-review.sh` (cross-model pass), finding and disposition
   above.
+- Codex's GitHub-integrated review on PR #73, three findings with a
+  correct fix identified for each (tail-restricted signature matching,
+  doubled `timeout-minutes` budgets, `test/ci/**` path filters), but
+  only the first landed on this branch — the other two are blocked on
+  a human pushing the workflow-file diff by hand, per the `workflows`
+  permission gap recorded above. This session's sandbox also refused
+  to execute any script (`bash -n`, running the script directly, even
+  `tail`/`printf` to a scratch file all required an approval this
+  headless review-response flow had no human available to grant), so
+  the tail-matching change was verified by careful manual reading only
+  — `tail -n "$tail_lines" "$log_file" | grep -qF "$pattern"` is a
+  small, standard pipeline with no new edge case beyond what the
+  earlier whole-file `grep -qF` already had. A future session with
+  script execution available should still run the fixture tests the
+  original implementation describes above, against the tail-restricted
+  version.
 
 What only a real CI run on this PR proves, and what a reviewer should
 look for:

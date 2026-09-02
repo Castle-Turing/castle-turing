@@ -12,6 +12,19 @@
 # happens to print a similar string would otherwise get one free,
 # silent retry instead of surfacing.
 #
+# Only the log's tail is checked, not the whole file: vm-install-test.yml's
+# own comment on magic-nix-cache-action documents ~140 tolerated
+# "rate limit exceeded"/"throttled Magic Nix Cache" responses on a
+# perfectly successful run, and desktop-loop-test.yml's `-L` log can
+# carry the same benign noise from earlier in a build that then fails
+# later for an unrelated real reason. A whole-log grep would call that
+# real regression transient because of noise nowhere near the actual
+# failure. Whatever operation actually failed reports its own error at
+# or near the end of the log (run.sh's fail(), or nix's own error
+# summary under -L), so matching only the tail ties the signature to
+# the failure that happened, not to anything the log happened to see
+# earlier.
+#
 # Usage: known-transient-ci-failure.sh <log-file>
 # Exit 0 — the log matches a known-transient signature; one retry is
 #          warranted.
@@ -24,6 +37,7 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 log_file="$1"
+tail_lines=40
 
 # docs/backlog/ci-flakes-deserve-retries-not-vigilance.md: PR #63,
 # 2026-09-01. FlakeHub's login endpoint returned a transient auth error,
@@ -38,7 +52,7 @@ known_transient_signatures=(
 )
 
 for pattern in "${known_transient_signatures[@]}"; do
-  if grep -qF "$pattern" "$log_file"; then
+  if tail -n "$tail_lines" "$log_file" | grep -qF "$pattern"; then
     exit 0
   fi
 done
