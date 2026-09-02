@@ -540,8 +540,10 @@ Neither is reachable by `test/vm-install/`, whose fixture secret always
 decrypts, so both are verified by table-testing the *generated* unit
 across every shadow-field shape rather than by CI. The residual — that
 the banner's wording still describes a seeded password when the account
-has none — is filed as
-`docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md`.
+has none — was filed as
+`docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md`,
+since promoted to and fixed by
+`docs/tasks/0036-reminder-banner-states.md`.
 
 Nothing else needs editing as a consequence of keeping this machinery.
 `modules/agent/default.nix`'s comment citing `castle-password-reminder-check`
