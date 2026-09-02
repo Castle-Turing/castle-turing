@@ -245,6 +245,8 @@ locally:
 - The KVM audit above: read every job in every workflow file and
   traced which ones can reach `/dev/kvm`.
 - `/code-review` against `origin/main`, findings addressed above.
+- `tools/codex-review.sh` (cross-model pass), finding and disposition
+  above.
 
 What only a real CI run on this PR proves, and what a reviewer should
 look for:
