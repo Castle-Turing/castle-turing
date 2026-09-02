@@ -136,10 +136,23 @@ jobs:
       # retries. At most one retry, ever: a second failure — matched or
       # not — is surfaced as-is, because two failures on the same
       # runner are no longer "transient" by this entry's own definition.
+      #
+      # `sudo rm -rf /tmp/nix-build-*desktop-loop*` runs before every
+      # attempt, including the first (a no-op then): if attempt 1 is
+      # discarded as transient and retried, its --keep-failed build
+      # directory would otherwise still be sitting in /tmp when attempt
+      # 2 also fails, and the "Collect artifacts from a failed run" step
+      # below globs on that same path — the exact same class of
+      # discarded-attempt staleness fixed in test/vm-install/run.sh's
+      # own log directory for the sibling workflow, just fixed here at
+      # the call site instead of inside `nix build` itself, which has no
+      # such hook. `sudo` because that directory is owned by a nix
+      # build user, same reason the later collection step already needs
+      # it; `2>/dev/null` because "nothing to clean" is not an error.
       - name: Build and run the desktop-loop test
         run: |
           test/ci/retry-on-known-transient.sh --stdout /tmp/desktop-loop-out-path.txt -- \
-            nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths
+            bash -c 'sudo rm -rf /tmp/nix-build-*desktop-loop* 2>/dev/null; exec nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths'
 
       # The store path is validated, not trusted blindly: the same
       # failure this step's header comment describes (a masked `nix

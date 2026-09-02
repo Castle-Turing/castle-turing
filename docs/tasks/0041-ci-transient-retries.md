@@ -156,6 +156,27 @@ files. It found two things, both fixed in this version:
    `desktop-loop-test.yml`'s need to keep the build's stdout clean of
    the retry's own capture/logging).
 
+A second review pass (same command, after the fixes above) found a
+third problem the first two fixes didn't touch: `run.sh`'s
+`CASTLE_HARNESS_LOG_DIR` is a single fixed path CI reuses across a
+retried invocation, and `mkdir -p` alone left a discarded attempt's
+per-phase log files sitting in it alongside the differently-scoped
+attempt that actually failed and got surfaced — the uploaded artifact
+could then show, say, a `phase2d-*.od` file from the discarded attempt
+next to `phase1-*` files from the real failure, implying the failing
+run got further than it did. Fixed in `run.sh` itself: `rm -rf
+"$LOG_DIR"` before the existing `mkdir -p`, so every invocation —
+retried or not — starts from a clean directory. The same class of
+problem exists for `desktop-loop-test.yml`'s `--keep-failed` build
+directory (a discarded attempt's directory could survive to be
+copied into the failure artifact alongside the real attempt's, by the
+existing "Collect artifacts from a failed run" step's glob) — fixed
+at the call site, since `nix build` has no equivalent "clear my own
+scratch dir first" hook to edit: the command passed to
+`retry-on-known-transient.sh` now runs `sudo rm -rf
+/tmp/nix-build-*desktop-loop*` immediately before each attempt,
+including the first (a no-op then).
+
 ## Verification
 
 Nix workflow YAML cannot be fully proven locally — this development

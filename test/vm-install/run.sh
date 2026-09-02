@@ -33,6 +33,15 @@ HARNESS_DIR="$REPO_ROOT/test/vm-install"
 
 WORKDIR="$(mktemp -d /tmp/castle-vm-install.XXXXXX)"
 LOG_DIR="${CASTLE_HARNESS_LOG_DIR:-$WORKDIR/logs}"
+# docs/tasks/0041: CASTLE_HARNESS_LOG_DIR is a fixed path CI reuses
+# across a retried invocation (test/ci/retry-on-known-transient.sh runs
+# this script up to twice in the same job); `mkdir -p` alone would
+# leave a discarded first attempt's per-phase logs sitting alongside a
+# differently-scoped second attempt's, misleading whoever reads the
+# uploaded artifact about how far the run that actually failed got.
+# Every invocation of this harness — retried or not — starts from a
+# clean log directory.
+rm -rf "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 
 SSH_PORT="${CASTLE_HARNESS_SSH_PORT:-10222}"
