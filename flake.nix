@@ -51,6 +51,12 @@
         # uses; host modules declare only their device path
         # (castle.disk.device) — see modules/disk-layout.nix.
         diskLayout = ./modules/disk-layout.nix;
+        # The shared UEFI boot-loader posture (systemd-boot + the ESP
+        # fallback rationale). Bound into the host-* wrappers below, the
+        # same pattern as diskLayout, and deliberately NOT into base:
+        # the installer image imports base and boots the ISO profile's
+        # own loader — see modules/boot.nix.
+        boot = ./modules/boot.nix;
         # The resident's per-user environment (git identity today; more
         # to come). The wrapper binds this flake's home-manager pin so
         # consumers need neither input nor its own nixosModule import.
@@ -100,6 +106,7 @@
             nixos-hardware.nixosModules.dell-xps-13-9370
             disko.nixosModules.disko
             self.nixosModules.diskLayout
+            self.nixosModules.boot
             ./hosts/xps9370
           ];
         };
@@ -110,6 +117,7 @@
           imports = [
             disko.nixosModules.disko
             self.nixosModules.diskLayout
+            self.nixosModules.boot
             ./hosts/vm-test
           ];
         };
