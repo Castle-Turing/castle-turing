@@ -240,18 +240,26 @@ in
     # lock anyone out: worst case, a resident ignores it forever and
     # keeps the seeded password.
     #
-    # Mechanism: a root-run check compares the account's *current*
-    # shadow hash against the seed in `hashedPasswordFile` — root
+    # Mechanism: a root-run check classifies the account's *current*
+    # shadow field against the seed in `hashedPasswordFile` — root
     # already needs to read /etc/shadow for this, so it runs as a
     # systemd service rather than in each interactive shell (which runs
-    # as the resident, with no shadow access). It leaves a marker file
-    # behind once they differ *and the account actually has a password*
-    # — i.e. once `passwd` has genuinely been run; the marker (not the
-    # hash) is what the unprivileged shell-startup banner checks, so
-    # nagging genuinely stops the moment the password changes rather
-    # than running forever. "Differ" alone is not enough to conclude
-    # that, and the `case` in the script below is where that is
-    # enforced — read its comment before simplifying it away.
+    # as the resident, with no shadow access). It records what it found
+    # as at most one of two empty marker files, which are all the
+    # unprivileged shell-startup banner reads
+    # (docs/tasks/0036-reminder-banner-states.md):
+    #
+    #   password-changed — the field is a real hash differing from the
+    #     seed, i.e. `passwd` has genuinely been run. Banner: silent,
+    #     from the moment the password changes. "Differ" alone is not
+    #     enough to conclude this, and the `case` in the script below
+    #     is where that is enforced — read its comment before
+    #     simplifying it away.
+    #   password-absent — the field carries no usable password at all
+    #     (`!`, `!!`, `*` or empty), the state a seed that failed to
+    #     decrypt at account creation leaves behind.
+    #   neither — still on the seeded password, or never decidable.
+    #
     # The check re-runs at boot and
     # (via the path unit below) immediately whenever /etc/shadow is
     # touched, so it catches a same-session `passwd` too, not just the
@@ -278,21 +286,31 @@ in
       wantedBy = [ "multi-user.target" ];
       serviceConfig.Type = "oneshot";
       script = ''
-        marker=/var/lib/castle-turing/password-changed
-        mkdir -p "$(dirname "$marker")"
-        seed_file=${lib.escapeShellArg cfg.hashedPasswordFile}
-        if [ ! -r "$seed_file" ]; then
-          # The seed hasn't decrypted -- yet, or ever, per this task's
-          # missing/wrong-key case (docs/tasks/0032-password-hash.md,
-          # "The lockout story"). Say nothing rather than guess: leave
-          # the marker exactly as it was, so the banner keeps whatever
-          # state it last had.
-          exit 0
+        # Test seams, not configuration
+        # (docs/tasks/0036-reminder-banner-states.md): systemd starts
+        # this with no arguments, so a real machine always uses the
+        # real paths; the flake check
+        # (test/password-reminder/check.nix) runs this same generated
+        # script -- not a copy -- against fixture files.
+        shadow_file="''${1:-/etc/shadow}"
+        state_dir="''${2:-/var/lib/castle-turing}"
+        seed_file="''${3:-}"
+        if [ -z "$seed_file" ]; then
+          seed_file=${lib.escapeShellArg cfg.hashedPasswordFile}
         fi
-        seed="$(${pkgs.coreutils}/bin/cat "$seed_file")"
+        changed_marker="$state_dir/password-changed"
+        absent_marker="$state_dir/password-absent"
+        mkdir -p "$state_dir"
+        # The shadow field is read and classified *before* the seed is
+        # ever consulted, because the no-password state is knowable
+        # from the field alone: on the machine that most needs that
+        # message, a missing age key makes the seed unreadable *and*
+        # the account passwordless, and an order that checked the seed
+        # first exited before ever looking (the pre-0036 shape of this
+        # script).
         current="$(${pkgs.gnugrep}/bin/grep -m1 -E ${
           lib.escapeShellArg ("^" + cfg.username + ":")
-        } /etc/shadow | ${pkgs.coreutils}/bin/cut -d: -f2)"
+        } "$shadow_file" | ${pkgs.coreutils}/bin/cut -d: -f2)"
         # Two guards, and they answer different questions. Neither is
         # redundant; a future simplifier that removes either reopens a
         # different bug, so both are spelled out.
@@ -330,42 +348,57 @@ in
             # disallowed outright, per shadow(5) -- "no password can
             # produce a hash like this". These are what
             # update-users-groups.pl leaves when the seed did not
-            # resolve at account creation.
+            # resolve at account creation: a first install with a
+            # missing or wrong age key creates the account locked, and
+            # (because mutableUsers leaves an existing account's shadow
+            # entry alone) fixing the key and rebuilding never repairs
+            # it. See docs/tasks/0032-password-hash.md "The lockout
+            # story".
             #
-            # Say nothing, exactly as the unreadable-seed branch above
-            # does. Without this the check reads "no password" as "the
-            # resident changed their password" -- the field is
-            # readable, the seed is readable, they differ -- and
-            # silences the banner forever on the one machine that most
-            # needs it. That inference was sound only while the seed was
-            # a build-time string, where shadow always equalled it at
-            # creation. It stopped being sound the moment the seed
-            # became a runtime file that can fail to decrypt: a first
-            # install with a missing or wrong age key creates the
-            # account locked, and (because mutableUsers leaves an
-            # existing account's shadow entry alone) fixing the key and
-            # rebuilding never repairs it. See
-            # docs/tasks/0032-password-hash.md "The lockout story",
-            # whose SSH-and-passwd recovery is the path a resident here
-            # actually needs.
+            # Before 0036 this branch said nothing, and the banner --
+            # whose only vocabulary was password-changed's absence --
+            # claimed the account was "still using its seeded initial
+            # password" when in truth it had none. Now the state is
+            # recorded as its own marker and the banner says what is
+            # actually true, including the remedy that actually works
+            # here: `sudo passwd <user>`, because plain `passwd` cannot
+            # authenticate an account with no password.
             #
-            # The consequence, stated rather than glossed: the marker is
-            # left alone, so the banner claims the account "is still
-            # using its seeded initial password" when in truth it has
-            # none. That is imprecise and it is the right trade -- it
-            # points at `passwd`, the actual remedy. Asserting "password
-            # changed" from the absence of evidence is the failure shape
-            # docs/tasks/0015-filed-not-in-progress.md names: a label
-            # that causes the inaction it describes. The residual
-            # wording problem is filed as
-            # docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md.
+            # Removing password-changed is a deliberate, argued
+            # deviation from 0032's leave-it-alone
+            # (docs/tasks/0036-reminder-banner-states.md): 0032 could
+            # not act because any write to a boolean whose absence
+            # means "seeded" lied in one direction or the other. With a
+            # word for the state, acting is honest -- the field is
+            # positive evidence that no chosen password exists *now*,
+            # and a surviving password-changed would silence the banner
+            # on an account with no password, the exact silencing class
+            # 0032 fixed. Touch-then-remove, so a shell racing these
+            # two writes sees a moment of silence, never a wrong
+            # message.
+            touch "$absent_marker"
+            rm -f "$changed_marker"
             exit 0
             ;;
         esac
+        # A real hash exists, so "no password at all" is over --
+        # whatever the seed comparison below turns out to say, or
+        # whether it can run at all.
+        rm -f "$absent_marker"
+        if [ ! -r "$seed_file" ]; then
+          # The seed hasn't decrypted -- yet, or ever, per 0032's
+          # missing/wrong-key case ("The lockout story"). Whether the
+          # hash above is the seed or a chosen password genuinely
+          # cannot be decided without the seed, so say nothing rather
+          # than guess: leave password-changed exactly as it was, and
+          # the banner keeps whatever state it last had.
+          exit 0
+        fi
+        seed="$(${pkgs.coreutils}/bin/cat "$seed_file")"
         if [ "$stripped" = "$seed" ]; then
-          rm -f "$marker"
+          rm -f "$changed_marker"
         else
-          touch "$marker"
+          touch "$changed_marker"
         fi
       '';
     };
@@ -377,12 +410,34 @@ in
 
     # The banner itself: generic on purpose (no mention of what the
     # seeded password actually is) and only shown to interactive shells.
+    # Three states, read from the check's markers, and the wording of
+    # each -- escape codes included -- is pinned literally by
+    # test/password-reminder/check.nix
+    # (docs/tasks/0036-reminder-banner-states.md): password-changed
+    # silences everything; password-absent means the account has no
+    # password at all, the state 0032's check could detect but not
+    # express; neither means still on the seed. The messages name the
+    # account rather than saying "this account" because every
+    # interactive shell shows them, root's included, and in the
+    # no-password state a shell that is *not* the admin's is exactly
+    # who is likely to be reading. That is also why the no-password
+    # remedy is `sudo passwd <user>`: plain `passwd` cannot
+    # authenticate an account with no password, while wheel's
+    # passwordless sudo (set above) works from every shell that can
+    # display the message. No test seams here, deliberately -- the
+    # marker paths stay hardcoded so a user's environment cannot
+    # change what the banner reports; the flake check pins this block
+    # textually instead.
     # NixOS sources `environment.interactiveShellInit` for bash and zsh;
     # a private layer that swaps in a different shell needs to wire this
     # itself.
     environment.interactiveShellInit = lib.mkIf (cfg.hashedPasswordFile != null) ''
       if [ ! -e /var/lib/castle-turing/password-changed ]; then
-        printf '\n\033[1;33mNote:\033[0m this account is still using its seeded initial password. Run \033[1mpasswd\033[0m to set your own.\n\n'
+        if [ -e /var/lib/castle-turing/password-absent ]; then
+          printf '\n\033[1;33mNote:\033[0m the %s account has no password at all: most likely its seed never decrypted when the account was first created, and a rebuild will not repair an existing account. Set one now with \033[1msudo passwd %s\033[0m.\n\n' ${lib.escapeShellArg cfg.username} ${lib.escapeShellArg cfg.username}
+        else
+          printf '\n\033[1;33mNote:\033[0m the %s account is still using its seeded initial password. Run \033[1mpasswd\033[0m to set your own.\n\n' ${lib.escapeShellArg cfg.username}
+        fi
       fi
     '';
   };

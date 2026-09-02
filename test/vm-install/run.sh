@@ -644,6 +644,37 @@ if ! cmp -s "$WORKDIR/expected-shadow" "$WORKDIR/actual-shadow"; then
 fi
 log "[phase2d] PASS: the admin account's password came from the encrypted secret, byte-for-byte, with nobody at any keyboard."
 
+# --- Phase 2e: the seeded-password reminder reaches a real shell ----------
+# docs/tasks/0036-reminder-banner-states.md. Same booted VM. The fixture
+# secret always decrypts (phase 2d just proved it reached the account)
+# and nobody has run passwd, so the installed system is
+# deterministically in the reminder's "seeded" state:
+# castle-password-reminder-check is wanted by multi-user.target, which
+# this boot already reached, and must have left neither marker, so an
+# interactive shell prints the seeded message naming the harness
+# account. Asserted against a real interactive bash over SSH rather
+# than by reading the generated /etc/bashrc, for the same reason the
+# connected-banner check reads the serial console: the flake check
+# (test/password-reminder/check.nix) already pins the wording, and the
+# claim left for this harness is the *wiring* — that
+# environment.interactiveShellInit actually reaches the shell a
+# resident gets. `bash -ic true` has no tty, which interactive bash
+# tolerates (job-control warnings at worst), and stderr is captured
+# with stdout so the assertion cannot pass or fail on which stream the
+# banner used. The grep string deliberately stops before the styled
+# "passwd" so no escape bytes are part of the match.
+log "[phase2e] Asserting the seeded-password reminder banner prints in an interactive shell..."
+if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 \
+    "bash -ic true" >"$WORKDIR/banner-out" 2>&1; then
+  cp "$WORKDIR/banner-out" "$LOG_DIR/phase2e-banner.out" 2>/dev/null || true
+  fail "assertion failed: could not start an interactive bash as the harness account over SSH (see $LOG_DIR/phase2e-banner.out)"
+fi
+if ! grep -q "the harness account is still using its seeded initial password" "$WORKDIR/banner-out"; then
+  cp "$WORKDIR/banner-out" "$LOG_DIR/phase2e-banner.out" 2>/dev/null || true
+  fail "assertion failed: an interactive shell did not print the seeded-password reminder for the harness account (docs/tasks/0036-reminder-banner-states.md; output: $LOG_DIR/phase2e-banner.out). Either castle-password-reminder-check misclassified a freshly seeded account, or environment.interactiveShellInit never reached the shell."
+fi
+log "[phase2e] PASS: the reminder banner rendered in a real interactive shell, in the seeded state, naming the account."
+
 # --- Phase 3: power-cycle (hard stop + restart), NVRAM intact -------------
 log "[phase3] Power-cycling (hard stop, then restart with NVRAM intact)..."
 stop_qemu_hard
