@@ -232,10 +232,13 @@ as a GitHub App installation with no `workflows` write permission, so
 `.github/workflows/*.yml` — `refusing to allow a GitHub App to create
 or update workflow ... without workflows permission`. That is GitHub's
 own boundary on what an app credential can silently change about CI,
-not a bug to route around, so findings 2 and 3 below are fixed as an
-unstaged local diff and reproduced verbatim in the PR comment
-responding to this review for a human (who pushes from their own,
-differently-scoped credentials) to apply.
+not a bug to route around, so findings 2 and 3 below were left by
+that session as described fixes for someone with push rights over
+workflow files. (Its replies promised the diff verbatim in a PR-level
+summary comment; that comment never landed — the descriptions inline
+and below were the only record.) The orchestrating session, pushing
+with the operator's own credentials, applied both in the commit that
+updated this paragraph.
 
 1. **Whole-log matching, not tied to what actually failed.**
    `known-transient-ci-failure.sh` grepped the *entire* captured log,
@@ -258,7 +261,7 @@ differently-scoped credentials) to apply.
    retried step; a matched failure late into a near-full-length first
    attempt could let the job's own timeout kill a legitimate,
    healthy second attempt before it finished, silently defeating the
-   retry. Fix (unstaged, see above): bump `vm-install-test.yml` 30→55
+   retry. Fix (applied, see above): bump `vm-install-test.yml` 30→55
    and `desktop-loop-test.yml` 40→75 — each roughly doubles the step
    budget the retried command now needs while adding the fixed,
    non-retried overhead (checkout, `nix-installer`, KVM setup) only

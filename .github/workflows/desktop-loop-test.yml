@@ -27,6 +27,7 @@ on:
       - "modules/**"
       - "agent/**"
       - "test/desktop-loop/**"
+      - "test/ci/**"
       - "test/agent-loop/contract-worker.sh"
       - "test/agent-loop/check_assertions.py"
       - ".github/workflows/desktop-loop-test.yml"
@@ -39,6 +40,7 @@ on:
       - "modules/**"
       - "agent/**"
       - "test/desktop-loop/**"
+      - "test/ci/**"
       - "test/agent-loop/contract-worker.sh"
       - "test/agent-loop/check_assertions.py"
       - ".github/workflows/desktop-loop-test.yml"
@@ -62,7 +64,7 @@ jobs:
     # boot, a real greetd/tuigreet login, and OCR-paced typing is
     # meaningfully heavier than vm-install-test's 30-minute budget for
     # a lighter (base+desktop only) closure.
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 

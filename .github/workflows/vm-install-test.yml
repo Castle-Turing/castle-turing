@@ -21,6 +21,7 @@ on:
       - "modules/**"
       - "hosts/**"
       - "test/vm-install/**"
+      - "test/ci/**"
       - ".github/workflows/vm-install-test.yml"
   push:
     branches:
@@ -31,6 +32,7 @@ on:
       - "modules/**"
       - "hosts/**"
       - "test/vm-install/**"
+      - "test/ci/**"
       - ".github/workflows/vm-install-test.yml"
   # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
   # via `gh workflow run` — needed to get a real run of the anti-bricking
@@ -49,7 +51,7 @@ jobs:
     # Bumped from 25: docs/tasks/0005 added modules/desktop (Sway, Firefox,
     # fonts, portals, PipeWire) to the system under test, a meaningfully
     # bigger closure than modules/base alone, even mostly cache-substituted.
-    timeout-minutes: 30
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
