@@ -105,22 +105,59 @@ jobs:
       # text the last attempt saw), which is the primary debugging
       # signal regardless of whether the screenshot recovery below
       # finds anything.
-      # `set -o pipefail` is explicit and load-bearing here, not
-      # decorative: this step's own log (a prior run, before this fix)
-      # showed the default runner shell as `bash -e {0}` with no
-      # `pipefail`, so a `nix build ... | tee file` pattern lets a
-      # failing `nix build` (e.g. a Nix evaluation error, which exits
-      # before any VM ever boots) be masked by `tee`'s own exit code —
-      # the step reports success, `if: success()` steps downstream run
-      # against a nonexistent/garbage result, and the job goes green
-      # for a test that never ran at all. Redirecting stdout directly
-      # (no pipe) sidesteps the whole class of bug rather than trusting
-      # pipefail alone to catch it a second time.
+      # A prior version of this step's own log (before this fix) showed
+      # the default runner shell as `bash -e {0}` with no `pipefail`, so
+      # a bare `nix build ... | tee file` pattern let a failing `nix
+      # build` (e.g. a Nix evaluation error, which exits before any VM
+      # ever boots) be masked by `tee`'s own exit code — the step
+      # reports success, `if: success()` steps downstream run against a
+      # nonexistent/garbage result, and the job goes green for a test
+      # that never ran at all. `${PIPESTATUS[0]}` below names the build
+      # group's own exit code directly, which is what actually fixes
+      # this. `pipefail` is set so the `if` condition's own truthiness
+      # reflects the build's exit code too (without it, `tee` succeeding
+      # would make the `if` true regardless of the build). Grouping the
+      # build in `{ ...; }` and redirecting *inside* the group keeps
+      # `--print-out-paths`'s stdout in its own clean file (the next
+      # step still trusts it unconditionally — see its own comment on
+      # why); only the group's stderr — the `-L` log — goes through the
+      # outer pipe to `tee`, which is what docs/tasks/0041's retry below
+      # greps. The pipeline sits in an `if` condition, not a bare
+      # statement, because this runner's default shell is `bash -e {0}`
+      # (confirmed by the very log line this comment opens with) and
+      # `-e` does not abort on a command that is the test-part of an
+      # `if`/`while` — a bare `{ build; } | tee log; status=$?` here
+      # would `exit` the whole script on the first failure, before the
+      # retry logic below ever ran.
+      #
+      # docs/tasks/0041: a bounded, signature-matched retry for CI's own
+      # recognizable infrastructure flakes — docs/backlog/ci-flakes-
+      # deserve-retries-not-vigilance.md's PR #63 incident (FlakeHub's
+      # login endpoint returning a transient auth error, then the GitHub
+      # Actions cache rate-limiting narinfo downloads into HTTP 418s).
+      # test/ci/known-transient-ci-failure.sh holds the one commented
+      # signature list this checks against; a failure that doesn't match
+      # is a real regression and gets exactly zero retries. At most one
+      # retry, ever: a second failure — matched or not — is surfaced
+      # as-is, because two failures on the same runner are no longer
+      # "transient" by this entry's own definition.
       - name: Build and run the desktop-loop test
         run: |
-          set -euo pipefail
-          nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths \
-            > /tmp/desktop-loop-out-path.txt
+          set -uo pipefail
+          attempt=1
+          while :; do
+            if { nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths \
+                   > /tmp/desktop-loop-out-path.txt; } 2>&1 | tee /tmp/desktop-loop-build.log; then
+              exit 0
+            fi
+            status="${PIPESTATUS[0]}"
+            if [ "$attempt" -ge 2 ] || ! test/ci/known-transient-ci-failure.sh /tmp/desktop-loop-build.log; then
+              exit "$status"
+            fi
+            msg="Attempt $attempt failed with a known-transient CI signature (see test/ci/known-transient-ci-failure.sh); retrying once."
+            echo "$msg" | tee -a "$GITHUB_STEP_SUMMARY"
+            attempt=$((attempt + 1))
+          done
 
       # The store path is validated, not trusted blindly: the same
       # failure this step's header comment describes (a masked `nix
