@@ -823,6 +823,22 @@
           import ./test/desktop-loop/test.nix { inherit self; }
         );
 
+      # docs/tasks/0036-reminder-banner-states.md: the password-reminder
+      # state machine and its banner wording, table-tested against the
+      # *generated* artifacts of nixosConfigurations.example rather
+      # than a re-derivation of them. Deliberately a `checks.*` output,
+      # unlike the two slow VM tests above: it is pure shell over a few
+      # fixture files, cheap enough for the fast gate, so bare
+      # `nix flake check` (and therefore check.yml's flake-check job)
+      # runs it on every PR with no workflow change.
+      checks.x86_64-linux.password-reminder-states =
+        import ./test/password-reminder/check.nix {
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+          script =
+            self.nixosConfigurations.example.config.systemd.services.castle-password-reminder-check.script;
+          shellInit = self.nixosConfigurations.example.config.environment.interactiveShellInit;
+        };
+
       formatter = nixpkgs.lib.genAttrs [
         "x86_64-linux"
         "aarch64-linux"

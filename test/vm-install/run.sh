@@ -644,6 +644,55 @@ if ! cmp -s "$WORKDIR/expected-shadow" "$WORKDIR/actual-shadow"; then
 fi
 log "[phase2d] PASS: the admin account's password came from the encrypted secret, byte-for-byte, with nobody at any keyboard."
 
+# --- Phase 2e: the seeded-password reminder reaches a real shell ----------
+# docs/tasks/0036-reminder-banner-states.md. Same booted VM. The fixture
+# secret always decrypts (phase 2d just proved it reached the account)
+# and nobody has run passwd, so the installed system is
+# deterministically in the reminder's "seeded" state:
+# castle-password-reminder-check is wanted by multi-user.target, which
+# this boot already reached, and must have left neither marker, so an
+# interactive shell prints the seeded message naming the harness
+# account. Asserted against a real interactive bash over SSH rather
+# than by reading the generated /etc/bashrc, for the same reason the
+# connected-banner check reads the serial console: the flake check
+# (test/password-reminder/check.nix) already pins the wording, and the
+# claim left for this harness is the *wiring* — that
+# environment.interactiveShellInit actually reaches the shell a
+# resident gets. `bash -ic true` has no tty, which interactive bash
+# tolerates (job-control warnings at worst), and stderr is captured
+# with stdout so the assertion cannot pass or fail on which stream the
+# banner used. The grep string deliberately stops before the styled
+# "passwd" so no escape bytes are part of the match.
+log "[phase2e] Asserting the reminder check ran, then that its banner prints in an interactive shell..."
+# First that the classifier actually ran and succeeded: "neither
+# marker" is also what a crashed or never-started check leaves behind,
+# and the seeded message would then print for the wrong reason,
+# turning this assertion into a rubber stamp. `Result` alone does not
+# prove invocation -- systemd initialises it to "success" before a
+# unit has ever run, and this oneshot has no RemainAfterExit, so
+# ActiveState is "inactive" both before its first run and after a
+# successful one. `ExecMainStartTimestamp` is only set once the main
+# process actually starts, so pairing it with `Result` catches the
+# never-started case Result alone would rubber-stamp.
+if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
+    "systemctl show -p Result,ExecMainStartTimestamp --value castle-password-reminder-check.service" \
+    >"$WORKDIR/reminder-result" 2>"$LOG_DIR/phase2e-service.log"; then
+  fail "assertion failed: could not read castle-password-reminder-check's unit state on the installed system (see $LOG_DIR/phase2e-service.log)"
+fi
+reminder_result="$(sed -n '1p' "$WORKDIR/reminder-result" | tr -d '\n')"
+reminder_start_ts="$(sed -n '2p' "$WORKDIR/reminder-result" | tr -d '\n')"
+if [ "$reminder_result" != "success" ] || [ -z "$reminder_start_ts" ]; then
+  fail "assertion failed: castle-password-reminder-check did not run to success on the installed system (Result: $reminder_result, ExecMainStartTimestamp: $reminder_start_ts; see $LOG_DIR/phase2e-service.log)"
+fi
+if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 \
+    "bash -ic true" >"$LOG_DIR/phase2e-banner.out" 2>&1; then
+  fail "assertion failed: could not start an interactive bash as the harness account over SSH (see $LOG_DIR/phase2e-banner.out)"
+fi
+if ! grep -q "the harness account is still using its seeded initial password" "$LOG_DIR/phase2e-banner.out"; then
+  fail "assertion failed: an interactive shell did not print the seeded-password reminder for the harness account (docs/tasks/0036-reminder-banner-states.md; output: $LOG_DIR/phase2e-banner.out). Either castle-password-reminder-check misclassified a freshly seeded account, or environment.interactiveShellInit never reached the shell."
+fi
+log "[phase2e] PASS: the check succeeded and the banner rendered in a real interactive shell, in the seeded state, naming the account."
+
 # --- Phase 3: power-cycle (hard stop + restart), NVRAM intact -------------
 log "[phase3] Power-cycling (hard stop, then restart with NVRAM intact)..."
 stop_qemu_hard

@@ -237,6 +237,15 @@ image):
   from an activation script on this nixpkgs pin, so its error lands in
   the boot's console output), and at `phase2c-secret-actual.od` for the
   byte dump if a file did appear with the wrong contents.
+- `phase2e` (same VM again) — first `systemctl show -p Result` proves
+  `castle-password-reminder-check` ran to success (neither-marker is
+  also what a crashed check leaves, and would render the same banner),
+  then an interactive `bash -ic true` over SSH must print the
+  seeded-password reminder naming the `harness` account
+  (`docs/tasks/0036-reminder-banner-states.md`): the wording is pinned
+  byte-for-byte by the fast flake check, so the claim left here is the
+  wiring — that `environment.interactiveShellInit` reaches a real
+  shell. Output lands in `phase2e-banner.out` / `phase2e-service.log`.
 - `phase2d` (no separate boot either, same VM as phase 2) — the admin
   password reached `/etc/shadow`. Read the byte dumps first
   (`phase2d-shadow-expected.od` and `phase2d-shadow-actual.od`), because

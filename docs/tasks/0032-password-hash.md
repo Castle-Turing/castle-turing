@@ -523,7 +523,10 @@ file:
   exists, per §6 — so the check reads a good seed against a locked
   field, calls it "changed", and silences the banner forever on the one
   machine that most needs it. Those four values now leave the marker
-  alone, exactly as the unreadable-seed branch does.
+  alone, exactly as the unreadable-seed branch does. (Overtaken by
+  `docs/tasks/0036-reminder-banner-states.md`: that state is now
+  recorded as its own marker so the banner can say it — this
+  paragraph describes the 0032-era behaviour it replaced.)
 - **A lock prefix is not a password change.** `shadow(5)`: "If the
   password field begins with an exclamation mark `!`, the password is
   locked. The remaining characters on the line represent the password
@@ -540,8 +543,10 @@ Neither is reachable by `test/vm-install/`, whose fixture secret always
 decrypts, so both are verified by table-testing the *generated* unit
 across every shadow-field shape rather than by CI. The residual — that
 the banner's wording still describes a seeded password when the account
-has none — is filed as
-`docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md`.
+has none — was filed as
+`docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md`,
+since promoted to and fixed by
+`docs/tasks/0036-reminder-banner-states.md`.
 
 Nothing else needs editing as a consequence of keeping this machinery.
 `modules/agent/default.nix`'s comment citing `castle-password-reminder-check`

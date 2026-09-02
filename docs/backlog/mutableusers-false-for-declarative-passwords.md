@@ -73,3 +73,9 @@ depend on rebuilding (the SSH-as-root route 0032 documents assumes
 `passwd` works)? And is "declarative passwords" even the right unit of
 the question, or is the real one "does this project want declarative
 accounts at all," of which the password is one field?
+
+*Update (task 0036): the reminder machinery described above now has
+three states and two marker files — `password-changed` and
+`password-absent` — and its no-password remedy is `sudo passwd <user>`
+(`docs/tasks/0036-reminder-banner-states.md`). Any design here must
+handle all of them, not a single boolean marker or message.*
