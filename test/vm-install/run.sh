@@ -667,12 +667,22 @@ log "[phase2e] Asserting the reminder check ran, then that its banner prints in 
 # First that the classifier actually ran and succeeded: "neither
 # marker" is also what a crashed or never-started check leaves behind,
 # and the seeded message would then print for the wrong reason,
-# turning this assertion into a rubber stamp.
+# turning this assertion into a rubber stamp. `Result` alone does not
+# prove invocation -- systemd initialises it to "success" before a
+# unit has ever run, and this oneshot has no RemainAfterExit, so
+# ActiveState is "inactive" both before its first run and after a
+# successful one. `ExecMainStartTimestamp` is only set once the main
+# process actually starts, so pairing it with `Result` catches the
+# never-started case Result alone would rubber-stamp.
 if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" root@127.0.0.1 \
-    "systemctl show -p Result --value castle-password-reminder-check.service" \
-    >"$WORKDIR/reminder-result" 2>"$LOG_DIR/phase2e-service.log" \
-    || [ "$(tr -d '\n' <"$WORKDIR/reminder-result")" != "success" ]; then
-  fail "assertion failed: castle-password-reminder-check did not run to success on the installed system (Result: $(cat "$WORKDIR/reminder-result" 2>/dev/null); see $LOG_DIR/phase2e-service.log)"
+    "systemctl show -p Result,ExecMainStartTimestamp --value castle-password-reminder-check.service" \
+    >"$WORKDIR/reminder-result" 2>"$LOG_DIR/phase2e-service.log"; then
+  fail "assertion failed: could not read castle-password-reminder-check's unit state on the installed system (see $LOG_DIR/phase2e-service.log)"
+fi
+reminder_result="$(sed -n '1p' "$WORKDIR/reminder-result" | tr -d '\n')"
+reminder_start_ts="$(sed -n '2p' "$WORKDIR/reminder-result" | tr -d '\n')"
+if [ "$reminder_result" != "success" ] || [ -z "$reminder_start_ts" ]; then
+  fail "assertion failed: castle-password-reminder-check did not run to success on the installed system (Result: $reminder_result, ExecMainStartTimestamp: $reminder_start_ts; see $LOG_DIR/phase2e-service.log)"
 fi
 if ! "$SSH_BIN" "${SSH_OPTS[@]}" -p "$SSH_PORT" -i "$ADMIN_KEY" harness@127.0.0.1 \
     "bash -ic true" >"$LOG_DIR/phase2e-banner.out" 2>&1; then
