@@ -40,7 +40,10 @@ LOG_DIR="${CASTLE_HARNESS_LOG_DIR:-$WORKDIR/logs}"
 # differently-scoped second attempt's, misleading whoever reads the
 # uploaded artifact about how far the run that actually failed got.
 # Every invocation of this harness — retried or not — starts from a
-# clean log directory.
+# clean log directory. This makes CASTLE_HARNESS_LOG_DIR fully
+# harness-owned, not merely a write target: see README.md's own
+# warning on this variable before pointing it at a directory that
+# holds anything else.
 rm -rf "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 

@@ -177,6 +177,51 @@ scratch dir first" hook to edit: the command passed to
 /tmp/nix-build-*desktop-loop*` immediately before each attempt,
 including the first (a no-op then).
 
+`tools/codex-review.sh`'s cross-model pass (also scoped against
+`origin/main`) ran after the fixes above and returned one finding,
+reproduced here verbatim (raw output, `/tmp/codex-review-output.fcjXzn`
+at review time) per this repo's convention — no PR exists yet for this
+branch to comment on, since the harness opens it, so the disposition
+below stands in for the usual separate PR comment:
+
+> The retry mechanism appears functionally sound, but the harness now
+> destructively removes an externally configured log directory,
+> potentially deleting unrelated files.
+>
+> Review comment:
+>
+> - [P2] Avoid deleting the entire configured log directory —
+>   /home/wesley/.local/share/emcee/runs/castle-turing/2026-09-02T18-18-51/wt-0041-ci-transient-retries-1/test/vm-install/run.sh:45-45
+>   When `CASTLE_HARNESS_LOG_DIR` points to an existing directory that
+>   contains anything besides this harness's artifacts, every
+>   invocation now recursively deletes all of its contents. The
+>   variable is documented merely as where logs are written, so local
+>   callers can reasonably select a shared logging directory; clean
+>   only the harness-owned files or use a per-attempt subdirectory
+>   instead.
+
+**Disposition: fixed, by documenting the contract rather than by
+either alternative Codex offered.** A partial clean (deleting only
+recognized filenames) is fragile in the wrong direction — the harness
+writes over a dozen distinct log filenames today (`age-keygen.log`,
+`phase1-nixos-anywhere.log`, `phase2c-secret-actual.od`, and more,
+plus arbitrary `$phase.serial.log`/`$phase.qemu.log` pairs), and a
+whitelist would silently stop cleaning up the moment a new one is
+added, quietly reintroducing this exact staleness bug in a harder-to-
+notice form. A per-attempt subdirectory is the more thorough fix but
+touches every one of those log paths throughout `run.sh` for a risk
+that, on inspection, is narrow: CI always sets
+`CASTLE_HARNESS_LOG_DIR` to a path freshly created inside that run's
+own checkout (`vm-install-test.yml`'s `env:`), never a directory that
+predates or outlives the job, so the destructive-`rm` risk is entirely
+a local-development concern — a developer setting this variable by
+hand to a directory that also holds something else. `README.md` and
+`run.sh`'s own comment now say plainly that this directory is fully
+harness-owned and is wiped on every run, converting an undocumented
+surprise into a stated contract, which is proportionate to a risk that
+only exists at all when someone deliberately points this variable
+somewhere `run.sh` doesn't fully control.
+
 ## Verification
 
 Nix workflow YAML cannot be fully proven locally — this development
