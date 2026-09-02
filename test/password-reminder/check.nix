@@ -56,16 +56,22 @@ pkgs.runCommand "password-reminder-states" { } ''
   other=${pkgs.lib.escapeShellArg otherHash}
 
   # run_case NAME SHADOW-FIELD SEED-MODE PRIOR-MARKER WANTED-MARKER
+  #   SHADOW-FIELD: the field, or __no-resident-line__ for a shadow
+  #                 file with no entry for the account at all
   #   SEED-MODE: present | missing (the age-key-never-planted machine)
-  #   markers:   none | changed | absent  (want may also catch "both",
-  #              which no state should ever produce)
-  n=0
+  #   markers:   none | changed | absent | both ("both" as a prior is
+  #              the crash-persisted state a kill between two marker
+  #              writes could leave; as a result it is what no run may
+  #              ever produce or preserve)
   run_case() {
     name=$1; field=$2; seedmode=$3; prior=$4; want=$5
-    n=$((n + 1))
-    dir="$PWD/case-$n"
+    dir="$PWD/case-$name"
     mkdir -p "$dir/state"
-    printf 'root:*:20000:0:99999:7:::\n%s:%s:20000:0:99999:7:::\n' resident "$field" >"$dir/shadow"
+    if [ "$field" = __no-resident-line__ ]; then
+      printf 'root:*:20000:0:99999:7:::\n' >"$dir/shadow"
+    else
+      printf 'root:*:20000:0:99999:7:::\n%s:%s:20000:0:99999:7:::\n' resident "$field" >"$dir/shadow"
+    fi
     seedpath="$dir/seed"
     if [ "$seedmode" = present ]; then
       printf '%s\n' "$seed" >"$seedpath"
@@ -73,6 +79,10 @@ pkgs.runCommand "password-reminder-states" { } ''
     case "$prior" in
       changed) touch "$dir/state/password-changed" ;;
       absent) touch "$dir/state/password-absent" ;;
+      both)
+        touch "$dir/state/password-changed"
+        touch "$dir/state/password-absent"
+        ;;
     esac
     # bash -e replicates the NixOS job-script shebang (`bash -e`, no
     # pipefail) the unit really runs under.
@@ -100,6 +110,7 @@ pkgs.runCommand "password-reminder-states" { } ''
   run_case changed "$other" present none changed
   run_case changed-locked "!$other" present none changed
   run_case recovered-from-absent "$other" present absent changed
+  run_case heals-crash-both "$other" present both changed
 
   # State 3, no password at all: every field shape the guard groups,
   # including the double-strip case (`!!`) that motivated stripping
@@ -118,11 +129,23 @@ pkgs.runCommand "password-reminder-states" { } ''
   run_case absent-seed-missing '!' missing none absent
 
   # State 4, unknowable: a real hash but no seed to compare against.
-  # password-changed is left exactly as it was, in both directions;
-  # a real hash still clears password-absent, seed or no seed.
+  # password-changed is left exactly as it was, in both directions --
+  # with one decidable exception: a real hash appearing after
+  # password-absent cannot be the seed (creation with an unresolved
+  # seed writes a lock, never the seed), so that transition is proof
+  # of a hand-set password and records changed even seedless. Caught
+  # by cross-model review: without it, `sudo passwd` on the
+  # never-fixed-key machine ended in the false seeded message.
   run_case unknowable-keeps-changed "$other" missing changed changed
   run_case unknowable-keeps-none "$other" missing none none
-  run_case unknowable-clears-absent "$other" missing absent none
+  run_case recovered-seed-missing "$other" missing absent changed
+
+  # No entry for the account in the shadow file at all: not evidence,
+  # so nothing is touched -- in particular an earned password-changed
+  # survives a renamed username or a mid-rewrite shadow copy.
+  run_case no-line-keeps-changed __no-resident-line__ present changed changed
+  run_case no-line-keeps-none __no-resident-line__ present none none
+  run_case no-line-keeps-absent __no-resident-line__ missing absent absent
 
   # The banner: pin the generated three-state block byte-for-byte as a
   # substring of the merged interactiveShellInit (other modules may

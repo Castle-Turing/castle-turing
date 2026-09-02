@@ -65,7 +65,7 @@ states, and the first three each have a defined banner:
 | 1 | shadow field (after stripping up to two leading `!`) is a hash equal to the seed | neither file | "the `<user>` account is still using its seeded initial password. Run `passwd` to set your own." |
 | 2 | stripped field is a hash differing from the seed | `password-changed` | silent |
 | 3 | stripped field is empty or `*` — no usable password exists | `password-absent` | "the `<user>` account has no password at all: most likely its seed never decrypted when the account was first created, and a rebuild will not repair an existing account. Set one now with `sudo passwd <user>`." |
-| 4 | a real hash exists but the seed file is unreadable — seeded-vs-changed is genuinely unknowable | both left exactly as they were | whatever the last known state said |
+| 4 | a real hash exists but the seed file is unreadable | markers left as they were — except that a hash appearing *after* `password-absent` is proof of a hand-set password (the seed never reached shadow), so that one transition records `password-changed` | whatever the recorded state says |
 
 The literal strings (including the `printf` escape sequences around
 them) are pinned by the flake check below; the table gives the prose.
@@ -129,14 +129,27 @@ seeded-password lie. New order:
    no chosen password exists *now*, and leaving `password-changed` in
    place would silence the banner on an account with no password,
    which is the exact silencing class 0032 fixed.
-3. Otherwise a real hash exists, so remove `password-absent`
-   unconditionally — whatever else is true, "no password at all" is
-   over.
-4. Only now consult the seed. Unreadable → exit without touching
-   `password-changed` (0032's say-nothing branch, unchanged in
-   meaning: seeded-vs-changed genuinely cannot be decided without the
-   seed). Readable → compare and set/remove `password-changed` exactly
-   as before.
+3. Otherwise a real hash exists. If the seed is unreadable, mostly
+   say nothing (0032's branch, unchanged in meaning) — with one
+   decidable exception, caught by cross-model review: if
+   `password-absent` is on disk, this hash cannot be the seed
+   (creation with an unresolved seed writes a lock, never the seed),
+   so the transition is proof of a hand-set password and records
+   `password-changed` even seedless. Without it, `sudo passwd` on a
+   machine whose key was never fixed cleared `password-absent` into
+   the *seeded* message — a fresh falsehood on exactly the machine
+   this task is for.
+4. Seed readable → compare and set/remove `password-changed` exactly
+   as before; each branch clears `password-absent` after its own
+   decisive write. Marker writes are ordered so that a crash between
+   any pair leaves either a correct state or one that nags — never a
+   wrong silence.
+
+Two non-states are also guarded: a shadow file with *no line for the
+account at all* (a renamed username, a mid-rewrite copy) is not
+evidence and touches nothing, and a stale crash-persisted double
+marker heals on the next decidable run — both pinned in the table
+test.
 
 Everything 0032 settled stays settled: the check never locks anything,
 never forces expiry, runs as the same root oneshot plus
@@ -228,3 +241,5 @@ the real generated script, plus 0032's source-traced account of what
 - `flake.nix` — wires the new check as
   `checks.x86_64-linux.password-reminder-states`.
 - `test/vm-install/run.sh` — phase 2e.
+- `test/vm-install/README.md` — phase 2e added to the assertion and
+  troubleshooting lists.

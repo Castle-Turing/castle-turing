@@ -12,6 +12,12 @@
 
 let
   cfg = config.castle.admin;
+  # One definition for the reminder machinery's state directory: the
+  # check script's default (its $2 test seam) and the banner's
+  # hardcoded reads are derived from this, so they cannot drift apart
+  # -- the table test always passes explicit paths and could never
+  # notice the default and the banner disagreeing.
+  reminderStateDir = "/var/lib/castle-turing";
 in
 {
   # Deliberately a *removal*, not a rename, even though
@@ -293,7 +299,7 @@ in
         # (test/password-reminder/check.nix) runs this same generated
         # script -- not a copy -- against fixture files.
         shadow_file="''${1:-/etc/shadow}"
-        state_dir="''${2:-/var/lib/castle-turing}"
+        state_dir="''${2:-${reminderStateDir}}"
         seed_file="''${3:-}"
         if [ -z "$seed_file" ]; then
           seed_file=${lib.escapeShellArg cfg.hashedPasswordFile}
@@ -308,9 +314,23 @@ in
         # the account passwordless, and an order that checked the seed
         # first exited before ever looking (the pre-0036 shape of this
         # script).
-        current="$(${pkgs.gnugrep}/bin/grep -m1 -E ${
-          lib.escapeShellArg ("^" + cfg.username + ":")
-        } "$shadow_file" | ${pkgs.coreutils}/bin/cut -d: -f2)"
+        # The grep's own exit status matters: a shadow file with *no
+        # line for the account at all* (a renamed admin username, a
+        # mid-rewrite copy of the file) is not evidence about
+        # passwords, and must not be conflated with an account whose
+        # field is empty. A bare pipeline into cut would swallow
+        # grep's failure and classify "no line" as "no password",
+        # rewriting markers over a state this script knows nothing
+        # about -- so bail out first, touching nothing.
+        if ! shadow_line="$(${pkgs.gnugrep}/bin/grep -m1 -E ${
+          # escapeRegex so a username containing ERE metacharacters
+          # (legal: `.`, `+`) cannot match some *other* account's line
+          # and classify the wrong password.
+          lib.escapeShellArg ("^" + lib.escapeRegex cfg.username + ":")
+        } "$shadow_file")"; then
+          exit 0
+        fi
+        current="$(printf '%s' "$shadow_line" | ${pkgs.coreutils}/bin/cut -d: -f2)"
         # Two guards, and they answer different questions. Neither is
         # redundant; a future simplifier that removes either reopens a
         # different bug, so both are spelled out.
@@ -373,32 +393,60 @@ in
             # positive evidence that no chosen password exists *now*,
             # and a surviving password-changed would silence the banner
             # on an account with no password, the exact silencing class
-            # 0032 fixed. Touch-then-remove, so a shell racing these
-            # two writes sees a moment of silence, never a wrong
-            # message.
-            touch "$absent_marker"
+            # 0032 fixed. Remove-then-touch, in that order: if the
+            # script dies between the two writes, the surviving state
+            # is "neither marker", which nags (safely, if with the
+            # wrong message) until the next run -- the reverse order
+            # could strand *both* markers, and both markers read as
+            # silence, the one permanent state this machinery must
+            # never fail into. A shell racing the pair sees at worst
+            # one momentarily wrong nag.
             rm -f "$changed_marker"
+            touch "$absent_marker"
             exit 0
             ;;
         esac
         # A real hash exists, so "no password at all" is over --
         # whatever the seed comparison below turns out to say, or
         # whether it can run at all.
-        rm -f "$absent_marker"
         if [ ! -r "$seed_file" ]; then
           # The seed hasn't decrypted -- yet, or ever, per 0032's
           # missing/wrong-key case ("The lockout story"). Whether the
-          # hash above is the seed or a chosen password genuinely
-          # cannot be decided without the seed, so say nothing rather
-          # than guess: leave password-changed exactly as it was, and
+          # hash above is the seed or a chosen password cannot be
+          # decided by comparison, so as a rule say nothing rather
+          # than guess: leave both markers exactly as they were, and
           # the banner keeps whatever state it last had.
+          #
+          # One transition IS decidable without the seed, and skipping
+          # it left the recovery path ending in a false banner (caught
+          # by cross-model review): the account demonstrably had no
+          # usable password at the last check, and now a real hash
+          # exists while the seed has still never been readable. The
+          # hash cannot be the seed -- only account creation writes
+          # the seed into shadow, and creation with an unresolved seed
+          # writes a lock (0032 §5) -- so someone set this password by
+          # hand. Record it as changed; otherwise `sudo passwd <user>`
+          # on a machine whose key was never fixed would clear
+          # password-absent into the *seeded* message, which is false,
+          # on exactly the machine this task is for.
+          if [ -e "$absent_marker" ]; then
+            touch "$changed_marker"
+            rm -f "$absent_marker"
+          fi
           exit 0
         fi
         seed="$(${pkgs.coreutils}/bin/cat "$seed_file")"
+        # Each branch clears password-absent itself, *after* its own
+        # decisive write, so the recovery transition (absent, then the
+        # resident runs `sudo passwd`) never has a window -- or a
+        # crash-persisted state -- in which neither marker exists and
+        # the banner wrongly nags with the seeded message.
         if [ "$stripped" = "$seed" ]; then
           rm -f "$changed_marker"
+          rm -f "$absent_marker"
         else
           touch "$changed_marker"
+          rm -f "$absent_marker"
         fi
       '';
     };
@@ -432,8 +480,8 @@ in
     # a private layer that swaps in a different shell needs to wire this
     # itself.
     environment.interactiveShellInit = lib.mkIf (cfg.hashedPasswordFile != null) ''
-      if [ ! -e /var/lib/castle-turing/password-changed ]; then
-        if [ -e /var/lib/castle-turing/password-absent ]; then
+      if [ ! -e ${reminderStateDir}/password-changed ]; then
+        if [ -e ${reminderStateDir}/password-absent ]; then
           printf '\n\033[1;33mNote:\033[0m the %s account has no password at all: most likely its seed never decrypted when the account was first created, and a rebuild will not repair an existing account. Set one now with \033[1msudo passwd %s\033[0m.\n\n' ${lib.escapeShellArg cfg.username} ${lib.escapeShellArg cfg.username}
         else
           printf '\n\033[1;33mNote:\033[0m the %s account is still using its seeded initial password. Run \033[1mpasswd\033[0m to set your own.\n\n' ${lib.escapeShellArg cfg.username}
