@@ -29,21 +29,21 @@
     "virtio_rng"
   ];
 
-  boot.loader.systemd-boot.enable = true;
+  # The boot loader itself comes from modules/boot.nix, bound by
+  # flake.nix's nixosModules.host-vm-test wrapper alongside diskLayout —
+  # the same module, and so provably the same fallback-boot posture, as
+  # hosts/xps9370. That sharing is the point of this host: it exists to
+  # regression-test that posture (this harness's NVRAM-wipe assertion,
+  # test/vm-install/run.sh phase 4) before a drift costs a physical USB
+  # round-trip again — see docs/tasks/0003-findings.md finding #2/#5 and
+  # modules/boot.nix for the full story.
+  #
   # Nobody is ever at this console; don't sit at a boot menu.
   boot.loader.timeout = 0;
   # test/vm-install/run.sh captures qemu's -serial as the diagnostic log
   # for boot failures; without this the kernel only writes to the
   # (discarded, -display none) VGA console and that log is empty.
   boot.kernelParams = [ "console=ttyS0" ];
-  # Same fallback-boot posture as hosts/xps9370, and the reason this host
-  # exists: docs/tasks/0003-findings.md (finding #2/#5, first-install
-  # branch) traced a real "No Boot Device Found" failure to the ESP
-  # fallback file (EFI/BOOT/BOOTX64.EFI) not surviving install. This
-  # harness's NVRAM-wipe assertion (test/vm-install/run.sh) exists
-  # specifically to catch a regression here before it costs a physical
-  # USB round-trip again.
-  boot.loader.efi.canTouchEfiVariables = true;
 
   # QEMU's usermode networking (SLiRP) hands out an address over DHCP;
   # this must work with zero console interaction — the harness's whole

@@ -274,7 +274,8 @@ image):
   (`EFI/BOOT/BOOTX64.EFI`) is missing or broken. This is the exact bug
   class task 0003 found by hand; see
   `docs/tasks/0003-findings.md` finding #2/#5 for the full story and
-  `hosts/xps9370/default.nix` / `hosts/vm-test/default.nix` for the
+  `modules/boot.nix` (the shared boot-loader posture both hosts import
+  via their flake wrappers) for the
   `boot.loader.efi.canTouchEfiVariables` mitigation this phase is
   guarding.
 

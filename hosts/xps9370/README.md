@@ -5,9 +5,10 @@ The project machine: 8th-gen i7, 16GB, touchscreen. Covered by the
 
 Contents:
 
-- `default.nix` — the host module: boot loader, machine quirks. Machine
-  facts only; the admin identity comes from the private layer
-  (`docs/private-layer.md`).
+- `default.nix` — the host module: machine quirks and hardware-derived
+  defaults. Machine facts only; the boot loader is the shared posture in
+  `modules/boot.nix`, and the admin identity comes from the private
+  layer (`docs/private-layer.md`).
 - `disko.nix` — a device fact only (`castle.disk.device`, this
   chassis's single NVMe drive): the actual disk layout is the shared
   mechanism in `modules/disk-layout.nix`. Applied (destructively) by
