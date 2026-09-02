@@ -61,6 +61,16 @@ set -euo pipefail
 # have always had.
 : "${CASTLE_PRIVATE_ROOT:=$PWD}"
 
+# The configured journal directory, resolved the same way agent/castle's
+# state_dir() does: CASTLE_STATE_DIR, else XDG_STATE_HOME/castle, else
+# ~/.local/state/castle. Named explicitly in the prompt below rather than
+# left as "somewhere under your checkout" — a directory shaped like a
+# journal that lingers under $CASTLE_PRIVATE_ROOT after a migration
+# (docs/tasks/0040-validate-stray-state-directory.md) is otherwise
+# indistinguishable to a tenant from the real one, which is exactly what
+# put a stale record in front of a worker turn on 2026-09-01.
+state_dir="${CASTLE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/castle}"
+
 # Since docs/tasks/0023-resume-cold.md this is the errand's whole
 # continuation packet, not the bare request body: the request verbatim,
 # then — on an errand that has already had a turn — every prior result,
@@ -263,6 +273,13 @@ public mechanism, private configuration).
     ${CASTLE_PRIVATE_ROOT}. Their resident.nix lives there, any host module
     they wrote themselves lives there, and so does the journal these records
     were read out of. Most configuration changes belong here.
+
+    The journal is ${state_dir}/journal, and that is the ONLY journal.
+    If you come across another directory shaped like one somewhere else
+    under ${CASTLE_PRIVATE_ROOT} — most likely a leftover state/journal
+    from a resident migrating their state elsewhere — it is not the
+    journal, and nothing in it is current. Do not read it and do not
+    treat what it contains as this errand's history.
 
   * MECHANISM: ${mechanism_note}
 

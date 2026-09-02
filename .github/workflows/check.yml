@@ -94,6 +94,15 @@ jobs:
       # nothing but `castle`, `git` and stdlib python3, all of which
       # the stock runner already has, for the same reason given above.
       - run: test/agent-loop/state-layout.sh
+      # A second, independent journal left lying around under
+      # $CASTLE_PRIVATE_ROOT (docs/tasks/0040-validate-stray-state-
+      # directory.md): a hazard state-layout.sh does not cover, where a
+      # leftover state/journal from a half-finished migration is silent
+      # to the store-publishing check above but still readable by
+      # anything that goes looking under the private root instead of
+      # respecting castle.agent.stateDir. Same job as state-layout.sh for
+      # the same reason: no Nix, only castle and stdlib python3.
+      - run: test/agent-loop/stray-state-dir.sh
 
   # Automatic dispatch (docs/tasks/0021-auto-dispatch.md): the sweep a
   # systemd path unit and timer trigger on a real host, driven directly

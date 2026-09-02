@@ -1034,6 +1034,64 @@ def _warn_state_layout() -> None:
         print(f"WARNING: {finding}", file=sys.stderr)
 
 
+def _stray_journal_finding() -> str | None:
+    """Why a `state/journal`-shaped directory under `CASTLE_PRIVATE_ROOT`
+    is worth naming, or None if there is none
+    (docs/tasks/0040-validate-stray-state-directory.md).
+
+    A different hazard than `_state_layout_finding` above, not a second
+    copy of it. That check asks whether the *configured* state directory
+    is safe to publish; this one asks whether a *second*, unconfigured
+    directory shaped like a journal exists and could be mistaken for the
+    real one — which is exactly what happened on 2026-09-01: a resident
+    had migrated their journal out of the flake
+    (docs/tasks/0030-state-outside-the-flake.md), the old `state/`
+    directory lingered in the private checkout, and a worker turn read
+    the stale copy instead of the configured journal, took its single
+    ancient record for the whole thing, and reported anomalies that were
+    artifacts of reading the wrong directory. A resident who removed the
+    old directory from git's index but not from disk (or never tracked it
+    at all) clears `_state_layout_finding` completely while this hazard
+    is still sitting there, so the two checks have to run independently.
+    """
+    private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    if not private_root:
+        return None
+    candidate = pathlib.Path(private_root) / "state" / "journal"
+    if not candidate.is_dir():
+        return None
+
+    # Resolved on both sides before comparing, so a resident who
+    # symlinked the old path at the new one (or configured
+    # castle.agent.stateDir as $CASTLE_PRIVATE_ROOT/state, a layout
+    # _state_layout_finding already owns warning about) is not told a
+    # directory is stray when it is the one actually in use.
+    resolved_candidate = pathlib.Path(os.path.realpath(candidate))
+    resolved_configured = pathlib.Path(os.path.realpath(state_dir() / "journal"))
+    if resolved_candidate == resolved_configured:
+        return None
+
+    return (
+        f"a directory shaped like a journal exists at {resolved_candidate}, "
+        f"under {PRIVATE_ROOT_ENV}, but the configured journal is "
+        f"{resolved_configured}. If this is left over from migrating state "
+        "out of the flake, anything that looks under the private root "
+        "instead of respecting castle.agent.stateDir will read this stale "
+        "copy instead of the real journal. See docs/private-layer.md, "
+        "\"Migrating state out of the flake\", for how to check its "
+        "content is not needed and remove it."
+    )
+
+
+def _warn_stray_journal() -> None:
+    """Print the stray-journal finding, if there is one — same stderr,
+    same never-gates-the-exit-code treatment as `_warn_state_layout`,
+    and called from the same two sites right after it."""
+    finding = _stray_journal_finding()
+    if finding:
+        print(f"WARNING: {finding}", file=sys.stderr)
+
+
 def runtime_dir_is_fallback() -> bool:
     """True when `runtime_dir()` resolved to its `/tmp` last resort.
 
@@ -8560,6 +8618,12 @@ def cmd_digest(args: argparse.Namespace) -> int:
     # exactly the resident best placed to move it somewhere safe
     # (docs/tasks/0030-state-outside-the-flake.md).
     _warn_state_layout()
+    # A different fact about the same migration, checked independently
+    # (docs/tasks/0040-validate-stray-state-directory.md): not whether
+    # the configured journal is safe, but whether a second directory
+    # shaped like one is lying around under the private root, ready to
+    # be mistaken for it.
+    _warn_stray_journal()
     records = load_all(journal_dir())
     requests = [rec for rec in records.values() if rec.type == "request"]
     corrections = [rec for rec in records.values() if rec.type == "correction"]
@@ -9255,6 +9319,11 @@ def cmd_validate(args: argparse.Namespace) -> int:
     # at some other directory for a one-off check without moving
     # anything.
     _warn_state_layout()
+    # Same treatment, same independence from `errors`, for the second
+    # fact about the same migration (docs/tasks/0040-validate-stray-
+    # state-directory.md) — see the comment beside this call's twin in
+    # cmd_digest.
+    _warn_stray_journal()
 
     if errors:
         for err in errors:
