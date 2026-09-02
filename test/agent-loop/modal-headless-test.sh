@@ -2148,7 +2148,7 @@ NW_NOTIFY="$WORKDIR/notify-waiter-notify.sh"
 cat > "$NW_NOTIFY" <<'STUB'
 #!/usr/bin/env bash
 # Stands in for notify-send under CASTLE_NOTIFY_COMMAND: logs its full
-# argv (so the exact --app-name=castle and --action=open=Open spelling
+# argv (so the exact --app-name=castle and --action=default=Open spelling
 # can be asserted on) and prints back whatever action name
 # NOTIFY_ACTION_FILE names — faking the "activated/dismissed/expired"
 # contract the real notify-send's own --wait gives.
@@ -2166,7 +2166,7 @@ NW_HAS_MODAL_FILE="$WORKDIR/nw-has-modal"
 
 log "notify-waiter: an existing castle-modal window is focused, not duplicated"
 : > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
-printf 'open\n' > "$NW_ACTION_FILE"
+printf 'default\n' > "$NW_ACTION_FILE"
 : > "$NW_HAS_MODAL_FILE"
 PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
   SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \
@@ -2176,8 +2176,8 @@ PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
   || fail "notify-waiter exited nonzero when an existing window was found"
 grep -q -- '--app-name=castle' "$NW_ARGS_LOG" \
   || fail "notify-waiter did not pass --app-name=castle to the notify command"
-grep -q -- '--action=open=Open' "$NW_ARGS_LOG" \
-  || fail "notify-waiter did not use the --action=open=Open spelling (docs/tasks/0034, implementation deviations)"
+grep -q -- '--action=default=Open' "$NW_ARGS_LOG" \
+  || fail "notify-waiter did not use the --action=default=Open spelling (docs/tasks/0034, implementation deviations)"
 grep -q "Castle: your request has an answer" "$NW_ARGS_LOG" \
   || fail "notify-waiter did not pass the title through to the notify command"
 grep -qE '\[app_id="castle-modal"\].*focus' "$NW_SWAYMSG_LOG" \
@@ -2237,7 +2237,7 @@ log "notify-waiter: two notifications clicked at once with no modal open race fo
 # independent runs asserted on separately, it is the actual race.
 : > "$NW_SWAYMSG_LOG"; : > "$NW_FOOT_LOG"; : > "$NW_ARGS_LOG"
 rm -f "$NW_HAS_MODAL_FILE"
-printf 'open\n' > "$NW_ACTION_FILE"
+printf 'default\n' > "$NW_ACTION_FILE"
 RACE_START=$SECONDS
 PATH="$NW_BIN:$PATH" CASTLE_NOTIFY_COMMAND="$NW_NOTIFY" \
   SWAYMSG_LOG="$NW_SWAYMSG_LOG" SWAY_HAS_MODAL_FILE="$NW_HAS_MODAL_FILE" FOOT_LOG="$NW_FOOT_LOG" \

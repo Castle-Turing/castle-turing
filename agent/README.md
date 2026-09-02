@@ -215,7 +215,8 @@ castle show ID
   (`docs/tasks/0034-inbox-modal.md` §3). The waiter itself shells out to
   `CASTLE_NOTIFY_COMMAND` (default `notify-send` on `$PATH`,
   best-effort and non-fatal if it fails or isn't installed) with
-  `--app-name=castle` and `--action=open=Open`, then blocks on the
+  `--app-name=castle` and `--action=default=Open` (the reserved
+  freedesktop key a plain click fires; task 0038), then blocks on the
   daemon's own `--wait`, which returns the chosen action's name the
   instant the notification is activated, dismissed, or expires. A click
   (`open` on stdout) makes the waiter ask Sway whether a `castle-modal`

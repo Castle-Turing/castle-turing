@@ -244,7 +244,7 @@ left you to make.
 
 ## Implementation deviations (recorded by the implementing session)
 
-- `notify-send`'s action flag is spelled `--action=open=Open`, not
+- `notify-send`'s action flag is spelled `--action=<key>=<label>`, not
   `--action=open,Open` as this brief wrote: the real syntax is
   `[NAME=]Text` (verified against notify-send 0.8.8's own help). The
   mechanism is otherwise exactly as designed.
