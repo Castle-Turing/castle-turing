@@ -484,7 +484,7 @@ in
         directly by `castle route`: the router spawns a detached
         waiter (`castle notify-waiter`) and returns immediately, and
         the *waiter* runs this command with `--app-name=castle`,
-        `--action=open=Open`, the title, and the body appended — so
+        `--action=default=Open`, the title, and the body appended — so
         the value must be a `notify-send`-compatible command, not an
         arbitrary `<command> <title> <body>` sink. The waiter blocks
         on the notification's fate: a click focuses an existing

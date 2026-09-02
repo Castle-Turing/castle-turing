@@ -2714,7 +2714,15 @@ def _fire_notification(title: str, body: str, record_id: str) -> None:
         print(f"castle route: notify command {raw!r} failed (non-fatal): {exc}", file=sys.stderr)
 
 
-NOTIFY_ACTION_NAME = "open"
+# "default", not a name of our choosing: the freedesktop notification
+# spec reserves the action key "default" as the one a daemon fires on
+# plain activation, and mako's stock left-click binding is
+# invoke-DEFAULT-action. Keyed "open", the action rendered as a button
+# but a plain click fell through to dismissal — found by the one human
+# verification click task 0034's brief reserved, fixed by task 0038.
+# The label ("Open") is what daemons may show; the key is the wire
+# protocol.
+NOTIFY_ACTION_NAME = "default"
 
 # How long a waiter (below) will wait for `notify_waiter_lock_path` before
 # giving up and proceeding unlocked, and how long it will then wait for
