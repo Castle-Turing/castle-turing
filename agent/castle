@@ -1217,6 +1217,92 @@ def apply_in_flight_path(answer_id: str) -> pathlib.Path:
     return apply_in_flight_dir() / answer_id
 
 
+# How long a worker scratch file may sit in `work_scratch_dir()` before
+# a dispatch sweep unlinks it (docs/tasks/0039 §5).
+#
+# An absolute floor, deliberately, rather than a multiple of
+# `worker_timeout_seconds()`. That value is read per-process from the
+# environment, so a sweep and a hand-run `castle work` can disagree
+# about it, and a prune computing its own safety margin from a number
+# the process it must not disturb did not use is not safe. No turn
+# outlives its own timeout — `run_worker_turn` kills the tenant's
+# process group and unlinks both files — so a day cannot reach a live
+# turn's scratch under any timeout a resident would set.
+WORK_SCRATCH_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def work_scratch_dir() -> pathlib.Path:
+    """Where a worker turn's two output files live while it runs
+    (docs/tasks/0039-worker-writable-deliverables.md).
+
+    **Under the state directory and not under `/tmp`, which is the
+    whole of this function's reason to exist.** These two paths are
+    handed to a tenant to *write*, and the reference tenant
+    (`agent/castle-worker-claude`, a headless `claude -p`) runs under a
+    sandbox that permits writes only beneath the resident's home
+    directory. A bare `tempfile.mkstemp()` puts them under `$TMPDIR`,
+    which that tenant cannot write: on 2026-09-01 the first live
+    dispatched errand to produce a real diff diagnosed correctly,
+    drafted a correct diff, could write neither file, and staged both
+    deliverables as loose files in `$HOME` — leaving a result record
+    that says `completed` and "(no diff produced)" with the whole
+    approve-and-apply chain unreachable. It recurred on 2026-09-02. The
+    state directory is home-anchored on every layout
+    docs/private-layer.md documents (the recommended sibling
+    repository, the submodule variant, and the unset-`stateDir`
+    fallback to `~/.local/state/castle` alike).
+
+    **Beside the journal and deliberately outside it**, the same
+    placement and the same argument as `apply_in_flight_dir()`: nothing
+    folds these files, nothing routes them, and they are *deleted*,
+    which no record ever is.
+
+    **Home-anchoring is not enforced here and must not be.**
+    `castle.agent.stateDir` is an unconstrained `nullOr str`, so a
+    deployment is free to point this outside home — but `castle work`
+    does not know which tenant it is about to run or whether that
+    tenant is sandboxed at all, and the agent-loop harnesses
+    legitimately point `CASTLE_STATE_DIR` at a temp directory outside
+    home with scripted tenants that have no sandbox. What this module
+    verifies is that *this process* can write here (see
+    `run_worker_turn`'s pre-flight); the declaration about what a
+    sandboxed tenant may write is in the wrapper that chose that
+    tenant, which is the only file that knows.
+    """
+    d = state_dir() / "work"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def prune_work_scratch() -> None:
+    """Unlink worker scratch files older than
+    `WORK_SCRATCH_MAX_AGE_SECONDS`; never raise.
+
+    `run_worker_turn`'s `finally` unlinks both of a turn's files on
+    every ordinary and exceptional exit, including `BaseException` —
+    but not across a `SIGKILL` or a power loss. Under `/tmp` that
+    leftover was somebody else's problem to sweep; under the state
+    directory it is durable, and would accumulate one pair per killed
+    turn forever inside the resident's private directory.
+
+    Best effort throughout. A sweep's nonzero exit means "dispatch
+    itself broke" (`cmd_dispatch`'s exit-code contract), and a scratch
+    file that could not be deleted is emphatically not that.
+    """
+    try:
+        entries = list(work_scratch_dir().iterdir())
+    except OSError:
+        return
+    cutoff = time.time() - WORK_SCRATCH_MAX_AGE_SECONDS
+    for entry in entries:
+        try:
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            entry.unlink()
+        except OSError:
+            continue
+
+
 # The marker's body: two ASCII header lines, a `paths:` line, then the
 # patch's paths NUL-separated. Bytes rather than text throughout,
 # because a path is bytes (see `_patch_paths`) and this file has to hand
@@ -4670,18 +4756,81 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 ),
             )
 
-        diff_fd, diff_path_str = tempfile.mkstemp(prefix="castle-work-diff-")
-        os.close(diff_fd)
-        diff_path = pathlib.Path(diff_path_str)
-        # The second output file (docs/tasks/0024 §5): at most one word,
-        # naming which checkout the diff is against. Created the same
-        # way, handed over the same way, read back the same way and
-        # unlinked in the same `finally` as the diff — a tenant that
-        # already knows how to write one output file needs no second
-        # mechanism explained to it.
-        target_fd, target_path_str = tempfile.mkstemp(prefix="castle-work-target-")
-        os.close(target_fd)
-        target_path = pathlib.Path(target_path_str)
+        # **The pre-flight, and then the allocation, in that order**
+        # (docs/tasks/0039-worker-writable-deliverables.md §2).
+        #
+        # `work_scratch_dir()` explains why these two files live under
+        # the state directory rather than under `/tmp`. What this block
+        # adds is that the choice is *verified* rather than assumed:
+        # `castle.agent.stateDir` is an unconstrained `nullOr str`, so
+        # nothing stops a deployment from pointing it at a path this
+        # process cannot write, and inheriting "the state dir is under
+        # home, therefore writable" as an invariant is how this bug
+        # reappears somewhere else. Creating the directory and both
+        # files IS the check — a probe followed by a real allocation
+        # would be two questions with a race between them.
+        #
+        # Refusing here spends nothing. Same posture as the four
+        # refusals above: nothing ran, the errand keeps its automatic
+        # attempt, and the record names the command that retries.
+        #
+        # **What this establishes, stated exactly.** That the process
+        # running `castle work` can write there. It does NOT establish
+        # that a sandboxed tenant can — this process is not inside the
+        # tenant's sandbox, and neither is the wrapper that execs it
+        # (only the `claude` process is), so no probe on this side of
+        # that boundary could say otherwise. The declaration about what
+        # the reference tenant's sandbox permits lives in
+        # agent/castle-worker-claude, which is the file that knows
+        # which sandbox is in play. The message below claims only what
+        # was checked.
+        try:
+            scratch_dir = work_scratch_dir()
+            diff_fd, diff_path_str = tempfile.mkstemp(
+                prefix="castle-work-diff-", dir=scratch_dir
+            )
+            os.close(diff_fd)
+            diff_path = pathlib.Path(diff_path_str)
+            # The second output file (docs/tasks/0024 §5): at most one word,
+            # naming which checkout the diff is against. Created the same
+            # way, handed over the same way, read back the same way and
+            # unlinked in the same `finally` as the diff — a tenant that
+            # already knows how to write one output file needs no second
+            # mechanism explained to it.
+            target_fd, target_path_str = tempfile.mkstemp(
+                prefix="castle-work-target-", dir=scratch_dir
+            )
+            os.close(target_fd)
+            target_path = pathlib.Path(target_path_str)
+        except OSError as exc:
+            wanted = state_dir() / "work"
+            message = f"cannot write the worker's output files under {wanted}: {exc}"
+            print(f"castle work: {message}", file=sys.stderr)
+            raise TenantNotRunnable(
+                message,
+                _write_worker_result(
+                    request,
+                    outcome="failed",
+                    claim_id=claim_id,
+                    body_lines=[
+                        f"Errand `{request.id}` could not start: this turn could not "
+                        f"create the worker's two output files under `{wanted}` "
+                        f"({exc}).",
+                        "",
+                        "A worker turn hands its tenant two paths to write — the "
+                        "proposed diff and the checkout that diff targets — and they "
+                        "live beside the journal so that a sandboxed tenant can "
+                        "reach them. With nowhere to put them there is nothing for a "
+                        "tenant to produce, so no tenant was started.",
+                        "",
+                        "Check that `castle.agent.stateDir` (modules/agent) names a "
+                        "directory this account can write, then re-run "
+                        f"`castle work {request.id}`.",
+                    ]
+                    + spent_note
+                    + mechanism_note,
+                ),
+            )
         timeout = worker_timeout_seconds()
         try:
             env = dict(os.environ)
@@ -5998,6 +6147,14 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         print("dispatch: another sweep is already running; nothing to do")
         return 0
     try:
+        # Under the sweep lock, so two sweeps do not walk the same
+        # directory unlinking each other's findings — and before
+        # anything else, so a sweep that later refuses for its own
+        # reasons still leaves the scratch area bounded.
+        # `prune_work_scratch` swallows every OSError itself; see its
+        # docstring for why a leftover temp file must never be able to
+        # fail a sweep (docs/tasks/0039 §5).
+        prune_work_scratch()
         try:
             records = load_all(journal_dir())
         except OSError as exc:
