@@ -10,6 +10,16 @@
 #   - One concurrency slot per PR: stacked Codex reviews collapse into the
 #     latest run instead of queueing repeated responses.
 #   - Same-repo branches only: never runs with write access against a fork.
+#
+# Receipt verification, by construction (docs/tasks/0045):
+#   - A model's own report that it posted something is a claim, not
+#     evidence — see the PR #73 incident where the prompt described a
+#     summary comment as posted and it never landed. The "Wrap gh" step
+#     below shadows `gh` on PATH with a shim that logs every failing `gh`
+#     invocation, regardless of what the model's final summary says; the
+#     "Fail loudly" step at the end checks that log, not the model's
+#     narration. Neither step is something the prompt can talk its way
+#     around.
 name: Claude — handle Codex review
 
 on:
@@ -40,6 +50,25 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
+      - name: Wrap gh to catch silent posting failures
+        run: |
+          real_gh="$(command -v gh)"
+          shim_dir="$RUNNER_TEMP/gh-shim"
+          mkdir -p "$shim_dir"
+          log="$RUNNER_TEMP/gh-call-failures.log"
+          : > "$log"
+          cat > "$shim_dir/gh" <<SHIM
+          #!/usr/bin/env bash
+          "$real_gh" "\$@"
+          code=\$?
+          if [ "\$code" -ne 0 ]; then
+            printf 'FAILED (exit %s): gh %s\n' "\$code" "\$*" >> "$log"
+          fi
+          exit "\$code"
+          SHIM
+          chmod +x "$shim_dir/gh"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
       - name: Run Claude on Codex's findings
         uses: anthropics/claude-code-action@v1
         with:
@@ -57,15 +86,20 @@ jobs:
                findings you disagree with or that are out of the PR's scope,
                reply explaining why — never silently skip a finding. Every
                disagreement between reviewers must stay legible to the human.
-            3. Leave the receipt WHERE THE FINDING LIVES: reply directly on
-               each inline review thread (POST
-               repos/.../pulls/N/comments/COMMENT_ID/replies via gh api),
-               citing the fix commit hash or your reasoning for declining.
-               Then resolve each addressed thread via the GraphQL
-               resolveReviewThread mutation. A top-level summary without
-               inline replies is not sufficient — the human reads threads.
+            3. Leave the receipt WHERE THE FINDING LIVES: for each inline
+               review thread, POST the reply first (repos/.../pulls/N/comments/COMMENT_ID/replies
+               via gh api), citing the fix commit hash or your reasoning for
+               declining — only once that POST has actually succeeded.
+               Resolve a thread (GraphQL resolveReviewThread mutation) only
+               after its own reply has posted; never resolve a thread you
+               have not replied to. A top-level summary without inline
+               replies is not sufficient — the human reads threads.
             4. Finish with one PR comment summarizing what you fixed and what
-               you declined, with reasoning.
+               you declined, with reasoning. Never describe an artifact — a
+               reply, a resolved thread, this summary comment itself — as
+               posted unless the post call actually succeeded. If a post
+               fails, say plainly "I could not post <X>" instead of
+               describing X as if it exists.
 
             Hard rules:
             - Never write the Codex trigger phrase (the reviewer's @-mention)
@@ -76,3 +110,14 @@ jobs:
             - Do not expand the diff beyond what the findings require.
             - Follow the repository's CLAUDE.md.
           claude_args: '--allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh api:*),Bash(nix:*)"'
+
+      - name: Fail loudly if any gh call failed this run
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/gh-call-failures.log"
+          if [ -s "$log" ]; then
+            echo "::error::One or more gh calls failed during this run — a receipt (reply, resolved thread, or summary comment) may not have posted. See below:"
+            cat "$log"
+            exit 1
+          fi
+          echo "Every gh call in this run exited zero."
