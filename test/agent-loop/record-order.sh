@@ -241,17 +241,58 @@ check(
 # exists to catch is worse than no guard, because `check.yml` and
 # `agent/README.md` both advertise this one as load-bearing (this
 # task's code review, finding 2).
+def _is_param_id_access(expr, parameters):
+    """Does `expr` read `.id` off one of the lambda's own parameters —
+    directly (`rec.id`), or indirectly through indexing a collection by
+    that parameter (`records[i].id`, the same shape `order_records`
+    uses internally to rank by index)?
+    """
+    if isinstance(expr, ast.Attribute) and expr.attr == "id":
+        target = expr.value
+        if isinstance(target, ast.Name) and target.id in parameters:
+            return True
+        if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Name):
+            return target.slice.id in parameters
+        return False
+    # `getattr(rec, "id")` / `getattr(records[i], "id")` reach the same
+    # place by another spelling.
+    if (
+        isinstance(expr, ast.Call)
+        and (
+            (isinstance(expr.func, ast.Name) and expr.func.id == "getattr")
+            or (isinstance(expr.func, ast.Attribute) and expr.func.attr == "getattr")
+        )
+        and len(expr.args) >= 2
+        and isinstance(expr.args[1], ast.Constant)
+        and expr.args[1].value == "id"
+    ):
+        target = expr.args[0]
+        if isinstance(target, ast.Name) and target.id in parameters:
+            return True
+        if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Name):
+            return target.slice.id in parameters
+    return False
+
+
 def sorts_by_record_id(node):
     """Is this `key=` argument ordering records by their whole id?"""
     if isinstance(node, ast.Lambda):
         parameters = {arg.arg for arg in node.args.args}
-        return any(
-            isinstance(inner, ast.Attribute)
-            and inner.attr == "id"
-            and isinstance(inner.value, ast.Name)
-            and inner.value.id in parameters
-            for inner in ast.walk(node.body)
-        )
+        body = node.body
+        # The one exemption: `order_records`' own rank computation,
+        # `(stamp_of(pool[i].id), pool[i].id)` — id used only to break
+        # ties *after* the stamp already decided, not as the criterion.
+        # That shape is a tuple whose first element is a `stamp_of(...)`
+        # call; nothing else gets a pass just for looking like it.
+        if (
+            isinstance(body, ast.Tuple)
+            and len(body.elts) >= 2
+            and isinstance(body.elts[0], ast.Call)
+            and isinstance(body.elts[0].func, ast.Name)
+            and body.elts[0].func.id == "stamp_of"
+        ):
+            return False
+        return any(_is_param_id_access(inner, parameters) for inner in ast.walk(body))
     # `operator.attrgetter("id")` and `functools.partial(getattr, ...)`
     # reach the same place by another spelling.
     if isinstance(node, ast.Call):
@@ -275,6 +316,46 @@ def compares_two_record_ids(node):
         for operand in operands
     )
 
+
+# The detector's own coverage: `sorts_by_record_id` was flagged as easy
+# to bypass via `records[i].id` or `getattr(rec, "id")`, both of which
+# reach the same place as `rec.id` without matching the original
+# attribute-on-a-name check. Exercised directly, so a future edit that
+# narrows the check back down fails here instead of silently passing
+# everything in agent/castle by luck.
+def key_node(expr_src):
+    call = ast.parse(f"sorted(xs, key={expr_src})", mode="eval").body
+    return call.keywords[0].value
+
+
+check(
+    "direct attribute access is still caught",
+    sorts_by_record_id(key_node("lambda rec: rec.id")),
+)
+check(
+    "indexing the collection by the parameter is caught",
+    sorts_by_record_id(key_node("lambda i: records[i].id")),
+)
+check(
+    "getattr on the parameter is caught",
+    sorts_by_record_id(key_node('lambda rec: getattr(rec, "id")')),
+)
+check(
+    "getattr on an indexed parameter is caught",
+    sorts_by_record_id(key_node('lambda i: getattr(records[i], "id")')),
+)
+check(
+    "attrgetter/itemgetter on id is still caught",
+    sorts_by_record_id(key_node('operator.attrgetter("id")')),
+)
+check(
+    "an id access on something other than the parameter is not caught",
+    not sorts_by_record_id(key_node("lambda rec: rec.other.id")),
+)
+check(
+    "order_records' own stamp-first tie-break is exempt",
+    not sorts_by_record_id(key_node("lambda i: (stamp_of(pool[i].id), pool[i].id)")),
+)
 
 offenders = []
 for name in ("castle", "castle-modal"):
