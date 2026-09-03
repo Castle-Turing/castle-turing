@@ -25,8 +25,9 @@ commit.
 no open task for a harness to pick up, and a file at the top level of
 `docs/tasks/` is now, by convention, queued work.
 
-**Verification.** `grep -rn "/home/wesley" docs/` returns only the
-pre-existing, deliberate references in
-`docs/tasks/done/0002-private-layer-slot.md` (whharris repo names,
-flagged in the backlog entry as the resident's call), and nothing
-else.
+**Verification.** A recursive grep of `docs/` for the operator's home
+prefix (spelled here as a description, not a literal, so this brief
+does not itself feed the future CI guard) returns only the
+pre-existing, deliberate repo-name references in
+`docs/tasks/done/0002-private-layer-slot.md`, flagged in the backlog
+entry as the resident's call, and nothing else.
