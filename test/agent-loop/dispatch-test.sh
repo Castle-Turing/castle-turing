@@ -798,6 +798,210 @@ grep -q '^outcome: failed$' "$RESULT_NOBIN_FILE" || fail "$RESULT_NOBIN_FILE doe
 "$CASTLE" validate
 
 # ---------------------------------------------------------------------
+log "the worker's two output files are allocated under the state dir, not under /tmp (docs/tasks/0039)"
+# ---------------------------------------------------------------------
+# The bug this proves gone: `run_worker_turn` used a bare
+# `tempfile.mkstemp()`, so both deliverable paths landed under $TMPDIR
+# — which the reference tenant, a headless `claude -p`, cannot write
+# (its sandbox permits writes only beneath the resident's home). Twice
+# on the reference host (2026-09-01 and 2026-09-02) a turn diagnosed
+# correctly, drafted a correct diff, could write neither file, and left
+# a result saying `completed` with "(no diff produced)".
+#
+# Asserted on the paths the tenant is actually handed, reported by the
+# tenant itself, rather than on anything this script can infer from the
+# outside — the handoff is the thing that broke.
+SCRATCH_WITNESS="$WORKDIR/scratch-witness.txt"
+WORKER_SCRATCH="$WORKDIR/worker-scratch.sh"
+cat > "$WORKER_SCRATCH" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf '%s\n%s\n' "$CASTLE_DIFF_FILE" "$CASTLE_TARGET_FILE" > "$SCRATCH_WITNESS_OUT"
+printf -- '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n' > "$CASTLE_DIFF_FILE"
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+echo "worker-scratch: wrote both deliverables where it was told to"
+TENANT
+chmod +x "$WORKER_SCRATCH"
+
+REQ_SCRATCH="$("$CASTLE" ask "Dispatch test: where does the tenant get told to write its deliverables?")"
+SCRATCH_WITNESS_OUT="$SCRATCH_WITNESS" CASTLE_WORKER_COMMAND="$WORKER_SCRATCH" \
+  "$CASTLE" dispatch >/dev/null 2>&1 || fail "the scratch-witness sweep exited nonzero"
+[ -f "$SCRATCH_WITNESS" ] || fail "the tenant never ran, so nothing was learned about the paths it was handed"
+while read -r HANDED; do
+  case "$HANDED/" in
+    "$CASTLE_STATE_DIR"/work/*) ;;
+    *) fail "the tenant was handed $HANDED, which is not under $CASTLE_STATE_DIR/work — the /tmp allocation is back" ;;
+  esac
+done < "$SCRATCH_WITNESS"
+
+RESULT_SCRATCH_FILE="$(referencing result "$REQ_SCRATCH")"
+[ -n "$RESULT_SCRATCH_FILE" ] || fail "the scratch-witness turn left no result"
+grep -q '^outcome: completed$' "$RESULT_SCRATCH_FILE" || fail "$RESULT_SCRATCH_FILE does not carry outcome: completed"
+grep -q '^+new$' "$RESULT_SCRATCH_FILE" || fail "$RESULT_SCRATCH_FILE does not carry the diff the tenant wrote — the channel is still empty"
+grep -q '^target: private$' "$RESULT_SCRATCH_FILE" || fail "$RESULT_SCRATCH_FILE does not carry the target the tenant stamped"
+
+log "  -- and the turn leaves nothing behind in it: the scratch area is not a place things accumulate"
+LEFTOVER="$(find "$CASTLE_STATE_DIR/work" -mindepth 1 2>/dev/null || true)"
+[ -z "$LEFTOVER" ] || fail "a completed turn left scratch files behind: $LEFTOVER"
+
+# ---------------------------------------------------------------------
+log "  -- a state dir the turn cannot make a scratch area in refuses BEFORE a tenant runs, and says which option to fix"
+# ---------------------------------------------------------------------
+# castle.agent.stateDir is an unconstrained `nullOr str`, so "the state
+# dir is writable" is an assumption and not an invariant. A plain FILE
+# planted where the directory belongs is how this is made to fail
+# without a chmod, which proves nothing when the test runs as root —
+# and it happens to be a shape a resident could produce by hand.
+UNWRITABLE_STATE="$WORKDIR/state-no-scratch"
+mkdir -p "$UNWRITABLE_STATE"
+NEVER_RAN_WITNESS="$WORKDIR/never-ran-witness.txt"
+rm -f "$NEVER_RAN_WITNESS"
+WORKER_WITNESS="$WORKDIR/worker-witness.sh"
+cat > "$WORKER_WITNESS" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf 'this tenant was started\n' > "$NEVER_RAN_WITNESS_OUT"
+echo "worker-witness: started, which it should not have been"
+TENANT
+chmod +x "$WORKER_WITNESS"
+
+# The watermark first, on its own sweep: a request filed before one
+# exists is never auto-started, so without this the request below would
+# be ineligible and the case would pass vacuously.
+CASTLE_STATE_DIR="$UNWRITABLE_STATE" "$CASTLE" dispatch --watermark-only >/dev/null
+REQ_NOSCRATCH="$(CASTLE_STATE_DIR="$UNWRITABLE_STATE" "$CASTLE" ask "Dispatch test: the scratch area cannot be created.")"
+# The watermark sweep above already ran the prune, which creates the
+# scratch directory as a side effect; remove it before planting the
+# file that makes creating it fail.
+rm -rf "$UNWRITABLE_STATE/work"
+printf 'a regular file where the scratch directory belongs\n' > "$UNWRITABLE_STATE/work"
+CASTLE_STATE_DIR="$UNWRITABLE_STATE" NEVER_RAN_WITNESS_OUT="$NEVER_RAN_WITNESS" \
+  CASTLE_WORKER_COMMAND="$WORKER_WITNESS" "$CASTLE" dispatch >/dev/null 2>&1 || true
+
+# The same shape as `referencing` above, against the other journal:
+# `refs` is a comma-separated list and a worker result names the claim
+# it closes as well as the request, so an anchored full-line match
+# finds nothing.
+RESULT_NOSCRATCH_FILE="$(grep -l "^refs: .*$REQ_NOSCRATCH" "$UNWRITABLE_STATE"/journal/*-result-*.md 2>/dev/null | head -n 1)"
+[ -n "$RESULT_NOSCRATCH_FILE" ] || fail "an unusable scratch area left no record at all — the silent-failure shape 0039 exists to remove"
+grep -q '^outcome: failed$' "$RESULT_NOSCRATCH_FILE" || fail "$RESULT_NOSCRATCH_FILE does not carry outcome: failed"
+grep -qF "$UNWRITABLE_STATE/work" "$RESULT_NOSCRATCH_FILE" || fail "$RESULT_NOSCRATCH_FILE does not name the directory it could not create"
+grep -qF 'castle.agent.stateDir' "$RESULT_NOSCRATCH_FILE" || fail "$RESULT_NOSCRATCH_FILE does not name the option a resident would fix"
+[ ! -f "$NEVER_RAN_WITNESS" ] || fail "a tenant was started even though there was nowhere for it to write — the pre-flight ran too late"
+CASTLE_STATE_DIR="$UNWRITABLE_STATE" "$CASTLE" validate >/dev/null || fail "the refusal wrote a record that does not validate"
+
+# ---------------------------------------------------------------------
+log "  -- and a sweep prunes stale scratch, since the state dir is durable where /tmp was not"
+# ---------------------------------------------------------------------
+mkdir -p "$CASTLE_STATE_DIR/work"
+STALE_SCRATCH="$CASTLE_STATE_DIR/work/castle-work-diff-stale"
+FRESH_SCRATCH="$CASTLE_STATE_DIR/work/castle-work-diff-fresh"
+printf 'left behind by a SIGKILLed turn\n' > "$STALE_SCRATCH"
+printf 'a turn that might still be running\n' > "$FRESH_SCRATCH"
+touch -d '2020-01-01T00:00:00Z' "$STALE_SCRATCH"
+"$CASTLE" dispatch >/dev/null 2>&1 || fail "a sweep over a journal with stale scratch exited nonzero"
+[ ! -f "$STALE_SCRATCH" ] || fail "the sweep did not prune a scratch file older than a day — leftovers accumulate forever under the state dir"
+[ -f "$FRESH_SCRATCH" ] || fail "the sweep deleted a FRESH scratch file, which a live turn may still be writing"
+rm -f "$FRESH_SCRATCH"
+
+# ---------------------------------------------------------------------
+log "  -- and a worker timeout at or beyond the prune's cutoff is clamped below it, not honored"
+# ---------------------------------------------------------------------
+# The bug this proves fixed: `worker.timeoutSeconds` (modules/agent) is
+# an unbounded `ints.positive`. `work_scratch_dir()`'s prune argument —
+# no turn outlives its own timeout, so a sweep's age-based cutoff can
+# never reach a live turn's scratch — only holds if every timeout this
+# tool can act on stays under that cutoff. Without the clamp, a
+# resident configuring a turn longer than a day would let a concurrent
+# sweep delete that turn's own scratch files while it was still
+# running.
+REQ_LONGTIMEOUT="$("$CASTLE" ask "Dispatch test: a worker timeout beyond the scratch retention window is clamped.")"
+CASTLE_WORKER_TIMEOUT=100000 CASTLE_WORKER_COMMAND="$WORKER_SCRATCH" \
+  SCRATCH_WITNESS_OUT="$WORKDIR/longtimeout-witness.txt" \
+  "$CASTLE" dispatch >/dev/null 2>"$WORKDIR/longtimeout-sweep.err" \
+  || fail "the long-timeout sweep exited nonzero"
+grep -qF 'CASTLE_WORKER_TIMEOUT' "$WORKDIR/longtimeout-sweep.err" \
+  || fail "a CASTLE_WORKER_TIMEOUT of 100000s (over a day) was not flagged as clamped"
+RESULT_LONGTIMEOUT_FILE="$(referencing result "$REQ_LONGTIMEOUT")"
+[ -n "$RESULT_LONGTIMEOUT_FILE" ] || fail "the long-timeout turn left no result"
+grep -q '^outcome: completed$' "$RESULT_LONGTIMEOUT_FILE" || fail "$RESULT_LONGTIMEOUT_FILE does not carry outcome: completed"
+
+# ---------------------------------------------------------------------
+log "the reference tenant declares its sandbox and refuses paths outside it, without spending a model call"
+# ---------------------------------------------------------------------
+# The half neither of the cases above can reach: `castle work` is not
+# inside the tenant's sandbox, and neither is agent/castle-worker-claude
+# itself — only the `claude` it execs is. So no probe on this side of
+# that boundary can answer "can the tenant write here", and the wrapper
+# states the rule instead. This drives that script directly with a stub
+# `claude` on PATH, so a refusal is observable as the stub never being
+# reached.
+SANDBOX_STUBDIR="$WORKDIR/sandbox-stub"
+mkdir -p "$SANDBOX_STUBDIR"
+cat > "$SANDBOX_STUBDIR/claude" <<'STUB'
+#!/usr/bin/env bash
+cat > /dev/null
+printf 'the model call happened\n' > "$CLAUDE_STUB_WITNESS"
+exit 0
+STUB
+chmod +x "$SANDBOX_STUBDIR/claude"
+
+SANDBOX_HOME="$WORKDIR/sandbox-home"
+mkdir -p "$SANDBOX_HOME"
+CLAUDE_WITNESS="$WORKDIR/claude-reached.txt"
+SANDBOX_PACKET="$WORKDIR/sandbox-packet.txt"
+printf 'CASTLE-PACKET-0123456789abcdef a probe packet, not a real errand\n' > "$SANDBOX_PACKET"
+
+rm -f "$CLAUDE_WITNESS"
+if PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
+  CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$WORKDIR/outside-the-sandbox-diff" \
+  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
+  > "$WORKDIR/sandbox-refusal.out" 2>&1; then
+  fail "castle-worker-claude accepted a deliverable path outside the sandbox it declares it runs under"
+fi
+grep -qF "$WORKDIR/outside-the-sandbox-diff" "$WORKDIR/sandbox-refusal.out" \
+  || fail "the tenant's refusal does not name the path it rejected: $(cat "$WORKDIR/sandbox-refusal.out")"
+grep -qF "$SANDBOX_HOME" "$WORKDIR/sandbox-refusal.out" \
+  || fail "the tenant's refusal does not name the boundary it applied: $(cat "$WORKDIR/sandbox-refusal.out")"
+grep -qF 'castle.agent.stateDir' "$WORKDIR/sandbox-refusal.out" \
+  || fail "the tenant's refusal does not say what a resident would change: $(cat "$WORKDIR/sandbox-refusal.out")"
+[ ! -f "$CLAUDE_WITNESS" ] || fail "the tenant reached its model call before checking whether it could deliver anything"
+
+log "  -- and the positive control: the same call with both paths inside the sandbox runs the tenant"
+# Without this, the refusal above would pass just as well against a
+# script that refuses everything.
+rm -f "$CLAUDE_WITNESS"
+PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
+  CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" \
+  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
+  > "$WORKDIR/sandbox-accepted.out" 2>&1 \
+  || fail "castle-worker-claude refused paths that are inside the sandbox it declares: $(cat "$WORKDIR/sandbox-accepted.out")"
+[ -f "$CLAUDE_WITNESS" ] || fail "the tenant did not reach its model call with both deliverable paths inside the sandbox"
+
+log "  -- and the prompt tells the tenant never to stage a deliverable somewhere else when a write fails"
+# The mechanism above cannot cover a write that fails for a reason it
+# does not model (a full disk, a read-only mount), and the behaviour
+# actually observed on 2026-09-01 was a model inventing a channel when
+# the contract's channel failed. That rule lives in the prompt, so it
+# is checked in the rendered prompt. Whitespace collapsed first: this
+# is hand-wrapped prose, and a line-oriented grep for a phrase the
+# prose wrapped silently never matches.
+PROMPT_RENDER_0039="$WORKDIR/render-tenant-0039.sh"
+sed 's|^exec claude.*|cat <\&3|' "$REPO_ROOT/agent/castle-worker-claude" > "$PROMPT_RENDER_0039"
+RENDERED_0039="$(HOME="$SANDBOX_HOME" CASTLE_REQUEST_ID=probe \
+  CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" CASTLE_TARGET_FILE="$SANDBOX_HOME/target" \
+  CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  bash "$PROMPT_RENDER_0039" < "$SANDBOX_PACKET" 2>&1 | tr -s '[:space:]' ' ')"
+printf '%s' "$RENDERED_0039" | grep -qF 'THOSE TWO PATHS ARE THE ONLY CHANNEL' \
+  || fail "the rendered prompt carries no rule about what to do when a deliverable cannot be written"
+printf '%s' "$RENDERED_0039" | grep -qF 'do NOT put the diff somewhere else' \
+  || fail "the rendered prompt does not forbid staging the diff outside the two files it was given"
+
+# ---------------------------------------------------------------------
 log "a request a tenant files during its own turn is stamped, and never auto-dispatched (docs/tasks/0021 §2.4(e))"
 # ---------------------------------------------------------------------
 # The unbounded-spend case, and the reason it is not hypothetical: a

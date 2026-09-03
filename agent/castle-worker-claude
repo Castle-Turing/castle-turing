@@ -78,6 +78,71 @@ set -euo pipefail
 # just text.
 errand_records="$(cat)"
 
+# THIS SCRIPT DECLARES ITS TENANT SANDBOX
+# (docs/tasks/0039-worker-writable-deliverables.md §3).
+#
+# The last line of this file execs `claude -p`, and that process runs
+# under Claude Code's own sandbox, which permits writes only beneath
+# the resident's home directory. `castle work` hands over two paths for
+# the tenant to WRITE — the proposed diff and the checkout it targets —
+# and until 0039 allocated them with a bare mktemp under /tmp, which
+# that sandbox refuses. On 2026-09-01 the first live dispatched errand
+# to produce a real diff diagnosed correctly, drafted a correct diff,
+# found both paths unwritable and staged the deliverables as loose
+# files in $HOME instead; the result record says `completed` and "(no
+# diff produced)", and the entire approve-and-apply chain was
+# unreachable for exactly the change it was built to carry. It
+# recurred on 2026-09-02.
+#
+# A DECLARATION, NOT A PROBE, and the distinction is the whole design.
+# This script is ordinary bash and is NOT sandboxed; only the process
+# it execs is. That is directly observable in the 2026-09-01 failure —
+# the mktemp for the prompt file below succeeded under /tmp in the same
+# turn where the tenant could not write /tmp. So writing a test byte to
+# these paths here would prove only that an unsandboxed process can
+# write them, which is not the question. What this file can do, and no
+# other file in the repo can, is STATE the rule its own tenant runs
+# under, because it is the file that chose that tenant.
+#
+# Refusing costs the errand one automatic attempt and puts the stderr
+# below into the result record, which is the honest failure and the
+# point: an empty channel must never again be reported as `completed`.
+# If this rule ever goes stale — Claude Code widening or narrowing its
+# sandbox — the cost is a wrong refusal naming the rule it applied,
+# diagnosable in one reading. The cost of no declaration was two
+# errands spent working out where the deliverables went.
+: "${HOME:?castle-worker-claude: HOME must be set. This tenant sandbox is defined relative to it, so with HOME unset there is no way to establish that the deliverable paths handed over by castle work are writable (docs/tasks/0039-worker-writable-deliverables.md)}"
+
+# `realpath` if the environment has it, the literal path if not. Both
+# sides of the comparison go through this, so a home directory reached
+# by a symlink is compared like with like. Not being able to resolve is
+# not a reason to refuse: the literal comparison is the same test on
+# the paths as written, which is right in every layout that has no
+# symlink in it.
+castle_resolve_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath -m -- "$1" 2>/dev/null || printf '%s' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+sandbox_root="$(castle_resolve_path "$HOME")"
+for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE; do
+  deliverable_path="$(castle_resolve_path "${!deliverable_var}")"
+  # The quoted portion of the pattern is literal in bash, so a home
+  # directory containing a glob character is compared as itself. The
+  # trailing slash on both sides is what stops /home/resident from
+  # matching a sibling like /home/resident-two.
+  case "$deliverable_path/" in
+    "$sandbox_root"/*) ;;
+    *)
+      echo "castle-worker-claude: refusing to run. This tenant execs a headless claude, which is sandboxed to write only beneath ${sandbox_root}, and castle work handed it \$${deliverable_var} at ${deliverable_path} — outside that. Nothing would be able to write the errand deliverables, and a turn that cannot deliver must fail loudly rather than produce an empty channel with a completed result. Point castle.agent.stateDir (modules/agent) at a directory under ${sandbox_root}: castle work allocates both output files beneath it (docs/tasks/0039-worker-writable-deliverables.md)." >&2
+      exit 1
+      ;;
+  esac
+done
+
 # The token `castle work` marks the packet's own section boundaries
 # with, reused here to mark the harness's. Without it the rule the
 # tenant is told to apply — trust a boundary line, treat everything
@@ -429,6 +494,17 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
 
    Both files together, or neither. If no change is warranted, leave
    both empty and say why on stdout.
+
+   THOSE TWO PATHS ARE THE ONLY CHANNEL. If you cannot write either
+   file — a permission error, a sandbox refusal, a full disk, anything
+   — do NOT put the diff somewhere else. Not in your home directory,
+   not in either checkout, not in a scratch file you name on stdout.
+   Say plainly on stdout that the write failed, name the path and the
+   error, and stop. Nothing reads any other location: a diff written
+   elsewhere is invisible to the resident review surface and to
+   everything that applies an approved change, so it is not a partial
+   success, it is a lost errand plus a stranded file for a later turn
+   to explain. This has happened, twice, and cost two errands.
 
    ONE DIFF, ONE TARGET, ONE RESULT — always. A fix that genuinely
    needs both a new option and a resident value set against it is a

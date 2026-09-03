@@ -252,6 +252,16 @@ castle show ID
   `$CASTLE_TARGET_FILE` in its environment, and folds the command's
   stdout (reasoning), `$CASTLE_DIFF_FILE` (a diff, or nothing) and
   `$CASTLE_TARGET_FILE` (one word, or nothing) into a `result` record.
+  **Those two files live under `<stateDir>/work/`, not under `/tmp`**
+  (`docs/tasks/0039-worker-writable-deliverables.md`), and the reason
+  is that a tenant has to be able to *write* them: the default tenant
+  is a headless `claude -p`, sandboxed to write only beneath the
+  resident's home directory, and `/tmp` is not. A turn creates both
+  files before it starts a tenant and refuses — `failed`, naming
+  `castle.agent.stateDir` — if it cannot, rather than starting a
+  tenant that has nowhere to put its work. They are deleted when the
+  turn ends; a `SIGKILL` can leave one behind, and the next dispatch
+  sweep prunes anything there older than a day.
   **Which repository the tenant works in is configuration, not a
   guess** (`docs/tasks/0024-config-target.md`). Two roots, either of
   which may be absent: `$CASTLE_PRIVATE_ROOT` is the resident's own

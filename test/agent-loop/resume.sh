@@ -811,7 +811,18 @@ PACKET_FORGERY
 [ "$(wc -c < "$BIG_PACKET")" -gt "$ARG_MAX_ONE" ] || fail "the hand-built packet is under the cap — this case proves nothing"
 
 STUB_PROMPT="$WORKDIR/stub-prompt.txt"
-PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$STUB_PROMPT" \
+# HOME overridden to this harness's own workdir on every direct
+# invocation of the reference tenant below, and that is not scenery.
+# Since docs/tasks/0039 that script declares the sandbox its exec'd
+# `claude` runs under — writes only beneath $HOME — and refuses when
+# the deliverable paths castle work handed it fall outside. These
+# cases hand it stub paths under $WORKDIR, which is under /tmp on a
+# CI runner, so without this the tenant correctly refuses and the
+# E2BIG and fencing assertions below never run. Saying HOME=$WORKDIR
+# is the honest way to state "this deployment is configured the way
+# 0039 requires"; pointing the guard somewhere it cannot see would
+# be a test that disables the thing it is standing next to.
+PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$STUB_PROMPT" \
   CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out.txt" 2>&1 \
   || fail "castle-worker-claude failed on a packet larger than one argv entry (E2BIG is back): $(cat "$WORKDIR/stub-out.txt")"
@@ -841,7 +852,7 @@ log "  -- the same prompt rendered on a RESUMED turn, where the resume note exis
 # first-turn prompt would never see it, which is how an unfenced resume
 # note survived its first mutation test.
 STUB_PROMPT_RESUMED="$WORKDIR/stub-prompt-resumed.txt"
-PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$STUB_PROMPT_RESUMED" \
+PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$STUB_PROMPT_RESUMED" \
   CASTLE_RESUME_ANSWER_IDS="$A12" \
   CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out-resumed.txt" 2>&1 \
@@ -1149,7 +1160,7 @@ log "the reference tenant refuses a prompt it could not authenticate"
 # whose stated rule is false is the defect this whole fencing exists to
 # remove, so the tenant refuses to run instead.
 printf 'a bare request body with no packet structure at all\n' > "$WORKDIR/tokenless-packet.txt"
-if PATH="$STUBDIR:$PATH" STUB_PROMPT_OUT="$WORKDIR/tokenless-prompt.txt" \
+if PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$WORKDIR/tokenless-prompt.txt" \
   CASTLE_REQUEST_ID="$REQ1" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$WORKDIR/tokenless-packet.txt" \
   >"$WORKDIR/tokenless-out.txt" 2>&1; then
