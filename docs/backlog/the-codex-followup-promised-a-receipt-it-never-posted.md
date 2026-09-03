@@ -7,9 +7,11 @@ verbatim in the PR-level summary comment" for a human to apply. That
 comment does not exist. Nothing errored and nothing warned; the
 promised artifact simply never landed, and the absence was noticed
 only because a human went looking for the diff to apply it. The 0041
-brief happened to carry prose descriptions of both fixes — had it not,
-the fixes would have been recorded nowhere while two PR threads
-claimed otherwise.
+brief and the `883a111` commit message both happened to carry prose
+descriptions of the two fixes, so the record was not actually lost —
+what was missing was specifically the promised verbatim, ready-to-apply
+diff, while two PR threads kept pointing at a summary comment that
+was never there.
 
 **Why this shape is familiar.** It is the failure
 `tools/codex-review.sh`'s own header was written against: when the
