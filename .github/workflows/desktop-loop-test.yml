@@ -27,6 +27,7 @@ on:
       - "modules/**"
       - "agent/**"
       - "test/desktop-loop/**"
+      - "test/ci/**"
       - "test/agent-loop/contract-worker.sh"
       - "test/agent-loop/check_assertions.py"
       - ".github/workflows/desktop-loop-test.yml"
@@ -39,6 +40,7 @@ on:
       - "modules/**"
       - "agent/**"
       - "test/desktop-loop/**"
+      - "test/ci/**"
       - "test/agent-loop/contract-worker.sh"
       - "test/agent-loop/check_assertions.py"
       - ".github/workflows/desktop-loop-test.yml"
@@ -62,7 +64,7 @@ jobs:
     # boot, a real greetd/tuigreet login, and OCR-paced typing is
     # meaningfully heavier than vm-install-test's 30-minute budget for
     # a lighter (base+desktop only) closure.
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -105,22 +107,54 @@ jobs:
       # text the last attempt saw), which is the primary debugging
       # signal regardless of whether the screenshot recovery below
       # finds anything.
-      # `set -o pipefail` is explicit and load-bearing here, not
-      # decorative: this step's own log (a prior run, before this fix)
-      # showed the default runner shell as `bash -e {0}` with no
-      # `pipefail`, so a `nix build ... | tee file` pattern lets a
-      # failing `nix build` (e.g. a Nix evaluation error, which exits
-      # before any VM ever boots) be masked by `tee`'s own exit code —
-      # the step reports success, `if: success()` steps downstream run
-      # against a nonexistent/garbage result, and the job goes green
-      # for a test that never ran at all. Redirecting stdout directly
-      # (no pipe) sidesteps the whole class of bug rather than trusting
-      # pipefail alone to catch it a second time.
+      # A prior version of this step's own log (before this fix) showed
+      # the default runner shell as `bash -e {0}` with no `pipefail`, so
+      # a bare `nix build ... | tee file` pattern let a failing `nix
+      # build` (e.g. a Nix evaluation error, which exits before any VM
+      # ever boots) be masked by `tee`'s own exit code — the step
+      # reports success, `if: success()` steps downstream run against a
+      # nonexistent/garbage result, and the job goes green for a test
+      # that never ran at all. test/ci/retry-on-known-transient.sh (this
+      # step's actual command, docs/tasks/0041) fixes this the same way
+      # this comment's incident was originally fixed, but centrally: it
+      # groups the build so `--print-out-paths`'s stdout lands in its
+      # own clean file (the next step still trusts it unconditionally —
+      # see that step's own comment on why), captures only the build's
+      # stderr — the `-L` log — for retry-signature matching, and reads
+      # `${PIPESTATUS[0]}` for the build's real exit code rather than
+      # `tee`'s. See that script's own header comment for why its
+      # retry pipeline has to sit in an `if` condition rather than a
+      # bare statement (this runner's default shell is `bash -e {0}`,
+      # confirmed by the very log line this comment opens with).
+      #
+      # docs/tasks/0041: a bounded, signature-matched retry for CI's own
+      # recognizable infrastructure flakes — docs/backlog/ci-flakes-
+      # deserve-retries-not-vigilance.md's PR #63 incident (FlakeHub's
+      # login endpoint returning a transient auth error, then the GitHub
+      # Actions cache rate-limiting narinfo downloads into HTTP 418s).
+      # test/ci/known-transient-ci-failure.sh holds the one commented
+      # signature list the retry script checks against; a failure that
+      # doesn't match is a real regression and gets exactly zero
+      # retries. At most one retry, ever: a second failure — matched or
+      # not — is surfaced as-is, because two failures on the same
+      # runner are no longer "transient" by this entry's own definition.
+      #
+      # `sudo rm -rf /tmp/nix-build-*desktop-loop*` runs before every
+      # attempt, including the first (a no-op then): if attempt 1 is
+      # discarded as transient and retried, its --keep-failed build
+      # directory would otherwise still be sitting in /tmp when attempt
+      # 2 also fails, and the "Collect artifacts from a failed run" step
+      # below globs on that same path — the exact same class of
+      # discarded-attempt staleness fixed in test/vm-install/run.sh's
+      # own log directory for the sibling workflow, just fixed here at
+      # the call site instead of inside `nix build` itself, which has no
+      # such hook. `sudo` because that directory is owned by a nix
+      # build user, same reason the later collection step already needs
+      # it; `2>/dev/null` because "nothing to clean" is not an error.
       - name: Build and run the desktop-loop test
         run: |
-          set -euo pipefail
-          nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths \
-            > /tmp/desktop-loop-out-path.txt
+          test/ci/retry-on-known-transient.sh --stdout /tmp/desktop-loop-out-path.txt -- \
+            bash -c 'sudo rm -rf /tmp/nix-build-*desktop-loop* 2>/dev/null; exec nix build .#desktop-loop-test -L --keep-failed --no-link --print-out-paths'
 
       # The store path is validated, not trusted blindly: the same
       # failure this step's header comment describes (a masked `nix

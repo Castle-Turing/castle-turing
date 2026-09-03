@@ -177,7 +177,12 @@ Useful environment variables:
 - `CASTLE_HARNESS_LOG_DIR` — where serial console logs and the
   `nixos-anywhere` transcript are written. Defaults to a temp directory
   (printed at the end of the run, or in the `FAIL:` line if a phase
-  fails).
+  fails). The harness owns this directory outright: it is removed and
+  recreated empty at the start of every invocation (docs/tasks/0041,
+  so a retried CI run never mixes a discarded attempt's logs into the
+  one that actually failed), so point this at a directory dedicated to
+  this harness's own output, never one holding anything else you want
+  to keep.
 - `CASTLE_HARNESS_SSH_PORT` — host-forwarded SSH port (default 10222).
 - `CASTLE_HARNESS_BOOT_TIMEOUT` — seconds to wait for SSH on each boot
   (default 180).

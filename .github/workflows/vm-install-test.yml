@@ -21,6 +21,7 @@ on:
       - "modules/**"
       - "hosts/**"
       - "test/vm-install/**"
+      - "test/ci/**"
       - ".github/workflows/vm-install-test.yml"
   push:
     branches:
@@ -31,6 +32,7 @@ on:
       - "modules/**"
       - "hosts/**"
       - "test/vm-install/**"
+      - "test/ci/**"
       - ".github/workflows/vm-install-test.yml"
   # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
   # via `gh workflow run` — needed to get a real run of the anti-bricking
@@ -49,7 +51,7 @@ jobs:
     # Bumped from 25: docs/tasks/0005 added modules/desktop (Sway, Firefox,
     # fonts, portals, PipeWire) to the system under test, a meaningfully
     # bigger closure than modules/base alone, even mostly cache-substituted.
-    timeout-minutes: 30
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -101,8 +103,22 @@ jobs:
             exit 1
           fi
 
+      # docs/tasks/0041: a bounded, signature-matched retry for CI's own
+      # recognizable infrastructure flakes — docs/backlog/ci-flakes-
+      # deserve-retries-not-vigilance.md's PR #63 incident (FlakeHub's
+      # login endpoint returning a transient auth error, then the GitHub
+      # Actions cache rate-limiting narinfo downloads into HTTP 418s).
+      # test/ci/retry-on-known-transient.sh (shared with the sibling
+      # desktop-loop-test.yml workflow's identical need) holds the retry
+      # loop itself; test/ci/known-transient-ci-failure.sh holds the one
+      # commented signature list it checks a failure's log against. A
+      # failure that doesn't match is a real regression and gets
+      # exactly zero retries, surfaced as this step's real exit code. At
+      # most one retry, ever: a second failure — matched or not — is
+      # surfaced as-is, because two failures on the same runner are no
+      # longer "transient" by this entry's own definition.
       - name: Run the install-loop harness
-        run: test/vm-install/run.sh
+        run: test/ci/retry-on-known-transient.sh -- test/vm-install/run.sh
         env:
           CASTLE_HARNESS_LOG_DIR: ${{ github.workspace }}/test/vm-install/harness-logs
 
