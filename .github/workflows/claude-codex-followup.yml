@@ -14,12 +14,19 @@
 # Receipt verification, by construction (docs/tasks/0045):
 #   - A model's own report that it posted something is a claim, not
 #     evidence — see the PR #73 incident where the prompt described a
-#     summary comment as posted and it never landed. The "Wrap gh" step
-#     below shadows `gh` on PATH with a shim that logs every failing `gh`
-#     invocation, regardless of what the model's final summary says; the
-#     "Fail loudly" step at the end checks that log, not the model's
-#     narration. Neither step is something the prompt can talk its way
-#     around.
+#     summary comment as posted and it never landed. Two independent
+#     checks, neither something the prompt can talk its way around:
+#       - The "Wrap gh" step shadows `gh` on PATH with a shim that logs
+#         every failing `gh` invocation; "Fail loudly if any gh call
+#         failed" checks that log, not the model's narration. This
+#         catches a post that was attempted and rejected.
+#       - "Confirm the review's receipts actually landed" queries the
+#         forge directly afterward: every inline comment on the
+#         triggering review must now have a reply, and the PR's
+#         top-level comment count must have increased. This catches
+#         the PR #73 shape specifically — a post that was never
+#         attempted at all, which a call-failure log can't see because
+#         no call means no failure to log.
 name: Claude — handle Codex review
 
 on:
@@ -51,6 +58,8 @@ jobs:
           fetch-depth: 0
 
       - name: Wrap gh to catch silent posting failures
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           real_gh="$(command -v gh)"
           shim_dir="$RUNNER_TEMP/gh-shim"
@@ -68,6 +77,13 @@ jobs:
           SHIM
           chmod +x "$shim_dir/gh"
           echo "$shim_dir" >> "$GITHUB_PATH"
+
+          # Snapshot the PR's top-level comment count now, before Claude
+          # runs, so "Confirm the review's receipts actually landed" can
+          # tell whether the required step-4 summary comment actually got
+          # posted rather than just claimed.
+          "$real_gh" api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}" \
+            --jq .comments > "$RUNNER_TEMP/pr-comment-count-before.txt"
 
       - name: Run Claude on Codex's findings
         uses: anthropics/claude-code-action@v1
@@ -122,3 +138,37 @@ jobs:
             exit 1
           fi
           echo "Every gh call in this run exited zero."
+
+      - name: Confirm the review's receipts actually landed
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          missing=0
+
+          review_comment_ids="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments" \
+            --paginate --jq '.[].id')"
+
+          if [ -n "$review_comment_ids" ]; then
+            all_comments="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+              --paginate --jq '.[]' | jq -s '.')"
+            for id in $review_comment_ids; do
+              has_reply="$(echo "$all_comments" | jq --argjson id "$id" '[.[] | select(.in_reply_to_id == $id)] | length')"
+              if [ "$has_reply" -eq 0 ]; then
+                echo "::error::No reply found on review comment $id — a finding may have been silently skipped, not just declined without a reply."
+                missing=1
+              fi
+            done
+          fi
+
+          before="$(cat "$RUNNER_TEMP/pr-comment-count-before.txt" 2>/dev/null || echo 0)"
+          after="$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}" --jq .comments)"
+          if [ "$after" -le "$before" ]; then
+            echo "::error::No new top-level PR comment was posted — the required summary comment (step 4) may be missing, the PR #73 failure shape this task exists to catch."
+            missing=1
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Every inline finding on this review has a reply, and a new summary comment was posted."

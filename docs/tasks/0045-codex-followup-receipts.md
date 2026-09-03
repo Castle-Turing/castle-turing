@@ -39,40 +39,44 @@ follows correctly most of the time; it is also exactly the layer that
 failed silently on PR #73, because prompts drift and models have off
 days.
 
-**2. A verification step outside the model's control (the load-bearing
-piece).** A new "Wrap gh to catch silent posting failures" step runs
-immediately after checkout, before the Claude action. It resolves the
-real `gh` binary, writes a shim of the same name to a scratch
-directory, and prepends that directory to `PATH` via `$GITHUB_PATH` —
-so every `gh` invocation for the rest of the job, including all of the
-model's own tool calls, runs through the shim first. The shim always
-calls through to the real `gh` and passes its exit code back
-unchanged, but if that exit code is nonzero, it appends the failing
-command and its arguments to a log file in `$RUNNER_TEMP`. A final
-"Fail loudly if any gh call failed this run" step, `if: always()`,
+**2. Two verification steps outside the model's control (the
+load-bearing piece).** A new "Wrap gh to catch silent posting
+failures" step runs immediately after checkout, before the Claude
+action. It resolves the real `gh` binary, writes a shim of the same
+name to a scratch directory, and prepends that directory to `PATH` via
+`$GITHUB_PATH` — so every `gh` invocation for the rest of the job,
+including all of the model's own tool calls, runs through the shim
+first. The shim always calls through to the real `gh` and passes its
+exit code back unchanged, but if that exit code is nonzero, it appends
+the failing command and its arguments to a log file in `$RUNNER_TEMP`.
+A "Fail loudly if any gh call failed this run" step, `if: always()`,
 checks that log after the Claude action step completes (success or
 failure) and fails the job — with `::error::` and the log's contents —
 if it is non-empty. The model never sees the shim, cannot disable it
 short of reading and defeating it deliberately, and its own narration
 in a final summary comment has no bearing on whether the job goes red.
 
-The entry's second, more thorough suggestion — checking that the
-artifacts a run's replies actually *reference* exist on the forge, not
-just that the `gh` calls that create them exited zero — was not built.
-The entry itself only asks for it "if... cheaply"; doing it for real
-means parsing the model's free-text summary for claimed artifact
-identifiers and cross-checking each against the GitHub API, which is
-real complexity for a marginal gain: the exit-code check below is
-already a superset of what it would catch, since every way a "reply
-succeeded" claim can be false while a `gh` call still exited zero
-(wrong PR, wrong comment ID, wrong body) is a bug in the model's
-*arguments*, not something this run's own replies would let it lie
-about undetected — the model would have to fabricate the reply's
-content in its summary while the real API call still succeeded, which
-is a different, narrower failure mode than the one PR #73 actually hit
-(a call that just never happened). If that narrower failure mode is
-ever observed, it is worth a new backlog entry naming it specifically,
-rather than building the general mechanism speculatively now.
+That call-failure shim was the only mechanism through the first
+`/code-review` pass, and it has a real gap: it only proves something
+about calls that were *attempted*. `tools/codex-review.sh`'s
+cross-model pass caught this directly — see the disposition in
+Verification below — and it is exactly the shape PR #73 actually hit:
+"nothing errored, nothing warned," which reads far more like a `gh`
+call that was simply never made than one that was made and failed.
+A second step, "Confirm the review's receipts actually landed," now
+runs after the failure-log check and queries the forge itself: every
+inline comment on the triggering review must have at least one reply
+(`in_reply_to_id` pointing at it, via `gh api
+.../pulls/N/comments`), and the PR's top-level comment count
+(`gh api .../issues/N --jq .comments`, snapshotted before the Claude
+step runs and compared after) must have increased by at least one —
+proving the step-4 summary comment specifically, the exact artifact
+missing on PR #73. This is the entry's own "if the run's replies can
+be checked against the forge for referenced artifacts cheaply, do
+that too" — the two `gh api` calls plus a `jq` diff per check qualify
+as cheap; it does not attempt to check that a reply's *content*
+matches what the model claims, only that a reply and a new summary
+comment *exist*, which is what "receipt" means here.
 
 ## Why every failing `gh` call, not just "posting" calls
 
@@ -101,8 +105,22 @@ narrowing the check, not just refactoring it.
   [[the-codex-followup-cannot-push-workflow-fixes]], unchanged by this
   task.
 - Does not verify that a posted artifact's *content* matches what the
-  model's summary claims (see "not built," above) — only that the `gh`
-  call used to post it exited zero.
+  model's summary claims — only that a reply and a new summary comment
+  *exist*, and that the `gh` calls that created them exited zero.
+  Checking content would mean parsing the model's free-text summary
+  for claimed specifics and cross-checking each against the GitHub
+  API, which is real complexity for a narrower gain: the model would
+  have to fabricate a claim while the underlying post still succeeded,
+  a different failure mode than the one this task was built against
+  (a post that never happened, or one that failed outright). If that
+  narrower failure mode is ever observed, it is worth a new backlog
+  entry naming it specifically, rather than building the general
+  mechanism speculatively now.
+- Does not verify that a resolved thread (the GraphQL
+  `resolveReviewThread` mutation) actually succeeded, only that its
+  reply exists — an unresolved-but-replied thread is still visible to
+  a human on the PR, unlike a missing reply, so this was judged a
+  smaller gap than the two checks that are built.
 - Does not change loop prevention, concurrency, trigger conditions, or
   any other part of `claude-codex-followup.yml`'s existing behavior.
 
@@ -169,6 +187,35 @@ narrowing the check, not just refactoring it.
    them. Fixed by keeping "resolve each addressed thread" as the
    command and adding the ordering constraint alongside it, rather
    than in place of it.
+7. **`tools/codex-review.sh` caught that the failure-log shim alone
+   cannot detect a `gh` call that was never made — only one that was
+   made and failed — which is the PR #73 shape specifically.** Fixed
+   by adding "Confirm the review's receipts actually landed" (see
+   piece 2 above), a genuine forge-side existence check, rather than
+   trying to stretch the exit-code shim to cover a case it structurally
+   cannot see (a call that never happens produces no exit code to log).
+8. **The new forge-side check needs its own GitHub API credential.**
+   `gh` calls made from inside the Claude action authenticate somehow
+   internal to that action (its own `github_token` handling — not
+   inspected, and not this task's concern, since those calls already
+   work today); a plain `run:` step has no such thing implicitly and
+   needs `env: GH_TOKEN: ${{ github.token }}` set explicitly, which is
+   GitHub's own documented pattern for using `gh` in a workflow step.
+   Added to both the snapshot half (in "Wrap gh") and the check itself,
+   scoped to those two steps only — not job-wide — so as not to change
+   anything about how the Claude action step authenticates its own
+   `gh` calls, which already work and were out of scope to touch.
+9. **The before/after comment-count snapshot lives in `$RUNNER_TEMP`,
+   written by "Wrap gh" and read by "Confirm the review's receipts
+   actually landed."** Two other options considered: a `GITHUB_OUTPUT`
+   step output (more idiomatic for passing a value between steps, but
+   this value only needs to survive to one specific later step in the
+   same job, and $RUNNER_TEMP is already the pattern this task uses
+   for the failure log) and re-deriving "before" from the review's own
+   `submitted_at` timestamp instead of snapshotting a count (rejected:
+   comparing counts sidesteps any ambiguity about which comments were
+   created before vs. after a given instant, and needs no timestamp
+   parsing).
 
 ## Verification
 
@@ -214,6 +261,56 @@ What was done locally:
   tradeoff already reasoned through and accepted under "Why every
   failing `gh` call, not just 'posting' calls," above; no further
   change made.
+- `tools/codex-review.sh` (cross-model pass, also scoped against
+  `origin/main`), run after the `/code-review` fixes above, one P1
+  finding, reproduced here verbatim per this repo's convention (raw
+  output saved at `/tmp/codex-review-output.XnKYEn` at review time; no
+  PR exists yet for this branch to comment on, since the harness opens
+  it, so this disposition stands in for the usual separate PR
+  comment):
+
+  > The verification mechanism misses the motivating silent-omission
+  > scenario because no failed `gh` call is recorded when no call
+  > occurs. The workflow can therefore remain green while required
+  > receipts are absent.
+  >
+  > Review comment:
+  >
+  > - [P1] Detect missing receipt calls, not only failed calls —
+  >   /home/wesley/.local/share/emcee/runs/castle-turing/2026-09-02T23-41-35/wt-0045-codex-followup-receipts-1/.github/workflows/claude-codex-followup.yml:118-118
+  >   When Claude claims a receipt was posted but never invokes
+  >   `gh`—the exact failure mode this change is intended to
+  >   catch—the log remains empty and this step reports success.
+  >   Checking only nonzero invocations therefore cannot prove that the
+  >   required inline replies, resolutions, or summary comment were
+  >   attempted; track successful posting calls and expected counts, or
+  >   query GitHub afterward to verify the artifacts exist.
+
+  **Disposition: fixed, by the second option offered — querying
+  GitHub afterward.** "Track successful posting calls and expected
+  counts" was considered and rejected: it would mean pattern-matching
+  the shim's *successful* calls by shape (reply-vs-resolve-vs-comment)
+  to derive an "expected count," which is exactly the fragile
+  classifier problem already reasoned through and rejected under "Why
+  every failing `gh` call, not just 'posting' calls," above — a
+  `resolveReviewThread` GraphQL mutation and a plain read both go
+  through `gh api graphql`/`gh api`, and distinguishing them from
+  argument shape alone is brittle. Querying the forge afterward avoids
+  that entirely: the two `gh api` calls "Confirm the review's receipts
+  actually landed" makes don't care what commands the model ran or in
+  what shape, only what state the PR is actually in — closer to the
+  entry's own stronger suggestion ("confirm the artifacts the run's
+  replies reference actually exist") than to its cheap fallback, but
+  still only two `gh api` calls and a `jq` diff, not the elaborate
+  free-text-parsing version the brief had originally scoped out.
+  Verified locally against four scenarios with a fake `gh` returning
+  fixture JSON (real `jq` via `nix-shell -p jq`, since this development
+  machine has no system `jq`): every inline comment replied to and the
+  comment count increased (pass); one inline comment left unreplied
+  (fails, names the specific comment ID); comment count unchanged, i.e.
+  no summary posted (fails, names the PR #73 shape explicitly); a
+  review with zero inline comments and a summary posted (pass, the
+  inline-reply loop correctly no-ops on an empty ID list).
 
 What only a real run proves, and what a reviewer should look for on
 this task's own PR: `claude-codex-followup.yml` triggers on
@@ -221,7 +318,9 @@ this task's own PR: `claude-codex-followup.yml` triggers on
 reviews this PR, that review is this change's own first live exercise.
 Look for:
 
-- Both new steps present and green in the run.
+- All three new/changed steps present and green in the run (the "Wrap
+  gh" snapshot addition, "Fail loudly," and "Confirm the review's
+  receipts actually landed").
 - The "Fail loudly" step's own log line — "Every gh call in this run
   exited zero." — confirming the job reached that step cleanly.
 - Corroboration that the shim was actually live, not silently bypassed
@@ -235,3 +334,13 @@ Look for:
   should go red with the `::error::` annotation naming the failing
   command — that is the actual event this task exists to make visible,
   and it may never happen to be observed on this specific PR.
+- The "Confirm the review's receipts actually landed" step's own log
+  line — either the pass message or an `::error::` naming a specific
+  unreplied comment ID or the missing-summary-comment message. If
+  `env: GH_TOKEN: ${{ github.token }}` (judgment call 8) turns out to
+  be insufficient permission for a `run:` step despite being GitHub's
+  documented pattern, this step's own `gh api` calls fail under the
+  job's default `bash -e` shell and the step goes red directly on its
+  own — still the fail-safe direction (a broken check still shows red,
+  it just wouldn't say why in the friendly `::error::` form), but
+  worth distinguishing from an actual missing-receipt finding if seen.
