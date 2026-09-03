@@ -36,8 +36,8 @@ permission checkbox:
 - keep the boundary and promote the fallback to a stated contract: a
   workflow-touching fix is *always* recorded (where, in what format,
   and how a human finds it) and never pushed by the App — plus a
-  receipt that can be trusted, which is its own open problem:
-  [[the-codex-followup-promised-a-receipt-it-never-posted]].
+  receipt that can be trusted, which now has a mechanism:
+  [[0045-codex-followup-receipts]].
 
 Whichever way this goes, `claude-codex-followup.yml`'s prompt should
 tell the session about the boundary up front, so it plans for the
