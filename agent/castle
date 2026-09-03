@@ -8038,8 +8038,11 @@ def _commit_finding(
     file and runs `git apply --cached`, so using it would have meant
     synthesising a creation-patch from the finding's bytes — line
     counts, and the no-trailing-newline marker — which is a byte-
-    fidelity hazard invented for no gain. `hash-object -w` takes the
-    bytes exactly as the tenant wrote them.
+    fidelity hazard invented for no gain. `hash-object -w --no-filters`
+    takes the bytes exactly as the tenant wrote them, bypassing any
+    clean filter the destination checkout's `.gitattributes` names for
+    the scratch path — a transform is exactly the byte-fidelity break
+    this function exists to rule out.
     """
     probe, fault = _run_git(
         root, ["rev-parse", "--verify", "--quiet", f"{FINDING_BASE_REF}^{{commit}}"]
@@ -8050,7 +8053,9 @@ def _commit_finding(
     if probe.returncode != 0 or not base:
         return "", "base", ""
 
-    probe, fault = _run_git(root, ["hash-object", "-w", "--", str(blob_source)])
+    probe, fault = _run_git(
+        root, ["hash-object", "-w", "--no-filters", "--", str(blob_source)]
+    )
     if probe is None:
         return "", "hash-object", fault
     if probe.returncode != 0:
