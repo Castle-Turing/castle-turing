@@ -2,7 +2,7 @@
 
 Not a real host. This module exists so the install mechanism can be
 exercised end to end, unattended, in CI — see
-[`docs/tasks/0004-install-test-harness.md`](../../docs/tasks/0004-install-test-harness.md)
+[`docs/tasks/done/0004-install-test-harness.md`](../../docs/tasks/done/0004-install-test-harness.md)
 and [`test/vm-install/`](../../test/vm-install/) for the harness that
 builds and boots it.
 
