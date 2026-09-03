@@ -146,19 +146,21 @@ jobs:
         run: |
           missing=0
 
-          review_comment_ids="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments" \
-            --paginate --jq '.[].id')"
+          # One paginated fetch covers both checks: every comment on the PR
+          # (not just this review's) carries pull_request_review_id and
+          # in_reply_to_id, so this review's own findings and their replies
+          # are both derivable from it without a second API round-trip.
+          all_comments="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+            --paginate --jq '.[]' | jq -s '.')"
 
-          if [ -n "$review_comment_ids" ]; then
-            all_comments="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
-              --paginate --jq '.[]' | jq -s '.')"
-            for id in $review_comment_ids; do
-              has_reply="$(echo "$all_comments" | jq --argjson id "$id" '[.[] | select(.in_reply_to_id == $id)] | length')"
-              if [ "$has_reply" -eq 0 ]; then
-                echo "::error::No reply found on review comment $id — a finding may have been silently skipped, not just declined without a reply."
-                missing=1
-              fi
-            done
+          unreplied="$(echo "$all_comments" | jq -c --argjson rid ${{ github.event.review.id }} '
+            ([.[] | select(.pull_request_review_id == $rid and .in_reply_to_id == null) | .id]) as $review_ids
+            | ([.[] | select(.in_reply_to_id != null) | .in_reply_to_id]) as $replied
+            | ($review_ids - $replied)')"
+
+          if [ "$unreplied" != "[]" ]; then
+            echo "::error::Review comment(s) with no reply found — a finding may have been silently skipped, not just declined without a reply: $unreplied"
+            missing=1
           fi
 
           before="$(cat "$RUNNER_TEMP/pr-comment-count-before.txt" 2>/dev/null || echo 0)"

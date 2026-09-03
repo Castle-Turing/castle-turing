@@ -216,6 +216,58 @@ narrowing the check, not just refactoring it.
    comparing counts sidesteps any ambiguity about which comments were
    created before vs. after a given instant, and needs no timestamp
    parsing).
+10. **A second `/code-review` pass, run after the forge-check commit,
+    found a real redundancy and fixed it, and raised one already-known
+    risk plus a narrow race worth naming explicitly.** "Confirm the
+    review's receipts actually landed" originally made two paginated
+    `gh api` calls — one scoped to the triggering review's own
+    comments, one for the whole PR's comments — to check for replies.
+    A finder confirmed live against PR #73 that every comment on a PR
+    already carries both `pull_request_review_id` and
+    `in_reply_to_id`, so the review-scoped call was pure duplication of
+    data the whole-PR call already returns, and a per-finding loop
+    spawning one `jq` process each was replaced with a single `jq`
+    pass over the one fetch (`$review_ids - $replied`, a set
+    difference). Fixed in this branch. A second finder flagged the
+    before/after comment-count check as racy: an unrelated top-level
+    comment landing on the PR from a human or another bot during the
+    job's run window would make `after > before` true even if Claude's
+    own summary comment never posted, a false pass. This was judged an
+    accepted, narrow limitation rather than something to harden further
+    — it requires a coincidental unrelated comment on this specific
+    PR in this specific few-minute window, on top of the summary
+    comment already having silently failed to post, and closing it
+    properly (matching by author identity or timestamp against the
+    review's `submitted_at`) adds real complexity for an edge case
+    layered on an edge case. Recorded here rather than silently
+    dropped, per this task's own "no silent caps" standard.
+11. **A third review pass claimed the "Wrap gh" step's heredoc
+    terminator was space-indented and therefore never recognized by
+    bash, silently swallowing the rest of the step (the `chmod`, the
+    `$GITHUB_PATH` append, and the comment-count snapshot) into the
+    heredoc body — a claim serious enough to re-verify from scratch
+    rather than take on trust.** It does not hold up: GitHub Actions'
+    `run: |` is a YAML literal block scalar, and YAML strips the
+    block's *common* leading indentation from every line before bash
+    ever sees the text — confirmed authoritatively this time by
+    parsing the actual committed file with `PyYAML` (`nix-shell -p
+    python3 python3Packages.pyyaml`) rather than reasoning about it,
+    printing the exact string bash receives, and running that exact
+    string with `bash -n` and live execution against a mocked `gh`:
+    the heredoc terminates correctly, the shim file is written and
+    made executable, `$GITHUB_PATH` is appended, and the snapshot file
+    is populated. The claim is consistent with what a reviewer would
+    see by copying the *file's own indented lines* directly into a
+    test script without first stripping that common indentation —
+    every line in the "Wrap gh" step's body shares the same base
+    indentation (10 spaces, matching the step's `run: |` nesting), so
+    a test that skips the dedent would reproduce exactly the false
+    positive reported. No change made; recorded here because a false
+    "critical, confirmed" finding is exactly the kind of thing that
+    should stay legible rather than be silently dropped, per this
+    project's own "every disagreement between reviewers must stay
+    legible to the human" standard (echoing the prompt text this same
+    task added to `claude-codex-followup.yml`).
 
 ## Verification
 
@@ -311,6 +363,20 @@ What was done locally:
   no summary posted (fails, names the PR #73 shape explicitly); a
   review with zero inline comments and a summary posted (pass, the
   inline-reply loop correctly no-ops on an empty ID list).
+- A second `/code-review` pass (scoped against `origin/main`, run
+  after the forge-check commit above), three finder angles: altitude
+  and CLAUDE.md conventions found no violation; a cleanup finder
+  caught the redundant paginated call and the per-finding `jq`-spawn
+  loop, both fixed (judgment call 10) and re-verified locally against
+  the same four scenarios plus a fifth confirming a reply comment that
+  itself carries the review's `pull_request_review_id` (a real shape,
+  confirmed live against PR #73's own data by that same finder) is
+  still correctly excluded from the "needs a reply" set; a correctness
+  finder reported a "confirmed, critical" heredoc-termination bug that
+  did not survive re-verification with an actual YAML parser (judgment
+  call 11) and also raised the before/after comment-count race,
+  recorded as an accepted limitation (judgment call 10) rather than
+  hardened further.
 
 What only a real run proves, and what a reviewer should look for on
 this task's own PR: `claude-codex-followup.yml` triggers on
