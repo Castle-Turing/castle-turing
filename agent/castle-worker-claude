@@ -4,7 +4,8 @@
 # `claude -p` invocation, wrapped just enough to keep the errand-boundary
 # contract honest. `castle work` (agent/castle's cmd_work) is the caller:
 # it pipes the request body to this script's stdin and sets
-# CASTLE_REQUEST_ID / CASTLE_DIFF_FILE / CASTLE_TARGET_FILE and the
+# CASTLE_REQUEST_ID / CASTLE_DIFF_FILE / CASTLE_TARGET_FILE /
+# CASTLE_FINDING_FILE and the
 # configured repo roots in the environment before running whatever
 # castle.agent.worker.command names — this script, by default.
 #
@@ -52,6 +53,7 @@ set -euo pipefail
 # with an error pointing at this line. Same gotcha the comment on the
 # prompt heredoc below documents, met from a different direction.
 : "${CASTLE_TARGET_FILE:?castle-worker-claude: CASTLE_TARGET_FILE must be set (see cmd_work in agent/castle)}"
+: "${CASTLE_FINDING_FILE:?castle-worker-claude: CASTLE_FINDING_FILE must be set (see cmd_work in agent/castle, and docs/tasks/0042-finding-outbox.md for the lane it opens)}"
 # The tenant's own last resort, and only that. `castle work` no longer
 # supplies a fallback of its own — an unconfigured turn refuses before
 # a tenant is ever started (docs/tasks/0024-config-target.md §16) — so
@@ -93,9 +95,10 @@ errand_records="$(cat)"
 #
 # The last line of this file execs `claude -p`, and that process runs
 # under Claude Code's own sandbox, which permits writes only beneath
-# the resident's home directory. `castle work` hands over two paths for
-# the tenant to WRITE — the proposed diff and the checkout it targets —
-# and until 0039 allocated them with a bare mktemp under /tmp, which
+# the resident's home directory. `castle work` hands over three paths for
+# the tenant to WRITE — the proposed diff, the checkout it targets, and
+# one finding about the framework itself
+# (docs/tasks/0042-finding-outbox.md) — and until 0039 allocated them with a bare mktemp under /tmp, which
 # that sandbox refuses. On 2026-09-01 the first live dispatched errand
 # to produce a real diff diagnosed correctly, drafted a correct diff,
 # found both paths unwritable and staged the deliverables as loose
@@ -138,7 +141,7 @@ castle_resolve_path() {
 }
 
 sandbox_root="$(castle_resolve_path "$HOME")"
-for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE; do
+for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
   deliverable_path="$(castle_resolve_path "${!deliverable_var}")"
   # The quoted portion of the pattern is literal in bash, so a home
   # directory containing a glob character is compared as itself. The
@@ -525,6 +528,13 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    success, it is a lost errand plus a stranded file for a later turn
    to explain. This has happened, twice, and cost two errands.
 
+   A DIFF IS NOT THE ONLY THING A TURN MAY PRODUCE. If what you found
+   is wrong with CASTLE ITSELF rather than with this configuration —
+   a missing option, a defect in the harness, a rule that contradicts
+   itself — that goes in \$CASTLE_FINDING_FILE, described in 8 below,
+   and it is a separate channel from these two rather than a substitute
+   for either.
+
    ONE DIFF, ONE TARGET, ONE RESULT — always. A fix that genuinely
    needs both a new option and a resident value set against it is a
    mechanism change first: propose the mechanism half if a mechanism
@@ -600,7 +610,8 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    editing a file in order to make a "git diff" show something. The
    resident's checkout is yours to read and never to modify. Your
    whole output is the reasoning on stdout, the composed diff in
-   \$CASTLE_DIFF_FILE, and the one word in \$CASTLE_TARGET_FILE.
+   \$CASTLE_DIFF_FILE, the one word in \$CASTLE_TARGET_FILE, and at
+   most one finding in \$CASTLE_FINDING_FILE (8).
 
    Two traps worth naming so you do not spend a cycle rediscovering
    them. nixos-option ships on \$PATH and looks like exactly the right
@@ -695,6 +706,56 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
        cannot resolve by reading — an mkForce, an mkOverride with a
        number, a value built by a function — do not guess which wins.
        File a question (1d).
+8. IF THE PROBLEM IS WITH CASTLE ITSELF, FILE A FINDING. Some errands
+   end with nothing to propose because the fix does not belong in any
+   configuration: an option that does not exist and should, a defect in
+   this harness, a contract that says two things. That diagnosis used
+   to have nowhere to go — it went in your reasoning on stdout, where
+   the only reader is the resident, and reached the framework only by a
+   human carrying it there. It now has a lane.
+
+   Write ONE finding to the file at \$CASTLE_FINDING_FILE (currently
+   ${CASTLE_FINDING_FILE}). THE FORMAT is a work item: a header of
+   Key: value lines, a blank line, then a markdown body.
+
+     Title: A one-line statement of the problem
+     Destination: mechanism
+
+     **What.** One or two sentences on the problem itself.
+
+     **Why it matters.** The cost of not fixing it, or what it
+     unblocks.
+
+   Title: and Destination: are both required, and mechanism is the only
+   destination there is — it means the Castle Turing framework
+   checkout. The body is a statement of a PROBLEM, not a solution:
+   what is wrong, what it costs, and what you saw. Two or three short
+   paragraphs. Write it for a stranger who is not your resident, on
+   hardware that is not this machine, with priorities that are not
+   theirs — it becomes a file in a public repository, so nothing about
+   your resident, their machine or their words may appear in it.
+
+   That is the whole format. There is no schema, no version field and
+   no registry, deliberately: boring enough that anything which can
+   read a directory can consume it.
+
+   ONE FILE, ONE FINDING. If you noticed two things, pick the one worth
+   reporting and say the rest on stdout. If you noticed nothing about
+   the framework, LEAVE THE FILE EMPTY — that is the ordinary case and
+   is never a fault.
+
+   A finding is not a proposal and does not stop this errand. Write it,
+   finish the errand you were given, and say in your reasoning that you
+   filed one. It does not need the resident approval that a diff needs:
+   what happens to it is a file on a new branch in the framework
+   checkout, which nobody has merged and nothing has pushed.
+
+   THIS IS NOT A PLACE TO PUT WHAT DID NOT FIT ELSEWHERE. A finding is
+   about the framework. A question for your resident is still 5, a
+   perceptual judgment is still 6, and an errand that maps to no option
+   is still 7 — say so honestly and propose nothing. A finding that is
+   really a complaint about the errand wastes a stranger who reads it
+   later.
 ${packet_nonce} END
 
 ${packet_nonce} BEGIN harness instruction: the one rule that overrides everything else

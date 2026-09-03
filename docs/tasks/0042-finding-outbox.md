@@ -275,10 +275,20 @@ fails retroactively:
   git's sha256 object format is real and a resident's repository is
   theirs to create however they like.
 
-The branch name and the path stay in the body prose next to them, for
-the split `apply-commit` established: the field is the machine-facing
-fact, the prose is the resident-facing copy. Nothing today keys on the
-branch name, so nothing gets a field promising it will stay stable.
+- `finding-branch` and `finding-destination`, also stamped only on
+  `filed`. These are fields rather than prose because §4's status line
+  has to name the branch and the checkout, and `agent/README.md`'s
+  `outcome` section forbids a surface inferring a fact by grepping a
+  body — the lesson `apply-commit` was promoted for. `finding-
+  destination` carries a **role**, never a path, for exactly
+  `target`'s reason: a role is legible cold years later and an
+  absolute path is a lie the first time the checkout moves.
+
+The repository-relative path of the entry itself stays prose-only,
+beside the resolved checkout path, for the split `apply-commit`
+established: the field is the machine-facing fact, the prose is the
+resident-facing copy. Nothing keys on the path, and a field is a
+promise that something may.
 
 **`outcome`** is not widened. `failed-git` — git absent, or a git
 command that did not finish — is `outcome: failed`, an environment
@@ -517,7 +527,14 @@ them open and a reviewer might have decided differently.
 8. **The status line is added to `run_status` only**, not to inbox
    mode. Inbox is the surface for things *waiting* on the resident,
    and a filed finding is waiting on nothing.
-9. **The `[[…]]` link in
+9. **`finding-branch` and `finding-destination` became fields during
+   implementation**, and this section of the brief was rewritten to
+   match rather than left describing the design it started from. The
+   first draft kept both in body prose on the grounds that nothing
+   keyed on them; writing §4's status line made that false in the same
+   commit, and a surface grepping a body for the branch name is the
+   exact defect `apply-commit` exists to have already fixed once.
+10. **The `[[…]]` link in
    `docs/backlog/the-worker-cited-a-rule-its-contract-does-not-
    contain.md` now points at this brief** rather than at a deleted
    entry, and the `chevaline-example/` half of the second promoted

@@ -163,6 +163,115 @@ TARGET_FIELD = "target"
 # docs/tasks/0023 §5 already had to close once.
 TARGET_FILE_ENV = "CASTLE_TARGET_FILE"
 
+# The worker seat's THIRD deliverable: one finding about the framework
+# itself (docs/tasks/0042-finding-outbox.md §1). Allocated, handed over,
+# read back and unlinked in exactly the same places as the two above —
+# a tenant that already knows how to write one output file needs no
+# third mechanism explained to it, and 0039's whole argument for where
+# those files live transfers unchanged.
+#
+# It exists because the worker contract's honest dead-end ("say so and
+# stop, having proposed nothing") had no lane for "this is not a
+# configuration problem, it is a defect in the thing doing the
+# configuring." That diagnosis used to reach `docs/backlog/` only by a
+# human carrying it there through a development session, four times.
+#
+# ONE FILE, ONE FINDING, and an empty file is the normal case and never
+# a fault — the same posture $CASTLE_DIFF_FILE already has.
+FINDING_FILE_ENV = "CASTLE_FINDING_FILE"
+
+# What happened to the FINDING, on a result written by the outbox seat
+# (docs/tasks/0042-finding-outbox.md §5). Distinct from `outcome`,
+# which stays what agent/README.md reserves it as: an observation about
+# the writer's own run. Same split `apply-outcome` made, for the same
+# reason — every refusal below is `outcome: completed`, because the
+# outbox ran to a recorded conclusion and a conclusion correctly
+# reached is not a failure of the run; only `failed-git`, which is a
+# fact about the machine rather than about the finding, is
+# `outcome: failed`.
+#
+# A membership test rather than TARGET_FIELD's open non-blank check,
+# for the reason APPLY_OUTCOME_VALUES gets one: exactly one writer
+# exists (`_file_finding`) and every surface that reads it branches on
+# the value.
+FINDING_OUTCOME_FIELD = "finding-outcome"
+FINDING_OUTCOME_VALUES = (
+    "filed",
+    "refused-malformed",
+    "refused-destination-unknown",
+    "refused-destination-unconfigured",
+    "refused-tree-dirty",
+    "refused-already-there",
+    "refused-no-base",
+    "failed-git",
+)
+
+# The commit a finding landed as, stamped ONLY on the `filed` path, so
+# its meaning is exact: not "a commit happened" but "this branch was
+# created, pointing at this commit, carrying this finding and nothing
+# else." Every refusal stamps nothing, matching the body prose, which
+# names no sha on those paths either.
+#
+# Forty OR sixty-four lowercase hex, both and no third, for the reason
+# APPLY_COMMIT_FIELD gives: git's sha256 object format is real and a
+# resident's repository is theirs to create however they like.
+#
+FINDING_COMMIT_FIELD = "finding-commit"
+
+# The branch a finding landed on, and the checkout it landed in. Both
+# stamped only on the `filed` path, alongside `finding-commit`.
+#
+# They are FIELDS rather than prose for the reason APPLY_COMMIT_FIELD
+# was promoted to one: the status surface and the digest have to tell a
+# resident where to go look, and agent/README.md's `outcome` section
+# forbids a surface inferring a fact by grepping a body. A promised
+# fact left in prose is a grep waiting to happen.
+#
+# `finding-destination` carries a ROLE, never a path, for exactly
+# TARGET_FIELD's reason: a role is legible cold years later, and an
+# absolute path is a lie the first time the checkout moves. The
+# resolved path is in the body prose beside it, where staleness is
+# obvious rather than load-bearing. The repository-relative path of the
+# entry itself stays prose-only — nothing keys on it, and a field is a
+# promise that something may.
+FINDING_BRANCH_FIELD = "finding-branch"
+FINDING_DESTINATION_FIELD = "finding-destination"
+
+# The closed set of destinations a finding may declare, and the seat
+# that lands it. `mechanism` is the only member in v1 and resolves to
+# `castle.agent.repo.mechanism`; a finding naming anything else is
+# refused by name rather than routed on a guess.
+FINDING_DESTINATIONS = ("mechanism",)
+OUTBOX_SEAT = "outbox"
+
+# Where a finding lands in the destination checkout, and what the
+# branch that carries it is called. `docs/backlog/` because that is
+# what a finding IS — a statement of a problem nobody is working on
+# yet — and that directory's README already says one file per item,
+# slug only, no numbers.
+FINDING_DIR = "docs/backlog"
+FINDING_BRANCH_PREFIX = "castle/finding/"
+
+# The base every finding branch is cut from, spelled as a remote-
+# tracking ref deliberately (CLAUDE.md: scope against origin/main,
+# never a local branch ref). A branch cut from whatever the resident
+# happened to have checked out would carry their in-progress work into
+# a finding's pull request.
+#
+# NOT fetched first. A fetch is network, and this seat does none, so
+# the branch may be based on a stale origin/main — stated in the record
+# and the resident's to rebase. `origin/main` not resolving at all is
+# `refused-no-base`: a fact about the checkout, named rather than
+# worked around by falling back to HEAD.
+FINDING_BASE_REF = "origin/main"
+
+# The identity on a finding commit. The outbox seat, not the resident,
+# for the reason APPLY_COMMIT_NAME states about the applier: signing a
+# seat's commit with a resident's key would assert authorship they do
+# not have. `commit-tree` does not sign.
+OUTBOX_COMMIT_NAME = "Castle outbox"
+OUTBOX_COMMIT_EMAIL = "outbox@castle.invalid"
+
 # The environment variable that carries the running turn's claim id
 # into the tenant's own environment, and from there into any `castle`
 # the tenant invokes. Set on the tenant's env dict only — never on
@@ -4866,29 +4975,36 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # was checked.
         try:
             scratch_dir = work_scratch_dir()
-            diff_fd, diff_path_str = tempfile.mkstemp(
-                prefix="castle-work-diff-", dir=scratch_dir
-            )
-            os.close(diff_fd)
-            diff_path = pathlib.Path(diff_path_str)
             # The second output file (docs/tasks/0024 §5): at most one word,
-            # naming which checkout the diff is against. Created the same
-            # way, handed over the same way, read back the same way and
-            # unlinked in the same `finally` as the diff — a tenant that
-            # already knows how to write one output file needs no second
-            # mechanism explained to it.
+            # naming which checkout the diff is against. The third
+            # (docs/tasks/0042-finding-outbox.md §1): one finding about the
+            # framework itself. Created the same way, handed over the same
+            # way, read back the same way and unlinked in the same
+            # `finally` as the diff — a tenant that already knows how to
+            # write one output file needs no second or third mechanism
+            # explained to it.
+            #
+            # Allocated as a list so a failure part-way through unlinks
+            # what already exists: without that, an earlier file would sit
+            # in the scratch directory until the age-based prune, orphaned
+            # by a turn that never started.
+            allocated: list[pathlib.Path] = []
             try:
-                target_fd, target_path_str = tempfile.mkstemp(
-                    prefix="castle-work-target-", dir=scratch_dir
-                )
+                for prefix in (
+                    "castle-work-diff-",
+                    "castle-work-target-",
+                    "castle-work-finding-",
+                ):
+                    scratch_fd, scratch_path_str = tempfile.mkstemp(
+                        prefix=prefix, dir=scratch_dir
+                    )
+                    os.close(scratch_fd)
+                    allocated.append(pathlib.Path(scratch_path_str))
             except OSError:
-                # The diff file exists by now; without this it would sit
-                # in the scratch directory until the age-based prune,
-                # orphaned by a turn that never started.
-                diff_path.unlink(missing_ok=True)
+                for scratch in allocated:
+                    scratch.unlink(missing_ok=True)
                 raise
-            os.close(target_fd)
-            target_path = pathlib.Path(target_path_str)
+            diff_path, target_path, finding_path = allocated
         except OSError as exc:
             wanted = state_dir() / "work"
             message = f"cannot write the worker's output files under {wanted}: {exc}"
@@ -4901,14 +5017,15 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                     claim_id=claim_id,
                     body_lines=[
                         f"Errand `{request.id}` could not start: this turn could not "
-                        f"create the worker's two output files under `{wanted}` "
+                        f"create the worker's three output files under `{wanted}` "
                         f"({exc}).",
                         "",
-                        "A worker turn hands its tenant two paths to write — the "
-                        "proposed diff and the checkout that diff targets — and they "
-                        "live beside the journal so that a sandboxed tenant can "
-                        "reach them. With nowhere to put them there is nothing for a "
-                        "tenant to produce, so no tenant was started.",
+                        "A worker turn hands its tenant three paths to write — the "
+                        "proposed diff, the checkout that diff targets, and one "
+                        "finding about the framework itself — and they live beside "
+                        "the journal so that a sandboxed tenant can reach them. With "
+                        "nowhere to put them there is nothing for a tenant to "
+                        "produce, so no tenant was started.",
                         "",
                         "Check that `castle.agent.stateDir` (modules/agent) names a "
                         "directory this account can write, then re-run "
@@ -4934,6 +5051,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # nothing reads is not worth a size limit nobody documented.
             env["CASTLE_DIFF_FILE"] = str(diff_path)
             env[TARGET_FILE_ENV] = str(target_path)
+            env[FINDING_FILE_ENV] = str(finding_path)
             # The two roots, and the third variable that reports a
             # configured-but-unusable mechanism checkout
             # (docs/tasks/0024-config-target.md §2). Three properties
@@ -5209,8 +5327,21 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                         break
             except OSError:
                 target_text = ""
+
+            # The third deliverable, read as BYTES and never decoded on
+            # this path (docs/tasks/0042-finding-outbox.md §1). What the
+            # outbox commits is exactly what the tenant wrote; the decode
+            # the outbox does for parsing a header is a separate, lossy
+            # copy that never reaches a file. An unreadable or absent
+            # file is an empty finding, the same handling an empty
+            # $CASTLE_DIFF_FILE already gets — a turn with nothing to
+            # report is the normal case and never a fault.
+            try:
+                finding_bytes = finding_path.read_bytes()
+            except OSError:
+                finding_bytes = b""
         finally:
-            for scratch in (diff_path, target_path):
+            for scratch in (diff_path, target_path, finding_path):
                 try:
                     scratch.unlink()
                 except OSError:
@@ -5464,6 +5595,26 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # better for one half of the pair.
         if patch_sha256:
             (journal_dir() / f"{result_id}.patch").write_bytes(diff_bytes)
+        # The outbox, after the result and gated on a COMPLETED turn
+        # (docs/tasks/0042-finding-outbox.md §3). After, because the
+        # record it writes names this result and nothing else — see
+        # `_write_finding_result` for why naming the request or the
+        # claim would break the reaper's per-turn accounting. Gated on
+        # `completed`, because a finding written by a turn that timed
+        # out or died is the state of an unfinished attempt rather than
+        # something the seat stands behind, exactly as the `target`
+        # field a few lines above is gated.
+        #
+        # `env` rather than the ambient environment, so the destination
+        # this resolves against is the same one the tenant was told
+        # about: a mechanism checkout diagnosed unusable earlier in this
+        # function is absent from `env`, and the outbox therefore
+        # reaches its "nowhere to file this" refusal rather than writing
+        # into a directory the turn already refused to hand over.
+        if outcome == "completed" and finding_bytes.strip():
+            _file_finding(
+                result_id, finding_bytes, {"mechanism": env.get(MECHANISM_ROOT_ENV, "")}
+            )
         if stamped_target:
             _file_proposal_question(request, result_id, stamped_target)
         return (result_id, outcome)
@@ -7689,6 +7840,588 @@ def _write_apply_result(
     return record_id
 
 
+# How long a finding's slug may be, and therefore its file name and its
+# branch name. Long enough that a real title survives whole, short
+# enough that it cannot collide with a path-length limit on any
+# filesystem a resident might keep a checkout on. Truncation cuts at a
+# word boundary so a shortened slug still reads as words.
+FINDING_SLUG_MAX = 72
+
+# The first line of a finding's result record, per `finding-outcome`.
+# Drafted here rather than improvised at each call site for the reason
+# APPLY_FIRST_LINES gives: a result's first line is what
+# `_fire_notification` would take verbatim if this record ever routed
+# to the notify channel, and a body's first line has leaked a store
+# path onto that channel before. Under 200 characters, no ids, no
+# paths — those go in the detail lines below it.
+FINDING_FIRST_LINES = {
+    "filed": (
+        "A worker turn found something wrong with Castle itself and filed it as a "
+        "backlog entry on a new branch. Nothing was pushed."
+    ),
+    "refused-malformed": (
+        "A worker turn tried to report something wrong with Castle itself, but what "
+        "it wrote was not in the work-item format, so nothing was filed."
+    ),
+    "refused-destination-unknown": (
+        "A worker turn tried to report something wrong with Castle itself and "
+        "addressed it somewhere this system has no checkout for, so nothing was filed."
+    ),
+    "refused-destination-unconfigured": (
+        "A worker turn found something wrong with Castle itself, and there is no "
+        "checkout of Castle configured on this machine to file it in."
+    ),
+    "refused-tree-dirty": (
+        "A worker turn found something wrong with Castle itself, but you have "
+        "uncommitted work where it would have gone, so nothing was filed."
+    ),
+    "refused-already-there": (
+        "A worker turn found something wrong with Castle itself, and something by "
+        "that name is already filed, so nothing was written."
+    ),
+    "refused-no-base": (
+        "A worker turn found something wrong with Castle itself, but your checkout "
+        "of Castle has no origin/main to branch from, so nothing was filed."
+    ),
+    "failed-git": (
+        "A worker turn found something wrong with Castle itself, and git could not "
+        "be run to file it. Nothing was written."
+    ),
+}
+
+
+def _parse_finding(text: str) -> tuple[dict[str, str], str] | None:
+    """A finding, split into its header and its body, or None if what
+    the tenant wrote is not in the format.
+
+    **THE FORMAT, in full** (docs/tasks/0042-finding-outbox.md §2). A
+    work item is a file: a header of `Key: value` lines, a blank line,
+    then a markdown body shaped like a `docs/backlog/` entry — a
+    statement of a problem, written for a stranger who is not us, on
+    hardware that is not ours. `Title:` and `Destination:` are the two
+    keys this task requires; `Destination:` names which checkout the
+    finding belongs in, and `mechanism` is the only value there is.
+
+        Title: A framework defect found by a worker has no outbox
+        Destination: mechanism
+
+        **What.** One or two sentences on the problem.
+
+        **Why it matters.** The cost of not fixing it.
+
+    That is the whole specification, and it is deliberately a
+    preference rather than a standard: no schema document, no
+    versioning, no registry. Boring enough that a bare Claude Code
+    session reading the directory is a valid harness, which is the
+    floor a brand-new resident starts from before she has any harness
+    at all. If a second resident's harness ever chokes on it, that
+    adoption pressure — not an RFC — is what promotes this paragraph to
+    something specced. The authoritative copy for a tenant is in
+    agent/castle-worker-claude's prompt, which is the one place a
+    tenant is told what to write; this is the reader's half of it.
+
+    Keys are matched case-insensitively and returned lowercased. A
+    header line that is not `Key: value` makes the whole thing
+    malformed rather than being skipped: a tenant that wrote prose
+    where the header goes has not written a work item, and guessing
+    which lines it meant as a header is the judgment this seat may not
+    have.
+    """
+    lines = text.splitlines()
+    header: dict[str, str] = {}
+    index = 0
+    while index < len(lines) and lines[index].strip():
+        raw = lines[index]
+        key, sep, value = raw.partition(":")
+        key = key.strip()
+        if not sep or not key or any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-"
+            for char in key
+        ):
+            return None
+        header[key.lower()] = value.strip()
+        index += 1
+    if not header:
+        return None
+    body = "\n".join(lines[index + 1:]).strip()
+    return header, body
+
+
+def _finding_slug(title: str) -> str:
+    """A backlog file name from a finding's title, or `""` if the title
+    has nothing a slug can be made of.
+
+    `docs/backlog/README.md`'s convention exactly: lowercase words
+    joined by hyphens, no numbers, one file per item. Everything that is
+    not an ASCII letter or digit becomes a separator, so a title with
+    punctuation, an em dash or a non-Latin script degrades to whatever
+    ASCII it contains rather than producing a file name a resident
+    cannot type. A title with no ASCII alphanumerics at all yields the
+    empty string, which the caller treats as malformed rather than
+    inventing a name.
+    """
+    keep = "abcdefghijklmnopqrstuvwxyz0123456789"
+    out: list[str] = []
+    for char in title.lower():
+        out.append(char if char in keep else "-")
+    slug = "".join(out).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    if len(slug) > FINDING_SLUG_MAX:
+        slug = slug[:FINDING_SLUG_MAX]
+        if "-" in slug:
+            slug = slug.rsplit("-", 1)[0]
+        slug = slug.strip("-")
+    return slug
+
+
+def _fence_for(text: str) -> str:
+    """A backtick fence longer than any run of backticks in `text`.
+
+    A finding is markdown and may legitimately contain a fenced block of
+    its own; quoting it inside a fixed three-backtick fence would end
+    the quote early and hand a resident a record that renders as
+    nonsense. Three is the floor, not the answer.
+    """
+    longest = 0
+    run = 0
+    for char in text:
+        run = run + 1 if char == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
+def _commit_finding(
+    root: str, rel_path: str, blob_source: pathlib.Path, message: str, branch: str
+) -> tuple[str, str, str]:
+    """Build the commit a finding lands as and move a NEW branch ref to
+    it. Returns `(sha, failed_stage, detail)`.
+
+    **Nothing here reads or writes the working tree, the real index or
+    HEAD.** `_build_commit`'s argument transfers whole: the content of
+    the commit is a pure function of the base tree and the finding's
+    bytes, and the resident's tree is not one of those, so there is no
+    window in which anything they do can end up inside a commit this
+    seat certifies — and a failure at any stage is a clean refusal with
+    nothing to undo, because every object written before the final
+    `update-ref` is unreferenced.
+
+    `update-ref <ref> <new> ""` — the three-argument form with an empty
+    old value — is what makes "a FRESH branch" a precondition git
+    enforces rather than a check with a race after it. Nothing this
+    function does can move a branch that already exists.
+
+    `_build_commit` itself is deliberately not reused. It takes a patch
+    file and runs `git apply --cached`, so using it would have meant
+    synthesising a creation-patch from the finding's bytes — line
+    counts, and the no-trailing-newline marker — which is a byte-
+    fidelity hazard invented for no gain. `hash-object -w` takes the
+    bytes exactly as the tenant wrote them.
+    """
+    probe, fault = _run_git(
+        root, ["rev-parse", "--verify", "--quiet", f"{FINDING_BASE_REF}^{{commit}}"]
+    )
+    if probe is None:
+        return "", "rev-parse", fault
+    base = (probe.stdout or "").strip()
+    if probe.returncode != 0 or not base:
+        return "", "base", ""
+
+    probe, fault = _run_git(root, ["hash-object", "-w", "--", str(blob_source)])
+    if probe is None:
+        return "", "hash-object", fault
+    if probe.returncode != 0:
+        return "", "hash-object", (probe.stderr or "").strip()
+    blob = (probe.stdout or "").strip()
+    if not blob:
+        return "", "hash-object", "git named no blob"
+
+    index_fd, index_path = tempfile.mkstemp(prefix="castle-outbox-index-")
+    os.close(index_fd)
+    index_env = {"GIT_INDEX_FILE": index_path}
+    try:
+        for stage, args in (
+            ("read-tree", ["read-tree", base]),
+            (
+                "update-index",
+                ["update-index", "--add", "--cacheinfo", f"100644,{blob},{rel_path}"],
+            ),
+        ):
+            probe, fault = _run_git(root, args, env_extra=index_env)
+            if probe is None:
+                return "", stage, fault
+            if probe.returncode != 0:
+                return "", stage, (probe.stderr or probe.stdout or "").strip()
+
+        probe, fault = _run_git(root, ["write-tree"], env_extra=index_env)
+        if probe is None:
+            return "", "write-tree", fault
+        if probe.returncode != 0:
+            return "", "write-tree", (probe.stderr or "").strip()
+        tree = (probe.stdout or "").strip()
+        if not tree:
+            return "", "write-tree", "git named no tree"
+
+        probe, fault = _run_git(
+            root,
+            ["commit-tree", tree, "-p", base, "-m", message],
+            config=[
+                f"user.name={OUTBOX_COMMIT_NAME}",
+                f"user.email={OUTBOX_COMMIT_EMAIL}",
+            ],
+            env_extra=index_env,
+        )
+        if probe is None:
+            return "", "commit-tree", fault
+        if probe.returncode != 0:
+            return "", "commit-tree", (probe.stderr or "").strip()
+        sha = (probe.stdout or "").strip()
+        if not sha:
+            return "", "commit-tree", "git named no commit"
+    finally:
+        try:
+            os.unlink(index_path)
+        except OSError:
+            pass
+
+    probe, fault = _run_git(root, ["update-ref", f"refs/heads/{branch}", sha, ""])
+    if probe is None:
+        return "", "update-ref", fault
+    if probe.returncode != 0:
+        return "", "update-ref", (probe.stderr or "").strip()
+    return sha, "", ""
+
+
+def _write_finding_result(
+    worker_result_id: str,
+    *,
+    finding_outcome: str,
+    detail_lines: list[str],
+    finding_text: str = "",
+    commit_sha: str = "",
+    branch: str = "",
+    destination: str = "",
+) -> str:
+    """The one record the outbox writes
+    (docs/tasks/0042-finding-outbox.md §5).
+
+    **`refs: [worker-result-id]`, and deliberately NOT the request —
+    nor the claim.** This is `_write_apply_result`'s reasoning applied
+    to a second seat, and it is load-bearing rather than stylistic.
+    `closing_result`'s clause (b) treats any result naming a claim's
+    request, newer than the claim and naming no claim of that request,
+    as the account closing that claim, and `_reap_interrupted` passes
+    it every result in the journal — so an outbox record naming the
+    request would silently close a genuinely dangling worker claim, and
+    an errand whose hand-run retry died would be labelled with the
+    OUTBOX's outcome and never reaped. Naming the claim would be worse
+    still: that is clause (a), the exact per-turn case, so the record
+    would positively assert it is that turn's account.
+
+    Naming the worker result is safe on both clauses and is the true
+    statement — this record is about what happened to that result's
+    finding file. Lineage is unharmed: `_find_root_request` walks
+    `refs[0]` transitively and reaches the request in two hops, so
+    `castle digest`'s grouping and the router's evidence sentence are
+    correct with no change, and `_collect_downstream` still collects
+    it, which is what castle-modal's status line rides on.
+
+    `cmd_validate` enforces both halves of that, because the paragraph
+    above is a docstring and the defect it prevents comes back the
+    first time someone makes these refs "more informative."
+
+    **`provenance: initiated`, not inherited**, and this is the one
+    place a record written on a worker turn's behalf departs from
+    `_write_worker_result`'s inheritance rule. Provenance records who
+    WANTED the work. The resident asked for the errand; they did not
+    ask for the finding — the worker volunteered it, unbidden, about
+    the framework rather than about the errand. The router's rule then
+    sends it to the digest rather than to a notification, which is the
+    reporting cadence this authority tier wants: worth reading in the
+    day's account, not worth interrupting someone for.
+
+    **The finding's own text rides in the body on every path except
+    `filed`.** On `filed` the committed file is the artifact and the
+    body carries no copy, so there is no second source of truth; on a
+    refusal nothing was committed anywhere, so the body copy is the
+    only copy and there is nothing for it to disagree with. Nothing
+    mechanical ever reads it back — which is why this does not
+    contradict docs/backlog/a-proposed-diff-does-not-survive-the-
+    journal.md, whose failure mode is a byte-exact artifact
+    RECONSTRUCTED from a body a line-oriented format may normalise. A
+    finding is prose for a human; a normalising round trip costs
+    legibility at worst, never correctness.
+    """
+    body_lines = [FINDING_FIRST_LINES[finding_outcome], ""] + list(detail_lines)
+    if finding_text and finding_outcome != "filed":
+        fence = _fence_for(finding_text)
+        body_lines += [
+            "",
+            "The finding itself, verbatim, so that nothing is lost:",
+            "",
+            fence,
+            finding_text,
+            fence,
+        ]
+    extra = {"outcome": "failed" if finding_outcome == "failed-git" else "completed"}
+    extra[FINDING_OUTCOME_FIELD] = finding_outcome
+    if commit_sha:
+        extra[FINDING_COMMIT_FIELD] = commit_sha
+    if branch:
+        extra[FINDING_BRANCH_FIELD] = branch
+    if destination:
+        extra[FINDING_DESTINATION_FIELD] = destination
+    return write_record(
+        journal_dir(),
+        type="result",
+        provenance="initiated",
+        seat=OUTBOX_SEAT,
+        refs=[worker_result_id],
+        body="\n".join(body_lines),
+        extra=extra,
+    )
+
+
+def _file_finding(
+    worker_result_id: str, finding_bytes: bytes, roots: dict[str, str]
+) -> str:
+    """THE OUTBOX (docs/tasks/0042-finding-outbox.md §3): plumbing, not
+    a reasoning seat.
+
+    A total function of one turn's outputs — the bytes in
+    $CASTLE_FINDING_FILE, and which checkouts that turn had — with no
+    judgment of its own, no tenant, no model, and no opinion about
+    whether a finding is worth filing. The seat that wrote the file
+    already decided that, and the resident decides again at the
+    eventual pull request. Giving it a policy about which findings are
+    worth landing, or a say in whether to land one, would make it a
+    reasoning seat; this docstring exists to stop a later agent from
+    "completing" it into one, exactly as the same sentence does for
+    dispatch and for the applier in docs/architecture.md.
+
+    It never touches the resident's current branch, never writes
+    `main`, and NEVER PUSHES. docs/architecture.md's push bullet is
+    unamended by this task: what an unattended push may do with nobody
+    watching is an open authority question, so commits stay local-only
+    and a finding goes no further than a branch on the resident's own
+    machine without them.
+
+    Returns the id of the record it wrote. Every path writes exactly
+    one, including every refusal — the honest dead-end becomes a stated
+    limit rather than a silent drop.
+    """
+    text = finding_bytes.decode("utf-8", errors="replace")
+    parsed = _parse_finding(text)
+    if parsed is None:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-malformed",
+            finding_text=text,
+            detail_lines=[
+                "The worker tenant wrote something to $CASTLE_FINDING_FILE that is "
+                "not a work item, so there was nothing to file. A work item is a "
+                "header of `Key: value` lines — `Title:` and `Destination:` at "
+                "minimum — then a blank line, then the body "
+                "(docs/tasks/0042-finding-outbox.md).",
+            ],
+        )
+    header, _body = parsed
+    title = header.get("title", "").strip()
+    destination = header.get("destination", "").strip()
+    slug = _finding_slug(title)
+    if not title or not destination or not slug:
+        if not title or not destination:
+            missing = "`Title:`" if not title else "`Destination:`"
+            detail = f"The finding declared no {missing}, so there was nothing to file."
+        else:
+            detail = (
+                f"The finding's title (`{title}`) contains nothing a file name can "
+                "be made of, so there was nothing to file."
+            )
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-malformed",
+            finding_text=text,
+            detail_lines=[
+                detail,
+                "",
+                "Both keys are required and neither is defaulted: `Destination:` has "
+                "exactly one legal value today, so a default would be harmless now "
+                "and would silently start being wrong the first time that set grew "
+                "(docs/tasks/0042-finding-outbox.md).",
+            ],
+        )
+
+    if destination not in FINDING_DESTINATIONS:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-destination-unknown",
+            finding_text=text,
+            detail_lines=[
+                f"The finding declared `Destination: {destination}`, which is not a "
+                "checkout this system knows about. The destinations a finding may "
+                f"name are: {', '.join(FINDING_DESTINATIONS)}.",
+            ],
+        )
+    root = (roots.get(destination) or "").strip()
+    if not root:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-destination-unconfigured",
+            finding_text=text,
+            detail_lines=[
+                f"The finding belongs in the **{destination}** checkout — a checkout "
+                "of Castle Turing itself — and this machine has none configured and "
+                "usable, so there is nowhere for it to go. That is the normal state "
+                "for a resident who consumes this framework as a pinned flake input "
+                "rather than as a working tree they keep.",
+                "",
+                "Set `castle.agent.repo.mechanism` (modules/agent) to a checkout of "
+                "the framework if you want findings filed automatically. Until then "
+                "the finding is preserved below and nowhere else.",
+            ],
+        )
+
+    rel_path = f"{FINDING_DIR}/{slug}.md"
+    branch = f"{FINDING_BRANCH_PREFIX}{slug}"
+
+    # Every check below is a PRE-check: nothing has been written to the
+    # destination checkout at this point and nothing will be until
+    # `_commit_finding`'s final `update-ref`, so the order among them
+    # decides only which refusal a resident reads, never what state
+    # anything is left in.
+    dirty, why = _dirty_under(root, [rel_path])
+    if dirty is None:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="failed-git",
+            finding_text=text,
+            detail_lines=[
+                f"Whether `{root}` has uncommitted work where this finding would go "
+                f"could not be established: {why}. Nothing was written there.",
+            ],
+        )
+    if dirty:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-tree-dirty",
+            finding_text=text,
+            detail_lines=[
+                "Your checkout of Castle Turing has uncommitted work exactly where "
+                f"this finding would have gone ({dirty}), so nothing was written "
+                "there. Commit or set that aside and the next finding will file "
+                "normally; this one is preserved below.",
+            ],
+        )
+
+    probe, fault = _run_git(root, ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"])
+    if probe is None:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="failed-git",
+            finding_text=text,
+            detail_lines=[
+                f"git could not be run to completion in `{root}`: {fault}. Nothing "
+                "was written there.",
+            ],
+        )
+    branch_exists = probe.returncode == 0
+    path_probe, _fault = _run_git(
+        root, ["cat-file", "-e", f"{FINDING_BASE_REF}:{rel_path}"]
+    )
+    path_exists = path_probe is not None and path_probe.returncode == 0
+    if branch_exists or path_exists:
+        which = (
+            f"a branch named `{branch}` already exists"
+            if branch_exists
+            else f"`{rel_path}` already exists on `{FINDING_BASE_REF}`"
+        )
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-already-there",
+            finding_text=text,
+            detail_lines=[
+                f"Nothing was written, because {which}. A near-duplicate entry filed "
+                "automatically is a mess somebody has to reconcile later, so this "
+                "seat refuses rather than picking a second name. The finding is "
+                "preserved below; decide by hand whether it says something the "
+                "existing entry does not.",
+            ],
+        )
+
+    # The bytes go back to disk under the state directory rather than
+    # down git's stdin, because `_run_git` runs in text mode and has no
+    # stdin channel — and widening that helper, whose docstring
+    # carefully scopes what it does for the applier, is a worse trade
+    # than one temp file (docs/tasks/0042 judgment call 7).
+    blob_fd, blob_path_str = tempfile.mkstemp(prefix="castle-finding-", dir=work_scratch_dir())
+    blob_path = pathlib.Path(blob_path_str)
+    try:
+        with os.fdopen(blob_fd, "wb") as handle:
+            handle.write(finding_bytes)
+        message = "\n".join(
+            [
+                f"Backlog: {title}",
+                "",
+                "Filed by the Castle outbox from a worker turn's finding",
+                "(docs/tasks/0042-finding-outbox.md). Nothing was pushed and no",
+                "branch other than this one was touched.",
+                "",
+                f"Worker result: {worker_result_id}",
+            ]
+        )
+        sha, stage, detail = _commit_finding(root, rel_path, blob_path, message, branch)
+    finally:
+        blob_path.unlink(missing_ok=True)
+
+    if stage == "base":
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="refused-no-base",
+            finding_text=text,
+            detail_lines=[
+                f"`{FINDING_BASE_REF}` does not resolve in `{root}`, so there is no "
+                "base to cut a branch from. Findings are always branched from the "
+                "remote-tracking main rather than from whatever is checked out, so "
+                "that a finding's branch never carries your in-progress work; this "
+                "seat does no network, so it cannot fetch one for you.",
+            ],
+        )
+    if not sha:
+        return _write_finding_result(
+            worker_result_id,
+            finding_outcome="failed-git",
+            finding_text=text,
+            detail_lines=[
+                f"`git {stage}` did not do what this seat needed in `{root}`: "
+                f"{detail or 'no detail'}. Nothing was written there — every object "
+                "built before the branch is moved is unreferenced, so a failure "
+                "part-way leaves nothing to undo.",
+            ],
+        )
+    return _write_finding_result(
+        worker_result_id,
+        finding_outcome="filed",
+        commit_sha=sha,
+        branch=branch,
+        destination=destination,
+        detail_lines=[
+            f"Filed as `{rel_path}` on branch `{branch}` in the **{destination}** "
+            f"checkout, which on this host resolved to `{root}`.",
+            "",
+            f"    git -C {shlex.quote(root)} log -p {FINDING_BASE_REF}..{branch}",
+            "",
+            f"Title: {title}",
+            "",
+            "One commit, one file, branched from "
+            f"`{FINDING_BASE_REF}` as it stood in that checkout — which may be stale, "
+            "because this seat does no network and never fetches. Your own branch "
+            "and working tree were not touched, `main` was not written, and "
+            "**nothing was pushed**: opening a pull request is yours to do.",
+        ],
+    )
+
+
 def _validation_command(private_root: str, host: str) -> list[str]:
     """The one command this task ever runs against Nix
     (docs/tasks/0026-apply-validate.md §E).
@@ -8878,6 +9611,15 @@ def cmd_digest(args: argparse.Namespace) -> int:
             # field 0026 will route an apply step on.
             if rec.type == "result" and rec.fields.get(TARGET_FIELD):
                 print(f"- target: {rec.fields[TARGET_FIELD]}")
+            # And `finding-outcome` beside it (docs/tasks/0042-finding-
+            # outbox.md §4), presentation only in the same sense. This
+            # is half of the reporting half of a made-then-reported
+            # authority: no approval question is ever filed for a
+            # finding, so the digest is where a resident learns one
+            # landed — or that one could not. A record rendering as a
+            # bare heading here would make the whole lane silent.
+            if rec.type == "result" and rec.fields.get(FINDING_OUTCOME_FIELD):
+                print(f"- finding: {rec.fields[FINDING_OUTCOME_FIELD]}")
             # And `decision` beside those (docs/tasks/0025-approval.md
             # §G), presentation only in the same sense: `castle
             # validate` already checks the field's shape and its
@@ -9130,6 +9872,64 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 f"{path.name}: '{APPLY_COMMIT_FIELD}' ({apply_commit_raw!r}) is not 40 "
                 "or 64 lowercase hex characters — the two shapes a git commit id has "
                 "(sha1 and sha256 object formats)."
+            )
+
+        # `finding-outcome` and `finding-commit` (result-only,
+        # docs/tasks/0042-finding-outbox.md §5), the same
+        # "well-formed if present, never required" treatment as
+        # everything above. Closed vocabulary for the first, because
+        # exactly one writer exists (`_write_finding_result`) and every
+        # surface that reads it branches on the value; the two commit-id
+        # lengths for the second, for the reason `apply-commit` gives.
+        finding_outcome_raw = rec.fields.get(FINDING_OUTCOME_FIELD)
+        if finding_outcome_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{FINDING_OUTCOME_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0042-finding-outbox.md)."
+            )
+        elif (
+            finding_outcome_raw is not None
+            and finding_outcome_raw not in FINDING_OUTCOME_VALUES
+        ):
+            errors.append(
+                f"{path.name}: '{FINDING_OUTCOME_FIELD}' ({finding_outcome_raw!r}) is "
+                f"not one of {', '.join(FINDING_OUTCOME_VALUES)}"
+            )
+
+        for field in (FINDING_BRANCH_FIELD, FINDING_DESTINATION_FIELD):
+            raw = rec.fields.get(field)
+            if raw is not None and rtype != "result":
+                errors.append(
+                    f"{path.name}: '{field}' is a result-record field and this is a "
+                    f"{rtype!r} record. Nothing reads it here, so it would validate, "
+                    "read as meaningful, and do nothing "
+                    "(docs/tasks/0042-finding-outbox.md)."
+                )
+            elif raw is not None and not raw.strip():
+                errors.append(
+                    f"{path.name}: '{field}' is present but blank. Absent means this "
+                    "result filed nothing; blank asserts it filed something and "
+                    "declines to say where (docs/tasks/0042-finding-outbox.md)."
+                )
+
+        finding_commit_raw = rec.fields.get(FINDING_COMMIT_FIELD)
+        if finding_commit_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{FINDING_COMMIT_FIELD}' is a result-record field and "
+                f"this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0042-finding-outbox.md)."
+            )
+        elif finding_commit_raw is not None and (
+            len(finding_commit_raw) not in (40, 64)
+            or any(char not in "0123456789abcdef" for char in finding_commit_raw)
+        ):
+            errors.append(
+                f"{path.name}: '{FINDING_COMMIT_FIELD}' ({finding_commit_raw!r}) is "
+                "not 40 or 64 lowercase hex characters — the two shapes a git commit "
+                "id has (sha1 and sha256 object formats)."
             )
 
         # `target` (result-only, docs/tasks/0024 §6), same append-only
@@ -9490,6 +10290,43 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 f"'decision: approve', and this one names "
                 f"{rec.refs[0] if rec.refs else 'nothing'} "
                 "(docs/tasks/0026-apply-validate.md)."
+            )
+
+    # **An outbox-seat result must not name the errand's request, or its
+    # claim** (docs/tasks/0042-finding-outbox.md §5). The reasoning that
+    # keeps it out of both lives in `_write_finding_result`'s docstring,
+    # and a docstring does not survive somebody making these refs "more
+    # informative": a result naming the request satisfies
+    # `closing_result`'s clause (b) and silently closes a dangling
+    # worker claim, and one naming the claim satisfies clause (a) and
+    # positively asserts it is that turn's account. Both are permanent
+    # once written, because the journal is append-only.
+    #
+    # Refs-shape only, like the applier check above it. All this owes is
+    # that a malformed one is named rather than passed over.
+    for rec in sorted(records.values(), key=lambda r: r.id):
+        if rec.type != "result" or rec.fields.get("seat") != OUTBOX_SEAT:
+            continue
+        anchor = records.get(rec.refs[0]) if rec.refs else None
+        if anchor is None or anchor.type != "result":
+            errors.append(
+                f"{rec.path.name}: an outbox-seat result must name the worker result "
+                "whose finding it is about as its first ref, and this one names "
+                f"{rec.refs[0] if rec.refs else 'nothing'} "
+                "(docs/tasks/0042-finding-outbox.md)."
+            )
+        named = [
+            ref
+            for ref in rec.refs
+            if (records.get(ref).type if records.get(ref) else "") in ("request", "claim")
+        ]
+        if named:
+            errors.append(
+                f"{rec.path.name}: an outbox-seat result must name neither the errand's "
+                f"request nor its claim, and this one names {', '.join(named)}. Filing "
+                "a finding is not a turn of the errand, and a result that names either "
+                "is read by `closing_result` as the account closing that turn "
+                "(docs/tasks/0042-finding-outbox.md)."
             )
 
     # Unconditionally, and outside the pass/fail branch below: an unsafe
