@@ -328,7 +328,7 @@ def _first_line(text: str) -> str:
     return stripped.splitlines()[0] if stripped else ""
 
 
-def _pending_questions(records: dict) -> list:
+def _pending_questions(castle, records: dict) -> list:
     """Every `question` no answer names, oldest first.
 
     A flat pass over the journal, deliberately NOT the transitive errand
@@ -360,21 +360,19 @@ def _pending_questions(records: dict) -> list:
     corrected rather than deleted because a stated invariant is
     precisely what a later change would have relied on.
 
-    Sorted by full id, which is chronological only to one-second
-    granularity (review round 1, finding 7): `make_id` prefixes a
-    UTC timestamp and appends a *random* suffix, so two questions filed
-    in the same second sort by that suffix rather than by which came
-    first. What the sort actually guarantees — and all the picker needs
-    — is that the order is deterministic and identical on every
-    invocation, so the number a resident presses means the same thing
-    for as long as the list is on screen. Across seconds it is genuinely
-    oldest-first, the same property `castle dispatch`'s own loop relies
-    on.
+    Ordered by `castle.order_records`, the shared comparison
+    (docs/tasks/0046-record-ordering-helper.md) — which is genuinely
+    oldest-first across seconds and wherever a `refs` edge says so, and
+    for two questions filed in the same second with nothing between
+    them is a deterministic arbitrary choice. Deterministic is all the
+    picker needs: the number a resident presses has to mean the same
+    thing for as long as the list is on screen. Review round 1, finding
+    7 is where that requirement was first written down, against a
+    hand-rolled sort that only met it by accident.
     """
     answered = {ref for rec in records.values() if rec.type == "answer" for ref in rec.refs}
-    return sorted(
-        (rec for rec in records.values() if rec.type == "question" and rec.id not in answered),
-        key=lambda rec: rec.id,
+    return castle.order_records(
+        rec for rec in records.values() if rec.type == "question" and rec.id not in answered
     )
 
 
@@ -624,7 +622,7 @@ def _run_answer_scripted(castle, question_id: str | None, out=sys.stdout) -> int
 
 def run_answer(castle, out=sys.stdout, question_id: str | None = None) -> int:
     records = castle.load_all(castle.journal_dir())
-    pending = _pending_questions(records)
+    pending = _pending_questions(castle, records)
     interactive = sys.stdin.isatty()
 
     # A scripted caller naming a question goes straight to the write,
@@ -1093,7 +1091,7 @@ def _pending_proposals(castle, records: dict) -> list:
     narrowed to the ones this mode decides, with the same fold and the
     same ordering guarantee, so a change cannot be pending on one
     surface and absent from the other."""
-    return [q for q in _pending_questions(records) if _is_proposal(castle, q)]
+    return [q for q in _pending_questions(castle, records) if _is_proposal(castle, q)]
 
 
 # Every C0/C1 control byte except newline and tab, including the ESC
@@ -1541,13 +1539,13 @@ def _inbox_items(castle, records: dict, seen: set) -> list:
     consulted for results only: pending-ness of the other two kinds is
     derivable, and deriving beats recording wherever possible.
     """
-    pending = _pending_questions(records)
+    pending = _pending_questions(castle, records)
+    # Blocking first, and chronological within each group: a stable
+    # sort over the shared ordering, rather than a composite key with
+    # `q.id` in it (docs/tasks/0046 — the whole id is not a time).
     questions = sorted(
-        (q for q in pending if not _is_proposal(castle, q)),
-        key=lambda q: (
-            q.fields.get(castle.BLOCKING_FIELD, "").strip() != "true",
-            q.id,
-        ),
+        castle.order_records(q for q in pending if not _is_proposal(castle, q)),
+        key=lambda q: q.fields.get(castle.BLOCKING_FIELD, "").strip() != "true",
     )
     proposals = [q for q in pending if _is_proposal(castle, q)]
     # A proposal's own backing result (`refs[1]` on any question ever
@@ -1573,13 +1571,10 @@ def _inbox_items(castle, records: dict, seen: set) -> list:
         and q.fields.get(castle.PROPOSAL_SHA256_FIELD, "").strip()
         and len(q.refs) >= 2
     }
-    unread = sorted(
-        (
-            rec
-            for rec in records.values()
-            if rec.type == "result" and rec.id not in seen and rec.id not in proposal_results
-        ),
-        key=lambda rec: rec.id,
+    unread = castle.order_records(
+        rec
+        for rec in records.values()
+        if rec.type == "result" and rec.id not in seen and rec.id not in proposal_results
     )
     return (
         [("question", rec) for rec in questions]
@@ -1925,19 +1920,6 @@ def run_inbox(castle, out=sys.stdout, focus: str | None = None) -> int:
         records = castle.load_all(castle.journal_dir())
 
 
-def _stamp_of(record_id: str) -> str:
-    """The UTC timestamp a record id begins with, and nothing else.
-
-    Ids are `<stamp>-<type>-<random suffix>`, so comparing two of them
-    whole compares the type name whenever the stamps tie — which makes
-    `...-answer-...` older than a `...-result-...` written in the same
-    second, by alphabet rather than by time. Callers that mean "which
-    happened later" want this; callers that only need a deterministic
-    total order (the picker) are right to use the whole id.
-    """
-    return record_id.split("-", 1)[0]
-
-
 def _started_at(castle, claim) -> str:
     """A claim's start time as local wall-clock `HH:MM`.
 
@@ -2128,17 +2110,11 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # first in its `refs` (what the reaper uses to find the request),
     # and a result belongs to any errand it names (what `closing_result`
     # uses, and what lets `--refs R,C` close a turn by hand).
-    results = sorted(
-        (rec for rec in downstream if rec.type == "result" and request_id in rec.refs),
-        key=lambda rec: rec.id,
+    results = castle.order_records(
+        rec for rec in downstream if rec.type == "result" and request_id in rec.refs
     )
-    claims = sorted(
-        (
-            rec
-            for rec in downstream
-            if rec.type == "claim" and rec.refs and rec.refs[0] == request_id
-        ),
-        key=lambda rec: rec.id,
+    claims = castle.order_records(
+        rec for rec in downstream if rec.type == "claim" and rec.refs and rec.refs[0] == request_id
     )
 
     base = None
@@ -2146,13 +2122,13 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # is running right now. Both exist for the decision overlay below,
     # which must not describe an errand by something older than its
     # newest turn (finding 4 of docs/tasks/0025's code review).
-    base_source_id = ""
+    base_source = None
     turn_is_live = False
     if claims:
         newest_claim = claims[-1]
         if castle.lease_is_held(request_id):
             turn_is_live = True
-            base_source_id = newest_claim.id
+            base_source = newest_claim
             base = f"in progress (started {_started_at(castle, newest_claim)})"
         else:
             # The result that closes *this* turn, not merely the newest
@@ -2164,19 +2140,19 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # "interrupted" the reaper was about to contradict.
             closing = castle.closing_result(newest_claim, results, claims)
             if closing is not None:
-                base_source_id = closing.id
+                base_source = closing
                 base = _outcome_label(closing.fields.get("outcome", ""), request_id)
             else:
                 # The window between "the lease died" and "the next
                 # dispatch sweep reaps it into a result". Nothing is
                 # running, so "interrupted" is the honest label.
-                base_source_id = newest_claim.id
+                base_source = newest_claim
                 base = f"interrupted — castle work {request_id} to retry"
     elif results:
         # No claim records anywhere on this errand: a journal from
         # before docs/tasks/0021, where nothing recorded turns at all.
-        base_source_id = results[-1].id
-        base = _outcome_label(results[-1].fields.get("outcome", ""), request_id)
+        base_source = results[-1]
+        base = _outcome_label(base_source.fields.get("outcome", ""), request_id)
     elif any(
         rec.type == "decision"
         and rec.fields.get("seat") == castle.DISPATCH_SEAT
@@ -2226,32 +2202,31 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # that is the lineage edge a proposal question carries its errand
     # on, the same edge `claims` is keyed by (finding 3 of this task's
     # code review).
-    proposals = sorted(
-        (
-            rec
-            for rec in downstream
-            if rec.type == "question"
-            and rec.fields.get(castle.PROPOSAL_SHA256_FIELD)
-            and rec.refs
-            and rec.refs[0] == request_id
-        ),
-        key=lambda rec: rec.id,
+    proposals = castle.order_records(
+        rec
+        for rec in downstream
+        if rec.type == "question"
+        and rec.fields.get(castle.PROPOSAL_SHA256_FIELD)
+        and rec.refs
+        and rec.refs[0] == request_id
     )
-    # ACCEPTED LIMIT, and the reason it is not fixed here.
-    # `proposals[-1]` below is "newest" only across seconds: ids carry a
-    # one-second stamp and a random suffix, so two proposals filed on one
-    # errand inside the same second sort arbitrarily, and this can label
-    # the errand with the verdict belonging to the other one. Found by
-    # the cross-model review, round 3.
+    # REMAINING LIMIT, narrowed rather than closed by
+    # docs/tasks/0046-record-ordering-helper.md. This selection and the
+    # decision comparison twelve lines below it now use the same shared
+    # ordering — which is the point of that task: this line and that one
+    # disagreeing, in a function whose own comment explained the hazard,
+    # is what the helper exists to make impossible.
     #
-    # Not patched, because the bug is the id format rather than this
-    # line — see docs/tasks/0046-record-ordering-helper.md,
-    # which records that this same hazard has now produced a defect in
-    # four separate tasks, including twelve lines below, where the
-    # decision-versus-result comparison deliberately compares only the
-    # timestamp half to dodge it. Patching one more call site would make
-    # the fifth local workaround and still leave the next fold to
-    # rediscover it.
+    # What the helper does not fix: two proposals filed on one errand
+    # inside the same second, with no `refs` edge between them, still
+    # genuinely tie, and `newest_record` then picks one — deterministic
+    # and identical on every surface, but arbitrary, so the errand can
+    # still be labelled with the verdict belonging to the other one
+    # (cross-model review, round 3). The tie is at least *sayable* now:
+    # `castle.tied_for_newest(proposals)` returns both. Rendering it
+    # means a new resident-facing label carrying its own remedy sentence
+    # (docs/tasks/0015's rule), which is a different change from the one
+    # 0046 made, and is not made here.
     #
     # What bounds the damage: the `waiting` branch at the end of this
     # function is computed independently of this selection, so an errand
@@ -2272,24 +2247,29 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
         # nothing applied yet" while the failure and its retry command
         # vanished from the surface that exists to show them.
         #
-        # Compared on the TIMESTAMP half of the id, not the whole of
-        # it, and ties go to the decision. Comparing whole ids read
-        # correctly and behaved wrongly: a full id is
-        # `<stamp>-<type>-<suffix>`, so within one second the type name
-        # decides, `answer` sorts before `result`, and a decision made
-        # in the same second as the result it is about looked older
-        # than it. That is not a rare case — it is what a scripted
-        # caller does every time, and what a resident who approves
-        # straight off the notification does too. A tie going to the
-        # decision is right on its own terms as well: a decision can
-        # only exist after the change it decides, so when the two share
-        # a second, the decision is the later event.
-        newest_proposal = proposals[-1]
-        for rec in sorted(records.values(), key=lambda r: r.id):
+        # `castle.record_is_before`, which is where the reasoning this
+        # comment used to carry now lives (docs/tasks/0046). It said:
+        # comparing whole ids read correctly and behaved wrongly,
+        # because within one second the type name decides, `answer`
+        # sorts before `result`, and a decision made in the same second
+        # as the result it is about looked older than it — what a
+        # scripted caller does every time, and what a resident
+        # approving straight off the notification does too. The
+        # hand-rolled fix compared only the timestamp half and let ties
+        # go to the decision. The shared rule reaches the same answer
+        # for a better reason: an answer deciding a change refs the
+        # result it decides (docs/tasks/0025 §B), so there is a `refs`
+        # edge between them, and an edge beats a stamp. Where there is
+        # no edge and the stamps tie, `record_is_before` is False and
+        # the decision still stands — the same tie behaviour as before.
+        newest_proposal = castle.newest_record(proposals)
+        for rec in castle.order_records(records.values()):
             if rec.type != "answer" or newest_proposal.id not in rec.refs:
                 continue
             verdict = rec.fields.get("decision", "").strip()
-            if not verdict or _stamp_of(rec.id) < _stamp_of(base_source_id):
+            if not verdict or (
+                base_source is not None and castle.record_is_before(rec, base_source)
+            ):
                 continue
             # "approved — nothing applied yet" and not "approved"
             # alone. The same discipline the review surface states to
@@ -2353,28 +2333,23 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # nowhere. Verified, not theorised (code review on
             # docs/tasks/0026-apply-validate.md, finding 2).
             #
-            # ACCEPTED LIMIT, the same one `proposals[-1]` above carries
-            # and inherited rather than worked around: `applies[-1]` is
-            # "newest" only across seconds, so a hand retry landing in
-            # the same second as the attempt it retries can be described
-            # by the wrong one of the two. The bug is the id format —
-            # docs/tasks/0046-record-ordering-helper.md,
-            # which records that patching one more call site would make
-            # the fifth local workaround and still leave the next fold
-            # to rediscover it. What bounds the damage here: both
-            # records are apply attempts on the same approval, so the
-            # label is wrong about which attempt rather than about what
-            # kind of thing happened, and the next second resolves it.
-            applies = sorted(
-                (
-                    other
-                    for other in downstream
-                    if other.type == "result"
-                    and other.refs
-                    and other.refs[0] == rec.id
-                    and other.fields.get("seat") == castle.APPLIER_SEAT
-                ),
-                key=lambda other: other.id,
+            # REMAINING LIMIT, the same one the proposal selection
+            # above carries, for the same reason and now through the
+            # same helper (docs/tasks/0046): a hand retry landing in the
+            # same second as the attempt it retries has no `refs` edge
+            # to the attempt and the same stamp, so the two tie and this
+            # describes one of them arbitrarily. What bounds the damage
+            # here: both records are apply attempts on the same
+            # approval, so the label is wrong about which attempt rather
+            # than about what kind of thing happened, and the next
+            # second resolves it.
+            applies = castle.order_records(
+                other
+                for other in downstream
+                if other.type == "result"
+                and other.refs
+                and other.refs[0] == rec.id
+                and other.fields.get("seat") == castle.APPLIER_SEAT
             )
             if applies:
                 newest_apply = applies[-1]
@@ -2436,10 +2411,11 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
 
 def run_status(castle, limit: int, out=sys.stdout) -> int:
     records = castle.load_all(castle.journal_dir())
-    requests = sorted(
-        (rec for rec in records.values() if rec.type == "request"),
-        key=lambda rec: rec.id,
-        reverse=True,
+    # Newest first, so `limit` keeps the most recent errands — the
+    # shared ordering read backwards, never a second sort rule
+    # (docs/tasks/0046).
+    requests = list(
+        reversed(castle.order_records(rec for rec in records.values() if rec.type == "request"))
     )[:limit]
 
     if not requests:
@@ -2460,9 +2436,8 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
         first_line = req.body.strip().splitlines()[0] if req.body.strip() else "(no description)"
         print(f"[{req.id}] {req.fields.get('provenance', '?')} — {state}", file=out)
         print(f"    asked: {first_line}", file=out)
-        decisions = sorted(
-            (rec for rec in downstream if rec.type == "decision"),
-            key=lambda rec: rec.id,
+        decisions = castle.order_records(
+            rec for rec in downstream if rec.type == "decision"
         )
         for decision in decisions:
             channel = decision.fields.get("channel", "")

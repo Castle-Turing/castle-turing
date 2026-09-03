@@ -225,6 +225,19 @@ applier). No human steps.
   preserved deliberately rather than changed — argued above.
 - **`cmd_validate`'s two passes swept for uniformity**, though only
   the order of error messages depends on them.
+- **`_pending_questions` gained a `castle` parameter.** It was the one
+  fold in `castle-modal` with no handle on the `castle` module, since it
+  needed nothing from it; it does now. First-parameter `castle` is what
+  every other helper in that file already does, so the alternative —
+  reaching for a module-level global that file deliberately does not
+  have — would have been the novel thing.
+- **`agent/README.md` gained an "Ordering records" section**, and its
+  answer-picker paragraph lost a sentence that is now false ("ordering
+  is by full record id … chronological only to one-second
+  granularity"). Not scope creep: that paragraph described the old
+  behaviour, and the repo's rule is that docs are written for a
+  stranger. A stranger reading it after this change would have been
+  told the wrong thing.
 - **Old briefs' citations repointed.** `docs/tasks/0025-approval.md`,
   `docs/tasks/0026-apply-validate.md`, `test/agent-loop/apply.sh` and
   `agent/castle` all cite the backlog entry by path; a promoted entry

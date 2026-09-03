@@ -103,6 +103,18 @@ jobs:
       # respecting castle.agent.stateDir. Same job as state-layout.sh for
       # the same reason: no Nix, only castle and stdlib python3.
       - run: test/agent-loop/stray-state-dir.sh
+      # The shared record ordering
+      # (docs/tasks/0046-record-ordering-helper.md): record ids carry a
+      # one-second stamp and a random suffix, so sorting by the whole id
+      # is chronological only across seconds — a hazard that produced a
+      # defect in four separate tasks before one comparison replaced the
+      # per-surface ones. Pins the rule (a `refs` edge beats a stamp, a
+      # stamp beats the suffix, and a genuine tie is said rather than
+      # guessed) and pins the thing that keeps it shared: that no fold in
+      # either script has gone back to sorting by `rec.id`. In this job
+      # for the same reason as the two above, and cheaper than either —
+      # the helpers are pure, so it touches no journal at all.
+      - run: test/agent-loop/record-order.sh
 
   # Automatic dispatch (docs/tasks/0021-auto-dispatch.md): the sweep a
   # systemd path unit and timer trigger on a real host, driven directly

@@ -62,6 +62,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+import heapq
 import json
 import os
 import pathlib
@@ -725,6 +726,179 @@ def make_id(record_type: str, now: dt.datetime | None = None) -> str:
     ts = now.strftime(ID_TIMESTAMP_FMT)
     suffix = os.urandom(3).hex()
     return f"{ts}-{record_type}-{suffix}"
+
+
+# ---------------------------------------------------------------------------
+# Ordering records (docs/tasks/0046-record-ordering-helper.md)
+#
+# THE one comparison. Every fold that puts records in order — in this
+# file and in castle-modal — goes through what follows, and a CI check
+# (test/agent-loop/record-order.sh) fails the build if any of them sorts
+# by `rec.id` again.
+#
+# The reason it is centralised rather than written well in each place is
+# a record of four defects: sorting records by their whole id is
+# chronological only across seconds, because `make_id` puts a
+# one-second stamp in front and a *random* suffix behind, so within one
+# second the type name decides and then a coin does. That produced a
+# defect in docs/tasks/0023, in 0024, in 0025's harness, and in 0025's
+# status overlay — where `_errand_state` fell into it twelve lines below
+# a paragraph correctly explaining it. A hazard that defeats an author
+# who has just finished writing about it does not get fixed by a fifth
+# local workaround.
+# ---------------------------------------------------------------------------
+
+
+def stamp_of(record_id: str) -> str:
+    """The UTC timestamp a record id begins with, and nothing else.
+
+    Ids are `<stamp>-<type>-<random suffix>`, so comparing two of them
+    whole compares the type name whenever the stamps tie — which makes
+    an `...-answer-...` look older than a `...-result-...` written in
+    the same second, by alphabet rather than by time. Nothing outside
+    this section should need this; use the ordering helpers below.
+    """
+    return record_id.split("-", 1)[0]
+
+
+def record_is_before(earlier: Record, later: Record) -> bool:
+    """Does the journal actually say `earlier` was written first?
+
+    Two questions in order, and a refusal:
+
+    1. **A `refs` edge between the two wins, over any timestamp.** A
+       record can only name one that already exists, so `later refs
+       earlier` is direct evidence of order — stronger than a stamp,
+       and the only evidence that survives a clock that moved, a
+       restored journal, or two processes disagreeing about the time.
+       docs/tasks/0025's decision-versus-result tie-break is this rule
+       and not a special case: an answer deciding a proposed change
+       refs `[question, result]` (0025 §B), so "a decision can only
+       exist after the change it decides" is already written in the
+       record's own `refs`.
+    2. **Otherwise the timestamp half of the id**, never the whole id.
+    3. **Otherwise they genuinely tie**, and this returns False in both
+       directions rather than inventing an order. A caller that needs
+       one anyway has `order_records`, which is honest about the fact
+       that it is picking.
+
+    Only a *direct* edge counts. Reachability across the whole journal
+    is a different and far more expensive question, no caller here asks
+    it, and answering it quietly under this name would be worse than
+    not answering it.
+    """
+    if earlier.id == later.id:
+        return False
+    later_names_earlier = earlier.id in later.refs
+    earlier_names_later = later.id in earlier.refs
+    if later_names_earlier != earlier_names_later:
+        return later_names_earlier
+    # Mutual naming is not possible in an append-only journal and would
+    # mean a hand-edited one; it is not evidence either way, so it
+    # falls through to the stamps like any unrelated pair.
+    return stamp_of(earlier.id) < stamp_of(later.id)
+
+
+def order_records(records) -> list[Record]:
+    """Records oldest first: a total, deterministic order.
+
+    `record_is_before` may refuse to order a pair; a list may not, so
+    this one picks — timestamp, then `refs` edges, then the whole id
+    for records nothing else distinguishes. **That last step is
+    arbitrary.** It is not evidence about time and must never be read
+    as any; what it buys is that the arbitrary choice is identical on
+    every invocation and identical on every surface, which is what a
+    picker needs (the number a resident presses means the same thing
+    for as long as the list is on screen) and what makes two surfaces
+    unable to disagree about one errand.
+
+    Mechanically a Kahn topological sort over the `refs` edges *among
+    the records being ordered*, with the ready set prioritised by
+    `(stamp, whole id)` — which is exactly "timestamp order, except
+    that a record is held back until everything it names has been
+    emitted."
+    """
+    pool = list(records)
+    if len(pool) < 2:
+        return pool
+
+    rank = {
+        index: position
+        for position, index in enumerate(
+            sorted(range(len(pool)), key=lambda i: (stamp_of(pool[i].id), pool[i].id))
+        )
+    }
+    # First occurrence wins if a caller somehow passes the same id
+    # twice: the journal is keyed by id, so this is defensive only.
+    index_of_id: dict[str, int] = {}
+    for index, rec in enumerate(pool):
+        index_of_id.setdefault(rec.id, index)
+
+    waiting_for: dict[int, set] = {index: set() for index in range(len(pool))}
+    unblocks: dict[int, list] = {index: [] for index in range(len(pool))}
+    for index, rec in enumerate(pool):
+        for ref in rec.refs:
+            named = index_of_id.get(ref)
+            if named is None or named == index or rec.id in pool[named].refs:
+                continue
+            waiting_for[index].add(named)
+            unblocks[named].append(index)
+
+    ready = [(rank[i], i) for i in range(len(pool)) if not waiting_for[i]]
+    heapq.heapify(ready)
+    ordered: list[Record] = []
+    emitted: set = set()
+    while len(ordered) < len(pool):
+        if not ready:
+            # A cycle in `refs`, which an append-only journal cannot
+            # produce — a record's refs are resolved before it is
+            # written — so this means a hand-edited one. Break it at
+            # the earliest still-unemitted record and carry on: a
+            # status surface that raises on a malformed journal is
+            # worse than one that orders it oddly.
+            stuck = min(set(range(len(pool))) - emitted, key=lambda i: rank[i])
+            waiting_for[stuck] = set()
+            heapq.heappush(ready, (rank[stuck], stuck))
+        _, index = heapq.heappop(ready)
+        if index in emitted:
+            continue
+        emitted.add(index)
+        ordered.append(pool[index])
+        for blocked in unblocks[index]:
+            waiting_for[blocked].discard(index)
+            if not waiting_for[blocked] and blocked not in emitted:
+                heapq.heappush(ready, (rank[blocked], blocked))
+    return ordered
+
+
+def oldest_record(records) -> Record | None:
+    """The first of `order_records`, or None. Arbitrary among a tie."""
+    ordered = order_records(records)
+    return ordered[0] if ordered else None
+
+
+def newest_record(records) -> Record | None:
+    """The last of `order_records`, or None. Arbitrary among a tie —
+    ask `tied_for_newest` when that matters."""
+    ordered = order_records(records)
+    return ordered[-1] if ordered else None
+
+
+def tied_for_newest(records) -> list[Record]:
+    """Every record nothing orders before the newest one — the honest
+    answer where `newest_record` gives a convenient one.
+
+    More than one member means the journal genuinely cannot say which
+    of them happened last, and "two changes finished at once" is a
+    legitimate thing for a surface to render. Confidently reporting one
+    of two possibilities is how several of the defects behind this
+    section reached a resident.
+    """
+    ordered = order_records(records)
+    if not ordered:
+        return []
+    newest = ordered[-1]
+    return [rec for rec in ordered if not record_is_before(rec, newest)]
 
 
 # ---------------------------------------------------------------------------
@@ -2270,10 +2444,12 @@ def _filing_context() -> dict[str, str]:
 
     context: dict[str, str] = {}
     if notify_decisions:
-        # Ids are sortable timestamps (make_id) — the same ordering
-        # cmd_route and cmd_digest already sort by — so the lexically
-        # greatest id is the most recent notify decision.
-        context["context-last-notify"] = max(notify_decisions, key=lambda rec: rec.id).id
+        # The shared ordering (docs/tasks/0046), the same one cmd_route
+        # and cmd_digest fold by, so "most recent" means one thing
+        # everywhere. Two notify decisions in the same second with no
+        # edge between them tie, and this cites one of them; it is a
+        # context hint for a tenant, not an account of anything.
+        context["context-last-notify"] = newest_record(notify_decisions).id
     # No key at all when none exists (not an empty-string value): a
     # blank frontmatter value and a genuinely absent field read the same
     # to a human skimming the file, but only "absent" honestly says
@@ -3266,7 +3442,7 @@ def _route_journal_locked() -> int:
         for rec in records.values()
         if rec.type in ("result", "question") and rec.id not in already_routed
     ]
-    to_route.sort(key=lambda r: r.id)
+    to_route = order_records(to_route)
 
     appended = []
     for rec in to_route:
@@ -3875,13 +4051,10 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
     # Deliberately NOT the same test `_requests_with_results` uses for
     # eligibility, which stays broad; see its docstring for why the two
     # folds read the same records by different rules on purpose.
-    results = sorted(
-        (
-            rec
-            for rec in records.values()
-            if rec.type == "result" and rec.refs and rec.refs[0] == request.id
-        ),
-        key=lambda rec: rec.id,
+    results = order_records(
+        rec
+        for rec in records.values()
+        if rec.type == "result" and rec.refs and rec.refs[0] == request.id
     )
     for index, result in enumerate(results, start=1):
         section(
@@ -3889,24 +4062,18 @@ def render_continuation_packet(records: dict[str, Record], request: Record) -> s
             result.body,
         )
 
-    questions = sorted(
-        (
-            rec
-            for rec in records.values()
-            if rec.type == "question"
-            and (root := _find_root_request(records, rec)) is not None
-            and root.id == request.id
-        ),
-        key=lambda rec: rec.id,
+    questions = order_records(
+        rec
+        for rec in records.values()
+        if rec.type == "question"
+        and (root := _find_root_request(records, rec)) is not None
+        and root.id == request.id
     )
     for question in questions:
-        answers = sorted(
-            (
-                rec
-                for rec in records.values()
-                if rec.type == "answer" and question.id in rec.refs
-            ),
-            key=lambda rec: rec.id,
+        answers = order_records(
+            rec
+            for rec in records.values()
+            if rec.type == "answer" and question.id in rec.refs
         )
         # The identical test the eligibility fold uses, via the same
         # function, so the packet can never describe a question
@@ -5614,7 +5781,7 @@ def closing_result(
     request_id = claim.refs[0] if claim.refs else ""
     named = [rec for rec in results if claim.id in rec.refs]
     if named:
-        return max(named, key=lambda rec: rec.id)
+        return newest_record(named)
     if not request_id:
         return None
     # Keyed the way the reaper keys a claim to an errand — `refs[0]` —
@@ -5628,11 +5795,20 @@ def closing_result(
         rec
         for rec in results
         if request_id in rec.refs
-        and rec.id > claim.id
+        # "Newer than the claim", and on a tie the answer is yes —
+        # deliberately, which is the one place docs/tasks/0046's sweep
+        # had to choose rather than inherit. `rec.id > claim.id` used to
+        # say yes on a tie too, but by alphabet (`claim` sorts before
+        # `result`) rather than on purpose. The shape this clause exists
+        # for is a resident closing a crashed errand by hand, and the
+        # cost of resolving that tie the other way is the reaper writing
+        # a permanent `interrupted` over a result they just filed —
+        # exactly the regression clause (b) was added to prevent.
+        and not record_is_before(rec, claim)
         and not any(ref in request_claim_ids for ref in rec.refs)
     ]
     if by_recency:
-        return max(by_recency, key=lambda rec: rec.id)
+        return newest_record(by_recency)
     return None
 
 
@@ -5731,8 +5907,8 @@ def _find_watermark(records: dict[str, Record]) -> Record | None:
     if not candidates:
         return None
     # The earliest one ever written is the real boundary, if a second
-    # somehow exists — ids sort chronologically by construction.
-    return min(candidates, key=lambda rec: rec.id)
+    # somehow exists, under the shared ordering (docs/tasks/0046).
+    return oldest_record(candidates)
 
 
 def _write_watermark(records: dict[str, Record]) -> str:
@@ -5846,9 +6022,7 @@ def _reap_interrupted(records: dict[str, Record]) -> list[str]:
     # docstring, especially clause (b), which is what stops this reaper
     # contradicting a resident who closed the errand by hand.
     results = [rec for rec in records.values() if rec.type == "result"]
-    claims = sorted(
-        (rec for rec in records.values() if rec.type == "claim"), key=lambda rec: rec.id
-    )
+    claims = order_records(rec for rec in records.values() if rec.type == "claim")
     for claim in claims:
         refs = claim.refs
         if not refs:
@@ -6052,7 +6226,7 @@ def _resumable_answers(records: dict[str, Record], request_id: str) -> list[Reco
         and rec.fields.get("seat") == "intake"
         and any(ref in question_ids for ref in rec.refs)
     }
-    return [resumable[rec_id] for rec_id in sorted(resumable)]
+    return order_records(resumable.values())
 
 
 def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[Record]:
@@ -6138,8 +6312,7 @@ def _eligible_requests(records: dict[str, Record], excluded: set[str]) -> list[R
         # written, so a held lease is the earlier, stricter signal.
         and not lease_is_held(rec.id)
     ]
-    eligible.sort(key=lambda rec: rec.id)
-    return eligible
+    return order_records(eligible)
 
 
 def cmd_dispatch(args: argparse.Namespace) -> int:
@@ -6758,8 +6931,7 @@ def _eligible_approvals(records: dict[str, Record]) -> list[Record]:
         and rec.id not in named_by_results
         and _approval_binding(records, rec)[0] is not None
     ]
-    eligible.sort(key=lambda rec: rec.id)
-    return eligible
+    return order_records(eligible)
 
 
 def _reconcile_in_flight(records: dict[str, Record]) -> list[str]:
@@ -8816,8 +8988,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
     if args.since:
         requests = [rec for rec in requests if rec.fields.get("created", "") >= args.since]
         corrections = [rec for rec in corrections if rec.fields.get("created", "") >= args.since]
-    requests.sort(key=lambda r: r.id)
-    corrections.sort(key=lambda r: r.id)
+    requests = order_records(requests)
+    corrections = order_records(corrections)
 
     if not requests and not corrections:
         print("No errands recorded.")
@@ -8842,10 +9014,9 @@ def cmd_digest(args: argparse.Namespace) -> int:
         # Corrections section below — contradicting both this function's
         # docstring and that section's own preamble ("Not an errand").
         # Corrections render in exactly one place: their own section.
-        downstream = [
+        downstream = order_records(
             rec for rec in _collect_downstream(records, req.id) if rec.type != "correction"
-        ]
-        downstream.sort(key=lambda r: r.id)
+        )
         for rec in downstream:
             print(f"### {rec.type} {rec.id} (seat: {rec.fields.get('seat')})")
             if rec.type == "decision":
@@ -9397,7 +9568,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     # here rather than in the per-file pass above because both need the
     # whole journal resolved.
     decided: dict[str, str] = {}
-    for rec in sorted(records.values(), key=lambda r: r.id):
+    for rec in order_records(records.values()):
         if rec.type != "answer" or rec.fields.get("decision") is None:
             continue
         # Shape, not mere existence. The ref-existence pass above says
@@ -9467,7 +9638,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     # genuine environment fault writes. The status fold already renders
     # both with the hand-retry remedy. All this owes is that a
     # *malformed* one is named rather than passed over.
-    for rec in sorted(records.values(), key=lambda r: r.id):
+    for rec in order_records(records.values()):
         if rec.type != "result":
             continue
         if (

@@ -532,11 +532,10 @@ castle-modal --mode review  [--question ID]
   them." names the rest and `m` turns the page, wrapping to the first
   after the last: a cap with no way past it would make question ten
   unreachable, on a surface whose fold exists so that nothing can be
-  hidden. Ordering is by full record id, which is **deterministic and
+  hidden. Ordering is `castle.order_records`, the shared comparison
+  described under "Ordering records" below, which is **deterministic and
   identical on every invocation** — that is what makes a screen-relative
-  number safe to press — and chronological only to one-second
-  granularity, since ids carry a random suffix and same-second questions
-  sort by it. One keypress picks one; **any key that selects nothing
+  number safe to press. One keypress picks one; **any key that selects nothing
   closes the window immediately, writing nothing anywhere** — the
   keypress is the dismissal, and there is no code path from it to a
   write. A picked question is then shown in full, verbatim and never
@@ -783,6 +782,34 @@ Extra fields beyond this minimum set are allowed and ignored by
 `validate` — `castle route` adds a `channel` field (`notify` or
 `digest`) to the decision records it writes, purely so `castle digest`
 doesn't have to re-derive it from prose.
+
+### Ordering records
+
+An id is sortable, but it is **not a clock**. The stamp is one-second
+resolution, and what follows it is the record type and six random hex
+characters — so sorting records by the whole id is chronological only
+across seconds, and within one second it orders by type name and then
+by chance. That is not a hypothetical: it produced a defect in four
+separate tasks before it was fixed in one place
+(`docs/tasks/0046-record-ordering-helper.md`).
+
+So nothing orders records by hand. `agent/castle` exports one
+comparison and four helpers over it, and every fold in `castle` and
+`castle-modal` uses them — a CI check
+(`test/agent-loop/record-order.sh`) fails the build if any of them goes
+back to sorting by `rec.id`:
+
+| Helper | What it answers |
+|--------|-----------------|
+| `record_is_before(a, b)` | Did the journal actually record `a` first? A `refs` edge between the two wins over any timestamp — a record can only name one that already exists — then the timestamp half of the id, and if neither says anything the two genuinely tie and this is `False` both ways. |
+| `order_records(records)` | Oldest first, as a total order. Where two records tie it picks, deterministically and identically on every surface, by the whole id. **That last step is arbitrary and is not evidence about time.** |
+| `oldest_record` / `newest_record` | The ends of `order_records`, or `None`. Arbitrary among a tie. |
+| `tied_for_newest(records)` | Every record nothing orders before the newest. More than one means the journal cannot say which happened last, and a surface is free to say so — "two changes finished at once" is a legitimate rendering, and better than confidently naming one of two possibilities. |
+
+None of this changes the record format. The journal is append-only:
+every record ever written stays exactly as it is, so the ordering has
+to read today's directory correctly and forever, which is why it reads
+only what ids and `refs` already carry.
 
 ### The considered set and the selection propensity
 
