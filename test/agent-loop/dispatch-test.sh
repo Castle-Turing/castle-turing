@@ -810,17 +810,20 @@ log "the worker's two output files are allocated under the state dir, not under 
 #
 # Asserted on the paths the tenant is actually handed, reported by the
 # tenant itself, rather than on anything this script can infer from the
-# outside — the handoff is the thing that broke.
+# outside — the handoff is the thing that broke. All THREE of them since
+# docs/tasks/0042-finding-outbox.md, which added $CASTLE_FINDING_FILE
+# beside the other two and inherits every word of the argument above.
 SCRATCH_WITNESS="$WORKDIR/scratch-witness.txt"
 WORKER_SCRATCH="$WORKDIR/worker-scratch.sh"
 cat > "$WORKER_SCRATCH" <<'TENANT'
 #!/usr/bin/env bash
 set -euo pipefail
 cat > /dev/null
-printf '%s\n%s\n' "$CASTLE_DIFF_FILE" "$CASTLE_TARGET_FILE" > "$SCRATCH_WITNESS_OUT"
+printf '%s\n%s\n%s\n' "$CASTLE_DIFF_FILE" "$CASTLE_TARGET_FILE" "$CASTLE_FINDING_FILE" \
+  > "$SCRATCH_WITNESS_OUT"
 printf -- '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n' > "$CASTLE_DIFF_FILE"
 printf 'private\n' > "$CASTLE_TARGET_FILE"
-echo "worker-scratch: wrote both deliverables where it was told to"
+echo "worker-scratch: wrote its deliverables where it was told to"
 TENANT
 chmod +x "$WORKER_SCRATCH"
 
@@ -829,6 +832,7 @@ SCRATCH_WITNESS_OUT="$SCRATCH_WITNESS" CASTLE_WORKER_COMMAND="$WORKER_SCRATCH" \
   "$CASTLE" dispatch >/dev/null 2>&1 || fail "the scratch-witness sweep exited nonzero"
 [ -f "$SCRATCH_WITNESS" ] || fail "the tenant never ran, so nothing was learned about the paths it was handed"
 while read -r HANDED; do
+  [ -n "$HANDED" ] || continue
   case "$HANDED/" in
     "$CASTLE_STATE_DIR"/work/*) ;;
     *) fail "the tenant was handed $HANDED, which is not under $CASTLE_STATE_DIR/work — the /tmp allocation is back" ;;
@@ -957,7 +961,8 @@ printf 'CASTLE-PACKET-0123456789abcdef a probe packet, not a real errand\n' > "$
 rm -f "$CLAUDE_WITNESS"
 if PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
   CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$WORKDIR/outside-the-sandbox-diff" \
-  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
+  CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
   > "$WORKDIR/sandbox-refusal.out" 2>&1; then
   fail "castle-worker-claude accepted a deliverable path outside the sandbox it declares it runs under"
@@ -976,7 +981,8 @@ log "  -- and the positive control: the same call with both paths inside the san
 rm -f "$CLAUDE_WITNESS"
 PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
   CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" \
-  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
+  CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
   > "$WORKDIR/sandbox-accepted.out" 2>&1 \
   || fail "castle-worker-claude refused paths that are inside the sandbox it declares: $(cat "$WORKDIR/sandbox-accepted.out")"
@@ -994,6 +1000,7 @@ PROMPT_RENDER_0039="$WORKDIR/render-tenant-0039.sh"
 sed 's|^exec claude.*|cat <\&3|' "$REPO_ROOT/agent/castle-worker-claude" > "$PROMPT_RENDER_0039"
 RENDERED_0039="$(HOME="$SANDBOX_HOME" CASTLE_REQUEST_ID=probe \
   CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" CASTLE_TARGET_FILE="$SANDBOX_HOME/target" \
+  CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
   CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   bash "$PROMPT_RENDER_0039" < "$SANDBOX_PACKET" 2>&1 | tr -s '[:space:]' ' ')"
 printf '%s' "$RENDERED_0039" | grep -qF 'THOSE TWO PATHS ARE THE ONLY CHANNEL' \

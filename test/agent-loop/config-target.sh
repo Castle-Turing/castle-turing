@@ -798,14 +798,14 @@ render_prompt() {
   # $1 is one of: usable | invalid | absent
   local packet='CASTLE-PACKET-0123456789abcdef a rendering probe, not a real packet'
   case "$1" in
-    usable)  env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
+    usable)  env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" CASTLE_FINDING_FILE="$RENDER_HOME/finding" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT="$MECHANISM" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
-    invalid) env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
+    invalid) env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" CASTLE_FINDING_FILE="$RENDER_HOME/finding" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT_INVALID="$NOT_A_CHECKOUT" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
     absent)  env -u CASTLE_MECHANISM_ROOT -u CASTLE_MECHANISM_ROOT_INVALID \
-               HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
+               HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" CASTLE_FINDING_FILE="$RENDER_HOME/finding" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
   esac
@@ -834,6 +834,23 @@ printf '%s' "$R_USABLE" | grep -qF "$MECHANISM/tools/font-sweep.sh" \
   || fail "the usable-mechanism prompt does not point at the sweep tool that really is there"
 printf '%s' "$R_USABLE" | grep -qF 'no mechanism checkout is configured' \
   && fail "the usable-mechanism prompt claims none is configured"
+
+# The finding lane, in the state where it is meant to be usable
+# (docs/tasks/0042-finding-outbox.md §2). A prompt rule that nothing
+# checks is a comment, which is why 0039 pinned its own rule here; this
+# pins the format paragraph that is the ONLY documentation of the work
+# item format anywhere, by design — there is no schema document to
+# check it against.
+printf '%s' "$R_USABLE" | grep -qF "$RENDER_HOME/finding" \
+  || fail "the rendered prompt never names the finding file the tenant was handed"
+printf '%s' "$R_USABLE" | grep -qF 'Title: and Destination: are both required' \
+  || fail "the rendered prompt does not state the two required header keys"
+printf '%s' "$R_USABLE" | grep -qF 'LEAVE THE FILE EMPTY' \
+  || fail "the rendered prompt does not say an empty finding file is the ordinary case"
+printf '%s' "$R_USABLE" | grep -qF 'There is no schema, no version field and no registry' \
+  || fail "the rendered prompt has lost the restraint that is half the point of the format"
+printf '%s' "$R_USABLE" | grep -qF 'nothing about your resident, their machine or their words may appear in it' \
+  || fail "the rendered prompt does not tell the tenant a finding becomes a public file"
 
 # The positive control for the searches above: the phrase they hunt
 # for must really be findable in the one state where it belongs, or

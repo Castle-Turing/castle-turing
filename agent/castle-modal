@@ -2479,6 +2479,41 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
                 # request is exactly the explanation the resident wants
                 # for why nothing is happening on its own.
                 print(f"    noted: {evidence}", file=out)
+        # The reporting half of a made-then-reported authority
+        # (docs/tasks/0042-finding-outbox.md §4). No approval question
+        # is ever filed for a finding — the resident's judgment is
+        # spent once, at the eventual pull request, not twice — so this
+        # line and the digest's are the whole of how they learn one
+        # landed. It names the branch and the checkout, which are what a
+        # resident needs to go look.
+        #
+        # Reachable at all because `_collect_downstream` is transitive
+        # over `refs`: an outbox record names the worker result, which
+        # names the request. It is deliberately NOT in `_errand_state`'s
+        # fold — filing a finding is not a turn of the errand, and the
+        # refs that keep it out of that fold are the same ones that keep
+        # it away from `closing_result`.
+        findings = sorted(
+            (rec for rec in downstream if rec.fields.get("seat") == castle.OUTBOX_SEAT),
+            key=lambda rec: rec.id,
+        )
+        for finding in findings:
+            outcome = finding.fields.get(castle.FINDING_OUTCOME_FIELD, "?")
+            branch = finding.fields.get(castle.FINDING_BRANCH_FIELD, "")
+            where = finding.fields.get(castle.FINDING_DESTINATION_FIELD, "")
+            # Read off FIELDS, never off the body. Both are stamped only
+            # on the `filed` path, so a refusal renders as its outcome
+            # and its own first line — which is the sentence drafted for
+            # exactly that job — rather than as a branch name this seat
+            # would have to invent.
+            if branch and where:
+                print(f"    finding -> {outcome}: {branch} in the {where} checkout", file=out)
+            else:
+                first = finding.body.strip().splitlines()
+                print(
+                    f"    finding -> {outcome}: {first[0] if first else '(no account)'}",
+                    file=out,
+                )
         print(file=out)
     _pause_for_dismissal(out)
     return 0
