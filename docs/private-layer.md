@@ -812,6 +812,19 @@ which would then fire on a sibling state repository that happens to
 contain an unrelated flake. If you keep your flake in a subdirectory,
 this check will not help you; the rest of this section still does.
 
+**A second, independent check catches a different mistake in the same
+migration.** `castle validate` and `castle digest` also look for a
+directory shaped like a journal — `state/journal` — sitting under
+`$CASTLE_PRIVATE_ROOT`, and warn if one is there and it is not the
+journal `castle.agent.stateDir` actually resolved to. This is not the
+store-publishing question above; it fires whether or not the leftover
+directory was ever tracked in git, because the hazard it is naming is
+different: something reading for a journal under your private checkout
+instead of respecting `castle.agent.stateDir` and finding this one
+first, silently working from stale, superseded records. It happens
+exactly when step 2 below ("Only now remove the old directory") gets
+skipped, and clears the moment that step is actually done.
+
 ### Two things worth repeating
 
 Both are from `docs/architecture.md`, and both hold for whichever
@@ -920,10 +933,12 @@ artifact you least want to be relying on.
    that is what copy-first buys you. Add the flag and re-run.
 
 3. **Repoint `castle.agent.stateDir`** at the new location and
-   rebuild. Run `castle validate`; the warning above should be gone.
-   (For the submodule layout the path does not change — the directory
-   is in the same place, holding the same files, by a different
-   mechanism.)
+   rebuild. Run `castle validate`; the warning above should be gone. If
+   step 2 was skipped or only partly done, `castle validate` says so
+   too — see "`castle` will tell you if you get this wrong" above, the
+   second check. (For the submodule layout the path does not change —
+   the directory is in the same place, holding the same files, by a
+   different mechanism.)
 4. **Run `nix-collect-garbage`** once the move is committed and
    rebuilt, or wait for the host's normal GC schedule.
 
