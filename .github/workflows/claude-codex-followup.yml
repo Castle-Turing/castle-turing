@@ -10,6 +10,23 @@
 #   - One concurrency slot per PR: stacked Codex reviews collapse into the
 #     latest run instead of queueing repeated responses.
 #   - Same-repo branches only: never runs with write access against a fork.
+#
+# Receipt verification, by construction (docs/tasks/0045):
+#   - A model's own report that it posted something is a claim, not
+#     evidence — see the PR #73 incident where the prompt described a
+#     summary comment as posted and it never landed. Two independent
+#     checks, neither something the prompt can talk its way around:
+#       - The "Wrap gh" step shadows `gh` on PATH with a shim that logs
+#         every failing `gh` invocation; "Fail loudly if any gh call
+#         failed" checks that log, not the model's narration. This
+#         catches a post that was attempted and rejected.
+#       - "Confirm the review's receipts actually landed" queries the
+#         forge directly afterward: every inline comment on the
+#         triggering review must now have a reply, and the PR's
+#         top-level comment count must have increased. This catches
+#         the PR #73 shape specifically — a post that was never
+#         attempted at all, which a call-failure log can't see because
+#         no call means no failure to log.
 name: Claude — handle Codex review
 
 on:
@@ -40,6 +57,34 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
+      - name: Wrap gh to catch silent posting failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          real_gh="$(command -v gh)"
+          shim_dir="$RUNNER_TEMP/gh-shim"
+          mkdir -p "$shim_dir"
+          log="$RUNNER_TEMP/gh-call-failures.log"
+          : > "$log"
+          cat > "$shim_dir/gh" <<SHIM
+          #!/usr/bin/env bash
+          "$real_gh" "\$@"
+          code=\$?
+          if [ "\$code" -ne 0 ]; then
+            printf 'FAILED (exit %s): gh %s\n' "\$code" "\$*" >> "$log"
+          fi
+          exit "\$code"
+          SHIM
+          chmod +x "$shim_dir/gh"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
+          # Snapshot the PR's top-level comment count now, before Claude
+          # runs, so "Confirm the review's receipts actually landed" can
+          # tell whether the required step-4 summary comment actually got
+          # posted rather than just claimed.
+          "$real_gh" api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}" \
+            --jq .comments > "$RUNNER_TEMP/pr-comment-count-before.txt"
+
       - name: Run Claude on Codex's findings
         uses: anthropics/claude-code-action@v1
         with:
@@ -57,15 +102,21 @@ jobs:
                findings you disagree with or that are out of the PR's scope,
                reply explaining why — never silently skip a finding. Every
                disagreement between reviewers must stay legible to the human.
-            3. Leave the receipt WHERE THE FINDING LIVES: reply directly on
-               each inline review thread (POST
-               repos/.../pulls/N/comments/COMMENT_ID/replies via gh api),
-               citing the fix commit hash or your reasoning for declining.
-               Then resolve each addressed thread via the GraphQL
-               resolveReviewThread mutation. A top-level summary without
-               inline replies is not sufficient — the human reads threads.
+            3. Leave the receipt WHERE THE FINDING LIVES: for each inline
+               review thread, POST the reply first (repos/.../pulls/N/comments/COMMENT_ID/replies
+               via gh api), citing the fix commit hash or your reasoning for
+               declining — only once that POST has actually succeeded. Then
+               resolve each addressed thread via the GraphQL
+               resolveReviewThread mutation, only after its own reply has
+               posted; never resolve a thread you have not replied to. A
+               top-level summary without inline replies is not sufficient —
+               the human reads threads.
             4. Finish with one PR comment summarizing what you fixed and what
-               you declined, with reasoning.
+               you declined, with reasoning. Never describe an artifact — a
+               reply, a resolved thread, this summary comment itself — as
+               posted unless the post call actually succeeded. If a post
+               fails, say plainly "I could not post <X>" instead of
+               describing X as if it exists.
 
             Hard rules:
             - Never write the Codex trigger phrase (the reviewer's @-mention)
@@ -76,3 +127,50 @@ jobs:
             - Do not expand the diff beyond what the findings require.
             - Follow the repository's CLAUDE.md.
           claude_args: '--allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh api:*),Bash(nix:*)"'
+
+      - name: Fail loudly if any gh call failed this run
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/gh-call-failures.log"
+          if [ -s "$log" ]; then
+            echo "::error::One or more gh calls failed during this run — a receipt (reply, resolved thread, or summary comment) may not have posted. See below:"
+            cat "$log"
+            exit 1
+          fi
+          echo "Every gh call in this run exited zero."
+
+      - name: Confirm the review's receipts actually landed
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          missing=0
+
+          # One paginated fetch covers both checks: every comment on the PR
+          # (not just this review's) carries pull_request_review_id and
+          # in_reply_to_id, so this review's own findings and their replies
+          # are both derivable from it without a second API round-trip.
+          all_comments="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+            --paginate --jq '.[]' | jq -s '.')"
+
+          unreplied="$(echo "$all_comments" | jq -c --argjson rid ${{ github.event.review.id }} '
+            ([.[] | select(.pull_request_review_id == $rid and .in_reply_to_id == null) | .id]) as $review_ids
+            | ([.[] | select(.in_reply_to_id != null) | .in_reply_to_id]) as $replied
+            | ($review_ids - $replied)')"
+
+          if [ "$unreplied" != "[]" ]; then
+            echo "::error::Review comment(s) with no reply found — a finding may have been silently skipped, not just declined without a reply: $unreplied"
+            missing=1
+          fi
+
+          before="$(cat "$RUNNER_TEMP/pr-comment-count-before.txt" 2>/dev/null || echo 0)"
+          after="$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}" --jq .comments)"
+          if [ "$after" -le "$before" ]; then
+            echo "::error::No new top-level PR comment was posted — the required summary comment (step 4) may be missing, the PR #73 failure shape this task exists to catch."
+            missing=1
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Every inline finding on this review has a reply, and a new summary comment was posted."
