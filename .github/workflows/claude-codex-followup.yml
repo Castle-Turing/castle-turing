@@ -89,11 +89,12 @@ jobs:
             3. Leave the receipt WHERE THE FINDING LIVES: for each inline
                review thread, POST the reply first (repos/.../pulls/N/comments/COMMENT_ID/replies
                via gh api), citing the fix commit hash or your reasoning for
-               declining — only once that POST has actually succeeded.
-               Resolve a thread (GraphQL resolveReviewThread mutation) only
-               after its own reply has posted; never resolve a thread you
-               have not replied to. A top-level summary without inline
-               replies is not sufficient — the human reads threads.
+               declining — only once that POST has actually succeeded. Then
+               resolve each addressed thread via the GraphQL
+               resolveReviewThread mutation, only after its own reply has
+               posted; never resolve a thread you have not replied to. A
+               top-level summary without inline replies is not sufficient —
+               the human reads threads.
             4. Finish with one PR comment summarizing what you fixed and what
                you declined, with reasoning. Never describe an artifact — a
                reply, a resolved thread, this summary comment itself — as

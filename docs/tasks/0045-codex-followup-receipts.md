@@ -140,17 +140,35 @@ narrowing the check, not just refactoring it.
 5. **Whether `claude-code-action`'s own subprocess actually resolves
    `gh` through the runner's updated `PATH`, rather than an
    absolute path fixed at the action's own install time, was not
-   verified — it could not be, without either finding and reading the
-   action's source or observing a real run.** GitHub Actions'
-   `$GITHUB_PATH` mechanism is a runner-level guarantee about the job's
-   environment for every subsequent step, which is a strong prior that
-   this works, but the action is a third-party composite/JS action and
-   its internals were not inspected. If it resolves `gh` by an
-   absolute path instead, the shim is silently never on the path the
-   model's calls run through, and the failure log stays empty even on
-   a real posting failure — a false negative. This is the single
-   biggest risk in this design and is called out explicitly in
-   Verification below as the thing this task's own PR needs to prove.
+   fully verified — it could not be, without observing a real run.**
+   `/code-review`'s verification pass fetched the published `action.yml`
+   for `anthropics/claude-code-action@v1` and confirmed it is a
+   **composite action** (`bun run .../src/entrypoints/run.ts`), not a
+   Docker action — it runs in-job on the same runner process tree the
+   "Wrap gh" step already modified, so it inherits `$GITHUB_PATH`'s
+   prepend the same way any later step would. That raises confidence
+   in this design considerably, but does not fully close the question:
+   nothing rules out the CLI or its `bun` runtime caching a resolved
+   `gh` path once per process rather than re-resolving `PATH` on every
+   invocation, and that wasn't (and couldn't cheaply be) inspected.
+   If it resolves `gh` by an absolute or cached path instead, the shim
+   is silently never on the path the model's calls run through, and
+   the failure log stays empty even on a real posting failure — a
+   false negative. This is the one remaining risk in this design and
+   is called out explicitly in Verification below as the thing this
+   task's own PR needs to prove.
+6. **`/code-review` caught a real wording regression in the prompt
+   edit, fixed in this branch's second workflow commit.** The first
+   draft of step 3 replaced "Then resolve each addressed thread via
+   the GraphQL resolveReviewThread mutation" (an unconditional command
+   to resolve every addressed thread) with "Resolve a thread ... only
+   after its own reply has posted; never resolve a thread you have not
+   replied to" — a precondition and a prohibition, but no longer a
+   command to resolve every thread it addressed. A model could satisfy
+   that wording by replying to every thread and resolving none of
+   them. Fixed by keeping "resolve each addressed thread" as the
+   command and adding the ordering constraint alongside it, rather
+   than in place of it.
 
 ## Verification
 
@@ -182,6 +200,20 @@ What was done locally:
 - `grep` across the repo confirmed the deleted backlog file had exactly
   one citation (the sibling entry, updated above) and nothing else
   referenced its path.
+- `/code-review` (scoped against `origin/main`), three finder angles:
+  reuse/simplification/efficiency found nothing; altitude/conventions
+  confirmed this is genuinely new ground (no comparable mechanism
+  elsewhere in the repo to reuse) and flagged the same PATH-resolution
+  risk as judgment call 5; correctness confirmed the heredoc's
+  YAML-dedent and `\$`-escaping are both right, fetched
+  `claude-code-action`'s `action.yml` to strengthen judgment call 5
+  (folded in above), and caught the real prompt-wording regression
+  described in judgment call 6, fixed in this branch. The remaining
+  candidate — the blanket-`gh`-failure shim can flag an unrelated
+  transient read failure as if a receipt failed to post — is the
+  tradeoff already reasoned through and accepted under "Why every
+  failing `gh` call, not just 'posting' calls," above; no further
+  change made.
 
 What only a real run proves, and what a reviewer should look for on
 this task's own PR: `claude-codex-followup.yml` triggers on
