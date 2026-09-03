@@ -20,16 +20,24 @@ posture this project keeps finding insufficient.
 
 **Fix direction.** A CI guard, not more instructions: the check
 workflow greps the tree (docs/ at minimum, plausibly everything) for
-`/home/` and fails loudly on a match, so the leak becomes a red run at
-PR time instead of a review catch. One deliberate exception mechanism
-for any legitimate literal (none known today). Optionally, the
+an operator home path and fails loudly on a match, so the leak becomes
+a red run at PR time instead of a review catch. This can't be a bare
+`/home/` literal — the tree already has legitimate matches, both real
+paths (e.g. `modules/home/default.nix`) and documented placeholders
+(e.g. `docs/private-layer.md`'s `/home/<your-login>/...`) — so the
+pattern needs to distinguish an actual resident home-directory prefix
+from those, for instance by matching `/home/<segment>` only where
+`<segment>` isn't a known placeholder token (`<...>`) and excluding
+path components like `modules/home/`. The exact pattern and exclusion
+list are for whoever specs the guard to work out; whatever ships needs
+to pass clean against the tree as it exists today. Optionally, the
 brief-writing guidance says to relativize quoted paths — but the grep
 is the load-bearing half; prompts drift.
 
 **Open questions.** Does the guard belong in this repo's CI alone, or
 also in emcee (which could relativize paths in the excerpts it hands
 to agents — fixing the composition at its source)? And should the
-`whharris/castle-turing-private` references in
+historical resident/private-repository references in
 `docs/tasks/done/0002-private-layer-slot.md` — deliberate at the time,
 predating Principle 02 — be generalized the same way, or left as
 historical record? That one is the resident's call and is explicitly
