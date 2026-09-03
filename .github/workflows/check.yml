@@ -161,6 +161,18 @@ jobs:
       # own invocation, which is how the evaluation gate is proved on a
       # runner that has none.
       - run: test/agent-loop/apply.sh
+      # Filing a worker's finding about the framework
+      # (docs/tasks/0042-finding-outbox.md): the branch commit and its
+      # journal record, the refs that keep an outbox record away from
+      # `closing_result`, an empty finding file producing nothing, and
+      # each named refusal — a bad Destination, a dirty checkout, a name
+      # already filed, a malformed entry, and no mechanism checkout at
+      # all. Its own file rather than more scenarios in apply.sh, which
+      # asserts after every one of its own that the framework checkout
+      # never moved; here that checkout is exactly what moves. In this
+      # job for the same reason apply.sh is: real `git`, real `castle
+      # work`, no Nix, zero models.
+      - run: test/agent-loop/outbox.sh
 
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and

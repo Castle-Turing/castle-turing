@@ -798,14 +798,14 @@ render_prompt() {
   # $1 is one of: usable | invalid | absent
   local packet='CASTLE-PACKET-0123456789abcdef a rendering probe, not a real packet'
   case "$1" in
-    usable)  env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
+    usable)  env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" CASTLE_FINDING_FILE="$RENDER_HOME/finding" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT="$MECHANISM" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
-    invalid) env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
+    invalid) env HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" CASTLE_FINDING_FILE="$RENDER_HOME/finding" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" CASTLE_MECHANISM_ROOT_INVALID="$NOT_A_CHECKOUT" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
     absent)  env -u CASTLE_MECHANISM_ROOT -u CASTLE_MECHANISM_ROOT_INVALID \
-               HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" \
+               HOME="$RENDER_HOME" CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$RENDER_HOME/diff" CASTLE_TARGET_FILE="$RENDER_HOME/target" CASTLE_FINDING_FILE="$RENDER_HOME/finding" \
                CASTLE_PRIVATE_ROOT="$PRIVATE" \
                bash "$PROMPT_RENDER" <<<"$packet" 2>&1 ;;
   esac

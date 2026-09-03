@@ -417,12 +417,13 @@ Scenarios, each asserting on the artifact and not on the exit status:
    record carries `finding-outcome: filed`, a `finding-commit`
    matching the branch tip, and names the branch and the path in its
    body.
-2. **The refs reasoning holds.** The outbox record's `refs` names the
-   worker result and neither the request nor the claim, and `castle
-   validate` passes. Plus the defect itself, stated as a test: a
-   dangling claim for the same errand is still reported as
-   interrupted by a dispatch sweep after the outbox record exists.
-   Without that assertion the refs paragraph is a comment.
+2. **The refs reasoning holds.** Asserted on every scenario, not just
+   the happy one: the outbox record's `refs` is the worker result
+   alone, and the request id appears nowhere in it. Then the guard
+   itself, stated as a test — a hand-written outbox record naming the
+   request is built by copying a real one and rewriting that line, and
+   `castle validate` must refuse it and cite this brief. Without that,
+   §5's paragraph is a comment.
 3. **An empty finding file produces nothing** — no branch, no outbox
    record, no commit, and a turn that is otherwise completely
    ordinary.
@@ -436,14 +437,29 @@ Scenarios, each asserting on the artifact and not on the exit status:
    text** — `CASTLE_MECHANISM_ROOT` unset, `finding-outcome:
    refused-destination-unconfigured`, and a body naming
    `castle.agent.repo.mechanism` and carrying the finding.
-7. **A malformed finding and a taken path** —
-   `refused-malformed` for a body with no header, and
+7. **A malformed finding and a taken name** — `refused-malformed` for
+   a body with no header and for one with no `Title:`, and
    `refused-already-there` for a slug that already exists on
-   `origin/main`.
-8. **The scratch file is allocated and cleaned up**, in
-   `dispatch-test.sh` where 0039's equivalent assertions already live:
-   `$CASTLE_STATE_DIR/work` holds nothing after a turn, and the
-   wrapper's sandbox declaration covers the third path.
+   `origin/main`. The fixture checkout is built with `git archive`
+   from this repository's own `HEAD`, so "already exists" means a real
+   backlog entry rather than a planted one.
+8. **The digest and the status surface both report a filed finding**,
+   naming the branch and the checkout — the reporting half of §4's
+   authority tier, which is the half a test can actually hold.
+9. **The scratch file is allocated and cleaned up.** `outbox.sh`
+   asserts `$CASTLE_STATE_DIR/work` is empty at the end of the run;
+   `dispatch-test.sh`, where 0039's equivalent assertions already
+   live, has its scratch witness extended so the tenant reports all
+   three handed-over paths and all three are checked to be under the
+   state directory.
+
+Three existing harnesses invoke `agent/castle-worker-claude` directly
+with stub deliverable paths — `dispatch-test.sh`, `resume.sh` and
+`config-target.sh` — and each gains a `CASTLE_FINDING_FILE` beside the
+two it already sets, for the reason 0039 recorded when it made the
+same kind of edit: stating "this fixture is configured the way this
+task requires" is right, where exempting the fixture from the
+mechanism standing next to it would not be.
 
 `castle validate` runs over the finished journal at the end, as every
 harness here does, and `nix flake check` runs in CI.
@@ -534,7 +550,18 @@ them open and a reviewer might have decided differently.
    keyed on them; writing §4's status line made that false in the same
    commit, and a surface grepping a body for the branch name is the
    exact defect `apply-commit` exists to have already fixed once.
-10. **The `[[…]]` link in
+10. **The reaper scenario in the verification plan became an
+    assertion on the refs plus a rejected forgery.** The plan as
+    drafted called for driving a dangling claim through a dispatch
+    sweep to prove the outbox record does not close it. Rewritten
+    during implementation: `dispatch-test.sh` already owns the
+    reaper's scenarios, and re-staging one here would have coupled
+    this harness to that machinery to prove a property that is
+    exactly "these refs, and no others". The direct assertion plus
+    `castle validate` refusing a forged record covers it without the
+    coupling — but a reviewer who wants the end-to-end version should
+    say so, because it is the stronger test.
+11. **The `[[…]]` link in
    `docs/backlog/the-worker-cited-a-rule-its-contract-does-not-
    contain.md` now points at this brief** rather than at a deleted
    entry, and the `chevaline-example/` half of the second promoted
