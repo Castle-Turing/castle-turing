@@ -367,7 +367,7 @@ DIFF_BOUNDARY_FIELD = "diff-boundary"
 # Drawing the line by comparing timestamps against the commit that
 # changed the wording would be wrong twice over: record ids are
 # one-second resolution
-# (docs/backlog/record-ids-are-only-second-resolution.md), and a
+# (docs/tasks/0046-record-ordering-helper.md), and a
 # restored or synced journal has no defensible relationship between its
 # stamps and this repo's history. The field travels with the record
 # that was shown.

@@ -18,7 +18,8 @@ reservation at `:790-838` — this task is held to it by name — plus
 "Proposing a change, and deciding it" (`:1280-1305`) and "The
 byte-exact sidecar" (`:1307-1352`). Then, in `docs/backlog/`:
 `env-stripping-defeats-write-guards.md`,
-`record-ids-are-only-second-resolution.md`,
+`record-ids-are-only-second-resolution.md` (since promoted to
+`docs/tasks/0046-record-ordering-helper.md`),
 `where-do-host-modules-live.md`,
 `approval-channel-has-no-transfer-of-control-strategy.md`,
 `a-deferred-proposal-cannot-be-revisited.md`,
@@ -256,7 +257,7 @@ stamped by the harness at filing time:
 # Drawing the line by comparing timestamps against the commit that
 # changed the wording would be wrong twice over: record ids are
 # one-second resolution
-# (docs/backlog/record-ids-are-only-second-resolution.md), and a
+# (docs/tasks/0046-record-ordering-helper.md), and a
 # restored or synced journal has no defensible relationship between
 # its stamps and this repo's history. The field travels with the
 # record that was shown.
@@ -1419,7 +1420,7 @@ The same accepted limit `proposals[-1]` carries applies to
 `applies[-1]`: ids are chronological only to one second, so a hand
 retry landing in the same second as the attempt it retries can be
 described by the wrong one of the two. Inherited from
-`docs/backlog/record-ids-are-only-second-resolution.md` rather than
+`docs/tasks/0046-record-ordering-helper.md` rather than
 worked around, on that entry's own finding that a fifth local
 workaround would not help. It inherits the enclosing
 block's two guards for free — never over a live turn, never over
@@ -1654,7 +1655,7 @@ implemented, it is named as a default.
   layer would be a different design, and this task does not start one.
 - **Sub-second record ordering.** The applier's fold picks the oldest
   eligible answer by id and inherits
-  `docs/backlog/record-ids-are-only-second-resolution.md`'s limit. It
+  `docs/tasks/0046-record-ordering-helper.md`'s limit. It
   is bounded here: two approvals in one second are applied in an
   arbitrary order, both are applied, and each names its own
   authorization. No new local workaround is added — that entry's own

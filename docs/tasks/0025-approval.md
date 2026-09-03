@@ -1099,7 +1099,7 @@ task's actual shape rather than the assumed one:
   format: the same hazard has now produced a defect in four separate
   tasks, and this function already contains a correct hand-rolled
   workaround for it twelve lines further down. Filed as
-  `docs/backlog/record-ids-are-only-second-resolution.md`, which is
+  `docs/tasks/0046-record-ordering-helper.md`, which is
   where a fix belongs — one that every fold inherits instead of each
   one rediscovering the problem. What bounds it: the "waiting on you"
   half of the label is computed independently, so a resident with an

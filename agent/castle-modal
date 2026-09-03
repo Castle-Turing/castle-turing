@@ -2245,7 +2245,7 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
     # the cross-model review, round 3.
     #
     # Not patched, because the bug is the id format rather than this
-    # line — see docs/backlog/record-ids-are-only-second-resolution.md,
+    # line — see docs/tasks/0046-record-ordering-helper.md,
     # which records that this same hazard has now produced a defect in
     # four separate tasks, including twelve lines below, where the
     # decision-versus-result comparison deliberately compares only the
@@ -2358,7 +2358,7 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
             # "newest" only across seconds, so a hand retry landing in
             # the same second as the attempt it retries can be described
             # by the wrong one of the two. The bug is the id format —
-            # docs/backlog/record-ids-are-only-second-resolution.md,
+            # docs/tasks/0046-record-ordering-helper.md,
             # which records that patching one more call site would make
             # the fifth local workaround and still leave the next fold
             # to rediscover it. What bounds the damage here: both
