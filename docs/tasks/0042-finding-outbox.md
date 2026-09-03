@@ -561,7 +561,16 @@ them open and a reviewer might have decided differently.
     `castle validate` refusing a forged record covers it without the
     coupling — but a reviewer who wants the end-to-end version should
     say so, because it is the stronger test.
-11. **The `[[…]]` link in
+11. **The outbox runs last in the turn, behind a catch-all.** It is
+    the newest and least load-bearing lane; the proposal question and
+    the byte-exact sidecar are the oldest and most. An unexpected
+    exception in the outbox must not cost a turn its proposal, so it
+    runs after both and an escaping exception becomes a line on
+    stderr rather than a raised turn. This is the one place the
+    "never silently drop" rule is relaxed, and only for faults
+    outside `finding-outcome`'s vocabulary — every reachable outcome
+    writes a record.
+12. **The `[[…]]` link in
    `docs/backlog/the-worker-cited-a-rule-its-contract-does-not-
    contain.md` now points at this brief** rather than at a deleted
    entry, and the `chevaline-example/` half of the second promoted

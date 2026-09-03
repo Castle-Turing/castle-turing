@@ -5611,12 +5611,35 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # function is absent from `env`, and the outbox therefore
         # reaches its "nowhere to file this" refusal rather than writing
         # into a directory the turn already refused to hand over.
-        if outcome == "completed" and finding_bytes.strip():
-            _file_finding(
-                result_id, finding_bytes, {"mechanism": env.get(MECHANISM_ROOT_ENV, "")}
-            )
         if stamped_target:
             _file_proposal_question(request, result_id, stamped_target)
+        if outcome == "completed" and finding_bytes.strip():
+            # **Last, and behind a catch-all.** Everything above this
+            # line is the errand's own account and the approve-and-apply
+            # chain that hangs off it; a finding is a volunteered extra.
+            # An unexpected exception here — a state directory that went
+            # away between the allocation and now, a journal write that
+            # failed — must not take the proposal question down with it,
+            # because that would turn a defect in the newest, least
+            # load-bearing lane into a lost proposal on the oldest one.
+            #
+            # Not silent: `_file_finding` writes a record on every path
+            # it can reach, including every refusal, so reaching this
+            # handler at all means something outside its own vocabulary
+            # broke, and the only honest thing left is to say so where
+            # `castle work` says everything else it could not do.
+            try:
+                _file_finding(
+                    result_id,
+                    finding_bytes,
+                    {"mechanism": env.get(MECHANISM_ROOT_ENV, "")},
+                )
+            except Exception as exc:  # noqa: BLE001 — see above
+                print(
+                    "castle work: the turn completed and its result is filed, but "
+                    f"the finding it produced could not be: {exc}",
+                    file=sys.stderr,
+                )
         return (result_id, outcome)
     finally:
         # Releasing the lease is closing the handle — the kernel would
