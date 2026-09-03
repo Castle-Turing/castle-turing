@@ -799,12 +799,25 @@ comparison and four helpers over it, and every fold in `castle` and
 (`test/agent-loop/record-order.sh`) fails the build if any of them goes
 back to sorting by `rec.id`:
 
-| Helper | What it answers |
-|--------|-----------------|
-| `record_is_before(a, b)` | Did the journal actually record `a` first? A `refs` edge between the two wins over any timestamp — a record can only name one that already exists — then the timestamp half of the id, and if neither says anything the two genuinely tie and this is `False` both ways. |
-| `order_records(records)` | Oldest first, as a total order. Where two records tie it picks, deterministically and identically on every surface, by the whole id. **That last step is arbitrary and is not evidence about time.** |
-| `oldest_record` / `newest_record` | The ends of `order_records`, or `None`. Arbitrary among a tie. |
-| `tied_for_newest(records)` | Every record nothing orders before the newest. More than one means the journal cannot say which happened last, and a surface is free to say so — "two changes finished at once" is a legitimate rendering, and better than confidently naming one of two possibilities. |
+`record_is_before(a, b)` answers "did the journal actually record `a`
+first?" A `refs` edge between the two wins over any timestamp — a
+record can only name one that already exists — then the timestamp half
+of the id; and if neither says anything, the two genuinely tie and the
+answer is `False` in both directions rather than a guess.
+
+`order_records(records)` returns them oldest first as a total order.
+Where two records tie it has to pick, and does so deterministically and
+identically on every surface, by the whole id. **That last step is
+arbitrary and is not evidence about time.** `oldest_record` and
+`newest_record` are the two ends of it, or `None` for no records, and
+are equally arbitrary among a tie.
+
+`tied_for_newest(records)` is the honest version of `newest_record`: it
+returns the run at the end of the order that nothing distinguishes.
+More than one member means the journal cannot say which of them
+happened last, and a surface is free to say so — "two changes finished
+at once" is a legitimate rendering, and a better one than confidently
+naming one of two possibilities.
 
 None of this changes the record format. The journal is append-only:
 every record ever written stays exactly as it is, so the ordering has

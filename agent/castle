@@ -885,20 +885,33 @@ def newest_record(records) -> Record | None:
 
 
 def tied_for_newest(records) -> list[Record]:
-    """Every record nothing orders before the newest one — the honest
-    answer where `newest_record` gives a convenient one.
+    """The run of records at the end of the order that nothing
+    distinguishes — the honest answer where `newest_record` gives a
+    convenient one.
 
     More than one member means the journal genuinely cannot say which
     of them happened last, and "two changes finished at once" is a
     legitimate thing for a surface to render. Confidently reporting one
     of two possibilities is how several of the defects behind this
     section reached a resident.
+
+    Read backwards from the newest, stopping at the first record the
+    journal puts before something already collected — so the answer is
+    always a contiguous tail of `order_records`, and the two helpers
+    can never contradict each other. Testing each candidate against the
+    *whole* run and not merely against `ordered[-1]` is what makes that
+    true: on a same-second chain `C refs B refs A`, C alone is newest,
+    and a check against C by itself would have called A tied with it
+    (no direct edge, same stamp) while excluding the B that sits
+    between them.
     """
-    ordered = order_records(records)
-    if not ordered:
-        return []
-    newest = ordered[-1]
-    return [rec for rec in ordered if not record_is_before(rec, newest)]
+    tied: list[Record] = []
+    for rec in reversed(order_records(records)):
+        if any(record_is_before(rec, other) for other in tied):
+            break
+        tied.append(rec)
+    tied.reverse()
+    return tied
 
 
 # ---------------------------------------------------------------------------

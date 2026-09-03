@@ -2263,9 +2263,17 @@ def _errand_state(castle, request, downstream: list, records: dict) -> str:
         # no edge and the stamps tie, `record_is_before` is False and
         # the decision still stands — the same tie behaviour as before.
         newest_proposal = castle.newest_record(proposals)
-        for rec in castle.order_records(records.values()):
-            if rec.type != "answer" or newest_proposal.id not in rec.refs:
-                continue
+        # The answers naming this proposal, not the whole journal put in
+        # order to then skip nearly all of it: `_errand_state` runs once
+        # per errand on a surface a resident is waiting in front of, and
+        # ordering three thousand records ten times over to read one
+        # verdict is a cost with nothing behind it (this task's code
+        # review, finding 3).
+        for rec in castle.order_records(
+            other
+            for other in records.values()
+            if other.type == "answer" and newest_proposal.id in other.refs
+        ):
             verdict = rec.fields.get("decision", "").strip()
             if not verdict or (
                 base_source is not None and castle.record_is_before(rec, base_source)

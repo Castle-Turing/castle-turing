@@ -26,6 +26,7 @@ log() { printf '>>> %s\n' "$*"; }
 log "ordering rules and the no-bypass guard"
 REPO_ROOT="$REPO_ROOT" python3 - <<'PYEOF'
 import importlib.machinery
+import ast
 import importlib.util
 import os
 import pathlib
@@ -147,6 +148,32 @@ check(
     not castle.record_is_before(tie_a, tie_a),
 )
 
+# A chain inside one second: only the end of it is newest, and the
+# helpers have to agree about that. `tied_for_newest` checking each
+# candidate against `ordered[-1]` alone would call the head of the
+# chain tied with its tail — no direct edge, same stamp — while
+# excluding the record in between, which is both wrong and a
+# contradiction of the order `order_records` returns for the same input
+# (this task's code review, finding 1).
+chain_a = rec("20260903T103000Z-result-aaaaaa", "result", [])
+chain_b = rec("20260903T103000Z-result-bbbbbb", "result", ["20260903T103000Z-result-aaaaaa"])
+chain_c = rec("20260903T103000Z-result-cccccc", "result", ["20260903T103000Z-result-bbbbbb"])
+chain = [chain_c, chain_a, chain_b]
+check(
+    "a same-second chain is ordered by its edges",
+    ids(castle.order_records(chain)) == [chain_a.id, chain_b.id, chain_c.id],
+    ids(castle.order_records(chain)),
+)
+check(
+    "and only the end of the chain is newest — nothing ties with it",
+    ids(castle.tied_for_newest(chain)) == [chain_c.id],
+    ids(castle.tied_for_newest(chain)),
+)
+check(
+    "the tie is always a tail of the order the same input produces",
+    ids(castle.tied_for_newest(full)) == ids(castle.order_records(full))[-len(castle.tied_for_newest(full)):],
+)
+
 # ---------------------------------------------------------------------
 # A refs edge that contradicts the stamps — a clock that moved, a
 # restored journal, two processes disagreeing about the time. The edge
@@ -206,25 +233,64 @@ check(
 # is free to not know about — which is exactly the history the task is
 # a record of.
 # ---------------------------------------------------------------------
-BANNED = [
-    (
-        re.compile(r"key=lambda\s+([A-Za-z_]\w*)\s*:\s*.*\b\1\.id\b"),
-        "sorts records by their whole id",
-    ),
-    (
-        re.compile(r"\b[A-Za-z_]\w*\.id\s*[<>]=?\s*[A-Za-z_]\w*\.id\b"),
-        "compares two record ids directly",
-    ),
-]
+# Read with `ast` rather than grepped, because the shape most likely to
+# bring id-ordering back is the one this task removed from
+# `_inbox_items` — a composite key, wrapped over several lines by the
+# repo's own formatting, with `q.id` on a line of its own. A regex over
+# lines does not see it, and a guard that passes on the exact case it
+# exists to catch is worse than no guard, because `check.yml` and
+# `agent/README.md` both advertise this one as load-bearing (this
+# task's code review, finding 2).
+def sorts_by_record_id(node):
+    """Is this `key=` argument ordering records by their whole id?"""
+    if isinstance(node, ast.Lambda):
+        parameters = {arg.arg for arg in node.args.args}
+        return any(
+            isinstance(inner, ast.Attribute)
+            and inner.attr == "id"
+            and isinstance(inner.value, ast.Name)
+            and inner.value.id in parameters
+            for inner in ast.walk(node.body)
+        )
+    # `operator.attrgetter("id")` and `functools.partial(getattr, ...)`
+    # reach the same place by another spelling.
+    if isinstance(node, ast.Call):
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if name in ("attrgetter", "itemgetter"):
+            return any(
+                isinstance(a, ast.Constant) and a.value == "id" for a in node.args
+            )
+    return False
+
+
+def compares_two_record_ids(node):
+    """`rec.id > claim.id` — ordering by id without sorting by it."""
+    if not isinstance(node, ast.Compare):
+        return False
+    if not all(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for op in node.ops):
+        return False
+    operands = [node.left] + list(node.comparators)
+    return all(
+        isinstance(operand, ast.Attribute) and operand.attr == "id"
+        for operand in operands
+    )
+
+
 offenders = []
 for name in ("castle", "castle-modal"):
     path = REPO_ROOT / "agent" / name
-    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-        if line.lstrip().startswith("#"):
-            continue
-        for pattern, why in BANNED:
-            if pattern.search(line):
-                offenders.append(f"agent/{name}:{lineno} {why}: {line.strip()}")
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for keyword in node.keywords:
+                if keyword.arg == "key" and sorts_by_record_id(keyword.value):
+                    offenders.append(
+                        f"agent/{name}:{node.lineno} sorts records by their whole id"
+                    )
+        if compares_two_record_ids(node):
+            offenders.append(
+                f"agent/{name}:{node.lineno} compares two record ids directly"
+            )
 check(
     "no fold sorts records by id behind the shared helper's back",
     not offenders,

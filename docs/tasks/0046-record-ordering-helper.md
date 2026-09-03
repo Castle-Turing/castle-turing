@@ -81,10 +81,17 @@ refuse get different tools:
   number a resident presses must mean the same thing for as long as the
   list is on screen) and what a reviewer needs (two surfaces can no
   longer disagree about one errand).
-- `tied_for_newest` returns *every* record nothing orders before the
-  newest. A caller that wants to say "two changes finished at once" —
-  which the backlog entry names as a legitimate rendering, and a better
-  one than confidently reporting one of two possibilities — can ask.
+- `tied_for_newest` returns the run at the end of the order that
+  nothing distinguishes. A caller that wants to say "two changes
+  finished at once" — which the backlog entry names as a legitimate
+  rendering, and a better one than confidently reporting one of two
+  possibilities — can ask. It is defined as a *tail* of `order_records`
+  rather than as "every record with no direct edge to the newest",
+  which is what it was first written as and which was wrong: on a
+  same-second chain `C refs B refs A` the direct-edge version called A
+  tied with C while excluding the B between them, contradicting the
+  order the same input produces. Each candidate is tested against the
+  whole run, not against `ordered[-1]` alone.
 
 Implementation note: `order_records` is a Kahn topological sort over the
 `refs` edges among the records being ordered, with the ready set
@@ -148,11 +155,21 @@ Two `_stamp_of`-style helpers are collapsed into one: `castle_modal`'s
 private `_stamp_of` is deleted and its reasoning moved into
 `agent/castle` beside the rule it belongs to.
 
-**"Folds may not bypass" is enforced, not asked for.** A CI check greps
-both scripts for record-id sort keys (`key=lambda rec: rec.id` and
-friends) and fails with a pointer to the helper. Without it this task
-lands a helper that the next fold is free to not know about, which is
-the failure mode the backlog entry is a record of.
+**"Folds may not bypass" is enforced, not asked for.** A CI check reads
+both scripts with `ast` and fails, with a pointer to the helper, on any
+`key=` argument that reaches a record's `id` — a lambda, a composite
+tuple key, `operator.attrgetter("id")` — or on any direct `a.id < b.id`
+comparison. Without it this task lands a helper that the next fold is
+free to not know about, which is the failure mode the backlog entry is
+a record of.
+
+It reads the syntax tree rather than grepping lines for a specific
+reason: the shape most likely to bring id-ordering back is the one
+removed from `_inbox_items` here — a composite key wrapped over several
+lines by the repo's own formatting, with `q.id` alone on one of them. A
+line-oriented grep does not see it, and a guard that passes on the
+exact case it exists to catch is worse than no guard, because two other
+files advertise this one as load-bearing.
 
 ### What did not get better
 
@@ -188,13 +205,20 @@ It pins:
   the answer first, by alphabet; the helper puts the result first, via
   the edge the answer already carries. This is the regression that
   would have caught the original defect.
+- **A chain inside one second** (`C refs B refs A`): the edges order it,
+  and only its end is newest. This is the regression for the
+  direct-edge `tied_for_newest` described above, and it also pins that
+  the two helpers cannot contradict each other — the tie is always a
+  tail of the order the same input produces.
 - A `refs` edge that contradicts the stamps (clock skew / restored
   journal) — the edge still wins.
 - Cross-second ordering, the empty and single-record cases, and a
   hand-forged cycle producing a deterministic order rather than an
   exception.
 - The bypass guard itself: zero record-id sort keys remain in
-  `agent/castle` and `agent/castle-modal`.
+  `agent/castle` and `agent/castle-modal`. Verified by reintroducing
+  each of the four shapes it claims to catch and watching it fail, not
+  only by watching it pass on a clean tree.
 
 Every existing agent-loop assertion must pass unchanged. None was
 asserting the buggy order — `test/agent-loop/apply.sh` deliberately
@@ -231,6 +255,14 @@ applier). No human steps.
   every other helper in that file already does, so the alternative —
   reaching for a module-level global that file deliberately does not
   have — would have been the novel thing.
+- **`_errand_state` reads the answers naming the proposal, not the
+  whole journal in order.** The line swept was `for rec in
+  sorted(records.values(), ...)` with a two-clause `continue` at the
+  top; keeping that shape put a whole-journal ordering inside a loop
+  that runs once per errand on an interactive surface, measured at
+  ~10ms per call over 3000 records against 0.76ms for the old sort. The
+  filter moved into the fold, which is both cheaper and what every
+  other selection in the function already does.
 - **`agent/README.md` gained an "Ordering records" section**, and its
   answer-picker paragraph lost a sentence that is now false ("ordering
   is by full record id … chronological only to one-second
