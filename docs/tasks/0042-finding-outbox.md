@@ -573,7 +573,10 @@ them open and a reviewer might have decided differently.
 12. **The `[[…]]` link in
    `docs/backlog/the-worker-cited-a-rule-its-contract-does-not-
    contain.md` now points at this brief** rather than at a deleted
-   entry, and the `chevaline-example/` half of the second promoted
+   entry. (That entry has itself since been promoted to
+   `docs/tasks/0043-worker-contract-revision.md`, which deleted it —
+   the path above is where it lived, not where it is.) The
+   `chevaline-example/` half of the second promoted
    entry is re-filed as
    `docs/backlog/the-example-profile-has-no-work-section.md` so that
    promoting the parent does not silently delete undone work.
