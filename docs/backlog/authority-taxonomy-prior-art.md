@@ -132,3 +132,5 @@ cuts the other way for a single resident building a mental model of a
 system living in their OS. Categories buy predictability and
 auditability; thresholds buy calibration. Every failure in the record is
 a system that had one without the other.
+
+*Full review: see `docs/research/delegation-papers.md` (landed after this entry was written).*
