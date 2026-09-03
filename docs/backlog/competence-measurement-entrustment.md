@@ -155,3 +155,5 @@ direction case specificity warns about.
 **Do not store Dreyfus stages as a field.** No empirical evidence for
 discrete stages, and they index to the person — the error AMEE Guide 99
 and case specificity both warn against.
+
+*Full review: see `docs/research/delegation-papers.md` (landed after this entry was written).*

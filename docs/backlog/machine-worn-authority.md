@@ -76,3 +76,5 @@ rather than inference for this row.
 The passage states the problem as machine-worn authority; the evidence
 says that framing describes an avoidable configuration rather than an
 inherent one.
+
+*Full review: see `docs/research/delegation-papers.md` (landed after this entry was written).*

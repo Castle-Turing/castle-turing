@@ -64,3 +64,5 @@ the second or third option over the first.
 problem), [[legible-history-calibrated-trust]] (oversight that does not
 oversee). Proposal 06's receipt/verdict split assumes the resident can
 see what to render a verdict *on*; this is the case where they cannot.
+
+*Full review: see `docs/research/pressure-test.md` (landed after this entry was written).*

@@ -63,3 +63,5 @@ reliance behaviour, not felt trust.
 **Priority: high.** The journal exists, the digest surface is shaped
 (task 0009), and the audit ritual is the next design item. All three
 inherit this assumption.
+
+*Full review: see `docs/research/pressure-test.md` (landed after this entry was written).*
