@@ -191,7 +191,7 @@ below stands in for the usual separate PR comment:
 > Review comment:
 >
 > - [P2] Avoid deleting the entire configured log directory —
->   /home/wesley/.local/share/emcee/runs/castle-turing/2026-09-02T18-18-51/wt-0041-ci-transient-retries-1/test/vm-install/run.sh:45-45
+>   <worktree>/test/vm-install/run.sh:45-45
 >   When `CASTLE_HARNESS_LOG_DIR` points to an existing directory that
 >   contains anything besides this harness's artifacts, every
 >   invocation now recursively deletes all of its contents. The
