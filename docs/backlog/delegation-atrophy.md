@@ -143,3 +143,5 @@ change understanding is the key aspect of code reviewing").
 
 The project's most load-bearing oversight assumption sits exactly where
 the science has not gone.
+
+*Full review: see `docs/research/delegation-papers.md` (landed after this entry was written).*

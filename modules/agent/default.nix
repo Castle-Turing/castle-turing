@@ -150,7 +150,8 @@ in
 
         The contract, whatever holds this option: the request body is
         piped to the command's stdin; `$CASTLE_REQUEST_ID`,
-        `$CASTLE_DIFF_FILE`, `$CASTLE_TARGET_FILE`, and — when
+        `$CASTLE_DIFF_FILE`, `$CASTLE_TARGET_FILE`,
+        `$CASTLE_FINDING_FILE`, and — when
         configured and usable — `$CASTLE_PRIVATE_ROOT` and
         `$CASTLE_MECHANISM_ROOT` are set in its environment; reasoning
         goes to stdout, a diff (or nothing) goes to
@@ -158,7 +159,11 @@ in
         that diff targets (`private` or `mechanism`) goes to
         `$CASTLE_TARGET_FILE`, from where `castle work` folds it into
         the result record's `target` field
-        (docs/tasks/0024-config-target.md).
+        (docs/tasks/0024-config-target.md). One finding about the
+        framework itself (or nothing) goes to `$CASTLE_FINDING_FILE`,
+        from where the outbox commits it as a backlog entry on a new
+        branch in the mechanism checkout, if one is configured — it is
+        never pushed (docs/tasks/0042-finding-outbox.md).
         Since docs/tasks/0023-resume-cold.md the request body arrives
         under a heading, and on an errand this seat has already worked
         it is followed by that errand's own prior results, the

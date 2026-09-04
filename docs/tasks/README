@@ -1,0 +1,30 @@
+# docs/tasks — numbered briefs, and the queue an agentic harness reads
+
+Implementation work is specced as numbered briefs (`0001-`, `0002-`, …),
+each the spec and reasoning for one piece of work, committed on the
+branch that implements it. That convention is unchanged and lives in
+`CLAUDE.md`; this README documents the directory layout around it.
+
+## Layout
+
+- The **top level** of this directory is the open-work queue. A file
+  here is a task an agentic coding harness (emcee today — any harness
+  that reads `Title:`-headed markdown files works) may pick up and run:
+  a header of `Key: value` lines, a blank line, then a body that
+  becomes the working agent's brief. A task file is a *prompt*, not the
+  brief itself — it names the authoritative sources (usually a
+  `docs/backlog/` entry) and instructs the implementer to author the
+  numbered brief here on its own branch, deleting any promoted backlog
+  entry in the same commit.
+- **`done/`** holds completed briefs, moved here once their work has
+  merged. Tidying is the operator's act, not the harness's; a brief in
+  `done/` is exactly as authoritative a historical record as it was at
+  the top level. The harness independently skips any task whose
+  `emcee/<task-id>` branch has already merged, so the move is hygiene,
+  not the mechanism.
+
+## Number allocation
+
+Numbers are allocated by checking this directory **including `done/`**
+at write time, never from a stale listing. The split changes nothing
+about the rule except that both places count.

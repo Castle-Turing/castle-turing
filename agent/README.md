@@ -249,16 +249,20 @@ castle show ID
   `request` record, runs `CASTLE_WORKER_COMMAND` (default: a headless
   `claude -p` via `agent/castle-worker-claude`) with the request body
   on its stdin and `$CASTLE_REQUEST_ID`/`$CASTLE_DIFF_FILE`/
-  `$CASTLE_TARGET_FILE` in its environment, and folds the command's
+  `$CASTLE_TARGET_FILE`/`$CASTLE_FINDING_FILE` in its environment, and
+  folds the command's
   stdout (reasoning), `$CASTLE_DIFF_FILE` (a diff, or nothing) and
   `$CASTLE_TARGET_FILE` (one word, or nothing) into a `result` record.
-  **Those two files live under `<stateDir>/work/`, not under `/tmp`**
+  `$CASTLE_FINDING_FILE` (one finding about the framework, or nothing)
+  goes to the outbox instead — see "Filing a finding" below.
+  **Those three files live under `<stateDir>/work/`, not under `/tmp`**
   (`docs/tasks/0039-worker-writable-deliverables.md`), and the reason
   is that a tenant has to be able to *write* them: the default tenant
   is a headless `claude -p`, sandboxed to write only beneath the
   resident's home directory, and `/tmp` is not. A turn creates both
   files before it starts a tenant and refuses — `failed`, naming
-  `castle.agent.stateDir` — if it cannot, rather than starting a
+  `castle.agent.stateDir` — if any of them cannot be created, rather
+  than starting a
   tenant that has nowhere to put its work. They are deleted when the
   turn ends; a `SIGKILL` can leave one behind, and the next dispatch
   sweep prunes anything there older than a day.
@@ -1679,6 +1683,69 @@ of which is a fix: the tenant is a model this system chose to run rather
 than an attacker, nothing is activated, and a stripped write is visible
 in the journal as a record with no claim link where its siblings have
 one.
+
+### Filing a finding: `seat: outbox`, `finding-outcome` and friends
+
+From `docs/tasks/0042-finding-outbox.md`. A worker turn has a third
+output file beside the diff and the target — `$CASTLE_FINDING_FILE` —
+carrying at most one **finding**: something wrong with this framework
+rather than with the resident's configuration. It exists because that
+diagnosis previously had nowhere to go except a result body, and
+reached `docs/backlog/` only by a human carrying it there.
+
+A finding is a **work item**, and that format is deliberately a
+preference rather than a standard: a header of `Key: value` lines
+(`Title:` and `Destination:` are required), a blank line, then a
+markdown body shaped like a `docs/backlog/` entry. No schema document,
+no version field, no registry — boring enough that anything which can
+read a directory can consume it.
+
+**The outbox** is plumbing, not a reasoning seat, in exactly the sense
+`docs/architecture.md` uses for dispatch and the applier: a total
+function of one turn's outputs, no judgment, no tenant, no model. After
+a **completed** turn whose finding file is non-empty it validates the
+declared `Destination:` against the closed set of configured checkouts
+(`mechanism` is the only member, resolving to
+`castle.agent.repo.mechanism`) and commits the finding as
+`docs/backlog/<slug>.md` on a **fresh branch off `origin/main`** in
+that checkout. It never touches the resident's current branch, never
+writes `main`, and **never pushes** — that authority is the open design
+item `docs/architecture.md`'s push bullet describes. It refuses when the
+checkout is dirty where the entry would go, when something of that name
+is already filed, and when nothing there resolves.
+
+It writes **one `result` record**, `seat: outbox`, carrying:
+
+- **`finding-outcome`**, a closed vocabulary: `filed`,
+  `refused-malformed`, `refused-destination-unknown`,
+  `refused-destination-unconfigured`, `refused-tree-dirty`,
+  `refused-already-there`, `refused-no-base`, `failed-git`. Same split
+  `apply-outcome` made: `outcome` is an observation about the outbox's
+  own run, so every refusal is `outcome: completed` and only a machine
+  fault is `failed`.
+- **`finding-commit`**, **`finding-branch`** and
+  **`finding-destination`**, stamped only on `filed`.
+  `finding-destination` is a *role*, never a path, for the reason
+  `target` is one.
+
+**`refs` names the worker result, and neither the request nor the
+claim.** This is `docs/tasks/0026`'s rule for the applier applied to a
+second seat, and it is load-bearing: `closing_result` treats a result
+naming a claim as that turn's account (clause a) and a newer result
+naming its request as the account closing it (clause b), so an outbox
+record naming either would corrupt the reaper's per-turn accounting
+permanently, in an append-only journal. Filing a finding is not a turn
+of the errand. `castle validate` enforces both halves. Lineage still
+works, because `_find_root_request` walks `refs[0]` transitively and
+reaches the request in two hops.
+
+**No approval question is filed for a finding.** That authority is
+*made-then-reported*: the resident's judgment is spent once, at the
+eventual pull request, not twice. Provenance is `initiated` — the
+resident asked for the errand, not for the finding — so the router
+sends it to the digest rather than to a notification, and `castle
+digest` and `castle-modal --mode status` both report that one landed,
+naming the branch and the checkout.
 
 ### The byte-exact sidecar: `patch-sha256`
 

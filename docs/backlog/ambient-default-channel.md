@@ -35,3 +35,5 @@ records more informative for the audit.
 every routing decision for mildly time-relevant information chooses
 between over-delivering and under-delivering — and the audit will be
 grading channel choices from a roster with no good middle option.
+
+*Full review: see `docs/research/pressure-test.md` (landed after this entry was written).*

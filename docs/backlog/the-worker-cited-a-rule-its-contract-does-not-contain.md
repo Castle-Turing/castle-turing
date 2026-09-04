@@ -29,6 +29,6 @@ same turn argues yes — say so explicitly, and more generally instruct
 the tenant that a refusal must quote the contract text it rests on, so
 a fabricated rule fails loudly at review. (2) The recurring other
 half: the *right* fix (agent CLIs in `modules/dev`) is a mechanism
-finding with nowhere to go —
-[[a-framework-defect-found-by-a-worker-has-no-outbox]], fourth
-occurrence.
+finding with nowhere to go — the fourth occurrence of the problem
+`docs/tasks/0042-finding-outbox.md` was written to close, and the
+one that arrived after that brief was specced.

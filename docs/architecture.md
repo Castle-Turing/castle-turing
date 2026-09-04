@@ -243,6 +243,29 @@ applying, or a say in whether to apply one at all, would make it a
 reasoning seat; that is precisely what this paragraph exists to stop a
 later agent from "completing" it into.
 
+**Outbox** (plumbing, not a reasoning seat). The mechanism that carries
+a worker's finding out of the OS: when a turn reports something wrong
+with this framework rather than with the resident's configuration, it
+commits that report as a backlog entry on a fresh branch in a checkout
+of this framework, if one is configured. It is a total function of the
+turn's outputs and the tree — the same finding and the same checkout
+produce the same branch, reconstructable by re-running it — and it
+holds no judgment of its own: it does not decide whether a finding is
+worth filing, does not read it for quality, and runs no tenant. It
+**activates nothing**, it **pushes nothing**, it never writes `main`,
+and it never touches the branch the resident has checked out; where the
+applier refuses over uncommitted resident work, this refuses the same
+way and by name. Nothing it does needs a per-change authorization,
+because nothing it does changes a running system: what it produces is a
+branch nobody has merged, and the resident's judgment is spent once, at
+the pull request, rather than twice. `seat: outbox` is a new value in
+an existing category, as `dispatch` and `applier` were, and it is a
+distinct name for the same reason the applier's is — this one writes a
+checkout, so "which seat touched my repository" has an answer. Giving
+it a policy about which findings are worth landing, or a say in whether
+to land one, would make it a reasoning seat; that is precisely what
+this paragraph exists to stop a later agent from "completing" it into.
+
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers
 "right now" and forgets; an observation becomes durable only by being
