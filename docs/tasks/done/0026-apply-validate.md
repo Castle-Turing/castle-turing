@@ -1378,7 +1378,10 @@ of a refusal arriving after an approval. It is a change to 0024/0025's
 filing path, not to this one, and it interacts with the open host-module
 question. Filed as a backlog entry by this task
 (`docs/backlog/mechanism-proposals-are-approvable-but-unapplyable.md`),
-not built.
+not built. *(That entry was promoted to
+`docs/tasks/0044-mechanism-findings-not-proposals.md`, which moved the
+check to filing time and kept this refusal as the backstop for the
+mechanism-targeted proposals already in the journal.)*
 
 ### H. The status surface, and the fold that would otherwise lie
 
@@ -1902,7 +1905,8 @@ implemented, it is named as a default.
   sentence a reader would cite when reasoning about where this task's
   own journal writes land.
 - **`docs/backlog/mechanism-proposals-are-approvable-but-unapplyable.md`**
-  (new) — §G.
+  (new) — §G. *(Since promoted to
+  `docs/tasks/0044-mechanism-findings-not-proposals.md` and deleted.)*
 - **`docs/backlog/the-applier-patches-any-path-in-the-private-repo.md`**
   (new) — Stop conditions.
 - **`test/agent-loop/scripted-worker-applyable.sh`** (new) — see
