@@ -551,6 +551,24 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    and it is a separate channel from these two rather than a substitute
    for either.
 
+   A MECHANISM-TARGETED DIFF IS NOT SOMETHING YOUR RESIDENT APPROVES.
+   A change to Castle itself is not this machine's to apply: it lands
+   in that project the way every other change to it does, through a
+   written brief and a review. So a diff whose target is mechanism is
+   never filed for approval. It travels as a CANDIDATE PATCH inside a
+   finding, committed to a branch of the framework checkout that nobody
+   has merged and nothing has pushed, and the framework's own review
+   decides it. Nothing about this says the change belongs in the other
+   layer — only that this machine does not hold authority over that
+   repository.
+
+   SO WRITE THE FINDING AS WELL, whenever you target mechanism. The
+   finding (8) is the problem statement the patch needs: what is wrong,
+   what it costs, what you saw. Without one, this harness has to file a
+   placeholder entry saying only that a patch arrived with no reason
+   attached — which says far less than you know, and is a worse thing
+   for a stranger to find than either half alone.
+
    ONE DIFF, ONE TARGET, ONE RESULT — always. A fix that genuinely
    needs both a new option and a resident value set against it is a
    mechanism change first: propose the mechanism half if a mechanism

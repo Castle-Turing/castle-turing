@@ -1004,6 +1004,20 @@ is the one value it acts on, and `mechanism` gets its own named refusal
 (`refused-target-mechanism`) rather than an error, because an
 approved-but-unapplyable change is a terminal state and not a fault.
 
+Since `docs/tasks/0044-mechanism-findings-not-proposals.md` a completed
+turn stamping `target: mechanism` **files no proposal question at all**,
+so that refusal is a backstop rather than the ordinary path: nobody is
+asked to authorize a change this machine could never spend. The diff
+travels the finding lane instead — quoted as a candidate patch inside a
+`docs/backlog/` entry on a branch of the framework checkout, never as
+patched code, because a change to that project lands through a brief
+and a review. The refusal stays exact and stays reachable because the
+journal is append-only: proposals of that shape already sit in real
+journals, decided and undecided, and nothing may rewrite them.
+`authorizes-apply` is untouched by that task — absence still means, and
+only means, that the proposal was offered under the older, narrower
+statement.
+
 The field carries a **role**, not a path. A role reads correctly to a
 human or a cold tenant years later; an absolute path reads correctly
 today and is a lie the first time the checkout moves or the machine is
