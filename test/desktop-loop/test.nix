@@ -1243,6 +1243,101 @@ in
     assert "castle route:" not in dispatch_log, dispatch_log
     print("OK: the router's notify channel fired with no fallback warning")
 
+    # --- The waiter that notification left behind is not in the
+    # dispatch unit's cgroup (docs/tasks/0051) --------------------------
+    #
+    # A fired notification outlives the sweep that fired it, on purpose:
+    # `_fire_notification` detaches a waiter that blocks until the
+    # resident clicks, dismisses, or the daemon expires it, and mako's
+    # default is to expire nothing. Before 0051 that waiter stayed in
+    # `castle-dispatch.service`'s cgroup, and every subsequent sweep
+    # made the user manager say so — "Found left-over process ... in
+    # control group while starting unit", followed by a line about
+    # unclean termination and implementation deficiencies, on a
+    # two-minute timer, in the one log a resident reads first when an
+    # errand appears to have gone missing. Nothing was broken; the
+    # journal simply asserted it was.
+    #
+    # The first assertion is what stops the rest being vacuous. If no
+    # waiter is alive at this point there is no left-over process for
+    # systemd to find either, and every "no such line" check below
+    # would pass while covering nothing at all. `pgrep` runs as root
+    # with `-u resident` rather than under `su`, so the shell holding
+    # this very pattern in its own command line cannot match itself.
+    waiter_pids = machine.succeed("pgrep -u resident -f 'castle notify-waiter'").split()
+    assert waiter_pids, "no notification waiter is alive, so this section proves nothing"
+    for waiter_pid in waiter_pids:
+        waiter_cgroup = machine.succeed(f"cat /proc/{waiter_pid}/cgroup")
+        assert "castle-dispatch.service" not in waiter_cgroup, waiter_cgroup
+        assert "castle-notify-waiter-" in waiter_cgroup, waiter_cgroup
+        assert ".scope" in waiter_cgroup, waiter_cgroup
+    print(f"OK: {len(waiter_pids)} notification waiter(s) alive, none in the dispatch unit's cgroup")
+
+    # The scope is named rather than left as an auto-generated
+    # `run-rNNN.scope`, and the name is load-bearing: it is where the
+    # waiter's own stderr now lands. `journalctl` is asked for it by
+    # glob here for exactly the reason a resident would — this is the
+    # command the brief tells them to use.
+    waiter_units = machine.succeed(
+        "su - resident -c \"journalctl --no-pager --user -u 'castle-notify-waiter-*'\""
+    )
+    assert "Castle notification waiter for" in waiter_units, waiter_units
+    print("OK: each waiter runs in a scope named after the record it is waiting on")
+
+    # One more sweep, started synchronously rather than waited for on
+    # the timer: this is the moment the old behaviour produced its
+    # complaint, since the check happens as a unit *starts* and finds
+    # the previous run's residue.
+    machine.succeed(
+        "su - resident -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user "
+        "start castle-dispatch.service'"
+    )
+    # `--user-unit=`, not the `_SYSTEMD_USER_UNIT=` filter above, and
+    # the difference is the whole point: that filter selects what the
+    # unit's own processes *wrote*, and these lines are written by the
+    # user manager *about* the unit (field `USER_UNIT=`). Run under
+    # `su` because journalctl builds its user-unit matches around the
+    # calling uid, so the same command as root selects nothing. The two
+    # positive assertions are the guard the filter needs — one proving
+    # the unit's own output is in view, one proving the manager's
+    # messages about it are, without which "no left-over line here"
+    # would be a fact about an empty string.
+    manager_log = machine.succeed(
+        "su - resident -c 'journalctl --no-pager --user-unit=castle-dispatch.service'"
+    )
+    assert "dispatch: worked" in manager_log, manager_log
+    assert "Finished" in manager_log, manager_log
+    assert "left-over process" not in manager_log, manager_log
+    # Only that line, deliberately. The finding this comes from also
+    # names "Unit process N remains running after unit stopped", which
+    # the manager logs when a unit *stops* with something still in its
+    # cgroup — milliseconds after `_fire_notification` spawned the
+    # waiter, and so in a genuine race with `systemd-run` registering
+    # the scope that moves it out. The fix wins that race in every
+    # ordinary case and cannot be made to win it always without the
+    # sweep waiting on the scope, which is the one thing the notify
+    # path promises not to do. Asserting on it would buy a rare, loud,
+    # meaningless failure. "Found left-over process" carries no such
+    # race: it is checked when the *next* sweep starts, by which time
+    # the waiter has been in its own cgroup for two minutes.
+    print("OK: a sweep after a fired notification reports no left-over process")
+
+    # And the notify channel's own warnings are still nowhere, asked of
+    # the whole journal rather than of one unit's slice of it — which
+    # since docs/tasks/0051 is the only form of that question that
+    # still covers what it used to. Measured on the reference host, not
+    # assumed: journald files a line under the cgroup of the process
+    # that *wrote* it, not the unit that opened the stream, so a
+    # waiter's warning now appears under its own scope even though the
+    # file descriptor it travels on is still the dispatch unit's. The
+    # unit-scoped assertion above is kept as well — it is the one with
+    # a positive guard behind it, and it still covers everything the
+    # sweep itself prints.
+    full_journal = machine.succeed("journalctl --no-pager")
+    assert "castle route:" not in full_journal, full_journal[-4000:]
+    assert "castle notify-waiter:" not in full_journal, full_journal[-4000:]
+    print("OK: no notify-path warning anywhere in the journal, waiter's own included")
+
     # --- Independent verification: check_assertions.py re-derives the
     # frontmatter itself rather than trusting agent/castle's own parser
     # (its own header explains why), so this is a second,
