@@ -176,13 +176,28 @@ all: `$HOME/.config`, `/etc/pam`, `/sys/class/graphics/fb0`, each
 configured root, and the directory holding the deliverables.
 
 Denied, each a line of §4's forbidden list: `nixos-rebuild`,
-`systemctl`, `sudo`, `nix …`, `gsettings set`, `setfont`, the git
-mutations (`commit`, `add`, `checkout`, `apply`, `stash`, `push`), the
-network commands (`curl`, `wget`), and the `WebFetch` and `WebSearch`
-tools. Each mutating git subcommand is denied in two shapes —
-`Bash(git commit:*)` and `Bash(git * commit *)` — because the second
-form is what catches `git -C <root> commit`, and a deny rule is the
-only kind of rule allowed to carry a wildcard before the subcommand.
+`systemctl`, `sudo`, `nix eval`, `nix build`, `nix flake`,
+`gsettings set`, `setfont`, the git mutations (`commit`, `add`,
+`checkout`, `apply`, `stash`, `push`, `reset`, `restore`, `clean`), the
+network commands (`curl`, `wget`), the `WebFetch` and `WebSearch`
+tools, and — the item that had nothing behind it until the review
+pass — writes under either configured root, as `Edit(//<root>/**)`.
+
+Each mutating git subcommand is denied in three shapes, and each shape
+covers a case the others miss: `Bash(git commit:*)` for
+`git commit -am x` and for a bare `git commit`;
+`Bash(git * commit *)` for `git -C <root> commit -am x`, since a deny
+rule is the only kind allowed to carry a wildcard before the
+subcommand; and `Bash(git * commit)` because a trailing wildcard
+matches the bare command only when it is the rule's *only* wildcard, so
+the second shape misses an argument-less `git -C <root> stash`.
+
+The `Edit(//<root>/**)` rule is dropped for any root that contains one
+of this turn's deliverable paths, with a line on stderr saying so and
+naming `castle.agent.stateDir`. A deny rule cannot carry exceptions, so
+enforcing it over a state directory a resident had put inside a
+checkout would refuse the diff the turn exists to write — 0039's empty
+channel, produced by the mechanism meant to prevent it.
 
 The deny list exists for one reason worth naming: the tenant runs as
 the resident, and loads the resident's own `~/.claude/settings.json`.
@@ -220,11 +235,22 @@ excess is listed here rather than left for a reader to discover:
   deny beats allow and a deny rule cannot carry exceptions. Those five
   are simply the only `swaymsg` shapes granted; anything else is
   refused by default, unless a resident's own settings allow it.
-- **Writes are granted per file, but cannot be denied elsewhere.**
+- **Writes are granted per file, and denied only where it matters.**
   `Edit(//<path>)` grants the three deliverables without depending on
-  the resident's settings. It does not stop a resident's settings from
-  allowing more. The same "deny rules cannot carry exceptions" limit
-  applies: denying `Edit` wholesale would deny the deliverables.
+  the resident's settings, and `Edit(//<root>/**)` denies the place
+  §4 actually cares about. Everywhere else — the rest of the home
+  directory the inherited working directory exposes — a permissive
+  resident settings file can still allow writes, and nothing here
+  stops it: denying `Edit` wholesale would deny the deliverables in the
+  same stroke, because a deny rule cannot carry exceptions.
+- **The git deny list is not a closure over git.** The subcommands are
+  open-ended and a list that claimed otherwise would quietly stop being
+  true. What bounds git in this seat is the allow side — only the three
+  read-only shapes are granted, so everything else is refused by
+  default. The deny rules exist for the one case the allow side cannot
+  reach: a resident settings file that allows something broader.
+  §4 now says this to the tenant rather than leaving it to be
+  discovered.
 - **The tenant's working directory is inherited, not declared.**
   `castle work` passes no `cwd` to `Popen`, so under the dispatch unit
   the tenant's primary working directory is `%h` — the whole home
@@ -256,6 +282,13 @@ reader who moves the working directory knows what moved with it.
   different tenant writes their own grant with it. Principle 01 is
   satisfied — the mechanism is the grant, the configuration is which
   tenant runs and what the roots are.
+- It does not loosen 0039's `$HOME` pre-flight refusal, which this
+  change makes conservative rather than exactly right: the grant adds
+  the deliverables' own directory to the tenant's working directories,
+  so a state directory outside `$HOME` would now in fact be writable
+  and is still hard-refused. Loosening a guard on the strength of a
+  second mechanism added the same day is how a guard stops guarding;
+  the over-refusal names the rule it applied and reads in one pass.
 - It does not touch the scripted tenants. They remain unsandboxed
   fixtures, and this brief's verification plan says so out loud rather
   than pretending otherwise.
@@ -364,7 +397,21 @@ might have gone the other way:
    unconditionally**, without checking they exist. A missing directory
    passed to `--add-dir` is accepted silently (probed), so a guard
    would buy nothing and would add a branch that could itself be wrong.
-6. **The `Bash(cat:*)` rule is redundant today** — `cat` is in the
+6. **Three more subcommands named in §4's prose** — `git reset`,
+   `git restore`, `git clean` — plus a general clause saying no git
+   subcommand outside the allowed list may be run. A review pass
+   observed that the deny list named only the six subcommands the prose
+   named while §4's real prohibition is broader. Rather than deny
+   commands the prose did not mention, the prose was extended in the
+   same commit, which is the rule this task set for itself.
+7. **The prompt now states where its own enforcement stops.** The
+   first draft of the §4 paragraph claimed the environment refuses
+   everything on the forbidden list, which was not true of the
+   forbidden list's central item and would have left a tenant believing
+   a wall was there. Telling the tenant exactly which prohibitions it
+   alone is carrying is worth more than the rhetorical force of the
+   overclaim.
+8. **The `Bash(cat:*)` rule is redundant today** — `cat` is in the
    built-in read-only set and needs no rule. It is granted anyway
    because that set is a vendor's internal list, documented as not
    configurable and not versioned by us: a contract that depends on it

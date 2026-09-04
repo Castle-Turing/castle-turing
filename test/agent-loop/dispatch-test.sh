@@ -1115,7 +1115,9 @@ for grant_forbidden in \
   'Bash(nixos-rebuild:*)' \
   'Bash(systemctl:*)' \
   'Bash(sudo:*)' \
-  'Bash(nix:*)' \
+  'Bash(nix eval:*)' \
+  'Bash(nix build:*)' \
+  'Bash(nix flake:*)' \
   'Bash(gsettings set:*)' \
   'Bash(setfont:*)' \
   'Bash(curl:*)' \
@@ -1129,17 +1131,59 @@ done
 # Two shapes each: the bare form, and the form that catches a flag
 # before the subcommand, which is how a tenant told to use
 # `git --no-optional-locks -C <root> ...` would reach a commit.
-for grant_mutation in commit add checkout apply stash push; do
+for grant_mutation in commit add checkout apply stash push reset restore clean; do
   grep -qxF "Bash(git $grant_mutation:*)" "$GRANT_DENY" \
     || fail "git $grant_mutation is not denied: $(cat "$GRANT_DENY")"
   grep -qxF "Bash(git * $grant_mutation *)" "$GRANT_DENY" \
     || fail "git $grant_mutation is denied only in its bare form, so git -C <root> $grant_mutation still runs: $(cat "$GRANT_DENY")"
+  # A trailing wildcard matches the bare command only when it is the
+  # rule's only wildcard, so the shape above misses an argument-less
+  # `git -C <root> stash`. This is the rule that catches it.
+  grep -qxF "Bash(git * $grant_mutation)" "$GRANT_DENY" \
+    || fail "an argument-less git -C <root> $grant_mutation is denied by nothing: $(cat "$GRANT_DENY")"
 done
+
+log "  -- and 4's central prohibition, no write under a configured root, is a rule rather than the one item with nothing behind it"
+# Both roots are added to the tenant's working directories so it can
+# read them; without this deny, a resident settings file allowing Edit
+# broadly would turn that into write access over the resident's own
+# checkout.
+for grant_root in "$GRANT_MECH" "$GRANT_PRIV"; do
+  grep -qxF "Edit(/$grant_root/**)" "$GRANT_DENY" \
+    || fail "writes under $grant_root are forbidden by the contract and denied by nothing: $(cat "$GRANT_DENY")"
+done
+
+log "  -- unless the deliverables are inside that root, where the rule would refuse the diff the turn exists to write"
+# A deny rule cannot carry exceptions. The honest behaviour is to drop
+# the rule for that root and say so on stderr, rather than enforce it
+# and hand back another empty channel — which is the failure 0039 is
+# about.
+GRANT_ARGV_INSIDE="$WORKDIR/grant-argv-inside.txt"
+mkdir -p "$GRANT_PRIV/state"
+PATH="$GRANT_STUBDIR:$PATH" HOME="$GRANT_HOME" CLAUDE_ARGV_OUT="$GRANT_ARGV_INSIDE" \
+  CASTLE_REQUEST_ID=probe \
+  CASTLE_DIFF_FILE="$GRANT_PRIV/state/diff" CASTLE_TARGET_FILE="$GRANT_PRIV/state/target" \
+  CASTLE_FINDING_FILE="$GRANT_PRIV/state/finding" \
+  CASTLE_MECHANISM_ROOT="$GRANT_MECH" CASTLE_PRIVATE_ROOT="$GRANT_PRIV" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
+  > "$WORKDIR/grant-inside.out" 2>&1 \
+  || fail "castle-worker-claude failed with a deliverable inside a configured root: $(cat "$WORKDIR/grant-inside.out")"
+if grep -qxF "Edit(/$GRANT_PRIV/**)" "$GRANT_ARGV_INSIDE"; then
+  fail "the no-writes-under-a-root rule was kept for the root holding this turn's deliverables, so the diff channel is denied"
+fi
+grep -qF 'castle.agent.stateDir' "$WORKDIR/grant-inside.out" \
+  || fail "the harness dropped a rule and said nothing a resident could act on: $(cat "$WORKDIR/grant-inside.out")"
+grep -qxF "Edit(/$GRANT_MECH/**)" "$GRANT_ARGV_INSIDE" \
+  || fail "dropping the rule for one root dropped it for the other as well: $(cat "$GRANT_ARGV_INSIDE")"
 # Deny beats allow at every level, so a mutation appearing in both
 # lists would still be refused — but it would mean the allowlist had
 # stopped describing the contract, which is what this file asserts.
-if grep -q 'commit' "$GRANT_ALLOW"; then
-  fail "the allowlist mentions commit — the grant no longer matches the contract it enforces"
+# Anchored on the subcommand position, not on the word anywhere in the
+# line: the git rules carry a configured root verbatim, and a resident
+# whose checkout is named ~/commit-notes would otherwise fail this
+# suite against a perfectly correct grant.
+if grep -qE '^Bash\(git .*(commit|add|apply|checkout|stash|push|reset|restore|clean):\*\)$' "$GRANT_ALLOW"; then
+  fail "the allowlist grants a mutating git subcommand — the grant no longer matches the contract it enforces"
 fi
 
 log "  -- and the directories 4's reads live in are added, since no rule can reach outside them"
