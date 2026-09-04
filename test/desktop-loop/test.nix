@@ -1263,8 +1263,15 @@ in
     # systemd to find either, and every "no such line" check below
     # would pass while covering nothing at all. `pgrep` runs as root
     # with `-u resident` rather than under `su`, so the shell holding
-    # this very pattern in its own command line cannot match itself.
-    waiter_pids = machine.succeed("pgrep -u resident -f 'castle notify-waiter'").split()
+    # this very pattern in its own command line cannot match itself —
+    # and with `|| true`, because `pgrep` exits 1 when it matches
+    # nothing and `succeed` would then raise a bare command failure
+    # rather than the sentence below, conflating "no waiter is alive"
+    # with "pgrep itself broke" exactly the way the notify assertion
+    # above deliberately does not.
+    waiter_pids = machine.succeed(
+        "pgrep -u resident -f 'castle notify-waiter' || true"
+    ).split()
     assert waiter_pids, "no notification waiter is alive, so this section proves nothing"
     for waiter_pid in waiter_pids:
         waiter_cgroup = machine.succeed(f"cat /proc/{waiter_pid}/cgroup")
@@ -1274,7 +1281,7 @@ in
     print(f"OK: {len(waiter_pids)} notification waiter(s) alive, none in the dispatch unit's cgroup")
 
     # The scope is named rather than left as an auto-generated
-    # `run-rNNN.scope`, and the name is load-bearing: it is where the
+    # `run-pNNN-iNNN.scope`, and the name is load-bearing: it is where the
     # waiter's own stderr now lands. `journalctl` is asked for it by
     # glob here for exactly the reason a resident would — this is the
     # command the brief tells them to use.
@@ -1288,6 +1295,7 @@ in
     # the timer: this is the moment the old behaviour produced its
     # complaint, since the check happens as a unit *starts* and finds
     # the previous run's residue.
+    sweep_since = machine.succeed("date '+%Y-%m-%d %H:%M:%S'").strip()
     machine.succeed(
         "su - resident -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user "
         "start castle-dispatch.service'"
@@ -1297,16 +1305,27 @@ in
     # unit's own processes *wrote*, and these lines are written by the
     # user manager *about* the unit (field `USER_UNIT=`). Run under
     # `su` because journalctl builds its user-unit matches around the
-    # calling uid, so the same command as root selects nothing. The two
-    # positive assertions are the guard the filter needs — one proving
-    # the unit's own output is in view, one proving the manager's
-    # messages about it are, without which "no left-over line here"
-    # would be a fact about an empty string.
+    # calling uid, so the same command as root selects nothing.
+    #
+    # Two guards, and the second is read from a *window* rather than
+    # from the whole history on purpose: a "Finished" somewhere in the
+    # unit's log only proves the manager was writing about this unit at
+    # some point, which an hour-old sweep already satisfies. Cut to
+    # everything since the moment before the start above, it proves the
+    # manager's messages about the sweep this section actually
+    # triggered are in view — which is what makes the absence check a
+    # statement about that sweep rather than about an empty string.
     manager_log = machine.succeed(
         "su - resident -c 'journalctl --no-pager --user-unit=castle-dispatch.service'"
     )
     assert "dispatch: worked" in manager_log, manager_log
-    assert "Finished" in manager_log, manager_log
+    manager_log_since = machine.succeed(
+        "su - resident -c \"journalctl --no-pager "
+        f"--user-unit=castle-dispatch.service --since '{sweep_since}'\""
+    )
+    assert "Finished" in manager_log_since, manager_log_since
+    # Asked of the unit's whole history rather than of that window: a
+    # left-over process reported by ANY sweep this boot is the defect.
     assert "left-over process" not in manager_log, manager_log
     # Only that line, deliberately. The finding this comes from also
     # names "Unit process N remains running after unit stopped", which

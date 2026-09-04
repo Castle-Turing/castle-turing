@@ -127,11 +127,24 @@ would be a bad price for a tidier name.
 
 Three conditions, all cheap, none of them a subprocess:
 
-1. `INVOCATION_ID` is set. systemd sets it on the processes of a unit
-   it started and nothing else does, so it answers exactly the
-   question being asked: is there an enclosing service whose cgroup we
-   would be left behind in? A hand-run `castle route` sits in a
-   session scope, which nothing re-runs and nothing sweeps.
+1. This process's own cgroup belongs to a `.service`, read from the
+   unified line of `/proc/self/cgroup`. That is exactly the question:
+   is the cgroup we would be left behind in one that a later start
+   scans and complains about? A sweep answers
+   `.../app.slice/castle-dispatch.service`; a `castle route` typed at
+   a terminal answers `.../session-7.scope`, which nothing re-runs and
+   nothing sweeps. Both measured on the reference host.
+
+   This was written first as "`INVOCATION_ID` is set", which is wrong
+   and was caught in review: systemd does set it on a unit's
+   processes, but it is an environment variable and therefore
+   inherited by every descendant, so a terminal launched as a user
+   unit — uwsm, GNOME's or KDE's systemd app launching — would have
+   handed a hand-typed `castle route` a hop this brief promises it
+   will not take. Cgroup membership is a fact about the process rather
+   than a value handed down, and it also answers the interesting case
+   correctly: a terminal that really is a service gets the hop,
+   because its cgroup really is one the waiter should not be left in.
 2. `systemd-run` is on `$PATH`.
 3. The user bus is reachable — `DBUS_SESSION_BUS_ADDRESS`, or
    `$XDG_RUNTIME_DIR/bus` existing as a socket, which is how sd-bus
@@ -168,9 +181,9 @@ the fallback's safety net rather than the mechanism.
 ## The four constraints, and how each is met
 
 1. **The hand-run path keeps working.** It is not merely preserved,
-   it is untouched: with no `INVOCATION_ID` the helper is the identity
-   function, and the argv `Popen` receives is byte-for-byte what it
-   received before. No warning reaches the resident's terminal in the
+   it is untouched: with a session-scope cgroup the helper is the
+   identity function, and the argv `Popen` receives is byte-for-byte
+   what it received before. No warning reaches the resident's terminal in the
    ordinary case, because in the ordinary case nothing is attempted.
 
 2. **The waiter's stderr keeps travelling on the sweep's own file
@@ -259,7 +272,7 @@ it is checked when the *next* sweep starts, two minutes later.
 
 The no-Nix harnesses in `test/agent-loop/` exercise this path with
 `CASTLE_NOTIFY_COMMAND` pointed at a stub, from a shell with no
-`INVOCATION_ID` — so they take the identity path. `dispatch-test.sh`,
+a service cgroup — so they take the identity path. `dispatch-test.sh`,
 `run.sh` and `modal-headless-test.sh` were run against this change and
 all three pass, which is evidence that the gate is closed where it
 should be and no evidence at all about the scope.
@@ -278,8 +291,10 @@ Human hands needed: one confirmation on the reference host after
 deploy. Fire one errand that routes to notify, wait out two timer
 ticks, and read `journalctl --user -u castle-dispatch.service`. What
 should be gone is the pair of lines quoted at the top of this brief.
-`systemctl --user list-units 'run-*.scope'` should show the waiter
-under the description this task gives it.
+`systemctl --user list-units 'castle-notify-waiter-*'` should show
+the waiter under the description this task gives it, and
+`journalctl --user -u 'castle-notify-waiter-*'` is where its own
+stderr now lands.
 
 ## Judgment calls
 
@@ -298,6 +313,15 @@ each is a place a reviewer could reasonably have chosen otherwise.
   accepted cost is stated in constraint 2: a reader of only the
   dispatch unit's log no longer sees a waiter's warning.
 
+- **The gate asks about this process's cgroup, not about
+  `INVOCATION_ID`.** The first version asked the environment and was
+  wrong for a reason worth keeping written down: `INVOCATION_ID` is
+  inherited, so every descendant of any user service carries it, and a
+  terminal launched as a user unit would have made the hand-run path
+  take the hop. The cgroup is a fact about this process. The cost is a
+  file read per notification and one more shape to get wrong (cgroup
+  v1, an unreadable `/proc`), all of which fail to the identity path.
+
 - **The gate is a precondition check, not an observed exit status.**
   A caller that waited ~0.5s on `systemd-run` could fall back exactly,
   and would cost the sweep half a second per notification on the
@@ -311,13 +335,15 @@ each is a place a reviewer could reasonably have chosen otherwise.
   task exists to remove.
 
 - **`--quiet`, so nothing is logged on the happy path.** Without it
-  `systemd-run` prints "Running scope as unit: run-pNNN-iNNN.scope" to the
-  inherited stderr on every notification. Replacing two misleading
-  lines per sweep with one uninformative one is not what this task is
-  for, and the notify channel's documented shape is silence except on
-  failure. The scope is still discoverable: `--description` gives it
-  "Castle notification waiter for <record id>", which is what
-  `systemctl --user list-units 'run-*.scope'` shows.
+  `systemd-run` prints "Running scope as unit: <the name>" to the
+  inherited stderr on every notification, which is the sweep's own
+  journal. Replacing two misleading lines per sweep with one
+  uninformative one is not what this task is for, and the notify
+  channel's documented shape is silence except on failure. Nothing is
+  lost by it: the user manager still logs "Started Castle notification
+  waiter for <record id>." against the scope itself, which is where a
+  line about the waiter belongs, and `systemctl --user list-units
+  'castle-notify-waiter-*'` shows it running.
 
 - **`--unit=`, with a random suffix, rather than letting systemd name
   the scope.** This one was decided the other way first, on the
@@ -327,8 +353,10 @@ each is a place a reviewer could reasonably have chosen otherwise.
   changed the weight on the other side: the name is where the waiter's
   stderr is filed, so an opaque `run-pNNN-iNNN.scope` means a warning
   nobody can be told how to find. Four hex characters of `os.urandom`
-  make the collision impossible, which is the same answer `make_id`
-  gives to the same question.
+  reduce the collision to one chance in 65536 *of an event that should
+  not happen at all* — the same record notified twice while the first
+  waiter still stands — which is the answer `make_id` gives to the
+  same question and is enough for a name.
 
 - **The scope's name is asserted, not just its existence.** The VM
   test reads `journalctl --user -u 'castle-notify-waiter-*'` and

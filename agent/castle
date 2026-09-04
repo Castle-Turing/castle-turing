@@ -3097,6 +3097,37 @@ def _provenance_explanation(provenance: str) -> str:
     return "the system undertook this on its own initiative, so it defaults to the digest rather than an interruption"
 
 
+def _in_service_cgroup() -> bool:
+    """Whether this process sits in the cgroup of a systemd `.service`
+    — the question `_scope_wrapped` gates on (docs/tasks/0051).
+
+    Reads the unified-hierarchy line of `/proc/self/cgroup` (the one
+    whose controller field is empty, `0::/...`) and asks whether the
+    last path component names a service. A sweep run by
+    `castle-dispatch.service` answers
+    `/user.slice/user-1000.slice/user@1000.service/app.slice/castle-dispatch.service`;
+    a `castle route` typed at a terminal answers
+    `/user.slice/user-1000.slice/session-7.scope`. Both checked on the
+    reference host rather than recalled.
+
+    False on anything it cannot read or does not recognise — a cgroup
+    v1 host with no unified line, a kernel with no `/proc/self/cgroup`,
+    a path shape this does not expect. Every one of those means the
+    caller spawns the waiter the way it did before docs/tasks/0051,
+    which is a working notification, so guessing conservatively costs a
+    log line and guessing optimistically could cost the notification.
+    """
+    try:
+        raw = pathlib.Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return False
+    for line in raw.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) == 3 and fields[0] == "0" and fields[1] == "":
+            return fields[2].rstrip("/").rsplit("/", 1)[-1].endswith(".service")
+    return False
+
+
 def _scope_wrapped(argv: list[str], unit: str, description: str) -> list[str]:
     """Wrap `argv` so it runs in a transient systemd scope of its own,
     when — and only when — this process is itself running inside a
@@ -3140,15 +3171,31 @@ def _scope_wrapped(argv: list[str], unit: str, description: str) -> list[str]:
     quietly changed both.
 
     **The gate is three conditions, and the fallback is today's
-    behaviour.** `INVOCATION_ID` is set by systemd on the processes of
-    a unit it started and by nothing else, so it is the exact question
-    being asked here: is there an enclosing service whose cgroup we
-    would be left in? A hand-run `castle route` at a terminal is in a
-    session scope, which nothing re-runs and nothing sweeps, and takes
-    this function's identity path. Then `systemd-run` has to exist, and
-    the user bus it talks to the user manager over has to be reachable
-    — checked the way sd-bus itself resolves it, `DBUS_SESSION_BUS_ADDRESS`
-    or `$XDG_RUNTIME_DIR/bus`. Any of the three missing and the caller
+    behaviour.** The first is `_in_service_cgroup()`: this process's
+    own cgroup has to belong to a `.service`, which is the exact
+    question being asked — is the cgroup we would be left behind in one
+    that a later start scans and complains about? A hand-run `castle
+    route` at a terminal is in a session scope
+    (`/user.slice/user-1000.slice/session-7.scope`, checked), which
+    nothing re-runs and nothing sweeps, and takes this function's
+    identity path.
+
+    `INVOCATION_ID` was the first spelling of that question and is the
+    wrong one, which a code review caught: systemd sets it on a unit's
+    processes, but the environment is *inherited*, so every descendant
+    of any user service carries it — including a terminal launched as a
+    user unit by uwsm or by GNOME's systemd app launching, where a
+    hand-typed `castle route` would then have taken a hop it was
+    promised not to. Cgroup membership is a fact about this process
+    rather than a value handed down through an environment, and it
+    answers correctly in both directions: a terminal that genuinely IS
+    a service gets the hop, because its cgroup genuinely is one the
+    waiter should not be parked in.
+
+    Then `systemd-run` has to exist, and the user bus it talks to the
+    user manager over has to be reachable — checked the way sd-bus
+    itself resolves it, `DBUS_SESSION_BUS_ADDRESS` or
+    `$XDG_RUNTIME_DIR/bus`. Any of the three missing and the caller
     gets its own argv back and spawns the waiter exactly as it did
     before this task, which is a working notification with the
     left-over-process line back; `KillMode=process` on the unit stays
@@ -3195,7 +3242,7 @@ def _scope_wrapped(argv: list[str], unit: str, description: str) -> list[str]:
     list-units "castle-notify-waiter-*"` shows a resident who wonders
     what that process is.
     """
-    if not os.environ.get("INVOCATION_ID"):
+    if not _in_service_cgroup():
         return argv
     systemd_run = shutil.which("systemd-run")
     if systemd_run is None:

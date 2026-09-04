@@ -761,11 +761,11 @@ in
         # scope of its own (`_scope_wrapped` in `agent/castle`), so on
         # an ordinary sweep it genuinely leaves this cgroup and systemd
         # stops reporting it as a left-over process at the next start.
-        # But that hop is gated on a user bus and a `systemd-run` being
-        # there to take it, and when either is missing the waiter is
-        # spawned exactly as it was before — back in this cgroup, where
-        # this line is once again the only thing standing between it
-        # and a killed click handler. Removing it would make the fix
+        # But the hop needs machinery that can be absent — a
+        # `systemd-run` on `$PATH` and a reachable user bus — and when
+        # either is, the waiter is spawned exactly as it was before,
+        # back in this cgroup, where this line is once again the only
+        # thing standing between it and a killed click handler. Removing it would make the fix
         # load-bearing for a case it deliberately does not cover.
         KillMode = "process";
         ExecStart = "${castleCli}/bin/castle dispatch";
