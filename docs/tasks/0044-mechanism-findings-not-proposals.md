@@ -168,14 +168,29 @@ write.
 
 ### 5. The tenant is told what happens to a mechanism diff
 
-`agent/castle-worker-claude`'s prompt gains one paragraph in its
-diff-and-target section: a diff targeting `mechanism` is not something
-the resident approves — it travels as a candidate patch inside a
-finding, on a branch of the framework checkout, and the framework's own
-review decides it. And therefore: write the finding as well as the
-diff whenever you target `mechanism`, because it is the problem
-statement the patch needs and without one the harness writes a
-placeholder that says less than the tenant knows.
+`agent/castle-worker-claude`'s prompt gains three short paragraphs in
+its diff-and-target section:
+
+- A diff targeting `mechanism` is not something the resident approves.
+  It travels as a candidate patch inside a finding, on a branch of the
+  framework checkout, and the framework's own review decides it. And
+  nothing about that says the change belongs in the other layer — only
+  that this machine holds no authority over that repository.
+- **It becomes a file in a public repository**, so every path and every
+  value in it is written for strangers; the two checkouts can
+  legitimately hold the same relative paths, nothing downstream can
+  tell them apart, and a diff the tenant is not certain about must not
+  be stamped `mechanism` at all. This is where the exposure named under
+  "The known cost" is answered, because it is where the judgment
+  actually lives.
+- Write the finding as well as the diff whenever you target
+  `mechanism`, because it is the problem statement the patch needs and
+  without one the harness writes a placeholder that says less than the
+  tenant knows.
+
+Section 8's line that a finding "does not need the resident approval
+that a diff needs" is corrected in the same pass: it is a private diff
+that needs one.
 
 This is the same restraint 0042 §2 put on the format paragraph — the
 prompt is the one place a tenant is told what to write, so the sentence
@@ -200,6 +215,44 @@ them.
 
 The one thing this must never become is an outbox that commits the
 patch *applied*. See §2.
+
+## The known cost
+
+**A mis-stamped diff now publishes what it should not.** Nothing checks
+that a diff stamped `mechanism` is against the framework checkout. A
+tenant that gets the layer wrong — and host modules are exactly the
+case where a tenant reasonably might, because
+`docs/backlog/where-do-host-modules-live.md` is open — commits the
+resident's own configuration into a checkout of a public repository.
+Before this task the same mistake produced only an unspendable proposal
+question, with the diff confined to the journal. This is a real
+widening and it is the price of the lane.
+
+Three things bound it, and none of them is a check this code could
+honestly make:
+
+- **There is no mechanical test available.** `agent/README.md`'s own
+  paragraph on `target` says the two checkouts legitimately hold the
+  same relative paths — a private layer has its own `flake.nix` and its
+  own `hosts/` — which is precisely why the field exists. A guard that
+  refused a patch for touching paths that "look private" would be this
+  layer deciding where host modules live, which 0026 §G forbids and
+  which the promoted backlog entry names as the trap nobody should
+  re-derive.
+- **The judgment is answered where it lives.** The tenant is told, in
+  the one place a tenant is told anything, that a mechanism-targeted
+  diff becomes a file in a public repository, that the two checkouts
+  can hold the same paths, and that an uncertain diff must not be
+  stamped `mechanism` at all.
+- **Nothing leaves the machine.** The outbox never pushes. What exists
+  is a local branch nobody has merged, and the resident sees it before
+  it goes anywhere — which is the same containment 0042 relies on for a
+  finding's prose, applied to a patch.
+
+If this ever bites, the fix is not a path heuristic. It is either the
+host-module question being settled, or a review step between the branch
+and the push — and the push is already an open authority question in
+`docs/architecture.md`.
 
 ## Considered and rejected
 
@@ -286,10 +339,12 @@ says.
   candidate-patch clause and the "never the patched code" restraint;
   the **Applier** paragraph's mechanism clause is restated as a
   backstop for records already in the journal.
-- **`agent/README.md`** — the `target` field's paragraph, which
-  currently says the applier's refusal is what a `mechanism` target
-  gets, is corrected to say a mechanism target files no proposal and
-  the refusal is the backstop.
+- **`agent/README.md`** — two paragraphs. The `target` field's, which
+  says the applier's refusal is what a `mechanism` target gets, is
+  corrected to say a mechanism target files no proposal and the refusal
+  is the backstop. The outbox's, which says it runs "after a completed
+  turn whose finding file is non-empty", is corrected to include the
+  second thing it now runs for, and gains the synthesized entry.
 - **`test/agent-loop/approval.sh`** — the mechanism scenario, rewritten
   (verification plan below).
 - **`test/agent-loop/apply.sh`** — its mechanism scenario builds its
@@ -440,7 +495,21 @@ is granted, so the wording choices are design.
    The alternative — give it one, and assert the branch there too —
    would duplicate `approval.sh` and blunt the one assertion `apply.sh`
    is organised around.
-8. **`test/agent-loop/outbox.sh` is not extended.** Its tenant writes
+8. **The mis-stamped-diff exposure is named, not guarded.** See "The
+   known cost". A reviewer who thinks a mechanism candidate should be
+   refused unless its patch applies to the framework checkout would
+   change this — it is the only check that is not a path heuristic, and
+   it was rejected because a stale `origin/main` would then drop
+   legitimate candidates, and because "does not apply" and "belongs in
+   the other layer" are not the same fact.
+9. **The result body promises a hand-off, not a branch.** It is written
+   before the outbox runs and it is the record the router notifies on,
+   while the outbox's record is digest-only. A sentence there claiming
+   a branch exists would be contradicted, on every refusal path, only
+   by a record the resident was never shown — the same
+   self-contradiction the unresolvable-target branch a few lines above
+   it refuses to commit. Found by `/code-review` on this branch.
+10. **`test/agent-loop/outbox.sh` is not extended.** Its tenant writes
    no diff and names no target; the routing this task adds lives in
    `run_worker_turn` and is covered where the other proposal-filing
    scenarios are. A reviewer who wants the candidate path exercised

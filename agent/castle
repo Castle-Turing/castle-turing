@@ -5748,14 +5748,26 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 # against the wrong layer.
                 # docs/backlog/where-do-host-modules-live.md is still
                 # open and nothing here decides it.
+                #
+                # **It promises a hand-off, never a branch.** This runs
+                # BEFORE the outbox, which may refuse — a dirty tree,
+                # no `origin/main`, a name already taken — and this
+                # result is the record the router notifies on while the
+                # outbox's is digest-only, so a sentence here claiming
+                # a branch exists could be contradicted only by a
+                # record the resident was never shown. That is the same
+                # self-contradiction the unresolvable-target branch
+                # thirty lines above refuses to commit.
                 body_lines.append("")
                 body_lines.append(
                     "Nothing was filed for you to approve. A change to the Castle "
                     "Turing framework is not this machine's to apply, so it is not "
-                    "offered as a proposal: the diff above travels instead as a "
-                    "candidate patch inside a finding, on a branch of the framework "
-                    "checkout, where that project's own review decides it. The "
-                    "record beside this one says where it went."
+                    "offered as a proposal: the diff above was handed to the outbox "
+                    "instead, to travel as a candidate patch inside a finding rather "
+                    "than as something you authorize. **What became of it is in the "
+                    "record beside this one** — including whether it could be filed "
+                    "at all, which depends on the state of that checkout and is not "
+                    "settled here."
                 )
         if timed_out:
             body_lines.append("")
@@ -8369,9 +8381,47 @@ def _finding_with_candidate(finding_bytes: bytes, diff_text: str) -> bytes:
     The fence comes from `_fence_for` over the diff, for the reason that
     helper exists: a unified diff of a file containing a fenced block
     carries context lines that close a three-backtick fence early.
+
+    **What this lane commits is a composed artifact, not the tenant's
+    bytes**, and that is the one place it departs from
+    docs/tasks/0042-finding-outbox.md's posture. It has to: the whole
+    point is to put two deliverables in one file. The decode is lenient
+    for the same reason the result body's is — a finding is prose for a
+    human, so a replacement character costs legibility at worst — and
+    the diff's byte-exact copy is untouched in the `.patch` sidecar
+    beside the worker result, which stays the only artifact anything
+    applies. The plain-finding lane still hands `_file_finding` the
+    tenant's exact bytes, and `outbox.sh` still asserts that byte for
+    byte.
+
+    **The exposure this opens, named rather than guarded.** Nothing
+    here checks that a diff stamped `mechanism` is actually against the
+    framework checkout, so a tenant that mis-stamps a private-layer
+    diff publishes the resident's own configuration into a checkout of
+    a public repository — where before this lane existed the same
+    mistake produced only an unspendable proposal question. There is no
+    honest mechanical check: `agent/README.md`'s own paragraph on
+    `target` says the two checkouts legitimately hold the same relative
+    paths, which is why the field exists at all, and a guard that
+    refused a patch for touching paths that "look private" would be
+    this code deciding where host modules live —
+    docs/backlog/where-do-host-modules-live.md, which
+    docs/tasks/done/0026-apply-validate.md §G forbids this layer to
+    settle. It is answered where the judgment is: the tenant is told,
+    in agent/castle-worker-claude's prompt, that a mechanism-targeted
+    diff becomes a public file and that an uncertain one must not be
+    stamped. The branch is local and unpushed, so a resident still sees
+    it before anything leaves the machine
+    (docs/tasks/0044-mechanism-findings-not-proposals.md, "The known
+    cost").
     """
-    text = finding_bytes.decode("utf-8", errors="replace").strip()
-    if not text:
+    # `rstrip` and not `strip`: a leading blank line makes
+    # `_parse_finding` see an empty header and refuse the whole thing
+    # `refused-malformed`, and removing it here would make the same
+    # bytes parse on this lane and not on the other. This composes a
+    # finding; it does not repair one.
+    text = finding_bytes.decode("utf-8", errors="replace").rstrip()
+    if not text.strip():
         text = SYNTHESIZED_FINDING.strip()
     fence = _fence_for(diff_text)
     lines = [text, ""] + list(CANDIDATE_PATCH_LINES) + [

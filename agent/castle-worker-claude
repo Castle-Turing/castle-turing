@@ -562,6 +562,18 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    layer — only that this machine does not hold authority over that
    repository.
 
+   AND IT BECOMES A FILE IN A PUBLIC REPOSITORY. The candidate patch is
+   committed into a checkout of the framework, so every path, every
+   context line and every value in it is written for strangers. Before
+   you stamp mechanism, check that the diff you wrote is against the
+   FRAMEWORK'S files and not against your resident's: the two checkouts
+   can legitimately hold the same relative paths — a private layer has
+   its own flake.nix and its own hosts/ — and nothing downstream can
+   tell them apart on your behalf. If you are not certain which
+   checkout your diff is against, DO NOT STAMP MECHANISM. Say so on
+   stdout and file a finding instead; a finding you wrote for strangers
+   is safe to publish and a diff you were unsure about is not.
+
    SO WRITE THE FINDING AS WELL, whenever you target mechanism. The
    finding (8) is the problem statement the patch needs: what is wrong,
    what it costs, what you saw. Without one, this harness has to file a
@@ -816,9 +828,11 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
 
    A finding is not a proposal and does not stop this errand. Write it,
    finish the errand you were given, and say in your reasoning that you
-   filed one. It does not need the resident approval that a diff needs:
-   what happens to it is a file on a new branch in the framework
-   checkout, which nobody has merged and nothing has pushed.
+   filed one. It does not need the resident approval that a PRIVATE
+   diff needs: what happens to it is a file on a new branch in the
+   framework checkout, which nobody has merged and nothing has pushed.
+   A mechanism-targeted diff needs no approval either, for the same
+   reason and by the same route — see 2.
 
    THIS IS NOT A PLACE TO PUT WHAT DID NOT FIT ELSEWHERE. A finding is
    about the framework. A question for your resident is still 5, a
