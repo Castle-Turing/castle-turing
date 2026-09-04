@@ -10516,7 +10516,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     #
     # Refs-shape only, like the applier check above it. All this owes is
     # that a malformed one is named rather than passed over.
-    for rec in sorted(records.values(), key=lambda r: r.id):
+    for rec in order_records(records.values()):
         if rec.type != "result" or rec.fields.get("seat") != OUTBOX_SEAT:
             continue
         anchor = records.get(rec.refs[0]) if rec.refs else None

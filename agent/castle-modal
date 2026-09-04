@@ -2476,9 +2476,10 @@ def run_status(castle, limit: int, out=sys.stdout) -> int:
         # fold — filing a finding is not a turn of the errand, and the
         # refs that keep it out of that fold are the same ones that keep
         # it away from `closing_result`.
-        findings = sorted(
-            (rec for rec in downstream if rec.fields.get("seat") == castle.OUTBOX_SEAT),
-            key=lambda rec: rec.id,
+        findings = castle.order_records(
+            rec
+            for rec in downstream
+            if rec.fields.get("seat") == castle.OUTBOX_SEAT
         )
         for finding in findings:
             outcome = finding.fields.get(castle.FINDING_OUTCOME_FIELD, "?")
