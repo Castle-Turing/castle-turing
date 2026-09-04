@@ -21,16 +21,30 @@
 #     could otherwise paste the marker and spend the account's tokens.
 #   - Same-repo branches only: never runs with write access against a fork.
 #
-# The concurrency group is keyed by the triggering comment, not by the pull
-# request, and never cancels. Both halves matter, and both are scar tissue.
-# Concurrency is evaluated before a job's `if:`, so a pull-request-scoped
-# group catches every unrelated comment: with cancellation on, an ordinary
-# comment kills the handler mid-flight — castle-turing's predecessor of this
-# workflow did exactly that and completed none of its sixty runs. Turning
-# cancellation off is not sufficient either, because GitHub holds at most one
-# *pending* run per group and a newer run evicts the one waiting, so a queued
-# handler could still be discarded by an unrelated comment. A group of one
-# comment is a group nothing else can join.
+# The concurrency group discriminates on the marker, and never cancels. Both
+# halves matter, and every clause is scar tissue.
+#
+# Concurrency is evaluated before a job's `if:`, so a plain
+# pull-request-scoped group catches every unrelated comment. With
+# cancellation on, an ordinary comment kills the handler mid-flight —
+# castle-turing's predecessor of this workflow did exactly that and completed
+# none of its sixty runs. Turning cancellation off is necessary but not
+# sufficient: GitHub holds at most one *pending* run per group and a newer
+# run evicts the one waiting, so an ordinary comment could still discard a
+# queued handler.
+#
+# Keying by comment id alone fixes that and breaks something else: two gate
+# comments on one pull request then land in different groups, run at once,
+# and race to push to the same head, so one fails non-fast-forward and its
+# findings go unanswered. So the group is computed instead — gate comments
+# share one per-pull-request group and serialize; every other comment gets a
+# singleton group of its own and can neither cancel nor evict them.
+#
+# One residual limit, accepted knowingly: with a handler running and a second
+# already queued, a third gate comment evicts the queued one. That needs the
+# gate to have run three times on one pull request while a handler is still
+# working, and losing a queued run is a better failure than two handlers
+# pushing over each other.
 name: Handle review findings
 
 on:
@@ -38,7 +52,10 @@ on:
     types: [created]
 
 concurrency:
-  group: review-findings-${{ github.event.comment.id }}
+  group: >-
+    ${{ contains(github.event.comment.body, '<!-- chevaline-gate: cross-vendor-review -->')
+        && format('review-findings-{0}', github.event.issue.number)
+        || format('review-findings-bystander-{0}', github.event.comment.id) }}
   cancel-in-progress: false
 
 jobs:
