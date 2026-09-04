@@ -92,6 +92,13 @@ git -C "$REPO_ROOT" archive HEAD | tar -x -C "$MECHANISM"
 git -C "$MECHANISM" init -q
 git -C "$MECHANISM" add -A
 git -C "$MECHANISM" commit -q -m "fixture: this framework at HEAD"
+# A remote-tracking ref with no remote behind it, the same one-line
+# fixture outbox.sh builds and for the same reason: since
+# docs/tasks/0044-mechanism-findings-not-proposals.md a mechanism-
+# targeted diff travels the outbox, which branches from `origin/main`
+# and never fetches. Without this the section below would exercise
+# `refused-no-base` and prove nothing about the routing.
+git -C "$MECHANISM" update-ref refs/remotes/origin/main HEAD
 
 # Synthetic, and every literal in it is one this repo already
 # publishes: nixosConfigurations.example's "resident" admin username
@@ -787,16 +794,23 @@ for NEEDLE in FENCED-BEFORE-INSIDE FENCED-AFTER-INSIDE FENCED-BEFORE-AFTER FENCE
 done
 
 # ---------------------------------------------------------------------
-log "a change proposed against the MECHANISM checkout is decided the same way"
+log "a change targeting the MECHANISM checkout is never filed for approval"
 # ---------------------------------------------------------------------
-# Every scenario above proposes against the private layer, so the whole
-# `target: mechanism` route — the one that would edit this framework
-# itself — was uncovered. It is also the half of
-# `assert_checkouts_untouched` that could not fail until
-# CASTLE_MECHANISM_ROOT was exported: now `castle` knows the path, a
-# tenant is handed it, a change is proposed against it, and the
+# Until docs/tasks/0044-mechanism-findings-not-proposals.md this section
+# proved the opposite: a mechanism-targeted turn filed an ordinary
+# proposal, the resident approved it, and the applier refused it
+# afterwards by name. docs/tasks/done/0026-apply-validate.md §G kept
+# that scenario meaningful on purpose while the refusal sat at apply
+# time, and this is the deliberate change of what it means — nobody is
+# asked to authorize a change this machine could never spend.
+#
+# It is still the half of `assert_checkouts_untouched` that could not
+# fail until CASTLE_MECHANISM_ROOT was exported: `castle` knows the
+# path, a tenant is handed it, a change is written against it, and the
 # assertion that nothing moved is a claim about a checkout the code
-# under test can actually reach.
+# under test can actually reach. A branch ref moves no HEAD and dirties
+# no tree, so that assertion is exactly as strong here as everywhere
+# else in this file.
 MECHANISM_TENANT="$WORKDIR/mechanism-tenant.sh"
 cat > "$MECHANISM_TENANT" <<'TENANT'
 #!/usr/bin/env bash
@@ -816,26 +830,197 @@ DIFF
 printf 'mechanism\n' > "$CASTLE_TARGET_FILE"
 TENANT
 chmod +x "$MECHANISM_TENANT"
+
+# The outbox record for a worker result: the one result naming it and
+# nothing else. Found by `refs` rather than by seat name so that the
+# §5 refs discipline docs/tasks/0042-finding-outbox.md turns on is what
+# this harness relies on too.
+outbox_record_for() {
+  grep -l "^refs: $1\$" "$JOURNAL"/*-result-*.md 2>/dev/null | head -1 || true
+}
+field_of() { sed -n "s/^$2: //p" "$1"; }
+
 REQ_MECH="$("$CASTLE" ask "APPROVAL-FIXTURE-MECHANISM: an invented complaint whose fix belongs in the framework, not the private layer.")"
 CASTLE_WORKER_COMMAND="$MECHANISM_TENANT" "$CASTLE" work "$REQ_MECH" >/dev/null
 R_MECH="$(newest_result_for "$REQ_MECH")"
+R_MECH_ID="$(basename "$R_MECH" .md)"
 grep -q '^outcome: completed$' "$R_MECH" || fail "the mechanism-target turn did not complete"
+# Unchanged by this task, and deliberately so: `target` says which
+# checkout the diff is against, which is still true of a diff nobody
+# will be asked to approve (docs/tasks/done/0024-config-target.md §6).
 grep -q '^target: mechanism$' "$R_MECH" \
   || fail "the mechanism-target turn did not stamp target: mechanism: $(grep '^target:' "$R_MECH" || true)"
 # The proof that the export is real rather than decorative: the resolved
 # path in the body is the fixture checkout this harness built.
 grep -qF "This diff targets the **mechanism** checkout, which on this host resolved to \`$MECHANISM\`." "$R_MECH" \
   || fail "the result does not name the resolved mechanism path — castle never learned it"
-Q_MECH="$(proposal_question_for "$REQ_MECH")"
-[ -n "$Q_MECH" ] || fail "a completed turn targeting the mechanism checkout filed no change to decide"
-A_MECH="$("$CASTLE" answer --decision approve "$Q_MECH" </dev/null)"
-grep -q '^decision: approve$' "$JOURNAL/$A_MECH.md" \
-  || fail "approving a mechanism-targeted change did not record an approval"
-"$CASTLE" validate >/dev/null || fail "the journal does not validate after a mechanism-targeted decision"
-# The whole point of the section, and of the fixture the export makes
-# meaningful: approving a change against this framework's own checkout
-# still applies nothing to it.
-assert_checkouts_untouched "after approving a change targeting the mechanism checkout"
+grep -qF "Nothing was filed for you to approve." "$R_MECH" \
+  || fail "the result does not say the absence of a review prompt is deliberate: $(cat "$R_MECH")"
+# 0026 §G's wording constraint, inherited whole:
+# docs/backlog/where-do-host-modules-live.md is open, so nothing this
+# task writes may imply the tenant chose the wrong layer.
+grep -qi 'wrong layer\|mistake\|should have' "$R_MECH" \
+  && fail "the result implies the change was proposed against the wrong layer: $(cat "$R_MECH")"
+
+# The claim itself. Asserted by the field, never by wording — the same
+# discipline `proposal_question_for` already keeps, and the reason it
+# looks for `proposal-sha256` rather than for a sentence.
+[ -z "$(proposal_question_for "$REQ_MECH")" ] \
+  || fail "a mechanism-targeted turn filed a proposal question the resident cannot spend"
+
+# And where it went instead.
+OB_MECH="$(outbox_record_for "$R_MECH_ID")"
+[ -n "$OB_MECH" ] || fail "the mechanism-targeted diff went nowhere: no outbox record names $R_MECH_ID"
+[ "$(field_of "$OB_MECH" seat)" = "outbox" ] \
+  || fail "the record naming the worker result is not the outbox's: $(field_of "$OB_MECH" seat)"
+[ "$(field_of "$OB_MECH" finding-outcome)" = "filed" ] \
+  || fail "the candidate was not filed: $(field_of "$OB_MECH" finding-outcome) — $(cat "$OB_MECH")"
+[ "$(field_of "$OB_MECH" finding-destination)" = "mechanism" ] \
+  || fail "the candidate named the wrong destination: $(field_of "$OB_MECH" finding-destination)"
+B_MECH="$(field_of "$OB_MECH" finding-branch)"
+[ -n "$B_MECH" ] || fail "the outbox record names no branch"
+
+# One commit, off origin/main, on a branch that is not the resident's.
+[ "$(git -C "$MECHANISM" rev-list --count "origin/main..$B_MECH")" = "1" ] \
+  || fail "the candidate branch does not carry exactly one commit"
+[ "$(git -C "$MECHANISM" rev-parse "$B_MECH^")" = "$(git -C "$MECHANISM" rev-parse origin/main)" ] \
+  || fail "the candidate branch was not cut from origin/main"
+
+# **A problem statement carrying a candidate patch, never the patched
+# code.** This is the whole restraint of
+# docs/tasks/0044-mechanism-findings-not-proposals.md §2 stated as a
+# test: the commit adds one backlog entry and touches nothing else, so
+# an outbox that ever "helpfully" applied the diff fails right here.
+CHANGED="$(git -C "$MECHANISM" diff --name-only origin/main "$B_MECH")"
+case "$CHANGED" in
+  docs/backlog/*.md) ;;
+  *) fail "the candidate commit touched something other than one backlog entry: $CHANGED" ;;
+esac
+[ "$(printf '%s\n' "$CHANGED" | grep -c .)" = "1" ] \
+  || fail "the candidate commit touched more than one path: $CHANGED"
+ENTRY_MECH="$(git -C "$MECHANISM" show "$B_MECH:$CHANGED")"
+printf '%s\n' "$ENTRY_MECH" | grep -q 'MECHANISM-PLACEHOLDER-AFTER' \
+  || fail "the backlog entry does not carry the candidate patch: $ENTRY_MECH"
+printf '%s\n' "$ENTRY_MECH" | grep -q 'A candidate fix, as a patch' \
+  || fail "the backlog entry does not frame the patch as a candidate: $ENTRY_MECH"
+# The tenant wrote no finding of its own, so the harness's placeholder
+# is what a stranger finds — and it says so rather than pretending to a
+# problem statement it does not have (§4).
+printf '%s\n' "$ENTRY_MECH" | grep -q '^Title: A worker turn proposed a change to the framework without a finding$' \
+  || fail "the synthesized entry has the wrong title: $ENTRY_MECH"
+printf '%s\n' "$ENTRY_MECH" | grep -q '^Destination: mechanism$' \
+  || fail "the synthesized entry names no destination: $ENTRY_MECH"
+# Nothing of the resident's may reach a public repository: neither the
+# errand's own text nor anything the tenant said about it.
+printf '%s\n' "$ENTRY_MECH" | grep -q 'APPROVAL-FIXTURE-MECHANISM' \
+  && fail "the synthesized entry carries the errand's text into a public checkout: $ENTRY_MECH"
+printf '%s\n' "$ENTRY_MECH" | grep -qF "$REQ_MECH" \
+  && fail "the synthesized entry carries a journal id into a public file: $ENTRY_MECH"
+
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after a mechanism-targeted turn"
+assert_checkouts_untouched "after a turn targeting the mechanism checkout"
+
+# ---------------------------------------------------------------------
+log "  -- and a tenant that wrote its own finding keeps it, patch underneath"
+# ---------------------------------------------------------------------
+# The other half of §2's routing: the candidate is appended to the
+# turn's finding rather than replacing it, so a tenant that did state
+# the problem gets its own entry with the patch as a suggestion under
+# it. The synthesized placeholder must not appear anywhere near it.
+MECHANISM_BOTH="$WORKDIR/mechanism-both-tenant.sh"
+cat > "$MECHANISM_BOTH" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+: "${CASTLE_MECHANISM_ROOT:?mechanism-both-tenant.sh: CASTLE_MECHANISM_ROOT must be set}"
+printf 'mechanism tenant: an invented gap, with an invented fix for it\n'
+cat > "$CASTLE_DIFF_FILE" <<'DIFF'
+--- a/modules/example (synthetic, harness fixture only)
++++ b/modules/example (synthetic, harness fixture only)
+@@ -1 +1 @@
+-BOTH-PLACEHOLDER-BEFORE
++BOTH-PLACEHOLDER-AFTER
+DIFF
+printf 'mechanism\n' > "$CASTLE_TARGET_FILE"
+cat > "$CASTLE_FINDING_FILE" <<'ENTRY'
+Title: An invented fixture gap with a fix attached
+Destination: mechanism
+
+**What.** An invented gap in an invented mechanism, reported by a
+fixture tenant that also wrote the change it would take to close it.
+
+**Why it matters.** Nothing depends on it. Harness fixture only.
+ENTRY
+TENANT
+chmod +x "$MECHANISM_BOTH"
+REQ_BOTH="$("$CASTLE" ask "APPROVAL-FIXTURE-BOTH: an invented complaint whose fix and whose diagnosis both belong in the framework.")"
+CASTLE_WORKER_COMMAND="$MECHANISM_BOTH" "$CASTLE" work "$REQ_BOTH" >/dev/null
+R_BOTH="$(newest_result_for "$REQ_BOTH")"
+R_BOTH_ID="$(basename "$R_BOTH" .md)"
+[ -z "$(proposal_question_for "$REQ_BOTH")" ] \
+  || fail "the second mechanism-targeted turn filed a proposal question"
+OB_BOTH="$(outbox_record_for "$R_BOTH_ID")"
+[ -n "$OB_BOTH" ] || fail "the second mechanism-targeted diff went nowhere"
+[ "$(field_of "$OB_BOTH" finding-outcome)" = "filed" ] \
+  || fail "the tenant's own finding was not filed: $(field_of "$OB_BOTH" finding-outcome) — $(cat "$OB_BOTH")"
+B_BOTH="$(field_of "$OB_BOTH" finding-branch)"
+CHANGED_BOTH="$(git -C "$MECHANISM" diff --name-only origin/main "$B_BOTH")"
+ENTRY_BOTH="$(git -C "$MECHANISM" show "$B_BOTH:$CHANGED_BOTH")"
+printf '%s\n' "$ENTRY_BOTH" | grep -q '^Title: An invented fixture gap with a fix attached$' \
+  || fail "the tenant's own title did not survive: $ENTRY_BOTH"
+printf '%s\n' "$ENTRY_BOTH" | grep -q 'without a finding' \
+  && fail "the placeholder title replaced a finding the tenant actually wrote: $ENTRY_BOTH"
+printf '%s\n' "$ENTRY_BOTH" | grep -q 'BOTH-PLACEHOLDER-AFTER' \
+  || fail "the tenant's finding did not get the candidate patch appended: $ENTRY_BOTH"
+# The body the tenant wrote comes first and the patch is underneath it,
+# which is the difference between an entry with a suggestion in it and
+# a patch with a caption.
+[ "$(printf '%s\n' "$ENTRY_BOTH" | grep -n 'An invented gap in an invented mechanism' | cut -d: -f1)" \
+    -lt "$(printf '%s\n' "$ENTRY_BOTH" | grep -n 'A candidate fix, as a patch' | cut -d: -f1)" ] \
+  || fail "the candidate patch is above the problem statement: $ENTRY_BOTH"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the second mechanism turn"
+assert_checkouts_untouched "after a mechanism turn that wrote its own finding"
+
+# ---------------------------------------------------------------------
+log "  -- and a mechanism proposal already in the journal is still decidable"
+# ---------------------------------------------------------------------
+# The historical-record backstop. Journals are append-only: proposals of
+# this shape were filed for as long as the check sat at apply time, and
+# nothing may rewrite them. Planted by hand precisely because no
+# supported writer can produce one any more — the same pattern
+# test/agent-loop/apply.sh uses for approvals granted under the older
+# statement, and the same fixture that file's `refused-target-mechanism`
+# scenario is built on.
+#
+# What this half asserts is that such a record stays legible, stays
+# valid and stays decidable, and that deciding it still moves nothing.
+# That the applier then refuses it by name is apply.sh's half.
+Q_HIST="20260201T000300Z-question-mechhistoric"
+{
+  echo "---"
+  echo "id: $Q_HIST"
+  echo "type: question"
+  echo "provenance: requested"
+  echo "refs: $REQ_MECH,$R_MECH_ID"
+  echo "seat: worker"
+  echo "created: 2026-02-01T00:03:00Z"
+  echo "proposal-sha256: $(sha256_of "$R_MECH")"
+  echo "authorizes-apply: true"
+  echo "---"
+  echo
+  echo "This errand produced a proposed change to your mechanism configuration."
+  echo "Nothing has been applied. Review it to approve, reject, or set it aside."
+} > "$JOURNAL/$Q_HIST.md"
+"$CASTLE" validate >/dev/null || fail "a mechanism proposal already in the journal no longer validates"
+A_HIST="$("$CASTLE" answer --decision approve "$Q_HIST" </dev/null)"
+grep -q '^decision: approve$' "$JOURNAL/$A_HIST.md" \
+  || fail "approving a mechanism proposal already in the journal recorded no approval"
+grep -q "^authorizes-apply: true\$" "$JOURNAL/$Q_HIST.md" \
+  || fail "the planted question lost the field its scope is defined by"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after deciding a historic mechanism proposal"
+# Unchanged from what this section always proved: deciding a change
+# against this framework's own checkout still applies nothing to it.
+assert_checkouts_untouched "after deciding a mechanism proposal already in the journal"
 
 # ---------------------------------------------------------------------
 log "castle record refuses an --outcome it would then fail to validate"

@@ -917,9 +917,46 @@ assert_private_untouched "after the world-writable lock scenario"
 # ---------------------------------------------------------------------
 log "refused: a change to the framework itself is not this seat's to make"
 # ---------------------------------------------------------------------
-read -r REQ_M R_M Q_M A_M <<<"$(new_approval APPLYABLE-MECHANISM)"
+# **The historical-record backstop**
+# (docs/tasks/0044-mechanism-findings-not-proposals.md §3). Since that
+# task a mechanism-targeted turn files no proposal question at all, so
+# `new_approval` — which gets its question from a real turn — can no
+# longer build this fixture. The question is planted by hand instead,
+# exactly as the "old approvals are inert" section above plants one and
+# for the same reason: no supported writer produces one any more, and
+# journals are append-only, so proposals of this shape sit in real
+# journals, decided and undecided, and a resident who approves one
+# tomorrow must still meet this refusal unchanged.
+#
+# The result underneath it is real — a turn, its diff, its `target:
+# mechanism` and its byte-exact sidecar — because every check the
+# applier runs before it reaches the target is a check about those.
+REQ_M="$("$CASTLE" ask "APPLY-FIXTURE APPLYABLE-MECHANISM: an invented complaint whose fix is a one-line change.")"
+"$CASTLE" work "$REQ_M" >/dev/null
+R_M="$(basename "$(newest_result_for "$REQ_M")" .md)"
 grep -q '^target: mechanism$' "$JOURNAL/$R_M.md" \
   || fail "the mechanism fixture did not stamp target: mechanism"
+[ -f "$JOURNAL/$R_M.patch" ] || fail "the mechanism fixture kept no byte-exact copy of its diff"
+[ -z "$(proposal_question_for "$REQ_M")" ] \
+  || fail "a mechanism-targeted turn filed a proposal question the applier could never spend"
+Q_M="20260201T000400Z-question-mechhistoric"
+{
+  echo "---"
+  echo "id: $Q_M"
+  echo "type: question"
+  echo "provenance: requested"
+  echo "refs: $REQ_M,$R_M"
+  echo "seat: worker"
+  echo "created: 2026-02-01T00:04:00Z"
+  echo "proposal-sha256: $(sha256_of "$JOURNAL/$R_M.md")"
+  echo "authorizes-apply: true"
+  echo "---"
+  echo
+  echo "A change against the framework checkout, offered while such changes were"
+  echo "still offered. Harness fixture only."
+} > "$JOURNAL/$Q_M.md"
+"$CASTLE" validate >/dev/null || fail "the planted mechanism proposal does not validate"
+A_M="$("$CASTLE" answer --decision approve "$Q_M" </dev/null)"
 "$CASTLE" apply "$A_M" >/dev/null 2>&1 && fail "a mechanism-targeted change reported a successful apply"
 AP_M="$(newest_apply_result_for "$A_M")"
 grep -q '^apply-outcome: refused-target-mechanism$' "$AP_M" \
@@ -936,6 +973,20 @@ grep -qi 'wrong layer\|mistake\|should have' "$AP_M" \
   && fail "the refusal implies the change was proposed against the wrong layer"
 assert_private_untouched "after the mechanism refusal"
 assert_mechanism_untouched "after the mechanism refusal"
+# And the other end of the same turn: its diff was routed to the outbox
+# rather than to the inbox, and refused there because THIS fixture's
+# framework checkout deliberately has no `origin/main` to branch from.
+# That is what keeps `assert_mechanism_untouched` above as strong as it
+# has always been — this file's whole claim is that nothing in it ever
+# writes the framework checkout, and the branch-cutting half of the
+# routing is proved in test/agent-loop/approval.sh, which builds a
+# fixture that can receive one.
+OB_M="$(grep -l "^refs: $R_M\$" "$JOURNAL"/*-result-*.md 2>/dev/null | head -1 || true)"
+[ -n "$OB_M" ] || fail "the mechanism-targeted diff reached no outbox record at all"
+grep -q '^finding-outcome: refused-no-base$' "$OB_M" \
+  || fail "the outbox did not refuse for want of a base: $(field_of "$OB_M" finding-outcome)"
+grep -q 'MECHANISM-PLACEHOLDER-AFTER' "$OB_M" \
+  || fail "the refused candidate was not preserved in the record: $(cat "$OB_M")"
 
 # ---------------------------------------------------------------------
 log "refused: the proposal on disk is no longer the one that was approved"
