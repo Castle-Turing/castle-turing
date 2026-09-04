@@ -300,6 +300,13 @@ No new record type, and no `claim`. A killed activation leaves no
 record at all and the next sweep finds the approval still eligible —
 except where it may have moved the repository, which §G covers.
 
+**One unconfirmed generation at a time.** The sweep spends no approval
+while any health window is open. Two switches stacked would leave a
+single rollback between two unconfirmed generations, so the window that
+expired would restore the *first* unconfirmed one and call the machine
+recovered. This cannot wedge — the window closes at its deadline
+whatever anyone does — so what it costs at worst is one window's delay.
+
 ### §G. The in-flight marker, unchanged in kind
 
 The activation seat writes a pin bump before it switches, so it has

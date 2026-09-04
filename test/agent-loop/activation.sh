@@ -523,6 +523,12 @@ HEALTH_Q2="$(newest_with "confirms-activation: $SWITCHED2_ID" question)"
 "$CASTLE" activate --sweep > "$WORKDIR/act7.txt" 2>&1 || true
 grep -qx "start castle-rollback.service" "$SYSTEMCTL_ARGV" \
   && fail "the resident's own sweep rolled back a window nobody had decided"
+# And nothing else is switched on top of it. Two unconfirmed
+# generations stacked would leave one rollback between them, so the
+# window that expired would restore the *first* unconfirmed generation
+# and call the machine recovered.
+grep -q "still waiting to be confirmed" "$WORKDIR/act7.txt" \
+  || fail "the sweep did not hold off while a window was open: $(cat "$WORKDIR/act7.txt")"
 # The deadline arrives. This is what the privileged system unit runs.
 "$CASTLE" activate --close-window > "$WORKDIR/act8.txt" 2>&1 || fail "close-window failed: $(cat "$WORKDIR/act8.txt")"
 ROLLED="$(newest_with "activation-outcome: rolled-back" result)"

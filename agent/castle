@@ -12199,6 +12199,26 @@ def cmd_activate(args: argparse.Namespace) -> int:
         if acted:
             records = load_all(journal_dir())
 
+        # **Nothing is spent while a health window is still open.** A
+        # second switch on top of an unconfirmed one stacks two
+        # generations with a single rollback between them: the window
+        # that then expires would restore the *first* unconfirmed
+        # generation and call the machine recovered. The window is a
+        # promise about one generation at a time, and this is what keeps
+        # it one.
+        #
+        # It is not a lock and it cannot wedge: the window closes on its
+        # own at the deadline, whatever the resident does, so this
+        # delays a switch by at most one window.
+        still_open = _open_windows(records)
+        if still_open:
+            print(
+                "activate: a switch is still waiting to be confirmed "
+                f"({still_open[0].id}); nothing further will be activated until "
+                "that window closes"
+            )
+            return route_journal() if acted or reconciled else 0
+
         approvals = _eligible_activations(records)
         if not approvals and not acted:
             print("activate: nothing eligible")
