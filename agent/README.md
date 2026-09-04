@@ -1859,6 +1859,65 @@ proves the pair for a whole journal on demand; the applier proves it
 again for the one record it is about to act on, because "validate was
 run at some point" is not the same claim.
 
+### Building and switching: `seat: builder`, `seat: activation`
+
+From `docs/tasks/0048-activation.md`, and it is the first thing in this
+system that changes the machine rather than a file. Two seats, because
+they write incomparable things:
+
+**`seat: builder`** results carry **`build-outcome`**, a closed
+vocabulary: `built`, `build-failed`, `refused-no-mechanism-checkout`,
+`refused-pin-unresolvable`, `refused-tree-dirty`, `refused-no-nix`. A
+`built` one also carries **`build-toplevel`** (the store path it
+produced) and, when it is proposing a framework pin bump,
+**`build-target-rev`** (the revision it adopts),
+**`build-base-commit`** (the private-repository commit the new lock was
+computed against, which is the staleness guard), and the exact new
+`flake.lock` in its body between a `diff-boundary` nonce, digested
+under **`lock-sha256`**.
+
+That last field is deliberately **not** `patch-sha256`, and the reason
+is the section above: `patch-sha256` means "there is a `.patch` sidecar
+beside this record and this is its digest", and `castle validate`
+condemns a record carrying it without one. Same purpose, different
+location, different name.
+
+A build spends no authorization and asks for none — a build changes
+nothing, and a question whose only honest answer is yes is a question
+that trains a resident to stop reading questions. A clean build files a
+`question` stamped **`authorizes-activation: true`**, which is
+`authorizes-apply`'s sibling and never appears on the same record:
+absence is the positive fact that a question was offered under a
+narrower statement, and no later change of wording reaches backwards.
+
+**`seat: activation`** results carry **`activation-outcome`**:
+`switched`, `switch-failed`, `confirmed`, `rolled-back`,
+`rollback-failed`, `refused-pin-stale`, `refused-tree-dirty`,
+`refused-no-privilege`. A pin bump that landed also carries
+**`activation-commit`**, under `apply-commit`'s exact contract — only
+where exactly one commit was verified to have landed, parented where
+this started.
+
+`outcome` is **not widened by any of this**, and the split is the
+applier's: `outcome` is an observation about the seat's own run,
+`activation-outcome` is an observation about the machine. A refusal is
+`outcome: completed`, because a conclusion correctly reached is not a
+failure of the run.
+
+A `switched` result opens a **health window**. It files a second
+question carrying **`confirms-activation: <switched-result-id>`**,
+decided on the same review surface with the same three keys: approving
+keeps the generation, rejecting rolls back now, and setting it aside
+decides nothing while the window still runs out. That is the one
+`defer` in this system with a consequence, which is why the review
+screen says so before the key is pressed. When the window closes, a
+privileged timer runs `castle activate --close-window` — **the only
+`castle` invocation anywhere that runs as root** — and either records
+the confirmation or rolls the machine back. Records it writes are
+handed straight back to the journal directory's owner, so a window that
+closed while nobody was logged in does not leave root-owned files in a
+git-tracked state repository.
+
 ### Corrections and filing-time context
 
 A `correction` record (`docs/tasks/0010-correction-record.md`) needs no
