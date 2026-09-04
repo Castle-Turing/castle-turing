@@ -229,13 +229,14 @@ naming the authorization in the commit message. It **activates
 nothing** — no rebuild, no new generation, no change to the running
 system — it **pushes nothing**, and it never writes a checkout of this
 framework, which it refuses by name rather than by error. That refusal
-is now a backstop rather than a path anything routes into: a turn whose
-diff is against this framework files no approval at all, and travels
-the outbox instead. It stays, and stays exact, because journals are
-append-only and proposals of that shape already sit in them, decided
-and undecided. Every apply
-spends exactly one `answer` record, whose question said at the moment
-it was shown that approving authorizes this; an approval granted under
+is a backstop rather than a path anything routes into: a turn whose diff
+is against this framework files no approval at all and travels the
+outbox instead, so nobody is asked to authorize a change this machine
+could never spend. It stays, and stays exact, because journals are
+append-only and proposals of that shape already sit in them, decided and
+undecided. Every apply spends exactly one `answer` record, whose
+question said at the moment it was shown that approving authorizes
+this; an approval granted under
 any earlier wording is inert forever, by construction, because the
 scope of an authority is what the person was told when they granted it.
 `seat: applier` is a new value in an existing category, not a new
@@ -255,9 +256,9 @@ commits that report as a backlog entry on a fresh branch in a checkout
 of this framework, if one is configured. When the turn also wrote the
 fix, that diff rides the same entry as a **candidate patch quoted for
 review — never the patched code**, because a change to this framework
-lands through a written brief and a review like any other, and an
-outbox that committed the change applied would be a back door around
-that, opened by a machine. It is a total function of the
+lands through a written brief and a review like any other, and an outbox
+that committed the change applied would be a back door around that,
+opened by a machine. It is a total function of the
 turn's outputs and the tree — the same finding and the same checkout
 produce the same branch, reconstructable by re-running it — and it
 holds no judgment of its own: it does not decide whether a finding is

@@ -5815,6 +5815,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # function is absent from `env`, and the outbox therefore
         # reaches its "nowhere to file this" refusal rather than writing
         # into a directory the turn already refused to hand over.
+
         # **Not `mechanism`**, which is the whole of
         # docs/tasks/0044-mechanism-findings-not-proposals.md §1: a
         # completed turn whose diff is against the framework checkout
@@ -5848,6 +5849,14 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # failed — must not take the proposal question down with it,
             # because that would turn a defect in the newest, least
             # load-bearing lane into a lost proposal on the oldest one.
+            #
+            # A mechanism-targeted turn has no proposal question to
+            # lose (docs/tasks/0044-mechanism-findings-not-proposals.md
+            # §1), and its candidate patch does ride this lane — but
+            # the diff itself is already durable twice over by the time
+            # this runs, in the result body and in the byte-exact
+            # `.patch` sidecar beside it, so what an exception here
+            # costs is the branch and not the work.
             #
             # Not silent: `_file_finding` writes a record on every path
             # it can reach, including every refusal, so reaching this
