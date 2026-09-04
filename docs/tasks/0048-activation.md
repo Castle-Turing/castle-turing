@@ -525,6 +525,56 @@ itself, and the wording choices are the authority record.
    concern and serialize naturally. The applier's argument for its own
    trio — that a build inside the *dispatch* sweep would stall every
    errand — does not apply between these two.
+9. **The activation lock lives under `state_dir()`, not `runtime_dir()`
+   (found by Codex's review of this task's PR).** `runtime_dir()` is
+   `$XDG_RUNTIME_DIR`-scoped, hence UID-scoped, and this lock is the
+   one this task takes from two UIDs: the resident's build/`activate
+   --sweep`, and root's `activate --close-window`. Root's runtime
+   directory resolves somewhere else entirely — `/run/user/0` if it
+   exists, otherwise the `/tmp/castle-0` fallback that `activate`'s own
+   unattended-sweep guard then refuses to trust — so the two callers
+   were never contending for the same file, and on a typical host
+   `--close-window` was refused outright before it could act at all.
+   `state_dir()` does not have this problem: the Nix module sets
+   `CASTLE_STATE_DIR` identically for both privilege contexts, and
+   where it falls back instead, root reaches a resident-owned directory
+   fine (root is not subject to ordinary permission checks). The
+   `runtime_dir_is_fallback()` guards on `build --sweep` and `activate
+   --sweep`/`--close-window` are removed along with it: they existed
+   solely to protect this lock's old, world-writable-fallback location.
+10. **The window-closer's `CASTLE_STATE_DIR`/`CASTLE_ACTIVATION_WINDOW`
+    are read from a runtime snapshot, not baked straight into the unit
+    (also found by Codex's review).** `nixos-rebuild switch` reloads
+    unit files before `castle-activate.service`'s own `ExecStartPost`
+    starts the window timer, so if the approved switch itself changes
+    `castle.agent.stateDir`, the window-closer that later fires is the
+    *new* generation's unit and reads the *new*, wrong journal — the
+    switch it was meant to confirm is invisible to it. `ExecStartPre`
+    now snapshots the pre-switch generation's values to
+    `/run/castle-activation-window.env`, which `castle-activation
+    -window.service` reads via a second `EnvironmentFile` entry that
+    overrides the unit's own (possibly-new-generation) defaults. Left
+    unfixed, deliberately: a switch that also flips
+    `castle.agent.activation.enable` to `false` removes
+    `castle-activate`/`castle-rollback`/`castle-activation-window.*`
+    entirely, and there is no snapshot that can restore units the new
+    generation does not declare. Gating those four on anything other
+    than `activation.enable` was considered and rejected — §H's own
+    default-off proof (mirrored in `flake.nix`'s
+    `nixosConfigurations.example` assertions) requires that
+    `activation.enable` stay the *only* thing that can make this
+    standing root grant exist, so a resident who disables it inside an
+    unconfirmed switch is understood to also be giving up that
+    switch's auto-rollback — they still have `nixos-rebuild switch
+    --rollback` by hand.
+11. **`CASTLE_ACTIVATION_TIMEOUT`/`CASTLE_ACTIVATION_WINDOW`/
+    `CASTLE_FRAMEWORK_INPUT` joined `environment.sessionVariables`
+    (also found by Codex's review).** They were wired only into the
+    automatic unit's environment; a resident running `castle build` or
+    `castle activate <answer-id>` by hand from a terminal got
+    `agent/castle`'s own hardcoded defaults instead of the configured
+    values, the same silent-wrong-behavior shape the apply and worker
+    variables above were added to this block to avoid.
 
 ## Stop conditions — what this brief does not decide
 

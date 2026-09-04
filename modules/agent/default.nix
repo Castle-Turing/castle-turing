@@ -57,6 +57,24 @@ let
     '';
     meta.description = "Castle Turing agent-layer CLI (record schema, router, digest, modal, worker wrapper)";
   };
+
+  # The window-closer's environment, snapshotted from *this* generation
+  # by `castle-activate.service`'s `ExecStartPre` before it runs
+  # `nixos-rebuild switch`, and read back by `castle-activation-window
+  # .service` via `EnvironmentFile` — caught by Codex's review of this
+  # task's PR. `nixos-rebuild switch` reloads unit files before that
+  # `ExecStartPre`/`ExecStart`/`ExecStartPost` sequence finishes, so if
+  # the approved switch also changes `castle.agent.stateDir`, the
+  # window-closer that later fires is the *new* generation's unit and
+  # reads `CASTLE_STATE_DIR` baked from the *new* value — the wrong
+  # journal, with nothing in it to confirm or roll back. This file is
+  # what lets it read the journal the switch that opened the window was
+  # actually using instead.
+  activationWindowSnapshot = pkgs.writeText "castle-activation-window.env" ''
+    CASTLE_STATE_DIR=${toString cfg.stateDir}
+    CASTLE_ACTIVATION_WINDOW=${toString cfg.activation.windowSeconds}
+    CASTLE_ROLLBACK_UNIT=castle-rollback.service
+  '';
 in
 {
   # docs/tasks/0024-config-target.md §1. `castle.agent.worker.repoRoot`
@@ -784,7 +802,19 @@ in
       // (lib.optionalAttrs (cfg.repo.mechanism != null) { CASTLE_MECHANISM_ROOT = cfg.repo.mechanism; })
       // { CASTLE_APPLY_EVALUATE_FLAKE = lib.boolToString cfg.apply.evaluateFlake; }
       // { CASTLE_APPLY_TIMEOUT = toString cfg.apply.timeoutSeconds; }
-      // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
+      // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; })
+      # docs/tasks/0048-activation.md, for the apply variables' own
+      # reason above: a `castle build` or `castle activate <answer-id>`
+      # a resident runs by hand must read the same timeout, window and
+      # framework input the automatic unit does, not silently fall back
+      # to agent/castle's own defaults (caught by Codex's review of
+      # this task's PR). All three ride unconditionally — each always
+      # has a value, exactly like the two apply variables above.
+      // {
+        CASTLE_ACTIVATION_TIMEOUT = toString cfg.activation.timeoutSeconds;
+        CASTLE_ACTIVATION_WINDOW = toString cfg.activation.windowSeconds;
+        CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
+      };
 
     # ---------------------------------------------------------------
     # Automatic dispatch (docs/tasks/0021-auto-dispatch.md), off by
@@ -1307,6 +1337,10 @@ in
       # grant.
       serviceConfig = {
         Type = "oneshot";
+        # Snapshot this generation's window context to a tmpfs path
+        # before switching to a possibly-different one — see
+        # `activationWindowSnapshot`'s comment.
+        ExecStartPre = "${pkgs.coreutils}/bin/install -m0644 ${activationWindowSnapshot} /run/castle-activation-window.env";
         # `nixos-rebuild switch --flake`, and nothing configurable
         # beyond the flakeref this module already knows. This line IS
         # the grant: a resident can read it in /etc/systemd/system and
@@ -1360,9 +1394,6 @@ in
         ExecStart = "${castleCli}/bin/castle activate --close-window";
         Environment = [
           "PATH=/run/current-system/sw/bin"
-          "CASTLE_STATE_DIR=${toString cfg.stateDir}"
-          "CASTLE_ACTIVATION_WINDOW=${toString cfg.activation.windowSeconds}"
-          "CASTLE_ROLLBACK_UNIT=castle-rollback.service"
           # Notifications off on this one unit, and it is the option's
           # own documented spelling for it rather than an omission: a
           # notification waiter spawned by root from a system unit has
@@ -1371,6 +1402,24 @@ in
           # routes on every tick — is what announces it, from a session
           # that can.
           "CASTLE_NOTIFY_COMMAND="
+        ];
+        # Two files, in this order: systemd merges `EnvironmentFile`
+        # entries in list order, a later one overriding an earlier one
+        # for the same name. The first is this *generation's* own
+        # `CASTLE_STATE_DIR`/`CASTLE_ACTIVATION_WINDOW`/`CASTLE_ROLLBACK_UNIT`
+        # — the ordinary case, and what applies when nothing about them
+        # changed. The second is `castle-activate.service`'s own
+        # snapshot of whatever generation actually opened this window,
+        # taken before it switched away from itself; it overrides the
+        # first when the switch changed one of these settings, which is
+        # the case this pair of files exists for (see
+        # `activationWindowSnapshot`'s comment). The leading `-`
+        # tolerates the runtime file being absent, which is the
+        # ordinary case for the first activation this mechanism ever
+        # runs.
+        EnvironmentFile = [
+          activationWindowSnapshot
+          "-/run/castle-activation-window.env"
         ];
       };
     };

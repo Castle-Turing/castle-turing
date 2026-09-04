@@ -10132,7 +10132,30 @@ def rollback_unit() -> str:
 
 
 def activation_lock_path() -> pathlib.Path:
-    """One builder-or-activation at a time, machine-wide.
+    """One builder-or-activation at a time, machine-wide — including the
+    root-run health-window closer, which is why this is under
+    `state_dir()` and not `runtime_dir()`.
+
+    **`runtime_dir()` is scoped to a UID, and this lock is taken from
+    two of them.** The resident's build and `activate --sweep` run as
+    the resident; `activate --close-window` runs as root, the one path
+    in this program that does (docs/tasks/0048-activation.md). Root's
+    UID resolves `runtime_dir()` to `/run/user/0` or, when that does
+    not exist (the common case — nothing gives root a login-session
+    runtime directory), the world-writable `/tmp/castle-0` fallback,
+    which `runtime_dir_is_fallback()`'s guard then refuses to trust at
+    all. Either way the root and resident invocations were never
+    contending for the same file, which is caught by Codex's review of
+    this task's PR: a lock only one side actually watches is not
+    mutual exclusion.
+
+    `state_dir()` does not have that problem: the Nix module sets
+    `CASTLE_STATE_DIR` to the same configured path in both the
+    resident's activation unit and root's window unit, and where it
+    instead falls back to a resident-owned directory, root reaches it
+    too — root is not subject to ordinary permission checks.
+    `activation_in_flight_dir()` already relies on the same fact for
+    the same cross-privilege reason.
 
     **One lock across both seats, not one each**, which is the one place
     this task deliberately does not mirror the applier. The two seats
@@ -10142,7 +10165,7 @@ def activation_lock_path() -> pathlib.Path:
     store path on the wrong side of it. They are separate seats because
     they write different things, not because they may run at once.
     """
-    return runtime_dir() / "activation.lock"
+    return state_dir() / "activation.lock"
 
 
 def activation_in_flight_dir() -> pathlib.Path:
@@ -12049,17 +12072,11 @@ def cmd_build(args: argparse.Namespace) -> int:
         )
         return 0
 
-    if args.sweep and runtime_dir_is_fallback():
-        print(
-            "castle build: refusing to sweep with locks under "
-            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
-            "so the only available lock directory is world-writable and an "
-            "unattended builder cannot trust it. Run this from a real login session "
-            "(the systemd user units do).",
-            file=sys.stderr,
-        )
-        return 1
-
+    # No `runtime_dir_is_fallback()` guard here, unlike `cmd_apply`'s and
+    # `cmd_dispatch`'s sweeps: this seat's lock lives under `state_dir()`
+    # (see `activation_lock_path()`), never under `runtime_dir()`, so a
+    # degraded runtime directory is not a reason this lock could be
+    # untrustworthy.
     lock = acquire_lock(activation_lock_path())
     if lock is None:
         print("build: another build or activation is already running; nothing to do")
@@ -12122,18 +12139,11 @@ def cmd_activate(args: argparse.Namespace) -> int:
         )
         return 0
 
-    if (args.sweep or args.close_window) and runtime_dir_is_fallback():
-        print(
-            "castle activate: refusing to run unattended with locks under "
-            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
-            "so the only available lock directory is world-writable and any local "
-            "user could hold it. On the seat that changes the running system, a lock "
-            "that can be held by somebody else is a switch that silently never "
-            "happens, or a rollback that does.",
-            file=sys.stderr,
-        )
-        return 1
-
+    # No `runtime_dir_is_fallback()` guard here (see `cmd_build`'s
+    # comment at its own call to `acquire_lock(activation_lock_path())`)
+    # — and it could not be one for `--close-window` regardless, since
+    # that path runs as root, which has no `/run/user/0` on a typical
+    # host and would be refused by this guard on every run.
     lock = acquire_lock(activation_lock_path())
     if lock is None:
         print("activate: another build or activation is already running; nothing to do")
