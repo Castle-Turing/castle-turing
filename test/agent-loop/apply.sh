@@ -1215,7 +1215,7 @@ log "  -- and running the command that label names actually works"
 # spells out: record ids are chronological only to one second, so two
 # apply records for one approval written inside the same second sort by
 # their random suffix and the surface can describe the older one. That
-# limit is `docs/backlog/record-ids-are-only-second-resolution.md`'s and
+# limit is `docs/tasks/0046-record-ordering-helper.md`'s and
 # is inherited rather than worked around here — the harness separates
 # them the way a resident's hands would.
 sleep 1
