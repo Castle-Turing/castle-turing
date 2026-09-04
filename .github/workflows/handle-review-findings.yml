@@ -14,17 +14,23 @@
 #   - Triggers only on a comment carrying the gate's marker, which only the
 #     gate emits. Claude's own dispositions comment does not carry it, and
 #     the prompt forbids writing it.
-#   - Only comments from someone with write access to the repository can
-#     trigger it (author_association), so a passer-by cannot spend the
-#     account's tokens by pasting a marker.
+#   - The commenter's *effective repository permission* is queried and must
+#     be write or admin. `author_association` is not that check: on a public
+#     organization repository MEMBER includes org members with no access to
+#     this repository, and COLLABORATOR can be read or triage only. Either
+#     could otherwise paste the marker and spend the account's tokens.
 #   - Same-repo branches only: never runs with write access against a fork.
 #
-# cancel-in-progress is deliberately false. Concurrency groups are evaluated
-# before a job's `if:`, so every unrelated comment on the pull request joins
-# this group; with cancellation on, an ordinary comment kills the handler
-# mid-flight. That is not hypothetical — castle-turing's predecessor of this
-# workflow keyed a PR-scoped group with cancel-in-progress: true and, across
-# sixty runs, completed exactly none of them.
+# The concurrency group is keyed by the triggering comment, not by the pull
+# request, and never cancels. Both halves matter, and both are scar tissue.
+# Concurrency is evaluated before a job's `if:`, so a pull-request-scoped
+# group catches every unrelated comment: with cancellation on, an ordinary
+# comment kills the handler mid-flight — castle-turing's predecessor of this
+# workflow did exactly that and completed none of its sixty runs. Turning
+# cancellation off is not sufficient either, because GitHub holds at most one
+# *pending* run per group and a newer run evicts the one waiting, so a queued
+# handler could still be discarded by an unrelated comment. A group of one
+# comment is a group nothing else can join.
 name: Handle review findings
 
 on:
@@ -32,15 +38,14 @@ on:
     types: [created]
 
 concurrency:
-  group: review-findings-${{ github.event.issue.number }}
+  group: review-findings-${{ github.event.comment.id }}
   cancel-in-progress: false
 
 jobs:
   handle:
     if: |
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '<!-- chevaline-gate: cross-vendor-review -->') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      contains(github.event.comment.body, '<!-- chevaline-gate: cross-vendor-review -->')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -49,37 +54,63 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - name: Resolve the pull request's head
+      - name: Check the commenter's permission and resolve the head branch
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # `eligible` is written only once, at the very end. Every earlier
+          # exit leaves it unset, which the steps below read as "do not run".
+
+          # Effective repository permission, not author_association: the
+          # latter says how someone relates to the org, not whether they can
+          # write here.
+          permission="$(gh api \
+            "repos/${{ github.repository }}/collaborators/${{ github.event.comment.user.login }}/permission" \
+            --jq .permission 2>/dev/null || echo none)"
+          case "$permission" in
+            admin|write|maintain) ;;
+            *)
+              echo "Commenter has '$permission' permission on this repository; declining to run." >&2
+              exit 0
+              ;;
+          esac
+
           gh pr view "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
             --json headRefName,headRepository,headRepositoryOwner \
             > pr.json
           head_repo="$(jq -r '.headRepositoryOwner.login + "/" + .headRepository.name' pr.json)"
-          echo "ref=$(jq -r .headRefName pr.json)" >> "$GITHUB_OUTPUT"
           if [ "$head_repo" != "${{ github.repository }}" ]; then
             echo "Head branch lives in $head_repo, not ${{ github.repository }}: declining to run with write access against a fork." >&2
-            echo "fork=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "fork=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          echo "ref=$(jq -r .headRefName pr.json)" >> "$GITHUB_OUTPUT"
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      # REVIEW_BOT_TOKEN, when the repository has one, is a credential whose
+      # pushes GitHub reports as events. The default GITHUB_TOKEN's do not:
+      # a fix pushed with it never re-runs the pull request's checks, so the
+      # human can be looking at a green tick that belongs to an older commit.
+      # The fallback keeps the workflow working without the secret; the agent
+      # is told to say so when the checks do not re-run.
       - name: Checkout the pull request branch
-        if: steps.pr.outputs.fork == 'false'
+        if: steps.pr.outputs.eligible == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.pr.outputs.ref }}
           fetch-depth: 0
+          token: ${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: Judge the findings, fix what is valid, answer the rest
-        if: steps.pr.outputs.fork == 'false'
+        if: steps.pr.outputs.eligible == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           prompt: |
             The `cross-vendor-review` gate has posted its findings on pull
             request #${{ github.event.issue.number }} in ${{ github.repository }}.
@@ -102,7 +133,14 @@ jobs:
                disposition — fixed, with the commit hash, or declined, with
                the reasoning. That comment is the receipt; the human reads it
                instead of re-deriving what happened.
-            4. Follow the repository's own CLAUDE.md or AGENTS.md throughout.
+            4. If you pushed anything, check whether the pull request's own
+               checks ran against your commit
+               (gh pr checks ${{ github.event.issue.number }}). A push made
+               with the default workflow credential does not start them, and
+               a human reading a green tick that belongs to an older commit
+               is being misled. If they did not re-run, say so in your
+               comment, naming the commit that is unchecked.
+            5. Follow the repository's own CLAUDE.md or AGENTS.md throughout.
 
             Hard rules:
             - Never merge, close, approve, or request review on the pull

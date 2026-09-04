@@ -51,8 +51,17 @@ predecessor in three ways:
    script emits and nothing else does. Matching a marker rather than a
    heading means the review's wording can change without silently
    switching the automation off.
-2. **`cancel-in-progress: false`**, per the defect above. Stacked gate
-   comments on one pull request queue rather than killing each other.
+2. **A concurrency group of one comment, which never cancels.**
+   Disabling cancellation is necessary but not sufficient: GitHub keeps
+   at most one *pending* run per group and a newer run evicts the
+   waiting one, so an ordinary comment could still discard a queued
+   handler. Keying the group by `github.event.comment.id` makes it a
+   group nothing else can join. The workflow also checks the
+   commenter's effective repository permission rather than their
+   `author_association`, which on a public organization repository
+   admits members and collaborators who cannot write here. Both of
+   those came from the gate's review of this workflow's first version,
+   on the sibling repository that adopted it first.
 3. **Dispositions go in one comment**, because the gate posts its
    findings as one comment rather than as inline review threads. The
    predecessor replied on each inline thread and resolved it, which was
