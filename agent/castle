@@ -12163,7 +12163,14 @@ def cmd_activate(args: argparse.Namespace) -> int:
                     print(f"activate: {result_id} closes the window on {switched.id}")
             if not closed:
                 print("activate: no health window is open")
-            return route_journal() if closed else 0
+            # **Deliberately no routing pass on this path.** It runs as
+            # root, from a system unit, with no session behind it: the
+            # router spawns a detached notification waiter, and one
+            # spawned by root has no bus to talk to and no window to
+            # open. The record it would announce is durable, and the
+            # resident's own sweep — which runs every minute and does
+            # route — announces it from a session that can.
+            return 0
 
         if not args.sweep:
             answer = records.get(args.answer_id)
@@ -12237,9 +12244,15 @@ def cmd_activate(args: argparse.Namespace) -> int:
             # second authorization now would stack two unconfirmed
             # generations with one rollback between them.
             break
-        if acted or reconciled:
-            return route_journal()
-        return 0
+        # One routing pass at the end of every sweep, whether this one
+        # acted or not — which is where this deliberately differs from
+        # `cmd_apply`'s tail. A rollback is written by the privileged
+        # window unit, which does not route (see `--close-window`
+        # above), so if this only routed after acting, the one record a
+        # resident most needs to be told about would wait for the next
+        # thing that happened to happen. `route_journal` is an
+        # idempotent whole-journal fold and costs one read.
+        return route_journal()
     finally:
         lock.close()
 

@@ -1363,6 +1363,14 @@ in
           "CASTLE_STATE_DIR=${toString cfg.stateDir}"
           "CASTLE_ACTIVATION_WINDOW=${toString cfg.activation.windowSeconds}"
           "CASTLE_ROLLBACK_UNIT=castle-rollback.service"
+          # Notifications off on this one unit, and it is the option's
+          # own documented spelling for it rather than an omission: a
+          # notification waiter spawned by root from a system unit has
+          # no session bus to talk to and no window to open. The record
+          # is durable either way, and the resident's own sweep — which
+          # routes on every tick — is what announces it, from a session
+          # that can.
+          "CASTLE_NOTIFY_COMMAND="
         ];
       };
     };
