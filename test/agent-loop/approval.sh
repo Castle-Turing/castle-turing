@@ -982,6 +982,70 @@ printf '%s\n' "$ENTRY_BOTH" | grep -q 'BOTH-PLACEHOLDER-AFTER' \
 assert_checkouts_untouched "after a mechanism turn that wrote its own finding"
 
 # ---------------------------------------------------------------------
+log "  -- and a PRIVATE diff never rides a finding into the public checkout"
+# ---------------------------------------------------------------------
+# The leak guard, and the reason it is worth its own scenario: the
+# candidate section is composed only for a mechanism target
+# (docs/tasks/0044-mechanism-findings-not-proposals.md §2), and a
+# private-layer diff is a change to the RESIDENT'S OWN configuration —
+# their host names, their paths, their choices. A routing bug that
+# appended it to a finding would commit that into a checkout of a
+# public repository, which is the one failure this whole project is
+# organised against (CLAUDE.md's first hard rule).
+#
+# So: a tenant that writes both, with a private target. The proposal is
+# filed as it always was, and the branch the finding lands on carries
+# no trace of it.
+PRIVATE_BOTH="$WORKDIR/private-both-tenant.sh"
+cat > "$PRIVATE_BOTH" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'private tenant: a configuration change here, and a framework gap noticed in passing\n'
+cat > "$CASTLE_DIFF_FILE" <<'DIFF'
+--- a/resident.nix (synthetic, harness fixture only)
++++ b/resident.nix (synthetic, harness fixture only)
+@@ -1 +1 @@
+-PRIVATE-ONLY-MARKER-BEFORE
++PRIVATE-ONLY-MARKER-AFTER
+DIFF
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+cat > "$CASTLE_FINDING_FILE" <<'ENTRY'
+Title: An invented fixture gap noticed while changing something else
+Destination: mechanism
+
+**What.** An invented gap in an invented mechanism, reported by a
+fixture tenant whose actual change belonged in the other layer.
+
+**Why it matters.** Nothing depends on it. Harness fixture only.
+ENTRY
+TENANT
+chmod +x "$PRIVATE_BOTH"
+REQ_PB="$("$CASTLE" ask "APPROVAL-FIXTURE-PRIVATE-BOTH: an invented complaint fixed in the private layer by a turn that also noticed something upstream.")"
+CASTLE_WORKER_COMMAND="$PRIVATE_BOTH" "$CASTLE" work "$REQ_PB" >/dev/null
+R_PB="$(newest_result_for "$REQ_PB")"
+R_PB_ID="$(basename "$R_PB" .md)"
+grep -q '^target: private$' "$R_PB" || fail "the private-target turn did not stamp target: private"
+# Unchanged end to end: a private proposal is still filed exactly as it
+# was before this task existed.
+[ -n "$(proposal_question_for "$REQ_PB")" ] \
+  || fail "a private-target turn stopped filing a proposal question"
+OB_PB="$(outbox_record_for "$R_PB_ID")"
+[ -n "$OB_PB" ] || fail "the finding that turn wrote went nowhere"
+[ "$(field_of "$OB_PB" finding-outcome)" = "filed" ] \
+  || fail "the finding was not filed: $(field_of "$OB_PB" finding-outcome) — $(cat "$OB_PB")"
+B_PB="$(field_of "$OB_PB" finding-branch)"
+ENTRY_PB="$(git -C "$MECHANISM" show "$B_PB:$(git -C "$MECHANISM" diff --name-only origin/main "$B_PB")")"
+printf '%s\n' "$ENTRY_PB" | grep -q 'PRIVATE-ONLY-MARKER' \
+  && fail "a private-layer diff was committed into the public framework checkout: $ENTRY_PB"
+printf '%s\n' "$ENTRY_PB" | grep -q 'A candidate fix, as a patch' \
+  && fail "a private-target turn's finding grew a candidate-patch section: $ENTRY_PB"
+printf '%s\n' "$ENTRY_PB" | grep -q '^Title: An invented fixture gap noticed while changing something else$' \
+  || fail "the tenant's finding did not survive intact: $ENTRY_PB"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the private-plus-finding turn"
+assert_checkouts_untouched "after a private-target turn that also filed a finding"
+
+# ---------------------------------------------------------------------
 log "  -- and a mechanism proposal already in the journal is still decidable"
 # ---------------------------------------------------------------------
 # The historical-record backstop. Journals are append-only: proposals of

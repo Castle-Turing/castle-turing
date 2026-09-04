@@ -334,7 +334,18 @@ scenario is rewritten rather than deleted:
    mechanism tenant writes a diff, a target and a finding; the branch's
    entry carries the tenant's `Title:` and the candidate section
    underneath. The synthesized title does not appear.
-5. **The historical record stays decidable and stays inert.** A
+5. **A private diff never rides a finding into the public checkout.**
+   A third tenant writes a private-target diff *and* a finding. The
+   proposal question is filed exactly as it always was, the finding
+   lands, and the committed entry carries no trace of the diff and no
+   candidate section at all. This is the leak guard rather than a
+   symmetry check: a private-layer diff is a change to the resident's
+   own configuration, and a routing bug that appended it to a finding
+   would commit it into a checkout of a public repository — the one
+   failure `CLAUDE.md`'s first hard rule exists to prevent. The
+   synthesized entry is checked the same way, for the errand's text and
+   for any journal id.
+6. **The historical record stays decidable and stays inert.** A
    mechanism-targeted proposal question is planted by hand — the
    pattern `apply.sh` already uses, and the only way to produce one now
    — with `authorizes-apply: true` and a `proposal-sha256` over a real
@@ -342,7 +353,7 @@ scenario is rewritten rather than deleted:
    resident can approve it, the approval records, and
    `assert_checkouts_untouched` holds. Nothing rewrites it and nothing
    drops it.
-6. **`assert_checkouts_untouched` after every scenario, unweakened.**
+7. **`assert_checkouts_untouched` after every scenario, unweakened.**
    Creating a branch ref moves no HEAD and dirties no tree, so the
    file's central negative claim is unchanged and still has teeth.
 
