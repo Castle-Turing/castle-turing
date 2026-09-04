@@ -1,0 +1,118 @@
+# Handle review findings — the resident's default, copied into every repo.
+#
+# The canonical copy of this workflow lives in the Chevaline profile at
+# templates/handle-review-findings.yml; the contract it implements is
+# instructions/review.md. Change it there first, then copy outward — a repo
+# that edits its own copy has forked the default silently.
+#
+# What it does: when the `cross-vendor-review` gate posts its findings on a
+# pull request, Claude judges each one, fixes the valid ones on the branch,
+# and answers the rest in a single dispositions comment. Findings get
+# receipts before the human reads the PR.
+#
+# Loop prevention, by construction:
+#   - Triggers only on a comment carrying the gate's marker, which only the
+#     gate emits. Claude's own dispositions comment does not carry it, and
+#     the prompt forbids writing it.
+#   - Only comments from someone with write access to the repository can
+#     trigger it (author_association), so a passer-by cannot spend the
+#     account's tokens by pasting a marker.
+#   - Same-repo branches only: never runs with write access against a fork.
+#
+# cancel-in-progress is deliberately false. Concurrency groups are evaluated
+# before a job's `if:`, so every unrelated comment on the pull request joins
+# this group; with cancellation on, an ordinary comment kills the handler
+# mid-flight. That is not hypothetical — castle-turing's predecessor of this
+# workflow keyed a PR-scoped group with cancel-in-progress: true and, across
+# sixty runs, completed exactly none of them.
+name: Handle review findings
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: review-findings-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  handle:
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '<!-- chevaline-gate: cross-vendor-review -->') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Resolve the pull request's head
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json headRefName,headRepository,headRepositoryOwner \
+            > pr.json
+          head_repo="$(jq -r '.headRepositoryOwner.login + "/" + .headRepository.name' pr.json)"
+          echo "ref=$(jq -r .headRefName pr.json)" >> "$GITHUB_OUTPUT"
+          if [ "$head_repo" != "${{ github.repository }}" ]; then
+            echo "Head branch lives in $head_repo, not ${{ github.repository }}: declining to run with write access against a fork." >&2
+            echo "fork=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fork=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout the pull request branch
+        if: steps.pr.outputs.fork == 'false'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Judge the findings, fix what is valid, answer the rest
+        if: steps.pr.outputs.fork == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            The `cross-vendor-review` gate has posted its findings on pull
+            request #${{ github.event.issue.number }} in ${{ github.repository }}.
+            You are checked out on that pull request's branch.
+
+            1. Read the findings:
+               gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}"
+               They arrive as one comment holding every finding, each tagged
+               [P1], [P2] or [P3] with a file and line. There are no inline
+               review threads to reply to.
+            2. Judge each finding on its merits — the reviewer is a different
+               vendor's model, it is right often and not always. For a valid
+               finding, implement the smallest correct fix, commit it, and
+               push to this branch. For one you disagree with, or that is out
+               of the pull request's scope, decide against it and say why.
+               Never silently skip a finding: a disagreement between reviewers
+               that the human cannot see is worse than either verdict.
+            3. Post exactly one comment on the pull request, listing every
+               finding in the order the review gave them, each with its
+               disposition — fixed, with the commit hash, or declined, with
+               the reasoning. That comment is the receipt; the human reads it
+               instead of re-deriving what happened.
+            4. Follow the repository's own CLAUDE.md or AGENTS.md throughout.
+
+            Hard rules:
+            - Never merge, close, approve, or request review on the pull
+              request. Every merge decision is the human's.
+            - Do not expand the diff beyond what the findings require. A
+              drive-by refactor in a fix commit is a defect.
+            - Never edit the gate's comment; dispositions go in your own.
+            - Never write the gate's marker string
+              (an HTML comment beginning "chevaline-gate") anywhere — in a
+              comment, a commit message or a file. It would re-trigger this
+              workflow against your own output.
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh api:*),Bash(nix:*)"
