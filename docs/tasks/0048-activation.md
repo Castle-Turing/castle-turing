@@ -129,6 +129,29 @@ that produced it do not clear themselves, and a loop that rebuilds a
 broken revision every minute is the failure mode this bound exists to
 make impossible.
 
+**Amended during implementation, and the harness is what found it.**
+Trigger 2's bound is lifted for a revision whose *activation* refused.
+A refusal is a record saying the world moved between the build and the
+switch — the repository gained a commit, its lock went dirty — so a
+rebuild after one is not a retry of the same attempt but a build
+against a different base. Without the exception the first refusal
+barred that revision forever and the resident had to notice and drive
+it by hand, which is exactly the silence this whole mechanism exists to
+remove. It cannot run away: a rebuild files a question and stops, so
+nothing reaches a refusal again without a deliberate human approval in
+between.
+
+**The dirty check before a pin bump is scoped to `flake.lock` and
+`flake.nix`, never repo-wide**, and this too is a correction made
+against the code rather than against the brief's first draft.
+`_dirty_entries` documents at length why a repo-wide check refuses
+forever on residents who did nothing wrong — a `state/` submodule
+dirties the outer gitlink on every journal commit, an un-gitignored key
+file shows as untracked. What that concedes is stated in the record
+rather than hidden: a pin candidate is built from the repository's
+committed state, so uncommitted edits elsewhere are not in it, and the
+build result names the commit it was made from.
+
 ### §C. A failed build files a result and asks nothing
 
 `build-outcome: build-failed`, `outcome: failed`, the tail of the
@@ -153,7 +176,14 @@ posture, copied:
 1. A **result**, `seat: builder`, `build-outcome: built`, carrying the
    store path of the closure that was built (`build-toplevel`), and —
    on the pin-bump trigger only — the exact bytes of the new
-   `flake.lock` between a nonce diff boundary, stamped `patch-sha256`.
+   `flake.lock` between a nonce diff boundary, stamped `lock-sha256`.
+
+   **`lock-sha256` and not `patch-sha256`**, which is what this brief
+   said before the harness ran. `patch-sha256` means something exact
+   since docs/tasks/0033: there is a `<result-id>.patch` sidecar file
+   beside this record and this is its digest, and `cmd_validate`
+   condemns a record carrying the field without one. Same purpose,
+   different location, so a different name.
    The prose above the boundary names what is being adopted: the
    revision, how many commits it is ahead, and the subject line of
    each merge commit in that range. Titles, not shas, because a
@@ -250,7 +280,9 @@ no new keypress.
 `rollback-failed`, `refused-pin-stale`, `refused-tree-dirty`,
 `refused-no-privilege`.
 
-`build-toplevel` (result-only) — the store path built. `build-target-rev`
+`build-toplevel` (result-only) — the store path built. `lock-sha256`
+(result-only) — the digest of the `flake.lock` bytes carried in the
+body. `build-target-rev`
 (result-only) — the framework revision this build adopts, absent on the
 applied-change trigger. `activation-commit` (result-only) — the pin-bump
 commit, stamped only where a single commit was verified to have landed,
@@ -387,7 +419,14 @@ units evaluate. The check job additionally reads the *generated* unit
 files and the generated polkit rule and asserts their content, because
 `nix flake check` proves evaluation and not that the generated
 artifact says the right thing (the lesson `sway --validate` taught
-this project once already).
+this project once already), and `nixosConfigurations.example-activation`
+asserts the generated units and the generated **polkit rule text**. That
+last one matters most: a rule matching the action id and not the unit
+name would grant this user start/stop/restart over every unit on the
+machine and evaluate exactly as cleanly.
+`nixosConfigurations.example` carries the matching default-off proof,
+covering the units *and* the rule — a grant nobody uses is still a
+grant.
 
 **What only a real host proves, named as human steps.** That
 `nixos-rebuild switch` succeeds on real hardware; that the polkit rule
@@ -451,17 +490,30 @@ itself, and the wording choices are the authority record.
    not the JSON, and the activation seat needs bytes it can write
    verbatim. Embedding both a display diff and application bytes would
    be two copies of one artifact.
-5. **`nix flake update --override-input` is the one command whose
-   semantics this brief cannot prove in CI.** The harness asserts the
-   argv; whether that spelling pins the lock to the named revision at
-   this flake's nixpkgs pin is a Nix-capable-host claim. The exact
-   command line is recorded in every build result whether it ran or
-   not — the applier's own practice — so a resident can paste it.
+5. **`--override-input` was dropped during implementation, and the
+   check that replaced it is stronger.** The override would have meant
+   reconstructing a flakeref from the lock's `original` node — a parser
+   this task would own forever. Instead `nix flake update <input>
+   --flake <worktree>` runs unconstrained and the *result* is checked:
+   the revision the new lock names has to be the one the framework
+   checkout's `origin/main` names, or the build refuses and says the two
+   disagree. That also catches the case an override would have papered
+   over, where upstream and the local checkout genuinely differ. What
+   remains unprovable in CI is the spelling itself — that `nix flake
+   update <input> --flake <dir>` is what this flake's pinned nix takes.
+   The exact command line is recorded in every build result whether it
+   ran or not, the applier's own practice, so a resident can paste it.
 6. **The pin-behind trigger requires a mechanism checkout and is
    silently inert without one.** The alternative was fetching, which
    this seat may not do. A host with no mechanism checkout gets the
    applied-change trigger only, and the option's description says so.
-7. **One user-unit trio, not two.** Build and activation share one
+7. **The working tree is synced by writing the file and updating one
+   index entry, not by `checkout-index` or `read-tree`.** Found by the
+   harness: the commit is built in a private index, so `checkout-index`
+   restores what the *real* index still says — the old lock — and
+   `read-tree` would discard anything the resident had staged
+   elsewhere. One path in, one path out.
+8. **One user-unit trio, not two.** Build and activation share one
    sweep, one path unit, one timer, because they are one seat's
    concern and serialize naturally. The applier's argument for its own
    trio — that a build inside the *dispatch* sweep would stall every
