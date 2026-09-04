@@ -727,6 +727,19 @@ LOCK_PATH = "flake.lock"
 # says which commit it was made from.
 PIN_PATHS = [LOCK_PATH, "flake.nix"]
 
+# The digest covering the `flake.lock` bytes a build result carries in
+# its body (docs/tasks/0048-activation.md §D).
+#
+# **Not `patch-sha256`, and the distinction is not cosmetic.** That
+# field means something exact since docs/tasks/0033: there is a `.patch`
+# sidecar file beside this record and this is its digest — `cmd_validate`
+# checks for the file and condemns a record carrying the field without
+# one. What this covers lives in the body, between the same nonce
+# boundary a proposed diff uses, because the artifact is one generated
+# file that the activation seat writes verbatim rather than a patch it
+# applies. Same purpose, different location, so a different name.
+LOCK_SHA256_FIELD = "lock-sha256"
+
 
 def diff_boundary_lines(boundary: str) -> tuple[str, str]:
     """The two literal lines that delimit an embedded diff. One
@@ -809,6 +822,7 @@ FIELD_ORDER = (
     "build-toplevel",
     "build-target-rev",
     "build-base-commit",
+    "lock-sha256",
     "activation-outcome",
     "activation-commit",
     "target",
@@ -10436,9 +10450,31 @@ def _build_trigger(
     if target == locked:
         return "", [], "", locked, "the framework pin is already current"
 
+    # Barred by "a build of this revision exists" — with one exception,
+    # and the exception is not a loophole in the rule but the same rule
+    # applied to a second fact. An activation that **refused** is a
+    # record saying the world moved between the build and the switch:
+    # the repository gained a commit, or its lock went dirty. A rebuild
+    # after one of those is not a retry of the same attempt, it is a
+    # build against a different base, and without this the first refusal
+    # would bar that revision forever and the resident would have to
+    # notice and drive it by hand.
+    #
+    # It cannot run away. A rebuild files a question and stops; nothing
+    # reaches a refusal again without a resident approving in between,
+    # so each cycle costs one deliberate human act.
+    refused_revs = {
+        (records.get(rec.refs[1]).fields.get(BUILD_TARGET_REV_FIELD, "").strip()
+         if len(rec.refs) > 1 and records.get(rec.refs[1]) is not None
+         else "")
+        for rec in records.values()
+        if rec.type == "result"
+        and rec.fields.get("seat") == ACTIVATION_SEAT
+        and rec.fields.get(ACTIVATION_OUTCOME_FIELD, "").startswith("refused-")
+    }
     already = {
         rec.fields.get(BUILD_TARGET_REV_FIELD, "").strip() for rec in builder_results
-    }
+    } - {rev for rev in refused_revs if rev}
     if target in already:
         return "", [], "", locked, (
             f"a build of framework revision {target[:12]} has already been attempted"
@@ -10583,7 +10619,7 @@ def _write_build_result(
         boundary = os.urandom(8).hex()
         begin, end = diff_boundary_lines(boundary)
         extra[DIFF_BOUNDARY_FIELD] = boundary
-        extra[PATCH_SHA256_FIELD] = hashlib.sha256(lock_bytes).hexdigest()
+        extra[LOCK_SHA256_FIELD] = hashlib.sha256(lock_bytes).hexdigest()
         body_lines += [
             "",
             f"The exact `{LOCK_PATH}` this would write:",
@@ -11384,7 +11420,7 @@ def _extract_bounded(result: Record) -> bytes | None:
     (docs/tasks/0033-byte-exact-proposal.md).
     """
     boundary = result.fields.get(DIFF_BOUNDARY_FIELD, "").strip()
-    digest = result.fields.get(PATCH_SHA256_FIELD, "").strip()
+    digest = result.fields.get(LOCK_SHA256_FIELD, "").strip()
     if not boundary or not digest:
         return None
     begin, end = diff_boundary_lines(boundary)
@@ -11508,15 +11544,34 @@ def _commit_lock(
                 "something else moved this branch while the commit was being built"
             )
 
-        # The working tree still holds the old lock; bring it to the
-        # commit. Done after the ref moved, so a failure here leaves a
-        # correct commit and visible dirt rather than an uncommitted
-        # change nobody authorized.
-        checked, _ = _run_git(root, ["checkout-index", "-f", "--", LOCK_PATH])
-        if checked is None or checked.returncode != 0:
+        # The working tree and the resident's real index still hold the
+        # old lock; bring both to the commit. Done after the ref moved,
+        # so a failure here leaves a correct commit and visible dirt
+        # rather than an uncommitted change nobody authorized.
+        #
+        # **The file is written directly and the index entry updated by
+        # hand, rather than `checkout-index` or `read-tree`.** Those
+        # both read or rewrite the *whole* real index: `checkout-index`
+        # would restore whatever the index already said about this path
+        # — the old lock, since the commit was built in a private one —
+        # and `read-tree` would discard anything the resident had
+        # staged elsewhere. One path in, one path out, and nothing else
+        # in their index is touched.
+        try:
+            (pathlib.Path(root) / LOCK_PATH).write_bytes(lock_bytes)
+        except OSError as exc:
             return sha, (
-                f"the commit landed, but `{LOCK_PATH}` in your working tree was not "
-                "brought up to it — `git checkout -- " + LOCK_PATH + "` will"
+                f"the commit landed, but `{LOCK_PATH}` in your working tree could not "
+                f"be brought up to it ({exc}) — `git checkout -- {LOCK_PATH}` will"
+            )
+        staged_real, _ = _run_git(
+            root,
+            ["update-index", "--add", "--cacheinfo", f"100644,{blob_sha},{LOCK_PATH}"],
+        )
+        if staged_real is None or staged_real.returncode != 0:
+            return sha, (
+                f"the commit landed and `{LOCK_PATH}` on disk matches it, but git's "
+                "index still says otherwise — `git add " + LOCK_PATH + "` will settle it"
             )
         return sha, ""
     finally:
@@ -12622,6 +12677,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
             (CONFIRMS_ACTIVATION_FIELD, None, "question"),
             (BUILD_OUTCOME_FIELD, BUILD_OUTCOME_VALUES, "result"),
             (BUILD_TOPLEVEL_FIELD, None, "result"),
+            (LOCK_SHA256_FIELD, None, "result"),
             (BUILD_TARGET_REV_FIELD, None, "result"),
             (BUILD_BASE_COMMIT_FIELD, None, "result"),
             (ACTIVATION_OUTCOME_FIELD, ACTIVATION_OUTCOME_VALUES, "result"),
