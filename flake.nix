@@ -347,6 +347,50 @@
                   '';
                 }
                 {
+                  # docs/tasks/0048-activation.md: the same default-off
+                  # proof again, for the largest authority in this
+                  # module. Dispatch lets a tenant spend money, apply
+                  # lets it change a resident's files, and this one lets
+                  # it change the running machine — and declares a
+                  # standing root grant to do it. If importing
+                  # nixosModules.agent ever quietly produced these
+                  # units, or that polkit rule, a resident would acquire
+                  # root-for-the-agent-layer by installing a framework
+                  # rather than by deciding to.
+                  #
+                  # The polkit clause is the half that would not be
+                  # caught by the unit clauses: a rule can be installed
+                  # by a module whose units are all absent, and a grant
+                  # nobody uses is still a grant.
+                  #
+                  # Same implication form as the two above, and for the
+                  # same reason: nixosConfigurations.example-activation
+                  # extends this configuration and inherits its
+                  # assertions.
+                  assertion =
+                    config.castle.agent.activation.enable
+                    || (
+                      !(config.systemd.user.services ? castle-activation)
+                      && !(config.systemd.user.paths ? castle-activation)
+                      && !(config.systemd.user.timers ? castle-activation)
+                      && !(config.systemd.services ? castle-activate)
+                      && !(config.systemd.services ? castle-rollback)
+                      && !(config.systemd.services ? castle-activation-window)
+                      && !(config.systemd.timers ? castle-activation-window)
+                      && !(lib.hasInfix "castle-activate" config.security.polkit.extraConfig)
+                    );
+                  message = ''
+                    nixosConfigurations.example generates activation units, or a
+                    polkit rule naming them, even though
+                    castle.agent.activation.enable is left at its default.
+                    Letting this machine rebuild and switch itself is opt-in,
+                    and it is the first standing root grant in this project
+                    (docs/tasks/0048-activation.md §H): importing
+                    nixosModules.agent must never acquire that authority on its
+                    own.
+                  '';
+                }
+                {
                   # docs/tasks/0031-secrets-tooling.md: what this repo
                   # can prove about the secrets slot without ever
                   # holding a key. Three facts, all about the empty
@@ -799,6 +843,150 @@
                     settings baked in and no mechanism checkout, a path unit
                     watching the configured journal directory, and a one-minute
                     backstop timer (docs/tasks/0026-apply-validate.md §B, §K).
+                  '';
+                }
+              ];
+            }
+          )
+        ];
+      };
+
+      # docs/tasks/0048-activation.md: the activation seats' generated
+      # artifacts, asserted rather than trusted. Same shape and the same
+      # argument as example-apply above, with one addition that matters
+      # more than any of the unit fields: the **polkit rule text** is
+      # read, because that rule is the whole of the root grant and
+      # `nix flake check` proving the module evaluates says nothing at
+      # all about what the rule says. A rule that checked only the
+      # action id, and not the unit name, would grant this user
+      # start/stop/restart over every unit on the machine and evaluate
+      # exactly as cleanly.
+      nixosConfigurations.example-activation = self.nixosConfigurations.example.extendModules {
+        modules = [
+          (
+            { config, lib, ... }:
+            let
+              dummyStateDir = "/home/resident/private-state";
+              dummyRepoRoot = "/home/resident/private";
+              dummyMechanism = "/home/resident/castle-turing";
+              dummyUser = "resident";
+              unit = config.systemd.user.services.castle-activation or null;
+              pathUnit = config.systemd.user.paths.castle-activation or null;
+              timerUnit = config.systemd.user.timers.castle-activation or null;
+              switchUnit = config.systemd.services.castle-activate or null;
+              rollbackUnit = config.systemd.services.castle-rollback or null;
+              windowTimer = config.systemd.timers.castle-activation-window or null;
+              windowUnit = config.systemd.services.castle-activation-window or null;
+              environment = if unit == null then { } else unit.environment;
+              rule = config.security.polkit.extraConfig;
+            in
+            {
+              castle.agent = {
+                activation.enable = true;
+                activation.user = dummyUser;
+                stateDir = dummyStateDir;
+                repo.private = dummyRepoRoot;
+                repo.mechanism = dummyMechanism;
+              };
+              assertions = [
+                {
+                  assertion =
+                    unit != null
+                    && unit.unitConfig.ConditionUser == "!@system"
+                    && unit.serviceConfig.Type == "oneshot"
+                    && unit.serviceConfig.WorkingDirectory == "%h"
+                    # Two ExecStart lines in order, the first prefixed
+                    # `-` so a failed build never stops an approval the
+                    # resident already granted from being spent.
+                    && builtins.length unit.serviceConfig.ExecStart == 2
+                    && lib.hasPrefix "-" (builtins.elemAt unit.serviceConfig.ExecStart 0)
+                    && lib.hasSuffix "castle build --sweep" (builtins.elemAt unit.serviceConfig.ExecStart 0)
+                    && lib.hasSuffix "castle activate --sweep" (builtins.elemAt unit.serviceConfig.ExecStart 1)
+                    && !(unit ? wantedBy && unit.wantedBy != [ ])
+                    && environment.CASTLE_STATE_DIR or null == dummyStateDir
+                    && environment.CASTLE_PRIVATE_ROOT or null == dummyRepoRoot
+                    # Unlike the applier, this one IS given the
+                    # framework checkout: the pin trigger's whole
+                    # question is what that checkout's origin/main says.
+                    && environment.CASTLE_MECHANISM_ROOT or null == dummyMechanism
+                    && environment.CASTLE_ACTIVATION_WINDOW or null == "900"
+                    && environment.CASTLE_ACTIVATION_TIMEOUT or null == "3600"
+                    && environment.CASTLE_FRAMEWORK_INPUT or null == "castle-turing"
+                    && environment.CASTLE_ACTIVATE_UNIT or null == "castle-activate.service"
+                    && environment.CASTLE_ROLLBACK_UNIT or null == "castle-rollback.service"
+                    && pathUnit != null
+                    && pathUnit.pathConfig.PathChanged == "${dummyStateDir}/journal"
+                    && timerUnit != null
+                    && timerUnit.timerConfig.OnUnitActiveSec == "1min";
+                  message = ''
+                    nixosConfigurations.example-activation: the castle-activation
+                    user units do not carry what a build and a switch need.
+                    Expected a oneshot running `castle build --sweep` (failure
+                    tolerated) then `castle activate --sweep` from %h, with the
+                    state dir, both repository paths and every activation
+                    setting baked in, a path unit watching the configured
+                    journal, and a one-minute backstop timer
+                    (docs/tasks/0048-activation.md §K).
+                  '';
+                }
+                {
+                  # The grant, read as generated text. Every clause here
+                  # is one the review of this task would otherwise have
+                  # to take on trust.
+                  assertion =
+                    switchUnit != null
+                    && lib.hasInfix "nixos-rebuild switch --flake ${dummyRepoRoot}#" switchUnit.serviceConfig.ExecStart
+                    && lib.hasInfix "castle-activation-window.timer" switchUnit.serviceConfig.ExecStartPost
+                    # No wantedBy anywhere: a privileged unit pulled into
+                    # a target would switch this machine at boot on its
+                    # own, which is the standing authority this task
+                    # explicitly does not grant.
+                    && !(switchUnit ? wantedBy && switchUnit.wantedBy != [ ])
+                    && rollbackUnit != null
+                    && lib.hasInfix "nixos-rebuild switch --rollback" rollbackUnit.serviceConfig.ExecStart
+                    && !(rollbackUnit ? wantedBy && rollbackUnit.wantedBy != [ ])
+                    && windowTimer != null
+                    && windowTimer.timerConfig.OnActiveSec == "900s"
+                    && windowTimer.timerConfig.Unit == "castle-activation-window.service"
+                    && !(windowTimer ? wantedBy && windowTimer.wantedBy != [ ])
+                    && windowUnit != null
+                    && lib.hasInfix "castle activate --close-window" windowUnit.serviceConfig.ExecStart;
+                  message = ''
+                    nixosConfigurations.example-activation: the privileged units
+                    are not the two fixed commands this task's authority record
+                    says they are. Expected castle-activate.service running
+                    `nixos-rebuild switch --flake <repo>#<host>` and arming the
+                    window timer, castle-rollback.service running
+                    `nixos-rebuild switch --rollback`, a window timer firing
+                    once after castle.agent.activation.windowSeconds, and none
+                    of the three wanted by any target
+                    (docs/tasks/0048-activation.md §H, §I).
+                  '';
+                }
+                {
+                  assertion =
+                    config.security.polkit.enable
+                    && lib.hasInfix "org.freedesktop.systemd1.manage-units" rule
+                    && lib.hasInfix "subject.user != \"${dummyUser}\"" rule
+                    # The clause that keeps this a grant over two units
+                    # rather than over every unit on the machine.
+                    && lib.hasInfix "action.lookup(\"unit\")" rule
+                    && lib.hasInfix "castle-activate.service" rule
+                    && lib.hasInfix "castle-rollback.service" rule
+                    # And nothing else is named. `castle-activation-window`
+                    # is started by root from inside castle-activate, so
+                    # granting the resident anything over it would be a
+                    # widening with no purpose.
+                    && !(lib.hasInfix "castle-activation-window" rule);
+                  message = ''
+                    nixosConfigurations.example-activation: the polkit rule is
+                    not the grant docs/tasks/0048-activation.md §H describes. It
+                    must enable polkit, match the manage-units action, match the
+                    configured user exactly, read the unit name out of the
+                    action, and permit exactly castle-activate.service and
+                    castle-rollback.service — a rule that omitted the unit
+                    lookup would grant start/stop/restart over every unit on
+                    this machine and evaluate exactly as cleanly.
                   '';
                 }
               ];

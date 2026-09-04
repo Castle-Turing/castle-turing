@@ -186,6 +186,19 @@ jobs:
       # work`, no Nix, zero models.
       - run: test/agent-loop/outbox.sh
 
+      # Building the machine's own configuration and switching to it
+      # (docs/tasks/0048-activation.md): both triggers and both
+      # one-attempt bounds, a failed build that asks nothing, the exact
+      # boundary statement the activation question is offered under, an
+      # approval spent exactly once, a framework pin bump landing
+      # byte-exact in one commit, and a health window that both confirms
+      # and — unconfirmed — rolls back. In this job for apply.sh's
+      # reason and one more: every `nix`, `nixos-rebuild` and
+      # `systemctl` in it is a stub that logs its own argv, so nothing
+      # it does can reach the runner's own system, and the argv
+      # comparison is the assertion.
+      - run: test/agent-loop/activation.sh
+
   # The modal's logic (agent/castle-modal), driven headlessly: canned
   # stdin piped at it, asserting on the request record it produces and
   # the status fold it renders — no compositor, no foot, no Sway
