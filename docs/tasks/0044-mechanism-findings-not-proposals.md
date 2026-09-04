@@ -516,3 +516,19 @@ is granted, so the wording choices are design.
    against the outbox's own refusal matrix (dirty tree, taken name)
    should say so — it is more coverage, at the cost of a second copy of
    the mechanism-tenant fixture.
+11. **The result body no longer promises the outbox's own record
+   exists, either.** #9 fixed the sentence claiming a branch; it left
+   standing a narrower version of the same overclaim, asserting a
+   record beside this one always exists. It does not: the hand-off
+   runs after this body is written, behind the same catch-all
+   `_file_finding` runs behind, and a turn killed in that gap or an
+   exception outside the hand-off's own named outcomes leaves nothing
+   there — only a stderr line the journal never carries. Making the
+   record itself durable first would need new journal vocabulary for
+   an "attempt not yet resolved" state, which is a design question this
+   task's own restraint (§1, "no new field, no new value") puts out of
+   reach of a wording fix; the diff is not lost either way, since it is
+   already durable in this result's body and its `.patch` sidecar, so
+   the sentence now says the record is conditional on the hand-off
+   completing rather than promising it unconditionally. Found by
+   cross-model review on this branch.

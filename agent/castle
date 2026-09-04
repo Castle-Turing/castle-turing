@@ -5758,16 +5758,30 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 # record the resident was never shown. That is the same
                 # self-contradiction the unresolvable-target branch
                 # thirty lines above refuses to commit.
+                #
+                # Nor does it promise the outbox's record itself. The
+                # hand-off runs after this body is already written and
+                # behind the same catch-all `_file_finding` runs behind
+                # (below): a turn killed in that gap, or an exception
+                # the hand-off's own vocabulary does not name, leaves no
+                # record beside this one, only a stderr line nobody
+                # reading the journal sees. Cross-model review on this
+                # branch caught the first draft asserting one always
+                # exists.
                 body_lines.append("")
                 body_lines.append(
                     "Nothing was filed for you to approve. A change to the Castle "
                     "Turing framework is not this machine's to apply, so it is not "
                     "offered as a proposal: the diff above was handed to the outbox "
-                    "instead, to travel as a candidate patch inside a finding rather "
-                    "than as something you authorize. **What became of it is in the "
-                    "record beside this one** — including whether it could be filed "
-                    "at all, which depends on the state of that checkout and is not "
-                    "settled here."
+                    "next, to travel as a candidate patch inside a finding rather "
+                    "than as something you authorize. **What became of it, if that "
+                    "hand-off itself runs to completion, is in a record beside this "
+                    "one** — including whether it could be filed at all, which "
+                    "depends on the state of that checkout and is not settled here. "
+                    "A turn killed before the hand-off runs, or a failure inside it "
+                    "outside its own named outcomes, leaves no such record; the diff "
+                    "is not lost either way, since it is above and in this result's "
+                    "own `.patch` file."
                 )
         if timed_out:
             body_lines.append("")
