@@ -544,6 +544,189 @@ APPLY_OUTCOME_VALUES = (
 # the other, both, or neither.
 PATCH_SHA256_FIELD = "patch-sha256"
 
+# ---------------------------------------------------------------------
+# The activation seats (docs/tasks/0048-activation.md)
+# ---------------------------------------------------------------------
+#
+# Two seats, not one, and the split is §A of that brief rather than a
+# filing convenience. `builder` compiles and asks; `activation` spends
+# an approval and changes the machine the resident is using. A seat is
+# what reads and writes, and "which seat changed the running system"
+# must not have the same answer as "which seat compiled something".
+BUILDER_SEAT = "builder"
+ACTIVATION_SEAT = "activation"
+
+# The field that says this build, if approved, carries authority to
+# ACTIVATE it (docs/tasks/0048-activation.md §D). Stamped by
+# `_file_activation_question` and by nothing else.
+#
+# Word for word `AUTHORIZES_APPLY_FIELD`'s reasoning, one authority
+# further out: the sentence a resident read while deciding is the scope
+# of what they decided, absence is the positive fact that a proposal was
+# offered under a narrower statement, and no later change of wording
+# reaches backwards. Literal "true", the only spelling.
+#
+# It is a *separate* field from `authorizes-apply` rather than a second
+# value of it, because the two authorize incomparable acts and a
+# resident may reasonably hold one and not the other. A question never
+# carries both: an apply proposal comes out of a worker turn and an
+# activation question comes out of a build.
+AUTHORIZES_ACTIVATION_FIELD = "authorizes-activation"
+
+# The field that makes a question the health confirmation for one
+# activation (docs/tasks/0048-activation.md §E). Its value is the id of
+# the `switched` result whose window it closes — a ref in a field,
+# deliberately, because `refs[1]` is already spoken for by the proposal
+# binding `file_answer` enforces and this needs to be readable without
+# walking a chain.
+#
+# Approving it says the machine is working. Rejecting it rolls back now.
+# Setting it aside decides nothing and the window still expires, which
+# is the one place this system's review surface has a `defer` that is
+# not simply "closed, nothing happens" — so the boundary statement says
+# it outright rather than leaving a resident to discover it.
+CONFIRMS_ACTIVATION_FIELD = "confirms-activation"
+
+# What happened to the BUILD, on a result written by the builder seat
+# (docs/tasks/0048-activation.md §F). The same `outcome`-versus-its-own
+# field split the applier established, and for the identical reason:
+# `outcome` stays an observation about the seat's own run, and this is
+# an observation about the thing the run was about.
+BUILD_OUTCOME_FIELD = "build-outcome"
+
+# The store path the builder produced, on the result that produced it.
+# Machine-facing, beside the prose that names it, exactly as
+# `apply-commit` sits beside the `git revert` a resident would type.
+#
+# The activation seat reads it for one purpose and it is not to activate
+# it — the privileged unit takes no arguments at all
+# (docs/tasks/0048-activation.md §H) — but to compare against
+# `/run/current-system` afterwards and say, in the record, whether what
+# the resident approved is what ended up running.
+BUILD_TOPLEVEL_FIELD = "build-toplevel"
+
+# The framework revision a build adopts, on the result that built it.
+# Present only on the pin-behind trigger; absent on the applied-change
+# trigger, where nothing about the pin moves.
+#
+# It is also the one-attempt bound for that trigger: a builder result
+# carrying this revision bars another build of it, whatever that
+# result's outcome was. A bound expressed as "does a record exist"
+# cannot be reset by anything short of writing history
+# (`_eligible_approvals`' reasoning, reused).
+BUILD_TARGET_REV_FIELD = "build-target-rev"
+
+# The private-repository commit a build was made against, on the result
+# that made it. Present only where a pin bump is being proposed, and it
+# is the staleness guard: the approved `flake.lock` bytes were computed
+# from this commit's tree, so if the repository has moved since, what
+# the resident approved no longer describes it and the activation
+# refuses (`refused-pin-stale`). The applier's `refused-patch-stale`,
+# expressed against a whole file instead of a patch.
+BUILD_BASE_COMMIT_FIELD = "build-base-commit"
+
+BUILD_OUTCOME_VALUES = (
+    "built",
+    "build-failed",
+    "refused-no-mechanism-checkout",
+    "refused-pin-unresolvable",
+    "refused-tree-dirty",
+    "refused-no-nix",
+)
+
+# What happened to the MACHINE, on a result written by the activation
+# seat (docs/tasks/0048-activation.md §F).
+ACTIVATION_OUTCOME_FIELD = "activation-outcome"
+
+# The pin-bump commit an activation made, on the result that made it.
+# `apply-commit`'s exact contract: stamped only where the landing was
+# verified — one commit, parented where this started, nothing left
+# uncommitted — and absent everywhere else, which includes every
+# activation on the applied-change trigger, where there is no commit to
+# make at all.
+ACTIVATION_COMMIT_FIELD = "activation-commit"
+
+ACTIVATION_OUTCOME_VALUES = (
+    # The switch ran and the machine is now on the new generation, with
+    # a health question open and a window running.
+    "switched",
+    "switch-failed",
+    # The window closed with the resident's confirmation in it.
+    "confirmed",
+    # The window closed without one, or the resident said the machine
+    # was not working, and the previous generation was restored.
+    "rolled-back",
+    # The rollback itself failed. The machine is on an unconfirmed
+    # generation and the record says exactly that rather than implying a
+    # recovery that did not happen.
+    "rollback-failed",
+    "refused-pin-stale",
+    "refused-tree-dirty",
+    "refused-no-privilege",
+)
+
+# The flake input a private layer pins this framework at.
+# `docs/private-layer.md`'s template names it `castle-turing`; a
+# resident who called it something else says so in
+# `castle.agent.activation.frameworkInput`. Public mechanism, private
+# configuration (Principle 01), and the default is the name this
+# project's own documentation publishes rather than a guess.
+FRAMEWORK_INPUT_ENV = "CASTLE_FRAMEWORK_INPUT"
+DEFAULT_FRAMEWORK_INPUT = "castle-turing"
+
+# The two system units the polkit rule permits, and the ONLY two things
+# this seat may ask a privileged process to do
+# (docs/tasks/0048-activation.md §H). Overridable so the module names
+# them once and the harness can point them at a stub, never so a caller
+# can widen the grant: a name this process invents reaches a `systemctl`
+# that will refuse it, because polkit scopes the grant by unit name.
+ACTIVATE_UNIT_ENV = "CASTLE_ACTIVATE_UNIT"
+ROLLBACK_UNIT_ENV = "CASTLE_ROLLBACK_UNIT"
+DEFAULT_ACTIVATE_UNIT = "castle-activate.service"
+DEFAULT_ROLLBACK_UNIT = "castle-rollback.service"
+
+# How long the builder's `nix` invocations get, and how long a health
+# confirmation has to arrive. Both wired from modules/agent; both read
+# through the same tolerant parser the applier's timeout uses, so a
+# misconfigured number is a warning and a fallback rather than a reason
+# an authorized activation never happens.
+ACTIVATION_TIMEOUT_ENV = "CASTLE_ACTIVATION_TIMEOUT"
+DEFAULT_ACTIVATION_TIMEOUT_SECONDS = 3600
+ACTIVATION_WINDOW_ENV = "CASTLE_ACTIVATION_WINDOW"
+DEFAULT_ACTIVATION_WINDOW_SECONDS = 900
+
+# Where the system profile's current generation is readable from. A fact
+# about the running machine, read and never written by anything here —
+# the profile is moved by the privileged unit, never by this process.
+CURRENT_SYSTEM_PATH = "/run/current-system"
+
+# The identity on a pin-bump commit. The seat, never a person, and an
+# address RFC 2606 reserves — `APPLY_COMMIT_NAME`'s reasoning verbatim,
+# with a distinct name because a distinct seat made it.
+ACTIVATION_COMMIT_NAME = "Castle activation"
+ACTIVATION_COMMIT_EMAIL = "activation@castle.invalid"
+
+# The one path in a private repository this task ever writes. A constant
+# rather than a string spelled at four call sites, because the refusal
+# message, the dirty check, the commit and the harness all have to mean
+# the same file.
+LOCK_PATH = "flake.lock"
+
+# The two paths in a private repository whose committed state decides
+# which framework revision a build adopts. The dirty check before a pin
+# bump is scoped to exactly these, never repo-wide, for the reason
+# `_dirty_entries` gives at length: three documented private-layer
+# layouts leave a perfectly healthy configuration repository dirty — a
+# `state/` submodule dirties the outer gitlink on every journal commit,
+# an un-gitignored `key.txt` shows as untracked — so a repo-wide check
+# would refuse forever on residents who did nothing wrong.
+#
+# What that concedes is stated in the record rather than hidden: the
+# candidate is built from the repository's committed state, so
+# uncommitted edits to anything else are not in it, and the build result
+# says which commit it was made from.
+PIN_PATHS = [LOCK_PATH, "flake.nix"]
+
 
 def diff_boundary_lines(boundary: str) -> tuple[str, str]:
     """The two literal lines that delimit an embedded diff. One
@@ -617,6 +800,17 @@ FIELD_ORDER = (
     # itself before any prose — what happened to the change, and which
     # commit is it (docs/tasks/0026-apply-validate.md §F).
     "apply-commit",
+    # Result-only, and grouped with the apply pair immediately above by
+    # the same presentation-only rule: on a builder or activation result
+    # these are what the record says about itself before any prose —
+    # what happened, to which closure, adopting which revision, and
+    # which commit carried the pin (docs/tasks/0048-activation.md §F).
+    "build-outcome",
+    "build-toplevel",
+    "build-target-rev",
+    "build-base-commit",
+    "activation-outcome",
+    "activation-commit",
     "target",
     # Result-only, and beside `target` for the same presentation-only
     # reason: it is machine-readable structure about the body below,
@@ -646,6 +840,12 @@ FIELD_ORDER = (
     # proposal should meet them before the prose
     # (docs/tasks/0026-apply-validate.md §A).
     "authorizes-apply",
+    # Question-only, beside `authorizes-apply` and by the same
+    # presentation-only rule, because they say the same kind of thing
+    # about a different authority: what filing this question means, and
+    # what deciding it will spend (docs/tasks/0048-activation.md §D, §E).
+    "authorizes-activation",
+    "confirms-activation",
     # Answer-only and question-or-answer respectively
     # (docs/tasks/0025-approval.md §A), placed together and for the
     # same presentation-only reason as everything above them: on the
@@ -9851,6 +10051,2131 @@ def cmd_apply(args: argparse.Namespace) -> int:
         lock.close()
 
 
+# =====================================================================
+# The builder and activation seats (docs/tasks/0048-activation.md)
+# =====================================================================
+#
+# Everything above this line stops at the edge of the running system.
+# The applier's own first lines say so — "Nothing was activated" is in
+# most of them on purpose. This is the section that crosses that edge,
+# and every guard in it exists because crossing it is the first thing
+# this project does that a resident cannot undo by deleting a file.
+
+
+def _tolerant_seconds(env_name: str, default: int, command: str) -> int:
+    """A whole number of seconds out of the environment, or the default
+    with a warning.
+
+    `apply_timeout_seconds`' exact posture, factored out because this
+    task needs it twice: warn on stderr, fall back, never refuse to do
+    the work. A misconfigured number must not be the reason an
+    authorized activation never happens.
+    """
+    raw = os.environ.get(env_name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        print(
+            f"castle {command}: could not parse {env_name} ({raw!r}) as a whole "
+            f"number of seconds; using {default}",
+            file=sys.stderr,
+        )
+        return default
+    if value <= 0:
+        print(
+            f"castle {command}: {env_name} ({raw!r}) is not positive; using {default}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+def activation_timeout_seconds() -> int:
+    return _tolerant_seconds(
+        ACTIVATION_TIMEOUT_ENV, DEFAULT_ACTIVATION_TIMEOUT_SECONDS, "build"
+    )
+
+
+def activation_window_seconds() -> int:
+    return _tolerant_seconds(
+        ACTIVATION_WINDOW_ENV, DEFAULT_ACTIVATION_WINDOW_SECONDS, "activate"
+    )
+
+
+def framework_input() -> str:
+    value = os.environ.get(FRAMEWORK_INPUT_ENV, "").strip()
+    return value or DEFAULT_FRAMEWORK_INPUT
+
+
+def activate_unit() -> str:
+    return os.environ.get(ACTIVATE_UNIT_ENV, "").strip() or DEFAULT_ACTIVATE_UNIT
+
+
+def rollback_unit() -> str:
+    return os.environ.get(ROLLBACK_UNIT_ENV, "").strip() or DEFAULT_ROLLBACK_UNIT
+
+
+def activation_lock_path() -> pathlib.Path:
+    """One builder-or-activation at a time, machine-wide.
+
+    **One lock across both seats, not one each**, which is the one place
+    this task deliberately does not mirror the applier. The two seats
+    touch the same private checkout and the same machine: a build
+    running `nix` against a worktree of that repository while an
+    activation rewrites its `flake.lock` and commits is a race with a
+    store path on the wrong side of it. They are separate seats because
+    they write different things, not because they may run at once.
+    """
+    return runtime_dir() / "activation.lock"
+
+
+def activation_in_flight_dir() -> pathlib.Path:
+    """`apply_in_flight_dir()`'s sibling, and separate from it for a
+    mechanical reason rather than a tidy one: `_reconcile_in_flight`
+    walks that directory and writes an **apply** result for anything it
+    finds there. A breadcrumb this seat left would be reconciled into a
+    record claiming the applier had touched the resident's repository,
+    which is a false statement in an append-only journal.
+    """
+    d = state_dir() / "activation-in-flight"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def activation_in_flight_path(answer_id: str) -> pathlib.Path:
+    return activation_in_flight_dir() / answer_id
+
+
+def _chown_to_journal_owner(path: pathlib.Path) -> None:
+    """Hand a record this process just wrote back to whoever owns the
+    journal, when this process is root and they are not.
+
+    **This is the only code path in `castle` that ever runs as root**
+    (docs/tasks/0048-activation.md §I): the health window's timer must
+    be privileged, because what it may need to do is roll the machine
+    back. Everything else — the builder, the sweep that spends an
+    approval, every surface — runs as the resident.
+
+    Without this, a window that closed while nobody was logged in would
+    leave root-owned files in a git-tracked state repository the
+    resident then has to commit, and the failure would surface days
+    later as a permissions error a long way from its cause. Best effort
+    and never fatal: the record is already durable, and a chown that
+    fails is worth a sentence on stderr and nothing more.
+    """
+    if os.geteuid() != 0:
+        return
+    try:
+        owner = journal_dir().stat()
+    except OSError:
+        return
+    if owner.st_uid == 0:
+        return
+    try:
+        os.chown(path, owner.st_uid, owner.st_gid)
+    except OSError as exc:
+        print(
+            f"castle activate: wrote {path.name} as root but could not hand it back "
+            f"to uid {owner.st_uid} ({exc}). Fix its ownership before committing the "
+            "state repository.",
+            file=sys.stderr,
+        )
+
+
+# The first line of every builder result's body, per outcome. Drafted
+# here rather than improvised at the call site for `APPLY_FIRST_LINES`'
+# reason: `_fire_notification` takes exactly this line, so it carries no
+# ids and no store paths and stays well under the 200-character cap
+# `_route_journal_locked` applies.
+BUILD_FIRST_LINES = {
+    "built": (
+        "Castle built a new system configuration for this machine and is asking "
+        "whether to switch to it. Nothing has been activated."
+    ),
+    "build-failed": (
+        "Castle tried to build a new system configuration for this machine and it "
+        "did not build. Nothing has been activated, and there is nothing to decide."
+    ),
+    "refused-no-mechanism-checkout": (
+        "Castle cannot tell whether this machine's framework pin is behind, because "
+        "no checkout of the framework is configured for it to compare against."
+    ),
+    "refused-pin-unresolvable": (
+        "Castle could not work out which version of the framework this machine's "
+        "configuration is pinned to, so it built nothing."
+    ),
+    "refused-tree-dirty": (
+        "Castle did not build a new configuration: your configuration repository has "
+        "uncommitted edits, so there is no settled version of it to build."
+    ),
+    "refused-no-nix": (
+        "Castle cannot build a new system configuration on this machine, because "
+        "`nix` is not available to it."
+    ),
+}
+
+# The first line of every activation result's body, per outcome. Same
+# contract as above, and one fact runs through all of them because it is
+# the fact a resident most needs from a notification: which generation
+# this machine is on now.
+ACTIVATION_FIRST_LINES = {
+    "switched": (
+        "This machine is now running the configuration you approved. Confirm it is "
+        "working, or Castle will roll it back on its own."
+    ),
+    "switch-failed": (
+        "Castle could not switch this machine to the configuration you approved. It "
+        "is still running what it was running before."
+    ),
+    "confirmed": (
+        "You confirmed the new configuration is working, so Castle is keeping it."
+    ),
+    "rolled-back": (
+        "Nothing confirmed the new configuration was working, so this machine has "
+        "been rolled back to the generation it was running before."
+    ),
+    "rollback-failed": (
+        "This machine is running an unconfirmed configuration and Castle could not "
+        "roll it back. It needs you."
+    ),
+    "refused-pin-stale": (
+        "Castle did not switch: your configuration repository has moved since this "
+        "build was made, so what you approved no longer describes it."
+    ),
+    "refused-tree-dirty": (
+        "Castle did not switch: your configuration repository has uncommitted edits "
+        "to the file this change would rewrite."
+    ),
+    "refused-no-privilege": (
+        "Castle could not ask this machine to switch, because the privileged step it "
+        "needs is not available to it."
+    ),
+}
+
+# The one sentence an activation question's body opens with.
+# Harness-authored, never model-generated, for `PROPOSAL_QUESTION_BODY`'s
+# two reasons: it is the picker's first-line preview, and it is the line
+# `_fire_notification` sends.
+ACTIVATION_QUESTION_BODY = (
+    "Castle built a new system configuration for this machine. Approving switches "
+    "this machine to it. Nothing has been activated yet."
+)
+
+# What a resident is told about `switch`'s limits, in the question's own
+# body rather than only on the review screen — the body is what a digest
+# renders and what a notification's tail carries, and a resident who
+# approves from a digest must meet this too
+# (docs/tasks/0048-activation.md §E).
+ACTIVATION_QUESTION_CAVEAT = (
+    "Switching applies most of a configuration to the machine as it is running. A "
+    "change to the kernel, the initrd, or firmware is staged into the new "
+    "generation and takes effect at the next boot instead — so a switch that "
+    "succeeds does not mean every part of this is live."
+)
+
+HEALTH_QUESTION_BODY = (
+    "This machine has switched to the new configuration. Is it working? If nothing "
+    "says so in time, Castle rolls back to the previous generation."
+)
+
+
+def _lock_node_rev(private_root: str, input_name: str) -> tuple[str, str]:
+    """The revision a private flake's lock pins the framework input at,
+    or `("", why)`.
+
+    Read as JSON out of the resident's own `flake.lock` and never out of
+    `nix flake metadata`, which would evaluate the flake — and
+    evaluating a path flake copies its whole tracked tree into the
+    world-readable store, which is a thing this project gates behind an
+    explicit option elsewhere (`castle.agent.apply.evaluateFlake`) and
+    must not do casually to answer a yes/no question.
+    """
+    path = pathlib.Path(private_root) / LOCK_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return "", f"{LOCK_PATH} could not be read there ({exc})"
+    except ValueError as exc:
+        return "", f"{LOCK_PATH} is not readable as JSON ({exc})"
+    nodes = data.get("nodes")
+    if not isinstance(nodes, dict):
+        return "", f"{LOCK_PATH} has no 'nodes' object"
+    node = nodes.get(input_name)
+    if not isinstance(node, dict):
+        return "", (
+            f"{LOCK_PATH} has no input named {input_name!r}. If your private flake "
+            "calls this framework something else, set "
+            "castle.agent.activation.frameworkInput to that name."
+        )
+    rev = str(node.get("locked", {}).get("rev", "")).strip()
+    if not rev:
+        return "", (
+            f"the {input_name!r} input in {LOCK_PATH} is not pinned to a revision, "
+            "so there is nothing to compare"
+        )
+    return rev, ""
+
+
+def _origin_main_rev(mechanism_root: str) -> tuple[str, str]:
+    """What the last fetch of the framework checkout saw on its default
+    branch, or `("", why)`.
+
+    **`FINDING_BASE_REF`, and no fetch.** The outbox's rule verbatim and
+    for its reason: a fetch is network run by an unattended seat with
+    nobody watching, and what `origin/main` means here is exactly "what
+    the last fetch saw". A resident who wants this trigger to notice
+    something newer fetches, which is a thing they already do.
+    """
+    probe, fault = _run_git(
+        mechanism_root, ["rev-parse", FINDING_BASE_REF], timeout=CHECKOUT_PROBE_SECONDS
+    )
+    if probe is None:
+        return "", fault
+    if probe.returncode != 0:
+        return "", (
+            f"{FINDING_BASE_REF} does not resolve in the configured framework "
+            "checkout (has it ever been fetched?)"
+        )
+    return (probe.stdout or "").strip(), ""
+
+
+def _adopted_summary(mechanism_root: str, from_rev: str, to_rev: str) -> list[str]:
+    """What a pin bump is adopting, in the form a resident decides
+    about: how many commits, and their subject lines.
+
+    Titles and not shas, because somebody deciding this is deciding
+    about work rather than about hashes. Best effort: a range that will
+    not walk (a shallow clone, a rewritten history) produces the count
+    line alone rather than a refusal, since the build itself is the
+    thing that has to be right.
+    """
+    lines: list[str] = []
+    probe, _ = _run_git(
+        mechanism_root,
+        ["log", "--no-merges", "--format=%s", f"{from_rev}..{to_rev}"],
+        timeout=CHECKOUT_PROBE_SECONDS,
+    )
+    subjects = []
+    if probe is not None and probe.returncode == 0:
+        subjects = [line.strip() for line in (probe.stdout or "").splitlines() if line.strip()]
+    if subjects:
+        lines.append(
+            f"It adopts {len(subjects)} commit(s) of framework work, newest first:"
+        )
+        lines.append("")
+        lines.extend(f"  - {subject}" for subject in subjects)
+    else:
+        lines.append(
+            "Castle could not list the commits this adopts from the framework "
+            "checkout, so the revision above is all it can say about them."
+        )
+    return lines
+
+
+def _build_trigger(
+    records: dict[str, Record],
+) -> tuple[str, list[str], str, str, str]:
+    """What, if anything, is owed a build right now
+    (docs/tasks/0048-activation.md §B). Returns
+    `(kind, anchor_ids, target_rev, from_rev, why_not)`, where `from_rev`
+    is the revision a pin bump would replace and is empty on every other
+    branch.
+
+    `kind` is `"applied"`, `"pin"`, or `""`. Both bounds are "does a
+    record exist" — never a timestamp, never a counter — for
+    `_eligible_approvals`' reason: a bound of that shape cannot be reset
+    by anything short of writing history.
+
+    The applied-change trigger takes priority over the pin one when both
+    are true, and the resulting build names **every** unbuilt apply
+    result rather than only the newest. The tree contains all of them,
+    so one build accounts for all of them; naming only the newest would
+    leave the older ones unbarred and retriggering forever.
+    """
+    builder_results = [
+        rec
+        for rec in records.values()
+        if rec.type == "result" and rec.fields.get("seat") == BUILDER_SEAT
+    ]
+    named_by_builds = {ref for rec in builder_results for ref in rec.refs}
+
+    unbuilt = order_records(
+        [
+            rec
+            for rec in records.values()
+            if rec.type == "result"
+            and rec.fields.get(APPLY_OUTCOME_FIELD, "") in APPLY_SUCCESS_OUTCOMES
+            and rec.id not in named_by_builds
+        ]
+    )
+    if unbuilt:
+        # Newest first: the lineage ref is the change that most recently
+        # moved the repository, and the rest ride along as context.
+        newest_first = list(reversed(unbuilt))
+        return "applied", [rec.id for rec in newest_first], "", "", ""
+
+    private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    mechanism_root = os.environ.get(MECHANISM_ROOT_ENV, "").strip()
+    if not private_root:
+        return "", [], "", "", "no configuration repository is configured for this host"
+    if not mechanism_root:
+        return "", [], "", "", (
+            "no framework checkout is configured for this host, so nothing here can "
+            "tell whether its pin is behind"
+        )
+
+    input_name = framework_input()
+    locked, why = _lock_node_rev(private_root, input_name)
+    if not locked:
+        return "pin-unresolvable", [], "", "", why
+    target, why = _origin_main_rev(mechanism_root)
+    if not target:
+        return "pin-unresolvable", [], "", locked, why
+    if target == locked:
+        return "", [], "", locked, "the framework pin is already current"
+
+    already = {
+        rec.fields.get(BUILD_TARGET_REV_FIELD, "").strip() for rec in builder_results
+    }
+    if target in already:
+        return "", [], "", locked, (
+            f"a build of framework revision {target[:12]} has already been attempted"
+        )
+    return "pin", [], target, locked, ""
+
+
+def _lock_update_command(flake_dir: str, input_name: str) -> list[str]:
+    """Recompute a private flake's lock for one input, in a throwaway
+    worktree.
+
+    `nix flake update <input> --flake <dir>` is the spelling this
+    flake's pinned nix takes (the positional argument became an input
+    name, and the flake moved behind `--flake`, in nix 2.19). The older
+    `nix flake lock --update-input <input>` is deprecated at this pin.
+
+    **What this deliberately does not do is pin the result to a
+    revision.** `--override-input` would, and was rejected: it means
+    reconstructing a flakeref from the lock's `original` node, which is
+    a parser this task would own forever. Instead the update runs
+    unconstrained and the *result* is checked — the revision the new
+    lock names has to be the one `origin/main` named, or the build
+    refuses and says the upstream default branch and the local
+    framework checkout disagree. That check is stronger than the
+    override would have been, because it also catches the case where
+    they genuinely differ.
+    """
+    return ["nix", "flake", "update", input_name, "--flake", flake_dir]
+
+
+def _build_command(flake_dir: str, host: str) -> list[str]:
+    """`_validation_command`'s flags, plus `--print-out-paths`.
+
+    Every flag there is load-bearing for the reason its docstring gives
+    and none of them changes here. The addition is the whole difference
+    between validating and building a candidate: this seat needs the
+    store path back, because the record names it and the activation
+    compares against it.
+    """
+    return [
+        "nix",
+        "build",
+        "--no-link",
+        "--no-write-lock-file",
+        "--no-update-lock-file",
+        "--print-out-paths",
+        f"{flake_dir}#nixosConfigurations.{host}.config.system.build.toplevel",
+    ]
+
+
+def _run_bounded(command: list[str], *, what: str) -> tuple[int, str, str]:
+    """Run one bounded subprocess and come back with
+    `(returncode, output, fault)`.
+
+    stdout and stderr are merged, because what goes in the record is a
+    log tail a resident reads and Nix writes its progress to one and its
+    errors to the other. `fault` is non-empty only when the command
+    could not be run to a conclusion at all, which is a fact about the
+    machine rather than about the build, and the two get different
+    records.
+    """
+    timeout = activation_timeout_seconds()
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 1, "", f"{what} did not finish within {timeout}s"
+    except OSError as exc:
+        return 1, "", f"{what} could not be run ({exc})"
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or ""), ""
+
+
+def _log_tail(text: str) -> list[str]:
+    """The last screenful of a build log, indented so it cannot be read
+    as this harness's own prose. `APPLY_LOG_TAIL_LINES` worth, and the
+    whole of it never goes in a record: the journal is not a place to
+    keep build logs.
+    """
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ["    (the command printed nothing)"]
+    tail = lines[-APPLY_LOG_TAIL_LINES:]
+    prefix = []
+    if len(lines) > APPLY_LOG_TAIL_LINES:
+        prefix = [f"    (the last {APPLY_LOG_TAIL_LINES} lines of {len(lines)})"]
+    return prefix + [f"    {line}" for line in tail]
+
+
+def _write_build_result(
+    *,
+    outcome: str,
+    build_outcome: str,
+    refs: list[str],
+    detail_lines: list[str],
+    toplevel: str = "",
+    target_rev: str = "",
+    base_commit: str = "",
+    lock_bytes: bytes | None = None,
+) -> str:
+    """The one record a build writes (docs/tasks/0048-activation.md §F).
+
+    **A `result`, and no new record type**, for `_write_apply_result`'s
+    reason: `result` already means "an account of a turn a seat ran",
+    which is exactly what this is, and `RECORD_TYPES` is a schema
+    surface four folds key on.
+
+    **`refs` never name a request or a claim.** `closing_result`'s
+    clause (b) treats a result naming a claim's request as the account
+    closing that claim, so a build result naming one would silently
+    close somebody else's dangling worker turn and label it with a build
+    outcome. What this names is apply results (which are not claims and
+    have no request in their own refs) or nothing at all.
+
+    **The new lock rides in the body, not in a sidecar.** It is the
+    artifact the activation seat writes verbatim, so it has to survive
+    exactly, and the mechanism for "these exact bytes, decided against"
+    already exists: the nonce diff boundary 0025 built, the
+    `patch-sha256` digest 0033 added, and the `proposal-sha256` binding
+    `file_answer` re-derives at decision time. A resident approving this
+    approves those bytes and nothing near them.
+    """
+    first_line = BUILD_FIRST_LINES.get(build_outcome)
+    if first_line is None:
+        first_line = (
+            "Castle could not build a new system configuration for this machine, and "
+            "nothing was activated."
+        )
+    body_lines = [first_line, ""] + list(detail_lines)
+    extra = {"outcome": outcome, BUILD_OUTCOME_FIELD: build_outcome}
+    if toplevel:
+        extra[BUILD_TOPLEVEL_FIELD] = toplevel
+    if target_rev:
+        extra[BUILD_TARGET_REV_FIELD] = target_rev
+    if base_commit:
+        extra[BUILD_BASE_COMMIT_FIELD] = base_commit
+    if lock_bytes is not None:
+        boundary = os.urandom(8).hex()
+        begin, end = diff_boundary_lines(boundary)
+        extra[DIFF_BOUNDARY_FIELD] = boundary
+        extra[PATCH_SHA256_FIELD] = hashlib.sha256(lock_bytes).hexdigest()
+        body_lines += [
+            "",
+            f"The exact `{LOCK_PATH}` this would write:",
+            "",
+            begin,
+            "```json",
+            lock_bytes.decode("utf-8", "replace").rstrip("\n"),
+            "```",
+            end,
+        ]
+    record_id = write_record(
+        journal_dir(),
+        type="result",
+        # `initiated`, always. Nobody asked for this: the machine
+        # noticed its own configuration had moved. The router's
+        # provenance rule then does the right thing on its own — an
+        # initiated result defaults to the digest and has to earn an
+        # interruption — and the question this build files is what
+        # carries the interruption instead, which is the record that
+        # actually needs one.
+        provenance="initiated",
+        seat=BUILDER_SEAT,
+        refs=refs,
+        body="\n".join(body_lines),
+        extra=extra,
+    )
+    _chown_to_journal_owner(journal_dir() / f"{record_id}.md")
+    return record_id
+
+
+def _file_activation_question(build_result_id: str, anchor_id: str) -> str:
+    """The second record a clean build writes: the question that asks
+    the resident to switch (docs/tasks/0048-activation.md §D).
+
+    **The harness writes this, never a model**, and a model could not
+    write it if it wanted to: the hash covers bytes that do not exist
+    until the build result is written, which only this function's caller
+    can sequence. `_file_proposal_question`'s guarantees, restated
+    because they matter more here.
+
+    **Never `blocking`.** Nothing about approving this may make an
+    errand eligible for another worker turn; there is no errand.
+
+    **Never `fact`.** `file_answer` refuses a proposal question carrying
+    one, and approving an activation must never write into the resident
+    model.
+
+    `refs` are `[anchor, build_result_id]`. On the applied-change
+    trigger the anchor is the apply result, so the lineage walk reaches
+    the errand that started all of this. On the pin-bump trigger there
+    is no antecedent record anywhere in the journal, and the build is
+    its own root — said by self-reference, because inventing a synthetic
+    parent would put a fabricated errand in an append-only journal.
+    `_find_root_request` and `_collect_downstream` both carry `seen`
+    sets, so neither loops on it.
+
+    Returns the question's id, or "" if it could not be filed — printed
+    and never raised, because the build result is already durable and a
+    failure writing the second record must not read as the first one
+    having failed.
+    """
+    try:
+        result_bytes = (journal_dir() / f"{build_result_id}.md").read_bytes()
+        question_id = write_record(
+            journal_dir(),
+            type="question",
+            # `requested`, unlike the result above, and the difference is
+            # the whole point of the field. The result is Castle
+            # reporting on work nobody asked for; the question is Castle
+            # asking the resident for something, and a question about
+            # changing the machine they are using has to reach them
+            # through a channel they will actually encounter rather than
+            # wait in a digest.
+            provenance="requested",
+            seat=BUILDER_SEAT,
+            refs=[anchor_id, build_result_id],
+            body="\n".join(
+                [ACTIVATION_QUESTION_BODY, "", ACTIVATION_QUESTION_CAVEAT]
+            ),
+            extra={
+                PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest(),
+                AUTHORIZES_ACTIVATION_FIELD: "true",
+            },
+        )
+    except (OSError, RecordError) as exc:
+        print(
+            f"castle build: result {build_result_id} was written, but the question "
+            f"that would offer it could not be filed ({exc}). The build is durable in "
+            "the journal; nothing will prompt you to switch until this is "
+            "investigated.",
+            file=sys.stderr,
+        )
+        return ""
+    _chown_to_journal_owner(journal_dir() / f"{question_id}.md")
+    return question_id
+
+
+def _run_build(records: dict[str, Record]) -> tuple[str, str]:
+    """One build, start to finish, including the record it writes.
+    Returns `(result_id, build_outcome)`, or `("", "")` when nothing was
+    owed a build at all.
+
+    Every exit from here writes exactly one result and at most one
+    question. There is no path that builds something and says nothing.
+    """
+    kind, anchors, target_rev, from_rev, why_not = _build_trigger(records)
+    if kind == "":
+        print(f"build: nothing to build ({why_not})")
+        return "", ""
+
+    private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    mechanism_root = os.environ.get(MECHANISM_ROOT_ENV, "").strip()
+
+    if kind == "pin-unresolvable":
+        return (
+            _write_build_result(
+                outcome="completed",
+                build_outcome="refused-pin-unresolvable",
+                refs=[],
+                detail_lines=[
+                    "Castle compares the framework revision your configuration is "
+                    "pinned to against the one your framework checkout last fetched, "
+                    "and could not read one of them:",
+                    "",
+                    f"    {why_not}",
+                ],
+            ),
+            "refused-pin-unresolvable",
+        )
+
+    host = _hostname()
+    if shutil.which("nix") is None:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="refused-no-nix",
+                refs=list(anchors),
+                target_rev=target_rev,
+                detail_lines=[
+                    "`nix` is not on this session's PATH, so there is nothing here "
+                    "that can build a system configuration. A host running the agent "
+                    "layer without modules/dev genuinely may not have it.",
+                ],
+            ),
+            "refused-no-nix",
+        )
+
+    reserved = sorted({char for char in FLAKEREF_RESERVED if char in private_root})
+    if reserved:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="refused-pin-unresolvable",
+                refs=list(anchors),
+                target_rev=target_rev,
+                detail_lines=[
+                    "The path to your configuration repository contains "
+                    f"{', '.join(repr(char) for char in reserved)}, which a path "
+                    "flakeref reads as syntax and has no way to escape, so no `nix` "
+                    "command here can name it. Move the checkout to a path without "
+                    "those characters.",
+                ],
+            ),
+            "refused-pin-unresolvable",
+        )
+
+    if kind == "applied":
+        return _build_applied(private_root, host, anchors)
+    return _build_pin_candidate(
+        private_root, mechanism_root, host, target_rev, from_rev
+    )
+
+
+def _build_applied(
+    private_root: str, host: str, anchors: list[str]
+) -> tuple[str, str]:
+    """The applied-change trigger's build: the resident's repository as
+    it stands, which is exactly what `nixos-rebuild switch --flake`
+    would build later.
+
+    No worktree and no lock update — nothing about the pin moves here.
+    The working tree is built rather than `HEAD`, deliberately and
+    unlike the pin path: the privileged unit builds the working tree
+    too, so building anything else would be describing a different
+    closure from the one the switch would produce.
+    """
+    command = _build_command(private_root, host)
+    printed = shlex.join(command)
+    rc, output, fault = _run_bounded(command, what="the build")
+    detail = [
+        "This is your configuration repository as it stands, which is what "
+        "switching would put on this machine.",
+        "",
+        "The command that ran:",
+        "",
+        f"    {printed}",
+    ]
+    if fault:
+        return (
+            _write_build_result(
+                outcome="timeout" if "within" in fault else "failed",
+                build_outcome="build-failed",
+                refs=anchors,
+                detail_lines=detail + ["", fault],
+            ),
+            "build-failed",
+        )
+    if rc != 0:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="build-failed",
+                refs=anchors,
+                detail_lines=detail + ["", "It failed:", ""] + _log_tail(output),
+            ),
+            "build-failed",
+        )
+    toplevel = _last_store_path(output)
+    if not toplevel:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="build-failed",
+                refs=anchors,
+                detail_lines=detail
+                + [
+                    "",
+                    "It reported success but named no store path, so there is "
+                    "nothing here to offer:",
+                    "",
+                ]
+                + _log_tail(output),
+            ),
+            "build-failed",
+        )
+    result_id = _write_build_result(
+        outcome="completed",
+        build_outcome="built",
+        refs=anchors,
+        toplevel=toplevel,
+        detail_lines=detail + ["", "It built.", "", f"    {toplevel}"],
+    )
+    _file_activation_question(result_id, anchors[0] if anchors else result_id)
+    return result_id, "built"
+
+
+def _last_store_path(output: str) -> str:
+    """The store path `--print-out-paths` printed, or "".
+
+    The last `/nix/store/...` line and not the first: Nix writes
+    progress to the same streams this merges, and the out-path line is
+    the last thing it says. Checked for shape rather than trusted,
+    because this value ends up in a record as a machine-readable fact
+    and later gets compared against `/run/current-system`.
+    """
+    for line in reversed([line.strip() for line in output.splitlines()]):
+        if line.startswith("/nix/store/") and " " not in line:
+            return line
+    return ""
+
+
+def _build_pin_candidate(
+    private_root: str, mechanism_root: str, host: str, target_rev: str, from_rev: str
+) -> tuple[str, str]:
+    """The pin-behind trigger's build: what this machine would be if it
+    adopted the framework work its checkout has already fetched.
+
+    **In a throwaway worktree, never in the resident's checkout.** The
+    candidate does not exist yet — that is the whole point of asking —
+    and computing it must not leave a modified `flake.lock` in a
+    repository the resident is using. `git worktree add --detach` gives
+    a second working tree at `HEAD` with the same object database, the
+    lock is updated there, the toplevel is built from there, and the
+    worktree is removed whatever happens.
+
+    **`HEAD` and not the working tree, unlike the applied-change path,
+    which is why the tree has to be clean.** A worktree can only be
+    made from a commit. If the resident has uncommitted work, the
+    candidate would silently be a different configuration from the one
+    a later switch produces, so this refuses rather than describing
+    something that is not what would happen.
+    """
+    summary, why = _dirty_under(private_root, PIN_PATHS)
+    if summary is None:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="refused-tree-dirty",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=[
+                    "Castle could not read the state of your configuration "
+                    f"repository: {why}",
+                ],
+            ),
+            "refused-tree-dirty",
+        )
+    if summary:
+        return (
+            _write_build_result(
+                outcome="completed",
+                build_outcome="refused-tree-dirty",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=[
+                    "A framework pin bump is built from your repository's committed "
+                    "state, so that what Castle offers you is what switching would "
+                    "actually produce. Your working tree has uncommitted changes "
+                    f"({summary}), so it built nothing.",
+                    "",
+                    "Commit or stash them and this will come back on its own.",
+                ],
+            ),
+            "refused-tree-dirty",
+        )
+
+    head_probe, fault = _run_git(
+        private_root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS
+    )
+    if head_probe is None or head_probe.returncode != 0:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="refused-pin-unresolvable",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=[
+                    "Castle could not read your configuration repository's current "
+                    f"commit: {fault or 'it has no HEAD'}",
+                ],
+            ),
+            "refused-pin-unresolvable",
+        )
+    base_commit = (head_probe.stdout or "").strip()
+    input_name = framework_input()
+
+    scratch = tempfile.mkdtemp(prefix="castle-candidate-")
+    candidate = os.path.join(scratch, "candidate")
+    detail: list[str] = [
+        f"This adopts framework revision {target_rev} in place of the one your "
+        f"`{LOCK_PATH}` pins today.",
+    ]
+    try:
+        added, fault = _run_git(
+            private_root,
+            ["worktree", "add", "--detach", candidate, base_commit],
+        )
+        if added is None or added.returncode != 0:
+            stderr = (added.stderr or "").strip() if added is not None else ""
+            return (
+                _write_build_result(
+                    outcome="failed",
+                    build_outcome="refused-pin-unresolvable",
+                    refs=[],
+                    target_rev=target_rev,
+                    detail_lines=detail
+                    + [
+                        "",
+                        "Castle could not make a throwaway worktree of your "
+                        f"repository to build the candidate in: {fault or stderr}",
+                    ],
+                ),
+                "refused-pin-unresolvable",
+            )
+        try:
+            return _build_in_candidate(
+                candidate=candidate,
+                mechanism_root=mechanism_root,
+                host=host,
+                target_rev=target_rev,
+                from_rev=from_rev,
+                base_commit=base_commit,
+                input_name=input_name,
+                detail=detail,
+            )
+        finally:
+            # Removed and pruned whatever happened, because a worktree
+            # this seat forgot is an entry in the resident's own
+            # `.git/worktrees` pointing at a directory that no longer
+            # exists — bookkeeping this process created and therefore
+            # owns the lifetime of.
+            _run_git(private_root, ["worktree", "remove", "--force", candidate])
+            _run_git(private_root, ["worktree", "prune"])
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _build_in_candidate(
+    *,
+    candidate: str,
+    mechanism_root: str,
+    host: str,
+    target_rev: str,
+    from_rev: str,
+    base_commit: str,
+    input_name: str,
+    detail: list[str],
+) -> tuple[str, str]:
+    """Update the lock in the throwaway worktree, check what it landed
+    on, and build it."""
+    update = _lock_update_command(candidate, input_name)
+    build = _build_command(candidate, host)
+    detail = detail + [
+        "",
+        "The commands that ran, in order:",
+        "",
+        f"    {shlex.join(update)}",
+        f"    {shlex.join(build)}",
+        "",
+        "Both ran in a throwaway worktree of your repository, made from commit "
+        f"{base_commit[:12]}. Nothing in your checkout was touched.",
+    ]
+
+    rc, output, fault = _run_bounded(update, what="the lock update")
+    if fault or rc != 0:
+        return (
+            _write_build_result(
+                outcome="timeout" if fault and "within" in fault else "failed",
+                build_outcome="refused-pin-unresolvable",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=detail
+                + ["", "The lock update failed:", ""]
+                + ([f"    {fault}"] if fault else _log_tail(output)),
+            ),
+            "refused-pin-unresolvable",
+        )
+
+    landed, why = _lock_node_rev(candidate, input_name)
+    if not landed:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="refused-pin-unresolvable",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=detail + ["", f"The updated lock could not be read: {why}"],
+            ),
+            "refused-pin-unresolvable",
+        )
+    if landed != target_rev:
+        # The check that replaces `--override-input`. It is stronger
+        # than the override would have been: it catches the case where
+        # the upstream default branch and this machine's framework
+        # checkout genuinely disagree, which an override would have
+        # papered over by forcing the local answer.
+        return (
+            _write_build_result(
+                outcome="completed",
+                build_outcome="refused-pin-unresolvable",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=detail
+                + [
+                    "",
+                    "Updating the pin landed on a different revision from the one "
+                    "this machine's framework checkout last fetched:",
+                    "",
+                    f"    the checkout's {FINDING_BASE_REF}: {target_rev}",
+                    f"    what updating the pin produced: {landed}",
+                    "",
+                    "Castle will not offer a change it cannot describe accurately. "
+                    "Fetch the framework checkout and this will come back on its own.",
+                ],
+            ),
+            "refused-pin-unresolvable",
+        )
+
+    try:
+        lock_bytes = (pathlib.Path(candidate) / LOCK_PATH).read_bytes()
+    except OSError as exc:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="refused-pin-unresolvable",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=detail + ["", f"The updated lock could not be read ({exc})"],
+            ),
+            "refused-pin-unresolvable",
+        )
+
+    rc, output, fault = _run_bounded(build, what="the build")
+    adopted = _adopted_summary(mechanism_root, from_rev, target_rev)
+    if fault or rc != 0:
+        return (
+            _write_build_result(
+                outcome="timeout" if fault and "within" in fault else "failed",
+                build_outcome="build-failed",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=detail
+                + ["", "It did not build:", ""]
+                + ([f"    {fault}"] if fault else _log_tail(output)),
+            ),
+            "build-failed",
+        )
+    toplevel = _last_store_path(output)
+    if not toplevel:
+        return (
+            _write_build_result(
+                outcome="failed",
+                build_outcome="build-failed",
+                refs=[],
+                target_rev=target_rev,
+                detail_lines=detail
+                + ["", "It reported success but named no store path:", ""]
+                + _log_tail(output),
+            ),
+            "build-failed",
+        )
+    result_id = _write_build_result(
+        outcome="completed",
+        build_outcome="built",
+        refs=[],
+        toplevel=toplevel,
+        target_rev=target_rev,
+        base_commit=base_commit,
+        lock_bytes=lock_bytes,
+        detail_lines=adopted + ["", "It built."] + detail + ["", f"    {toplevel}"],
+    )
+    _file_activation_question(result_id, result_id)
+    return result_id, "built"
+
+
+class ActivationRefused(Exception):
+    """The id handed to `castle activate` is not an authorization to
+    spend.
+
+    `ApplyRefused`'s exact contract: raised before anything at all is
+    written, because none of a mistyped id, a record that is not an
+    answer, an answer that is not an approval, or an approval whose
+    question predates this task is an event an append-only journal needs
+    a permanent opinion about.
+    """
+
+
+def _activation_binding(records: dict[str, Record], answer: Record):
+    """The `(question, build_result)` an approving answer is bound to,
+    or `(None, why)` if it is not an authorization this seat may spend.
+
+    `_approval_binding`'s three checks, with `authorizes-activation` in
+    place of `authorizes-apply` and one more: the result has to be a
+    build that actually built. An approval bound to a failed build is
+    not something this seat can spend, and the failure record files no
+    question, so this is unreachable except by hand.
+    """
+    if len(answer.refs) < 2:
+        return None, (
+            "it names fewer than two records: a decision's first ref is the change it "
+            "decides and its second is the exact proposal it was bound to"
+        )
+    question = records.get(answer.refs[0])
+    if question is None or question.type != "question":
+        return None, f"{answer.refs[0]} is not a question record"
+    if not question.fields.get(PROPOSAL_SHA256_FIELD, "").strip():
+        return None, (
+            f"{question.id} carries no '{PROPOSAL_SHA256_FIELD}', so there is no "
+            "proposal here that anything could have authorized"
+        )
+    if question.fields.get(AUTHORIZES_ACTIVATION_FIELD, "").strip() != "true":
+        return None, (
+            f"{question.id} carries no '{AUTHORIZES_ACTIVATION_FIELD}: true'. It was "
+            "not offered as a question about switching this machine, so approving it "
+            "authorized whatever it did say and nothing more. That is not something a "
+            "later change of wording can reach backwards and widen "
+            "(docs/tasks/0048-activation.md §D)."
+        )
+    result = records.get(answer.refs[1])
+    if result is None or result.type != "result":
+        return None, f"{answer.refs[1]} is not a result record"
+    if result.fields.get(BUILD_OUTCOME_FIELD, "").strip() != "built":
+        return None, (
+            f"{result.id} is not a build that produced anything, so there is nothing "
+            "here to switch to"
+        )
+    return (question, result), ""
+
+
+def _eligible_activations(records: dict[str, Record]) -> list[Record]:
+    """Every activation approval this sweep may spend, oldest first.
+
+    `_eligible_approvals`' fold exactly, including the one-attempt bound
+    — no `result` record may name the answer anywhere in its refs — and
+    including the reason the hand path sits outside it: `castle activate
+    <answer-id>` re-runs a spent authorization exactly as `castle work
+    <id>` re-runs a resulted errand, and that IS the retry path.
+
+    One flat pass, never a per-answer rescan
+    (docs/backlog/eligibility-fold-rescans-per-request.md).
+    """
+    named_by_results = {
+        ref for rec in records.values() if rec.type == "result" for ref in rec.refs
+    }
+    return order_records(
+        [
+            rec
+            for rec in records.values()
+            if rec.type == "answer"
+            and rec.fields.get("decision", "").strip() == "approve"
+            and rec.id not in named_by_results
+            and _activation_binding(records, rec)[0] is not None
+        ]
+    )
+
+
+def _write_activation_result(
+    *,
+    cause: Record,
+    anchor: Record,
+    outcome: str,
+    activation_outcome: str,
+    detail_lines: list[str],
+    commit_sha: str = "",
+) -> str:
+    """The one record an activation writes
+    (docs/tasks/0048-activation.md §F).
+
+    `refs` are `[cause, anchor]`: the record that caused this — the
+    approving answer for a switch, the deciding answer or the switch
+    itself for a window closing — and the thing it is about. Never the
+    request and never a claim, for `_write_apply_result`'s reason:
+    `closing_result`'s clause (b) would read a result naming a request
+    as the account closing that request's dangling worker claim.
+
+    `outcome` is not widened. A refusal is `outcome: completed`, because
+    the seat ran to a recorded conclusion and a conclusion correctly
+    reached is not a failure of the run; `activation-outcome` is what
+    says the machine did not move.
+    """
+    first_line = ACTIVATION_FIRST_LINES.get(activation_outcome)
+    if first_line is None:
+        first_line = (
+            "Castle could not act on the activation you approved, and this machine "
+            "is still running what it was running before."
+        )
+    extra = {"outcome": outcome, ACTIVATION_OUTCOME_FIELD: activation_outcome}
+    if commit_sha:
+        extra[ACTIVATION_COMMIT_FIELD] = commit_sha
+    record_id = write_record(
+        journal_dir(),
+        type="result",
+        provenance=cause.fields.get("provenance", "requested"),
+        seat=ACTIVATION_SEAT,
+        refs=[cause.id, anchor.id],
+        body="\n".join([first_line, ""] + list(detail_lines)),
+        extra=extra,
+    )
+    _chown_to_journal_owner(journal_dir() / f"{record_id}.md")
+    _clear_activation_in_flight(cause.id)
+    return record_id
+
+
+def _write_activation_in_flight(answer_id: str, head_before: str) -> None:
+    """The breadcrumb, before the first byte of the checkout moves.
+
+    `_write_in_flight`'s contract and its own directory
+    (`activation_in_flight_dir`). Written before the mutation, never
+    after, so the window it covers is the whole of it.
+    """
+    payload = f"answer: {answer_id}\nhead-before: {head_before}\n".encode("utf-8")
+    try:
+        activation_in_flight_path(answer_id).write_bytes(payload)
+    except OSError as exc:
+        print(
+            f"castle activate: could not write the in-flight marker for {answer_id} "
+            f"({exc}). The activation will still run; what is lost is the ability to "
+            "tell, after a crash, that an attempt had begun.",
+            file=sys.stderr,
+        )
+
+
+def _clear_activation_in_flight(answer_id: str) -> None:
+    try:
+        activation_in_flight_path(answer_id).unlink()
+    except OSError:
+        pass
+
+
+def _reconcile_activation_in_flight(records: dict[str, Record]) -> list[str]:
+    """Settle every attempt that began and never wrote its account,
+    before anything fresh runs.
+
+    `_reconcile_in_flight`'s posture and its reasoning: an attempt that
+    touched the checkout and never said so is the one thing a re-attempt
+    must not run on top of, and the honest record is that nobody knows
+    what it left behind. What this can add that the applier's cannot is
+    a *comparison* rather than a guess about the machine itself — the
+    approved closure against `/run/current-system` — because the switch
+    leaves a fact on disk even when castle wrote nothing.
+    """
+    written: list[str] = []
+    try:
+        markers = sorted(activation_in_flight_dir().iterdir())
+    except OSError:
+        return written
+    for marker in markers:
+        answer = records.get(marker.name)
+        if answer is None or answer.type != "answer":
+            # A marker naming nothing this journal knows about. Removed
+            # rather than reconciled: there is no record to hang an
+            # account off, and leaving it would block every future sweep
+            # on a file nobody can explain.
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+            continue
+        binding, _why = _activation_binding(records, answer)
+        if binding is None:
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+            continue
+        _question, build = binding
+        approved = build.fields.get(BUILD_TOPLEVEL_FIELD, "").strip()
+        running = _running_system()
+        detail = [
+            "An earlier attempt to activate this began and never wrote an account of "
+            "itself — the process was killed, or the machine went down, between "
+            "starting and finishing.",
+            "",
+            f"What you approved:      {approved or '(the build named no store path)'}",
+            f"What is running now:    {running or '(this machine could not say)'}",
+            "",
+        ]
+        if approved and running and approved == running:
+            detail.append(
+                "Those are the same, so the switch did happen. What did not happen is "
+                "the health confirmation, so nothing is watching this generation. If "
+                "it is working, that is all this record is for; if it is not, roll "
+                "back by hand."
+            )
+        else:
+            detail.append(
+                "Those differ, so the switch did not take effect. Your configuration "
+                "repository may or may not carry the pin bump this would have "
+                "committed — look at it, then run this again if you still want it."
+            )
+        written.append(
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="interrupted",
+                activation_outcome="switch-failed",
+                detail_lines=detail,
+            )
+        )
+    return written
+
+
+def _running_system() -> str:
+    """The store path this machine is running, or "".
+
+    Read and never written. The system profile is moved by the
+    privileged unit; nothing in this process may touch it.
+    """
+    try:
+        return os.path.realpath(CURRENT_SYSTEM_PATH)
+    except OSError:
+        return ""
+
+
+def _start_unit(unit: str, *, what: str) -> tuple[int, str, str]:
+    """Ask the system manager to run one of the two units the polkit
+    rule permits, and wait for it (docs/tasks/0048-activation.md §H).
+
+    **`systemctl start` without `--no-block`, deliberately.** It blocks
+    until the unit finishes and exits nonzero if the unit failed, which
+    is the whole outcome channel this seat needs — no status file, no
+    polling, and nothing to get out of step with what actually happened.
+
+    **The unit takes no arguments and this passes none.** That is the
+    grant: two fixed `ExecStart` lines a resident can read in
+    `/etc/systemd/system`, with nothing reaching them from a session.
+    A helper that activated whatever store path it was handed would make
+    the request channel the security boundary, and that channel is a
+    file any process running as the resident can write.
+    """
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        return 1, "", (
+            "`systemctl` is not on this session's PATH, so there is no way from here "
+            "to ask this machine to " + what
+        )
+    return _run_bounded([systemctl, "start", unit], what=what)
+
+
+def _extract_bounded(result: Record) -> bytes | None:
+    """The bytes a build result carries between its nonce boundary, or
+    None.
+
+    Verified against `patch-sha256` before being handed back, and the
+    verification is not decoration: these bytes become a file in the
+    resident's repository, and the record was rendered through a
+    markdown format whose transforms the digest exists to catch
+    (docs/tasks/0033-byte-exact-proposal.md).
+    """
+    boundary = result.fields.get(DIFF_BOUNDARY_FIELD, "").strip()
+    digest = result.fields.get(PATCH_SHA256_FIELD, "").strip()
+    if not boundary or not digest:
+        return None
+    begin, end = diff_boundary_lines(boundary)
+    lines = result.body.splitlines()
+    try:
+        start = lines.index(begin)
+        stop = lines.index(end, start + 1)
+    except ValueError:
+        return None
+    inner = lines[start + 1 : stop]
+    if inner and inner[0].startswith("```"):
+        inner = inner[1:]
+    if inner and inner[-1] == "```":
+        inner = inner[:-1]
+    payload = ("\n".join(inner) + "\n").encode("utf-8")
+    if hashlib.sha256(payload).hexdigest() != digest:
+        return None
+    return payload
+
+
+def _commit_lock(
+    root: str, lock_bytes: bytes, head_before: str, message: str
+) -> tuple[str, str]:
+    """Commit exactly these bytes as `flake.lock`, returning
+    `(sha, why_not)`.
+
+    **Built in a private index and never through the working tree**, for
+    the reason `_build_commit` documents at length: between writing a
+    file and committing it by pathspec, anything at all can write that
+    path, and the commit then carries somebody else's bytes under a
+    message asserting the approved ones. Constructing the commit from
+    `head_before`'s tree plus these bytes removes the race rather than
+    narrowing it.
+
+    Its own function rather than a call into `_build_commit`, which is
+    shaped around a snapshot directory of N patched paths. This writes
+    one known file whose content is already in hand, and the sequence is
+    short enough that sharing would cost more than it saves.
+    """
+    scratch = tempfile.mkdtemp(prefix="castle-activation-index-")
+    index = os.path.join(scratch, "index")
+    env = {"GIT_INDEX_FILE": index}
+    try:
+        read, fault = _run_git(root, ["read-tree", head_before], env_extra=env)
+        if read is None or read.returncode != 0:
+            return "", fault or "git could not read the current tree into an index"
+
+        # `hash-object --stdin` needs the bytes on stdin, which
+        # `_run_git` does not carry, so this one command is run directly
+        # — with the same isolation arguments and the same stripped
+        # environment, which is what makes that safe.
+        git = shutil.which("git")
+        if git is None:
+            return "", "`git` is not on this session's PATH"
+        blob_env = _git_stripped_env()
+        blob_env.update(env)
+        try:
+            blob = subprocess.run(
+                [
+                    git, "-C", root, *GIT_ISOLATION_ARGS,
+                    "hash-object", "-w", "--stdin", "--path", LOCK_PATH,
+                ],
+                input=lock_bytes,
+                capture_output=True,
+                timeout=APPLY_GIT_SECONDS,
+                env=blob_env,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return "", f"`git hash-object` could not be run there ({exc})"
+        if blob.returncode != 0:
+            return "", (blob.stderr or b"").decode("utf-8", "replace").strip() or (
+                "git refused to store the approved bytes"
+            )
+        blob_sha = (blob.stdout or b"").decode("utf-8", "replace").strip()
+
+        staged, fault = _run_git(
+            root,
+            ["update-index", "--add", "--cacheinfo", f"100644,{blob_sha},{LOCK_PATH}"],
+            env_extra=env,
+        )
+        if staged is None or staged.returncode != 0:
+            return "", fault or "git could not stage the approved bytes"
+
+        tree_probe, fault = _run_git(root, ["write-tree"], env_extra=env)
+        if tree_probe is None or tree_probe.returncode != 0:
+            return "", fault or "git could not write a tree"
+        tree = (tree_probe.stdout or "").strip()
+
+        commit_probe, fault = _run_git(
+            root,
+            ["commit-tree", tree, "-p", head_before, "-m", message],
+            config=[
+                f"user.name={ACTIVATION_COMMIT_NAME}",
+                f"user.email={ACTIVATION_COMMIT_EMAIL}",
+                # Signing off, deliberately. A seat's commit signed with
+                # a resident's key would assert an authorship they did
+                # not perform — `_commit_finding`'s rule, reused.
+                "commit.gpgsign=false",
+            ],
+            env_extra=env,
+        )
+        if commit_probe is None or commit_probe.returncode != 0:
+            return "", fault or "git could not build the commit"
+        sha = (commit_probe.stdout or "").strip()
+
+        branch_probe, fault = _run_git(root, ["symbolic-ref", "-q", "HEAD"])
+        if branch_probe is None or branch_probe.returncode != 0:
+            return "", (
+                "this repository has no branch checked out (a detached HEAD), so "
+                "there is nothing for a commit to move"
+            )
+        ref = (branch_probe.stdout or "").strip()
+
+        # Old-value guard: the update fails rather than clobbering if
+        # anything moved the branch since `head_before` was read.
+        moved, fault = _run_git(
+            root, ["update-ref", "-m", message, ref, sha, head_before]
+        )
+        if moved is None or moved.returncode != 0:
+            return "", fault or (
+                "something else moved this branch while the commit was being built"
+            )
+
+        # The working tree still holds the old lock; bring it to the
+        # commit. Done after the ref moved, so a failure here leaves a
+        # correct commit and visible dirt rather than an uncommitted
+        # change nobody authorized.
+        checked, _ = _run_git(root, ["checkout-index", "-f", "--", LOCK_PATH])
+        if checked is None or checked.returncode != 0:
+            return sha, (
+                f"the commit landed, but `{LOCK_PATH}` in your working tree was not "
+                "brought up to it — `git checkout -- " + LOCK_PATH + "` will"
+            )
+        return sha, ""
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
+    """Spend one approval: bump the pin if there is one, then ask this
+    machine to switch (docs/tasks/0048-activation.md §D, §H).
+
+    Returns `(result_id, activation_outcome)`. Raises `ActivationRefused`
+    only before anything is written.
+    """
+    binding, why = _activation_binding(records, answer)
+    if binding is None:
+        raise ActivationRefused(why)
+    question, build = binding
+    approved = build.fields.get(BUILD_TOPLEVEL_FIELD, "").strip()
+    target_rev = build.fields.get(BUILD_TARGET_REV_FIELD, "").strip()
+    base_commit = build.fields.get(BUILD_BASE_COMMIT_FIELD, "").strip()
+    detail: list[str] = []
+    commit_sha = ""
+
+    if target_rev:
+        outcome_or_none = _bump_pin(
+            answer=answer,
+            build=build,
+            target_rev=target_rev,
+            base_commit=base_commit,
+            detail=detail,
+        )
+        if isinstance(outcome_or_none, tuple):
+            return outcome_or_none
+        commit_sha = outcome_or_none
+
+    # A second breadcrumb, now covering the switch rather than the
+    # commit: what it records is "an attempt got as far as asking this
+    # machine to move and never wrote its account", which is the window
+    # the reconciliation resolves by comparing the approved closure
+    # against `/run/current-system`.
+    _write_activation_in_flight(answer.id, approved)
+    rc, output, fault = _start_unit(activate_unit(), what="switch")
+    running = _running_system()
+    detail += [
+        "",
+        f"The unit this asked for:  {activate_unit()}",
+        f"What you approved:        {approved or '(the build named no store path)'}",
+        f"What is running now:      {running or '(this machine could not say)'}",
+    ]
+    if fault and "PATH" in fault:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="failed",
+                activation_outcome="refused-no-privilege",
+                detail_lines=detail + ["", fault],
+                commit_sha=commit_sha,
+            ),
+            "refused-no-privilege",
+        )
+    if fault or rc != 0:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="timeout" if fault and "within" in fault else "failed",
+                activation_outcome="switch-failed",
+                detail_lines=detail
+                + ["", "The switch did not succeed:", ""]
+                + ([f"    {fault}"] if fault else _log_tail(output)),
+                commit_sha=commit_sha,
+            ),
+            "switch-failed",
+        )
+
+    if approved and running and approved != running:
+        # Not a refusal and not a failure: the switch ran and this
+        # machine moved. What it moved to is not the closure the
+        # question described, which is the cost §H accepts in exchange
+        # for a privileged unit that takes no arguments — recorded here
+        # rather than assumed away.
+        detail += [
+            "",
+            "Those two are NOT the same. The privileged step rebuilds this machine's "
+            "configuration from your repository rather than activating a store path "
+            "handed to it, so something changed there between the build you approved "
+            "and this switch. What is running is your configuration as it stands now.",
+        ]
+    detail += [
+        "",
+        ACTIVATION_QUESTION_CAVEAT,
+        "",
+        "Castle will ask whether this machine is working. If nothing says so within "
+        f"{activation_window_seconds()}s, it rolls back to the generation this "
+        "machine was running before.",
+    ]
+    result_id = _write_activation_result(
+        cause=answer,
+        anchor=build,
+        outcome="completed",
+        activation_outcome="switched",
+        detail_lines=detail,
+        commit_sha=commit_sha,
+    )
+    _file_health_question(result_id)
+    return result_id, "switched"
+
+
+def _bump_pin(
+    *, answer: Record, build: Record, target_rev: str, base_commit: str, detail: list[str]
+):
+    """Write and commit the `flake.lock` the resident approved. Returns
+    the commit sha, or a `(result_id, outcome)` pair if it refused.
+
+    One question authorized the whole act — bump, commit, switch — so
+    there is no second decision here and no second record. What there is
+    is a staleness guard, because the approved bytes were computed
+    against one commit and only describe the repository while it is
+    still at that commit.
+    """
+    private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    if not private_root:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="failed",
+                activation_outcome="refused-pin-stale",
+                detail_lines=[
+                    "This activation adopts a new framework revision by rewriting "
+                    f"`{LOCK_PATH}` in your configuration repository, and no such "
+                    "repository is configured for this host.",
+                ],
+            ),
+            "refused-pin-stale",
+        )
+
+    lock_bytes = _extract_bounded(build)
+    if lock_bytes is None:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="failed",
+                activation_outcome="refused-pin-stale",
+                detail_lines=[
+                    f"The exact `{LOCK_PATH}` you approved could not be recovered "
+                    f"from {build.id} — the bytes are missing, or they no longer "
+                    "hash to what was stamped when it was offered. Nothing was "
+                    "written and nothing was switched.",
+                ],
+            ),
+            "refused-pin-stale",
+        )
+
+    summary, why = _dirty_under(private_root, PIN_PATHS)
+    if summary is None or summary:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="completed" if summary else "failed",
+                activation_outcome="refused-tree-dirty",
+                detail_lines=[
+                    "Your configuration repository has uncommitted edits to the files "
+                    f"this would rewrite ({summary or why}), so Castle did not touch "
+                    "them.",
+                ],
+            ),
+            "refused-tree-dirty",
+        )
+
+    head_probe, fault = _run_git(
+        private_root, ["rev-parse", "HEAD"], timeout=CHECKOUT_PROBE_SECONDS
+    )
+    head_now = (
+        (head_probe.stdout or "").strip()
+        if head_probe is not None and head_probe.returncode == 0
+        else ""
+    )
+    if not head_now or (base_commit and head_now != base_commit):
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="completed",
+                activation_outcome="refused-pin-stale",
+                detail_lines=[
+                    "The lock you approved was computed against a particular commit "
+                    "of your configuration repository, and the repository has moved "
+                    "since:",
+                    "",
+                    f"    what it was built against: {base_commit[:12] or '(unrecorded)'}",
+                    f"    where it is now:           {head_now[:12] or fault}",
+                    "",
+                    "Writing the approved file now would silently undo whatever "
+                    "landed in between, so Castle did nothing. The next build will "
+                    "offer this again against where you are.",
+                ],
+            ),
+            "refused-pin-stale",
+        )
+
+    _write_activation_in_flight(answer.id, head_now)
+    message = "\n".join(
+        [
+            f"Adopt framework revision {target_rev[:12]}",
+            "",
+            f"Authorized by {answer.id}, deciding {build.id}.",
+            "",
+            f"Written by the {ACTIVATION_SEAT} seat "
+            "(docs/tasks/0048-activation.md). Nothing was pushed.",
+        ]
+    )
+    sha, why = _commit_lock(private_root, lock_bytes, head_now, message)
+    if not sha:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="failed",
+                activation_outcome="refused-pin-stale",
+                detail_lines=[
+                    f"Castle could not commit the approved `{LOCK_PATH}` in your "
+                    f"configuration repository: {why}",
+                    "",
+                    "Nothing was switched.",
+                ],
+            ),
+            "refused-pin-stale",
+        )
+    verified, verify_why = _verify_single_commit(private_root, head_now, sha)
+    detail += [
+        f"Adopted framework revision {target_rev}.",
+        "",
+        f"    commit {verified or sha} in your configuration repository",
+        f"    undo it with: git -C <your config repo> revert {verified or sha}",
+    ]
+    if why:
+        detail += ["", why]
+    if not verified:
+        detail += ["", f"That commit could not be re-verified afterwards: {verify_why}"]
+    return verified or ""
+
+
+def _file_health_question(activation_result_id: str) -> str:
+    """The question that opens the health window
+    (docs/tasks/0048-activation.md §E).
+
+    A proposal-shaped question, decided with the same three keys, on the
+    same review surface, reached by the same notification click. That
+    reuse is the design: the resident learns one place where authority
+    is granted, and this task adds no second one.
+
+    It carries `confirms-activation` naming the switch it closes, and it
+    is stamped `proposal-sha256` over that switch's own bytes so
+    `file_answer` binds a decision to it exactly as it binds one to a
+    proposal. It carries **no** `authorizes-activation`: approving it
+    switches nothing.
+
+    Self-anchored in `refs`, because the switch is the root of its own
+    little story and nothing precedes it that this question is about.
+    """
+    try:
+        result_bytes = (journal_dir() / f"{activation_result_id}.md").read_bytes()
+        question_id = write_record(
+            journal_dir(),
+            type="question",
+            provenance="requested",
+            seat=ACTIVATION_SEAT,
+            refs=[activation_result_id, activation_result_id],
+            body=HEALTH_QUESTION_BODY,
+            extra={
+                PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest(),
+                CONFIRMS_ACTIVATION_FIELD: activation_result_id,
+            },
+        )
+    except (OSError, RecordError) as exc:
+        # Printed, never raised, and this one is worse than the
+        # equivalent failure elsewhere, so it says so: the machine has
+        # already switched, and without this question nothing will ask
+        # for a confirmation. The window still closes — the timer is
+        # systemd's, not this journal's — and finding no confirmation it
+        # will roll back. That is the safe direction, and the resident
+        # is told which way it will fall.
+        print(
+            f"castle activate: this machine switched ({activation_result_id}), but "
+            f"the question that asks whether it is working could not be filed "
+            f"({exc}). Nothing will prompt you, and the window will close "
+            "unconfirmed — which means a rollback.",
+            file=sys.stderr,
+        )
+        return ""
+    _chown_to_journal_owner(journal_dir() / f"{question_id}.md")
+    return question_id
+
+
+def _open_windows(records: dict[str, Record]) -> list[Record]:
+    """Every `switched` result whose health window is still open, oldest
+    first.
+
+    Open means no activation-seat result has closed it — and closure is
+    "does a record exist" like every other bound in this file, so a
+    window cannot be reopened by anything short of writing history.
+    """
+    closed = {
+        ref
+        for rec in records.values()
+        if rec.type == "result"
+        and rec.fields.get("seat") == ACTIVATION_SEAT
+        and rec.fields.get(ACTIVATION_OUTCOME_FIELD, "")
+        in ("confirmed", "rolled-back", "rollback-failed")
+        for ref in rec.refs
+    }
+    return order_records(
+        [
+            rec
+            for rec in records.values()
+            if rec.type == "result"
+            and rec.fields.get(ACTIVATION_OUTCOME_FIELD, "") == "switched"
+            and rec.id not in closed
+        ]
+    )
+
+
+def _health_decision(
+    records: dict[str, Record], switched: Record
+) -> tuple[Record | None, str]:
+    """`(deciding_answer, decision)` for a switch's health question, or
+    `(None, "")` if nobody has decided it yet."""
+    question = None
+    for rec in records.values():
+        if (
+            rec.type == "question"
+            and rec.fields.get(CONFIRMS_ACTIVATION_FIELD, "").strip() == switched.id
+        ):
+            question = rec
+            break
+    if question is None:
+        return None, ""
+    for rec in order_records(records.values()):
+        if rec.type == "answer" and question.id in rec.refs:
+            return rec, rec.fields.get("decision", "").strip()
+    return None, ""
+
+
+def _close_window(
+    switched: Record, records: dict[str, Record], *, expired: bool
+) -> str | None:
+    """Close one health window, rolling back if nothing confirmed the
+    machine was working (docs/tasks/0048-activation.md §E).
+
+    `expired` is what tells the two callers apart, and it is the whole
+    of the difference. The resident's own sweep passes False: it acts
+    only on a window somebody has actually decided, so a switch nobody
+    has looked at yet is left alone. The privileged timer passes True at
+    the deadline, and then an undecided window is a window that has run
+    out.
+
+    **The asymmetry, restated where it is implemented.** A good
+    generation rolled back costs one cheap re-approval. A bad generation
+    left running costs a physical trip to the machine. `defer` and
+    silence therefore both fall to the cheap side, which is the one
+    place in this system a `defer` does something — and the review
+    surface says so before the key is pressed.
+    """
+    answer, decision = _health_decision(records, switched)
+    if decision == "approve":
+        return _write_activation_result(
+            cause=answer,
+            anchor=switched,
+            outcome="completed",
+            activation_outcome="confirmed",
+            detail_lines=[
+                "You said this machine is working, so the generation it switched to "
+                "is the one it keeps. Nothing further will happen on its own.",
+            ],
+        )
+    if not expired and decision not in ("reject",):
+        # Undecided, or set aside with the window still running. The
+        # resident's sweep says nothing about it: the timer owns the
+        # deadline, and a sweep that rolled back early would be deciding
+        # something the screen said the resident had time to decide.
+        return None
+
+    why = (
+        "You said this machine was not working"
+        if decision == "reject"
+        else (
+            "Nothing confirmed this machine was working before the window closed"
+            if not decision
+            else "The window closed with this set aside rather than confirmed"
+        )
+    )
+    rc, output, fault = _start_unit(rollback_unit(), what="roll back")
+    running = _running_system()
+    detail = [
+        f"{why}, so Castle asked this machine to go back to the generation it was "
+        "running before.",
+        "",
+        f"The unit this asked for:  {rollback_unit()}",
+        f"What is running now:      {running or '(this machine could not say)'}",
+    ]
+    cause = answer if answer is not None else switched
+    if fault or rc != 0:
+        return _write_activation_result(
+            cause=cause,
+            anchor=switched,
+            outcome="failed",
+            activation_outcome="rollback-failed",
+            detail_lines=detail
+            + [
+                "",
+                "The rollback did not succeed:",
+                "",
+            ]
+            + ([f"    {fault}"] if fault else _log_tail(output))
+            + [
+                "",
+                "This machine is running a configuration nothing confirmed, and "
+                "Castle has no way left to undo that on its own. Roll it back by "
+                "hand, or select the previous generation at the boot menu.",
+            ],
+        )
+    return _write_activation_result(
+        cause=cause,
+        anchor=switched,
+        outcome="completed",
+        activation_outcome="rolled-back",
+        detail_lines=detail
+        + [
+            "",
+            "If it was in fact working, approving the next build costs one keypress "
+            "— which is the trade this window is built on. A generation rolled back "
+            "in error costs a re-approval; one left running in error costs a trip to "
+            "the machine.",
+        ],
+    )
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    """The builder seat's hands (docs/tasks/0048-activation.md §A).
+
+    `castle build` builds whatever is owed a build, at most one thing,
+    and writes one result. `--sweep` is the same fold with the guards an
+    unattended run needs and a routing pass at the end; the two forms
+    mirror `castle work` / `castle dispatch` exactly.
+
+    **No authorization is spent here and none is checked.** A build
+    changes nothing, so asking permission for one would be a question
+    whose only honest answer is yes — and this project has one screen
+    where that habit would be expensive.
+    """
+    claim_id = os.environ.get(WORKER_CLAIM_ENV, "").strip()
+    if claim_id:
+        # STOP-19's mechanical half, `cmd_apply`'s guard verbatim. A
+        # tenant that could start a build could spend the machine's
+        # electricity on its own say-so, and — worse — file the question
+        # that leads to a switch.
+        print(
+            "castle build: refusing to build anything from inside a worker turn "
+            f"(this environment carries {WORKER_CLAIM_ENV}={claim_id}). The worker "
+            "seat proposes; the builder seat builds, on the journal's own reading of "
+            "what has changed.",
+            file=sys.stderr,
+        )
+        return 1
+
+    configured_state_dir = state_dir()
+    if not configured_state_dir.exists():
+        print(
+            f"build: state dir {configured_state_dir} does not exist yet "
+            "(private repo not restored?); nothing to do"
+        )
+        return 0
+
+    if args.sweep and runtime_dir_is_fallback():
+        print(
+            "castle build: refusing to sweep with locks under "
+            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
+            "so the only available lock directory is world-writable and an "
+            "unattended builder cannot trust it. Run this from a real login session "
+            "(the systemd user units do).",
+            file=sys.stderr,
+        )
+        return 1
+
+    lock = acquire_lock(activation_lock_path())
+    if lock is None:
+        print("build: another build or activation is already running; nothing to do")
+        return 0
+    try:
+        try:
+            records = load_all(journal_dir())
+        except OSError as exc:
+            print(f"castle build: cannot read the journal: {exc}", file=sys.stderr)
+            return 1
+        result_id, build_outcome = _run_build(records)
+        if not result_id:
+            return 0
+        print(f"build: {result_id} -> {build_outcome}")
+        if args.sweep:
+            # One route pass, the tail step `cmd_dispatch` and
+            # `cmd_apply` both run and for the same reason: a host may
+            # enable this without enabling either of those, and then
+            # nothing else would fire the notification that tells the
+            # resident there is a machine-changing question waiting.
+            return route_journal()
+        return 0 if build_outcome == "built" else 1
+    finally:
+        lock.close()
+
+
+def cmd_activate(args: argparse.Namespace) -> int:
+    """The activation seat's hands (docs/tasks/0048-activation.md §A).
+
+    Three forms, exactly one of which argparse allows at a time:
+
+    * `castle activate <answer-id>` — the hand path, deliberately
+      unbounded, because re-running by hand IS the retry path;
+    * `castle activate --sweep` — the automatic one, bounded at one
+      attempt per approval, and what the resident's user unit runs;
+    * `castle activate --close-window` — what the **privileged** timer
+      runs at a health window's deadline, and the only path in this
+      program that ever runs as root.
+
+    The argument is the **answer** id and never the question's: the
+    authorization is the answer, and a question authorizes nothing on
+    its own.
+    """
+    claim_id = os.environ.get(WORKER_CLAIM_ENV, "").strip()
+    if claim_id:
+        print(
+            "castle activate: refusing to change this machine from inside a worker "
+            f"turn (this environment carries {WORKER_CLAIM_ENV}={claim_id}). The "
+            "worker seat proposes; the activation seat switches, on the resident's "
+            "recorded approval and nothing else.",
+            file=sys.stderr,
+        )
+        return 1
+
+    configured_state_dir = state_dir()
+    if not configured_state_dir.exists():
+        print(
+            f"activate: state dir {configured_state_dir} does not exist yet "
+            "(private repo not restored?); nothing to do"
+        )
+        return 0
+
+    if (args.sweep or args.close_window) and runtime_dir_is_fallback():
+        print(
+            "castle activate: refusing to run unattended with locks under "
+            f"{runtime_dir()} — no XDG_RUNTIME_DIR and no /run/user/{os.getuid()}, "
+            "so the only available lock directory is world-writable and any local "
+            "user could hold it. On the seat that changes the running system, a lock "
+            "that can be held by somebody else is a switch that silently never "
+            "happens, or a rollback that does.",
+            file=sys.stderr,
+        )
+        return 1
+
+    lock = acquire_lock(activation_lock_path())
+    if lock is None:
+        print("activate: another build or activation is already running; nothing to do")
+        return 0
+    try:
+        try:
+            records = load_all(journal_dir())
+        except OSError as exc:
+            print(f"castle activate: cannot read the journal: {exc}", file=sys.stderr)
+            return 1
+
+        # Before anything fresh, on every path. An attempt that touched
+        # the checkout or the machine and never wrote its account is the
+        # one thing a re-attempt must not run on top of.
+        reconciled = _reconcile_activation_in_flight(records)
+        if reconciled:
+            records = load_all(journal_dir())
+            for rid in reconciled:
+                print(f"activate: {rid} accounts for an interrupted attempt")
+
+        if args.close_window:
+            closed = 0
+            for switched in _open_windows(records):
+                result_id = _close_window(switched, records, expired=True)
+                if result_id:
+                    closed += 1
+                    print(f"activate: {result_id} closes the window on {switched.id}")
+            if not closed:
+                print("activate: no health window is open")
+            return route_journal() if closed else 0
+
+        if not args.sweep:
+            answer = records.get(args.answer_id)
+            if answer is None or answer.type != "answer":
+                print(
+                    f"castle activate: {args.answer_id} is not an approval in this "
+                    "journal. The argument is the id of the decision that approved a "
+                    "switch, not of the build itself.",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                result_id, activation_outcome = _activate_one(answer, records)
+            except ActivationRefused as exc:
+                print(
+                    f"castle activate: {args.answer_id} cannot be spent: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+            print(result_id)
+            return 0 if activation_outcome in ACTIVATION_SUCCESS_OUTCOMES else 1
+
+        acted = 0
+        # Windows first, approvals second. A resident who rejected a
+        # health question wants that machine back now, and making them
+        # wait behind somebody else's build would be the wrong order on
+        # the one path where the machine is known to be broken.
+        for switched in _open_windows(records):
+            result_id = _close_window(switched, records, expired=False)
+            if result_id:
+                acted += 1
+                print(f"activate: {result_id} closes the window on {switched.id}")
+        if acted:
+            records = load_all(journal_dir())
+
+        approvals = _eligible_activations(records)
+        if not approvals and not acted:
+            print("activate: nothing eligible")
+        for answer in approvals:
+            try:
+                result_id, activation_outcome = _activate_one(answer, records)
+            except ActivationRefused as exc:
+                # Unreachable: the fold established every one of these.
+                print(f"castle activate: skipping {answer.id}: {exc}", file=sys.stderr)
+                continue
+            acted += 1
+            print(f"activate: {result_id} spends {answer.id} -> {activation_outcome}")
+            # One approval per sweep, and this is not an economy. A
+            # switch has just changed the machine this process is
+            # running on, a health window is open on it, and spending a
+            # second authorization now would stack two unconfirmed
+            # generations with one rollback between them.
+            break
+        if acted or reconciled:
+            return route_journal()
+        return 0
+    finally:
+        lock.close()
+
+
+# The activation outcomes a hand-run `castle activate` treats as success
+# for its exit code. `switched` and `confirmed` only: a rollback is a
+# correctly-reached conclusion, but a resident who typed this command
+# asked for a switch and did not get one.
+ACTIVATION_SUCCESS_OUTCOMES = ("switched", "confirmed")
+
+
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
     """Every record reachable from `root_id` along the lineage edge,
     plus anything naming `root_id` directly.
@@ -10285,6 +12610,47 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 f"{path.name}: '{APPLY_OUTCOME_FIELD}' ({apply_outcome_raw!r}) is not "
                 f"one of {', '.join(APPLY_OUTCOME_VALUES)}"
             )
+
+        # The activation family (docs/tasks/0048-activation.md §F), each
+        # given the same "well-formed if present, never required"
+        # treatment as everything above, and each type-scoped for the
+        # same reason: nothing reads any of them off another record
+        # type, so one sitting there would validate, read as meaningful,
+        # and do nothing.
+        for field, values, kind in (
+            (AUTHORIZES_ACTIVATION_FIELD, ("true",), "question"),
+            (CONFIRMS_ACTIVATION_FIELD, None, "question"),
+            (BUILD_OUTCOME_FIELD, BUILD_OUTCOME_VALUES, "result"),
+            (BUILD_TOPLEVEL_FIELD, None, "result"),
+            (BUILD_TARGET_REV_FIELD, None, "result"),
+            (BUILD_BASE_COMMIT_FIELD, None, "result"),
+            (ACTIVATION_OUTCOME_FIELD, ACTIVATION_OUTCOME_VALUES, "result"),
+            (ACTIVATION_COMMIT_FIELD, None, "result"),
+        ):
+            raw = rec.fields.get(field)
+            if raw is None:
+                continue
+            if rtype != kind:
+                errors.append(
+                    f"{path.name}: '{field}' is a {kind}-record field and this is a "
+                    f"{rtype!r} record. Nothing reads it here, so it would validate, "
+                    "read as meaningful, and do nothing "
+                    "(docs/tasks/0048-activation.md)."
+                )
+            elif values is not None and raw not in values:
+                # Closed by construction: exactly one writer exists for
+                # each of these and every surface that reads one
+                # branches on the value.
+                errors.append(
+                    f"{path.name}: '{field}' ({raw!r}) is not one of "
+                    f"{', '.join(values)} (docs/tasks/0048-activation.md)."
+                )
+            elif values is None and not raw.strip():
+                errors.append(
+                    f"{path.name}: '{field}' is present but blank. Absent is how a "
+                    "record says it has nothing to report here; blank says nothing "
+                    "at all (docs/tasks/0048-activation.md)."
+                )
 
         # `apply-commit` (result-only,
         # docs/tasks/0026-apply-validate.md §F), the same "well-formed
@@ -10738,6 +13104,100 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 "(docs/tasks/0026-apply-validate.md)."
             )
 
+    # **A builder-seat result must carry a `build-outcome`, and an
+    # activation-seat result an `activation-outcome`** — and a result
+    # carrying one of those fields must be written by that seat
+    # (docs/tasks/0048-activation.md §F).
+    #
+    # Fail-closed and both ways round, for the reason the applier's
+    # equivalent check was added: `_build_trigger` bars a rebuild by
+    # seat, `_open_windows` finds windows by field, and
+    # `_eligible_activations` bars a second attempt by refs. A
+    # hand-written record satisfying one of those folds and not the
+    # others is invisible to the one command whose job is to name a
+    # broken journal.
+    for rec in order_records(records.values()):
+        if rec.type != "result":
+            continue
+        seat = rec.fields.get("seat")
+        build_outcome = rec.fields.get(BUILD_OUTCOME_FIELD)
+        activation_outcome = rec.fields.get(ACTIVATION_OUTCOME_FIELD)
+        if seat == BUILDER_SEAT and build_outcome is None:
+            errors.append(
+                f"{rec.path.name}: a builder-seat result must say what happened to "
+                f"the build in '{BUILD_OUTCOME_FIELD}'. Without it the trigger fold "
+                "still counts this as an attempt while no surface can say what it "
+                "was (docs/tasks/0048-activation.md)."
+            )
+        if build_outcome is not None and seat != BUILDER_SEAT:
+            errors.append(
+                f"{rec.path.name}: '{BUILD_OUTCOME_FIELD}' says a build happened and "
+                f"'seat: {seat}' says the builder seat did not write this "
+                "(docs/tasks/0048-activation.md)."
+            )
+        if seat == ACTIVATION_SEAT and activation_outcome is None:
+            errors.append(
+                f"{rec.path.name}: an activation-seat result must say what happened "
+                f"to the machine in '{ACTIVATION_OUTCOME_FIELD}' "
+                "(docs/tasks/0048-activation.md)."
+            )
+        if activation_outcome is not None and seat != ACTIVATION_SEAT:
+            errors.append(
+                f"{rec.path.name}: '{ACTIVATION_OUTCOME_FIELD}' says this machine "
+                f"moved and 'seat: {seat}' says the activation seat did not write "
+                "this (docs/tasks/0048-activation.md)."
+            )
+        # A result that says a switch was made must spend a real
+        # authorization, exactly as an applier-seat result must. The
+        # window-closing outcomes are deliberately outside this: a
+        # rollback the timer performed has no answer behind it at all,
+        # which is the whole point of a deadline.
+        if activation_outcome in ("switched", "switch-failed") or (
+            activation_outcome is not None
+            and activation_outcome.startswith("refused-")
+        ):
+            authorization = records.get(rec.refs[0]) if rec.refs else None
+            if (
+                authorization is None
+                or authorization.type != "answer"
+                or authorization.fields.get("decision", "").strip() != "approve"
+            ):
+                errors.append(
+                    f"{rec.path.name}: an activation-seat result about a switch must "
+                    "spend a real authorization: its first ref has to resolve to an "
+                    "answer carrying 'decision: approve', and this one names "
+                    f"{rec.refs[0] if rec.refs else 'nothing'} "
+                    "(docs/tasks/0048-activation.md)."
+                )
+
+    # **A question may not carry both activation stamps.** Approving a
+    # switch and confirming one are different acts with different
+    # boundary statements, and a question claiming to be both would pick
+    # whichever the reading surface tested for first.
+    for rec in order_records(records.values()):
+        if rec.type != "question":
+            continue
+        if (
+            rec.fields.get(AUTHORIZES_ACTIVATION_FIELD) is not None
+            and rec.fields.get(CONFIRMS_ACTIVATION_FIELD) is not None
+        ):
+            errors.append(
+                f"{rec.path.name}: carries both '{AUTHORIZES_ACTIVATION_FIELD}' and "
+                f"'{CONFIRMS_ACTIVATION_FIELD}'. One asks to switch this machine and "
+                "the other asks whether a switch worked; a question cannot be both "
+                "(docs/tasks/0048-activation.md §E)."
+            )
+        if (
+            rec.fields.get(AUTHORIZES_ACTIVATION_FIELD) is not None
+            and rec.fields.get(AUTHORIZES_APPLY_FIELD) is not None
+        ):
+            errors.append(
+                f"{rec.path.name}: carries both '{AUTHORIZES_APPLY_FIELD}' and "
+                f"'{AUTHORIZES_ACTIVATION_FIELD}'. Those authorize incomparable acts "
+                "and no writer here produces both "
+                "(docs/tasks/0048-activation.md §D)."
+            )
+
     # **An outbox-seat result must not name the errand's request, or its
     # claim** (docs/tasks/0042-finding-outbox.md §5). The reasoning that
     # keeps it out of both lives in `_write_finding_result`'s docstring,
@@ -11007,6 +13467,60 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_apply.set_defaults(func=cmd_apply)
+
+    p_build = sub.add_parser(
+        "build",
+        help="builder: build the new system closure this machine is owed, if any",
+    )
+    p_build.add_argument(
+        "--sweep",
+        action="store_true",
+        help=(
+            "the unattended form: the same single build, plus the guards an "
+            "unattended run needs and one routing pass at the end. What the "
+            "castle-activation systemd unit runs (docs/tasks/0048-activation.md)."
+        ),
+    )
+    p_build.set_defaults(func=cmd_build)
+
+    p_activate = sub.add_parser(
+        "activate",
+        help="activation: switch this machine to a build you approved",
+    )
+    # Exactly one of the three forms, enforced by argparse rather than
+    # by hand: an activation with none of them has no defensible default
+    # — switching "the obvious one" is a judgment this seat must never
+    # hold — and one with two would have to silently prefer one.
+    p_activate_form = p_activate.add_mutually_exclusive_group(required=True)
+    p_activate_form.add_argument(
+        "answer_id",
+        nargs="?",
+        help=(
+            "id of the ANSWER that approved the switch — the authorization being "
+            "spent, not the build itself. This is the hand path and it is "
+            "deliberately unbounded, exactly as `castle apply <answer-id>` is."
+        ),
+    )
+    p_activate_form.add_argument(
+        "--sweep",
+        action="store_true",
+        help=(
+            "close any health window the resident has decided, then spend at most "
+            "one approval that nothing has spent yet. What the castle-activation "
+            "systemd user unit runs (docs/tasks/0048-activation.md)."
+        ),
+    )
+    p_activate_form.add_argument(
+        "--close-window",
+        action="store_true",
+        help=(
+            "the health window's deadline has arrived: confirm, or roll back. What "
+            "the PRIVILEGED castle-activation-window system unit runs, and the only "
+            "form of any castle command that is ever run as root "
+            "(docs/tasks/0048-activation.md §I)."
+        ),
+    )
+    p_activate.set_defaults(func=cmd_activate)
 
     p_waiter = sub.add_parser(
         "notify-waiter",
