@@ -304,9 +304,12 @@ cat > "$HOSTILE_HOME/.gitconfig" <<'EOF'
 [diff]
 	suppressBlankEmpty = true
 EOF
-# The control first: without the pin, this configuration really does
-# produce the broken shape. Without this assertion the case below would
-# pass just as well against a git that ignores the setting.
+# The control first: with no neutralization at all — no config pin, no
+# GIT_CONFIG_GLOBAL=/dev/null — this configuration really does produce
+# the broken shape. (The generation path neutralizes ~/.gitconfig by
+# env before the -c pin can matter; the case below asserts the outcome,
+# whichever layer provides it.) Without this assertion the case below
+# would pass just as well against a git that ignores the setting.
 CONTROL="$WORKDIR/control"
 mkdir -p "$CONTROL/a" "$CONTROL/b"
 printf 'one\n\nthree\n' > "$CONTROL/a/f.nix"

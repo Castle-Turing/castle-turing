@@ -6476,6 +6476,20 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             generated_bytes, generated_role, generated_notes = _generate_worker_patch(
                 mirror_dir, mirror_roles
             )
+            if not generated_bytes and generated_notes and diff_text:
+                # The mirror channel produced nothing, with a note
+                # saying so — but the tenant separately wrote a diff by
+                # hand, and that diff is what this result carries below.
+                # Without this sentence the record would say "no patch
+                # was generated" a few lines above a ```diff block,
+                # which reads as a contradiction (cross-vendor review
+                # of task 0053).
+                generated_notes.append(
+                    "Separately from its edited copies, the worker tenant wrote a "
+                    "diff to $CASTLE_DIFF_FILE by hand. The notes above are about "
+                    "the generated channel only; the hand-written diff is the one "
+                    "this result records below."
+                )
             if generated_bytes:
                 if diff_text:
                     # A tenant that both edited its copy and wrote a
