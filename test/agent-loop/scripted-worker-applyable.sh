@@ -185,6 +185,20 @@ if packet_has "APPLYABLE-DELETE"; then
   exit 0
 fi
 
+if packet_has "APPLYABLE-MALFORMED"; then
+  # Nothing here validates a tenant's diff before it is filed as a
+  # proposal (docs/tasks/0055-a-malformed-patch-is-not-a-stale-one.md):
+  # whatever lands in $CASTLE_DIFF_FILE is kept byte-exact and offered
+  # for approval as-is. This is what that turn looks like — text with no
+  # diff headers at all, which `git apply` cannot parse as a patch of
+  # any file, staleness or otherwise.
+  say "proposing something that is not a patch at all"
+  printf 'this is not a diff, it is just words the tenant wrote instead\n' \
+    > "$CASTLE_DIFF_FILE"
+  printf 'private\n' > "$CASTLE_TARGET_FILE"
+  exit 0
+fi
+
 if packet_has "APPLYABLE-TWOFILE"; then
   say "proposing one change that spans two files"
   rewrite_marker "resident.nix" "twofile"
