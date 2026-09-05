@@ -54,6 +54,14 @@ set -euo pipefail
 # prompt heredoc below documents, met from a different direction.
 : "${CASTLE_TARGET_FILE:?castle-worker-claude: CASTLE_TARGET_FILE must be set (see cmd_work in agent/castle)}"
 : "${CASTLE_FINDING_FILE:?castle-worker-claude: CASTLE_FINDING_FILE must be set (see cmd_work in agent/castle, and docs/tasks/0042-finding-outbox.md for the lane it opens)}"
+# The writable copy of every configured checkout
+# (docs/tasks/0053-diffs-are-generated-not-composed.md). Required, not
+# defaulted: with no copy to edit, this tenant cannot propose anything
+# at all, and the prompt below would be telling a model to write to a
+# directory that is not there. A missing variable means an `agent/castle`
+# older than this file, which is a deployment fault worth one loud line
+# rather than a turn that quietly produces nothing.
+: "${CASTLE_EDIT_DIR:?castle-worker-claude: CASTLE_EDIT_DIR must be set (see cmd_work in agent/castle, and docs/tasks/0053-diffs-are-generated-not-composed.md for what the tenant does with it)}"
 # The tenant's own last resort, and only that. `castle work` no longer
 # supplies a fallback of its own — an unconfigured turn refuses before
 # a tenant is ever started (docs/tasks/0024-config-target.md §16) — so
@@ -158,7 +166,7 @@ castle_resolve_path() {
 }
 
 sandbox_root="$(castle_resolve_path "$HOME")"
-for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE CASTLE_EDIT_DIR; do
   deliverable_path="$(castle_resolve_path "${!deliverable_var}")"
   # The quoted portion of the pattern is literal in bash, so a home
   # directory containing a glob character is compared as itself. The
@@ -167,7 +175,7 @@ for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; 
   case "$deliverable_path/" in
     "$sandbox_root"/*) ;;
     *)
-      echo "castle-worker-claude: refusing to run. This tenant execs a headless claude, which is sandboxed to write only beneath ${sandbox_root}, and castle work handed it \$${deliverable_var} at ${deliverable_path} — outside that. Nothing would be able to write the errand deliverables, and a turn that cannot deliver must fail loudly rather than produce an empty channel with a completed result. Point castle.agent.stateDir (modules/agent) at a directory under ${sandbox_root}: castle work allocates both output files beneath it (docs/tasks/0039-worker-writable-deliverables.md)." >&2
+      echo "castle-worker-claude: refusing to run. This tenant execs a headless claude, which is sandboxed to write only beneath ${sandbox_root}, and castle work handed it \$${deliverable_var} at ${deliverable_path} — outside that. Nothing would be able to write the errand deliverables, and a turn that cannot deliver must fail loudly rather than produce an empty channel with a completed result. Point castle.agent.stateDir (modules/agent) at a directory under ${sandbox_root}: castle work allocates its output files and the copy this tenant edits beneath it (docs/tasks/0039-worker-writable-deliverables.md, docs/tasks/0053-diffs-are-generated-not-composed.md)." >&2
       exit 1
       ;;
   esac
@@ -1144,6 +1152,29 @@ for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; 
   fi
 done
 
+# The channel item 2 now writes through, which is a whole directory
+# rather than one file (docs/tasks/0053-diffs-are-generated-not-
+# composed.md): the copy of each configured checkout that this tenant
+# edits in place, and the one place in the filesystem it may write
+# freely. A subtree grant rather than a list of paths, because which
+# file a change belongs in is the diagnosis this seat exists to make and
+# cannot be known before the turn runs.
+#
+# THIS IS THE WHOLE OF THE WIDENING. No command was added to the allowed
+# list for it: no cp, no mkdir, no rm. A bash write is not covered by
+# the Edit deny below that keeps this tenant out of the resident
+# checkout (docs/backlog/bash-redirection-defeats-root-write-deny.md),
+# so granting any of those to save the harness a copy it can make itself
+# would widen that hole rather than this one.
+#
+# Both the path as handed over and its resolved form, for the same
+# reason the three files above grant both.
+permission_allow+=("Edit(/${CASTLE_EDIT_DIR}/**)")
+edit_dir_resolved="$(castle_resolve_path "$CASTLE_EDIT_DIR")"
+if [ "$edit_dir_resolved" != "$CASTLE_EDIT_DIR" ]; then
+  permission_allow+=("Edit(/${edit_dir_resolved}/**)")
+fi
+
 # 4's forbidden list, said in rules. Each line here has a line up there
 # behind it; nothing is denied that the prose does not forbid, because
 # a wall the contract never mentions is the same defect wearing the
@@ -1217,7 +1248,7 @@ for grant_root in "${CASTLE_MECHANISM_ROOT:-}" "$CASTLE_PRIVATE_ROOT"; do
   [ -n "$grant_root" ] || continue
   grant_root_resolved="$(castle_resolve_path "$grant_root")"
   grant_root_holds_deliverable=""
-  for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+  for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE CASTLE_EDIT_DIR; do
     case "$(castle_resolve_path "${!deliverable_var}")/" in
       "$grant_root_resolved"/*) grant_root_holds_deliverable=yes ;;
     esac
@@ -1253,6 +1284,7 @@ permission_dirs=(
   /etc/pam
   /sys/class/graphics/fb0
   "$CASTLE_PRIVATE_ROOT"
+  "$CASTLE_EDIT_DIR"
 )
 if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
   permission_dirs+=("$CASTLE_MECHANISM_ROOT")
@@ -1266,6 +1298,18 @@ fi
 # directory that passed the rule check would fail this one — and fail
 # it silently, losing every deliverable, which is 0039 over again from
 # a third cause.
+# $CASTLE_EDIT_DIR is added as ITSELF, in the list above, rather than
+# through the loop below that adds a deliverable file by its parent
+# directory. It is already a directory; adding its parent would name the
+# turn scratch directory, which is a wider grant than anything asks for.
+#
+# Stated honestly rather than claimed: that parent is granted anyway,
+# because it is where the three deliverable files live and the loop
+# below adds their dirname. So the pristine copy `castle work` diffs
+# against is READABLE by this tenant. It is not writable — no Edit rule
+# matches it, and file writes are matched against Edit rules only — and
+# it is a copy of a checkout this tenant may read directly in any case,
+# so what it could learn there it already knows.
 for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
   deliverable_dir="$(dirname -- "${!deliverable_var}")"
   for deliverable_candidate in "$deliverable_dir" "$(castle_resolve_path "$deliverable_dir")"; do
