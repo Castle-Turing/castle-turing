@@ -12,13 +12,12 @@ result and a near-simultaneous sibling record both routing to notify
 with similar prose seconds apart (the activation flow files several
 records in quick succession); the notify waiter firing twice for one
 decision; or something in the activation-window units notifying on
-their own beside the router's channel. Also observed in the same
-flow, possibly unrelated but cheap to note while it is fresh: the
-activation seat's confirmation question carried a duplicated `refs`
-entry — the same result id twice — which `castle validate` does not
-currently object to. A duplicate ref is harmless to today's folds but
-is the kind of shape drift that later becomes somebody's confusing
-afternoon.
+their own beside the router's channel. One false lead is disarmed
+here so the eventual investigator does not take it: the confirmation
+question's `refs` entry names the same result twice, which looks like
+duplication but is deliberate self-anchoring — `agent/castle`
+documents it where the record is written, and both positional refs
+conventions depend on it. It is not this bug.
 
 **Why it can wait.** Two notifications for one good event is noise,
 not damage, and the notify path is due for attention anyway when the

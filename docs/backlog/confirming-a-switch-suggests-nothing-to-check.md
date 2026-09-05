@@ -15,8 +15,11 @@ never suggested, and the resident had no reason to think of it.
 drawn.** The system knows what the change touched — the applied diff
 names the files and options it modified, and the builder knows both
 generations. A confirmation that says "this switch changed
-`wayland.windowManager.sway.config.keybindings` — check a binding or
-two before confirming" acts on information it was given, which is the
+`wayland.windowManager.sway.config.keybindings` — check a binding you
+did *not* just add before confirming" acts on information it was
+given — and the breadth matters: in the motivating incident the two
+added bindings were the only ones that worked, so "check a binding or
+two" would have passed on the broken machine. which is the
 right side of the Clippy boundary the resident drew in
 [[the-modal-could-choose-its-opening-view]]: shown quietly, derived
 from the change itself, volunteering nothing about anything else.
