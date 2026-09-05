@@ -178,21 +178,34 @@ pins the decision asserts both:
 
 - **The prompt hands over a hostname and orders no read.** The
   rendered prompt contains this machine's actual name — computed in the
-  test from `/proc/sys/kernel/hostname` at run time, never a literal,
-  so no hostname is written into the repository — and does **not**
-  contain the string `/proc/sys/kernel/hostname`. The negative half is
-  the one that matters: it is what fails if someone restores the read.
+  test from `/proc/sys/kernel/hostname` with the same fallback, at run
+  time, never a literal, so no hostname is written into the repository.
+  It must also carry the sentence saying the tenant could not have read
+  the name itself, since a wall the contract omits is the same defect
+  as a permission it promises.
+
+  The negative half greps for the **order**, `Read
+  /proc/sys/kernel/hostname`, not for the path: the prompt still names
+  the file as provenance — where the harness got the name, and that it
+  is the same file `castle apply` uses — and that sentence is worth
+  keeping. Checked by mutation both ways, including a prompt that
+  hands the name over and re-adds the order beside it, which is the
+  realistic regression.
 - **The sandbox was not widened to compensate.** No entry of the
   tenant's `--add-dir` list is under `/proc`, and no `/proc` path
   appears in the allow or deny sections. This is the assertion that
   pins §A's choice rather than merely the symptom: a later change that
   fixed the same finding by granting `/proc/sys/kernel` would pass the
   first assertion and fail this one, and the failure message says which
-  decision it is contradicting.
+  decision it is contradicting. Confirmed by mutation: adding
+  `/proc/sys/kernel` to `permission_dirs` fails this assertion and
+  nothing else.
 
 Run `test/agent-loop/dispatch-test.sh` directly — plain bash and
 python3, no Nix, no models, no network — and the CI check that already
-runs it.
+runs it. `config-target.sh`, `resume.sh` and `apply.sh` also start the
+real tenant and are the other three that could notice this edit; all
+four pass.
 
 **What this cannot prove**, stated for the same reason 0047 states it:
 that a live headless `claude` honours the grant is not observable from
