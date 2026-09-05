@@ -5733,6 +5733,56 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 f"This diff targets the **{stamped_target}** checkout, which on "
                 f"this host resolved to `{resolved}`."
             )
+            if stamped_target == "mechanism":
+                # Said here because the absence of a review prompt is
+                # otherwise invisible: every other targeted result in
+                # the journal is followed by a question, and a reader
+                # comparing them would be left wondering what happened
+                # to this one
+                # (docs/tasks/0044-mechanism-findings-not-proposals.md
+                # §1).
+                #
+                # Worded to 0026 §G's constraint, which this task
+                # inherits rather than relaxes: it says what this
+                # machine may do, never that the change was proposed
+                # against the wrong layer.
+                # docs/backlog/where-do-host-modules-live.md is still
+                # open and nothing here decides it.
+                #
+                # **It promises a hand-off, never a branch.** This runs
+                # BEFORE the outbox, which may refuse — a dirty tree,
+                # no `origin/main`, a name already taken — and this
+                # result is the record the router notifies on while the
+                # outbox's is digest-only, so a sentence here claiming
+                # a branch exists could be contradicted only by a
+                # record the resident was never shown. That is the same
+                # self-contradiction the unresolvable-target branch
+                # thirty lines above refuses to commit.
+                #
+                # Nor does it promise the outbox's record itself. The
+                # hand-off runs after this body is already written and
+                # behind the same catch-all `_file_finding` runs behind
+                # (below): a turn killed in that gap, or an exception
+                # the hand-off's own vocabulary does not name, leaves no
+                # record beside this one, only a stderr line nobody
+                # reading the journal sees. Cross-model review on this
+                # branch caught the first draft asserting one always
+                # exists.
+                body_lines.append("")
+                body_lines.append(
+                    "Nothing was filed for you to approve. A change to the Castle "
+                    "Turing framework is not this machine's to apply, so it is not "
+                    "offered as a proposal: the diff above was handed to the outbox "
+                    "next, to travel as a candidate patch inside a finding rather "
+                    "than as something you authorize. **What became of it, if that "
+                    "hand-off itself runs to completion, is in a record beside this "
+                    "one** — including whether it could be filed at all, which "
+                    "depends on the state of that checkout and is not settled here. "
+                    "A turn killed before the hand-off runs, or a failure inside it "
+                    "outside its own named outcomes, leaves no such record; the diff "
+                    "is not lost either way, since it is above and in this result's "
+                    "own `.patch` file."
+                )
         if timed_out:
             body_lines.append("")
             body_lines.append(
@@ -5791,9 +5841,32 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # function is absent from `env`, and the outbox therefore
         # reaches its "nowhere to file this" refusal rather than writing
         # into a directory the turn already refused to hand over.
-        if stamped_target:
+
+        # **Not `mechanism`**, which is the whole of
+        # docs/tasks/0044-mechanism-findings-not-proposals.md §1: a
+        # completed turn whose diff is against the framework checkout
+        # files no approval question, because nothing here can spend
+        # such an approval and asking for one is the small betrayal
+        # that task exists to remove — the resident reads a change,
+        # decides it is right, and is told afterwards that the decision
+        # could never have had an effect
+        # (docs/tasks/done/0015-filed-not-in-progress.md's shape).
+        #
+        # Spelled as an exclusion rather than as `== "private"` on
+        # purpose. This task removes ONE filing path; a future third
+        # role would go on filing a question, which is what
+        # docs/tasks/done/0025-approval.md specified, rather than
+        # silently inheriting this exception.
+        #
+        # The applier's `refused-target-mechanism` is untouched and is
+        # not now dead code: mechanism-targeted proposal questions
+        # already sit in append-only journals, decided and undecided,
+        # and a resident who approves one tomorrow must still meet that
+        # refusal.
+        candidate_target = stamped_target == "mechanism"
+        if stamped_target and not candidate_target:
             _file_proposal_question(request, result_id, stamped_target)
-        if outcome == "completed" and finding_bytes.strip():
+        if outcome == "completed" and (finding_bytes.strip() or candidate_target):
             # **Last, and behind a catch-all.** Everything above this
             # line is the errand's own account and the approve-and-apply
             # chain that hangs off it; a finding is a volunteered extra.
@@ -5803,6 +5876,14 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # because that would turn a defect in the newest, least
             # load-bearing lane into a lost proposal on the oldest one.
             #
+            # A mechanism-targeted turn has no proposal question to
+            # lose (docs/tasks/0044-mechanism-findings-not-proposals.md
+            # §1), and its candidate patch does ride this lane — but
+            # the diff itself is already durable twice over by the time
+            # this runs, in the result body and in the byte-exact
+            # `.patch` sidecar beside it, so what an exception here
+            # costs is the branch and not the work.
+            #
             # Not silent: `_file_finding` writes a record on every path
             # it can reach, including every refusal, so reaching this
             # handler at all means something outside its own vocabulary
@@ -5811,7 +5892,16 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             try:
                 _file_finding(
                     result_id,
-                    finding_bytes,
+                    # The tenant's bytes untouched on the ordinary
+                    # lane, so `outbox.sh`'s byte-identical assertion
+                    # keeps holding; composed with the candidate patch
+                    # only when this turn has a mechanism-targeted diff
+                    # to carry (§2). `candidate_target` implies both a
+                    # completed turn and a non-empty diff, because
+                    # `stamped_target` is gated on exactly those.
+                    _finding_with_candidate(finding_bytes, diff_text)
+                    if candidate_target
+                    else finding_bytes,
                     {"mechanism": env.get(MECHANISM_ROOT_ENV, "")},
                 )
             except Exception as exc:  # noqa: BLE001 — see above
@@ -8197,6 +8287,164 @@ def _fence_for(text: str) -> str:
         run = run + 1 if char == "`" else 0
         longest = max(longest, run)
     return "`" * max(3, longest + 1)
+
+
+# The finding a mechanism-targeted diff rides when its turn wrote none
+# of its own (docs/tasks/0044-mechanism-findings-not-proposals.md §4).
+#
+# **Every word of it is the harness's own observation.** Not the
+# errand's text, not the tenant's reasoning: those are a resident's
+# words about a resident's machine, and this becomes a file in a public
+# repository. What is left is what this code actually knows — a turn
+# produced a fix and wrote nothing saying what problem the fix is for —
+# and that is a real gap in this framework's worker contract, which is
+# what a `docs/backlog/` entry is for.
+#
+# The title is fixed prose, so a second synthesized entry collides with
+# the first and the outbox refuses it `refused-already-there`. That is
+# deliberate and follows docs/tasks/0042's own rejection of suffix
+# disambiguation: a near-duplicate backlog entry filed automatically is
+# a mess a human reconciles later, nothing is lost when it fires (the
+# refusal record carries the whole finding, candidate included, and the
+# byte-exact diff is still in the journal), and "something by that name
+# is already filed" is the useful sentence — the first entry is still
+# unmerged and the same gap has now produced a second one. A title
+# carrying the worker result id would always land and was rejected
+# against docs/backlog/README.md's "entries are not numbered, slugs
+# only", and against putting a timestamp from a resident's machine into
+# a public file name.
+#
+# The fix for the collision is not a suffix. It is a tenant that writes
+# a finding, which agent/castle-worker-claude's prompt now asks for
+# whenever it targets the mechanism checkout.
+SYNTHESIZED_FINDING = """\
+Title: A worker turn proposed a change to the framework without a finding
+Destination: mechanism
+
+**What.** A worker turn produced a candidate change to this framework
+while working on an errand, and wrote no finding saying what problem the
+change solves. The patch below is that candidate. Nobody reading it cold
+can tell what it is for, because the only account of that is a journal
+record on the machine the turn ran on.
+
+**Why it matters.** A fix with no problem statement cannot be specced,
+and this one arrived through the lane built so that a worker's diagnosis
+would stop depending on a human carrying it here by hand. The worker
+contract should ask for the finding alongside the diff whenever a turn
+targets this checkout, so that what lands is an entry a stranger can
+act on rather than a patch with no reason attached.
+"""
+
+# The heading and the framing the candidate patch is quoted under, in
+# whichever finding carries it — the tenant's own or the synthesized one
+# above (docs/tasks/0044-mechanism-findings-not-proposals.md §2, §6).
+#
+# **A candidate patch, never the patched code.** This is the whole
+# restraint of that task. An outbox that committed the diff APPLIED
+# would be a back door around the pipeline every other change to this
+# repository goes through — a numbered brief, a pull request, a human —
+# opened by a machine, in a repository whose premise is that its
+# argument travels with its code.
+#
+# The last sentence is docs/tasks/0042 §6's byte-fidelity argument made
+# again rather than inherited, because a patch is not prose: this copy
+# has been through a lenient decode and a markdown fence, so it is for
+# reading and re-deriving. The byte-exact artifact is untouched — the
+# `.patch` sidecar beside the worker result is written on exactly the
+# gate it always was and is still the only copy anything applies.
+CANDIDATE_PATCH_LINES = (
+    "**A candidate fix, as a patch.** A worker turn wrote this diff against a "
+    "checkout of this framework while working on an errand. It is a suggestion "
+    "for whoever specs this entry, not a change anyone has reviewed, and nothing "
+    "applies it: a change to this repository lands through a numbered brief and a "
+    "pull request like any other.",
+    "",
+    "Read it and re-derive it rather than piping it anywhere. This copy is quoted "
+    "prose in a markdown file; the byte-exact original stayed in the journal of "
+    "the machine that produced it.",
+)
+
+
+def _finding_with_candidate(finding_bytes: bytes, diff_text: str) -> bytes:
+    """The finding a mechanism-targeted turn hands the outbox: the
+    tenant's own, or a synthesized one, with the candidate patch quoted
+    at the end of its body
+    (docs/tasks/0044-mechanism-findings-not-proposals.md §2).
+
+    **Here rather than in the outbox.** `_file_finding` stays a total
+    function of bytes-plus-checkouts with no knowledge that candidates
+    exist; the party that composes this is the turn, which is the only
+    one holding both deliverables. Giving the outbox an opinion about
+    which finding a diff belongs to would make it a reasoning seat,
+    which its own docstring forbids two functions away.
+
+    The append lands past the blank line the header already terminates
+    at, so `_parse_finding`'s header/body split is unaffected and a
+    tenant's `Title:` and `Destination:` are exactly what they were. A
+    finding that was malformed stays malformed and is refused by name
+    with everything — including the candidate — carried verbatim into
+    the refusal record.
+
+    The candidate is appended whatever the tenant's `Destination:` says.
+    With `mechanism` the only member of FINDING_DESTINATIONS, any other
+    value is already refused by name and the whole thing rides into that
+    record intact; deciding instead whether a given finding is "the
+    right" finding for a given diff is precisely the judgment this
+    layer may not hold.
+
+    The fence comes from `_fence_for` over the diff, for the reason that
+    helper exists: a unified diff of a file containing a fenced block
+    carries context lines that close a three-backtick fence early.
+
+    **What this lane commits is a composed artifact, not the tenant's
+    bytes**, and that is the one place it departs from
+    docs/tasks/0042-finding-outbox.md's posture. It has to: the whole
+    point is to put two deliverables in one file. The decode is lenient
+    for the same reason the result body's is — a finding is prose for a
+    human, so a replacement character costs legibility at worst — and
+    the diff's byte-exact copy is untouched in the `.patch` sidecar
+    beside the worker result, which stays the only artifact anything
+    applies. The plain-finding lane still hands `_file_finding` the
+    tenant's exact bytes, and `outbox.sh` still asserts that byte for
+    byte.
+
+    **The exposure this opens, named rather than guarded.** Nothing
+    here checks that a diff stamped `mechanism` is actually against the
+    framework checkout, so a tenant that mis-stamps a private-layer
+    diff publishes the resident's own configuration into a checkout of
+    a public repository — where before this lane existed the same
+    mistake produced only an unspendable proposal question. There is no
+    honest mechanical check: `agent/README.md`'s own paragraph on
+    `target` says the two checkouts legitimately hold the same relative
+    paths, which is why the field exists at all, and a guard that
+    refused a patch for touching paths that "look private" would be
+    this code deciding where host modules live —
+    docs/backlog/where-do-host-modules-live.md, which
+    docs/tasks/done/0026-apply-validate.md §G forbids this layer to
+    settle. It is answered where the judgment is: the tenant is told,
+    in agent/castle-worker-claude's prompt, that a mechanism-targeted
+    diff becomes a public file and that an uncertain one must not be
+    stamped. The branch is local and unpushed, so a resident still sees
+    it before anything leaves the machine
+    (docs/tasks/0044-mechanism-findings-not-proposals.md, "The known
+    cost").
+    """
+    # `rstrip` and not `strip`: a leading blank line makes
+    # `_parse_finding` see an empty header and refuse the whole thing
+    # `refused-malformed`, and removing it here would make the same
+    # bytes parse on this lane and not on the other. This composes a
+    # finding; it does not repair one.
+    text = finding_bytes.decode("utf-8", errors="replace").rstrip()
+    if not text.strip():
+        text = SYNTHESIZED_FINDING.strip()
+    fence = _fence_for(diff_text)
+    lines = [text, ""] + list(CANDIDATE_PATCH_LINES) + [
+        "",
+        f"{fence}diff",
+        diff_text,
+        fence,
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def _commit_finding(

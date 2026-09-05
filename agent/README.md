@@ -1004,6 +1004,20 @@ is the one value it acts on, and `mechanism` gets its own named refusal
 (`refused-target-mechanism`) rather than an error, because an
 approved-but-unapplyable change is a terminal state and not a fault.
 
+Since `docs/tasks/0044-mechanism-findings-not-proposals.md` a completed
+turn stamping `target: mechanism` **files no proposal question at all**,
+so that refusal is a backstop rather than the ordinary path: nobody is
+asked to authorize a change this machine could never spend. The diff
+travels the finding lane instead — quoted as a candidate patch inside a
+`docs/backlog/` entry on a branch of the framework checkout, never as
+patched code, because a change to that project lands through a brief
+and a review. The refusal stays exact and stays reachable because the
+journal is append-only: proposals of that shape already sit in real
+journals, decided and undecided, and nothing may rewrite them.
+`authorizes-apply` is untouched by that task — absence still means, and
+only means, that the proposal was offered under the older, narrower
+statement.
+
 The field carries a **role**, not a path. A role reads correctly to a
 human or a cold tenant years later; an absolute path reads correctly
 today and is a lie the first time the checkout moves or the machine is
@@ -1702,9 +1716,21 @@ read a directory can consume it.
 
 **The outbox** is plumbing, not a reasoning seat, in exactly the sense
 `docs/architecture.md` uses for dispatch and the applier: a total
-function of one turn's outputs, no judgment, no tenant, no model. After
-a **completed** turn whose finding file is non-empty it validates the
-declared `Destination:` against the closed set of configured checkouts
+function of one turn's outputs, no judgment, no tenant, no model. It
+runs after a **completed** turn that has something for it: a non-empty
+finding file, or — since
+`docs/tasks/0044-mechanism-findings-not-proposals.md` — a diff stamped
+`target: mechanism`, which rides the turn's finding as a candidate
+patch quoted at the end of its body. A turn with a mechanism-targeted
+diff and no finding of its own gets a synthesized one, whose every word
+is the harness's own observation: an errand's text and a tenant's
+reasoning are the resident's words about the resident's machine, and
+this entry becomes a file in a public repository. Its title is fixed
+prose, so a second such entry collides with the first and is refused
+`refused-already-there` rather than disambiguated with a suffix.
+
+Either way the outbox validates the declared `Destination:` against the
+closed set of configured checkouts
 (`mechanism` is the only member, resolving to
 `castle.agent.repo.mechanism`) and commits the finding as
 `docs/backlog/<slug>.md` on a **fresh branch off `origin/main`** in

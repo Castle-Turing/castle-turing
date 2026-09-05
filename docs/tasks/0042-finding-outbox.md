@@ -382,10 +382,11 @@ that later needs its own authority argument.
   re-filed as its own backlog entry in this commit, so promoting the
   parent does not delete work nobody has done.
 - **Mechanism-targeted *diffs*.** A worker that wants to change the
-  framework rather than report a problem with it is task 0044, which
-  builds on this lane and on
-  `docs/backlog/mechanism-proposals-are-approvable-but-unapplyable.md`.
-  The applier's `refused-target-mechanism` is untouched here.
+  framework rather than report a problem with it is
+  `docs/tasks/0044-mechanism-findings-not-proposals.md`, which builds
+  on this lane and which promoted the backlog entry this non-goal
+  originally cited. The applier's `refused-target-mechanism` is
+  untouched here, and 0044 keeps it as a backstop.
 - **No new Nix option.** The destination set resolves to
   `castle.agent.repo.mechanism`, which already exists. Principle 01
   splits cleanly: the outbox and the format are public mechanism, the
