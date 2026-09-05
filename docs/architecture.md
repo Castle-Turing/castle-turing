@@ -408,7 +408,16 @@ as its own document:
   declares two privileged systemd units, carrying `nixos-rebuild switch
   --flake <repo>#<host>` and `nixos-rebuild switch --rollback` and no
   argument reaching them from anywhere, and a polkit rule permitting one
-  named account to start exactly those two. What is standing is the
+  named account to start exactly those two. Since
+  docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md it
+  also declares a third, smaller thing without which the first two do
+  not work: a `safe.directory` entry in the system git config naming
+  exactly the configured repository, because a switch running as root
+  is otherwise refused read access to a repository the resident owns.
+  That entry grants no authority the ExecStart line above it did not
+  already grant — the unit's purpose is to activate that repository's
+  configuration as root — and it names one path, not a pattern. What is
+  standing is the
   *ability to be asked*; every individual switch is still authorized
   one at a time, by a specific answer record, under a screen that says
   in capitals what approving does — so the applier bullet's "a

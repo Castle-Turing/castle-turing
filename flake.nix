@@ -378,10 +378,22 @@
                       && !(config.systemd.services ? castle-activation-window)
                       && !(config.systemd.timers ? castle-activation-window)
                       && !(lib.hasInfix "castle-activate" config.security.polkit.extraConfig)
+                      # And the read permission the switch needs
+                      # (docs/tasks/0057-the-privileged-switch-cannot-
+                      # read-the-repository.md): the module's only
+                      # reason to write a `[safe]` section into
+                      # /etc/gitconfig is that grant, so its absence
+                      # here is the same proof as the two clauses
+                      # above. A permission for root over a resident's
+                      # repository appearing on a host that never asked
+                      # to activate anything is the same defect class
+                      # as a privileged unit appearing there.
+                      && !(lib.hasInfix "[safe]" (config.environment.etc.gitconfig.text or ""))
                     );
                   message = ''
-                    nixosConfigurations.example generates activation units, or a
-                    polkit rule naming them, even though
+                    nixosConfigurations.example generates activation units, a
+                    polkit rule naming them, or the safe.directory grant that
+                    lets root read the resident's repository, even though
                     castle.agent.activation.enable is left at its default.
                     Letting this machine rebuild and switch itself is opt-in,
                     and it is the first standing root grant in this project
@@ -879,6 +891,13 @@
               windowUnit = config.systemd.services.castle-activation-window or null;
               environment = if unit == null then { } else unit.environment;
               rule = config.security.polkit.extraConfig;
+              # The rendered /etc/gitconfig, read as text for the same
+              # reason the polkit rule below is: `nix flake check`
+              # proving the option evaluates says nothing about what
+              # the file ends up containing, and the whole failure
+              # mode this grant fixes is a setting that looks right and
+              # is never consulted.
+              gitconfig = config.environment.etc.gitconfig.text or "";
             in
             {
               castle.agent = {
@@ -987,6 +1006,38 @@
                     castle-rollback.service — a rule that omitted the unit
                     lookup would grant start/stop/restart over every unit on
                     this machine and evaluate exactly as cleanly.
+                  '';
+                }
+                {
+                  # The third component of the grant
+                  # (docs/tasks/0057-the-privileged-switch-cannot-read-
+                  # the-repository.md). Without it the privileged unit
+                  # cannot open the repository its ExecStart names, and
+                  # the switch fails in under a second — which is how
+                  # the first real activation in this project's history
+                  # went. Read as generated text, because the ways this
+                  # grant fails are all ways it stays syntactically
+                  # perfect: written to a file libgit2 does not read,
+                  # or naming a path it will not match.
+                  #
+                  # The last clause is the scope check. Presence alone
+                  # would stay green if this ever grew a second entry,
+                  # and "root may read exactly one named repository" is
+                  # the whole difference between this and the
+                  # `safe.directory = *` the module deliberately does
+                  # not write.
+                  assertion =
+                    config.programs.git.enable
+                    && lib.hasInfix "[safe]" gitconfig
+                    && lib.hasInfix "directory = \"${dummyRepoRoot}\"" gitconfig
+                    && builtins.length (lib.splitString "directory = \"" gitconfig) == 2;
+                  message = ''
+                    nixosConfigurations.example-activation: /etc/gitconfig does
+                    not carry the safe.directory grant that lets the privileged
+                    switch read the resident's repository, or carries more than
+                    one directory entry. Expected exactly one, naming
+                    castle.agent.repo.private and nothing else
+                    (docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md).
                   '';
                 }
               ];

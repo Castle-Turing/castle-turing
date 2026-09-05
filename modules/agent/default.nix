@@ -1482,6 +1482,65 @@ in
       '';
     };
 
+    # The third half of the grant, and the one the first real
+    # activation in this project's history died without
+    # (docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md).
+    # `nixos-rebuild switch --flake` re-evaluates the resident's flake,
+    # and nix opens that flake's git repository through libgit2, which
+    # refuses a repository owned by somebody other than the process
+    # reading it — the CVE-2022-24765 ownership protection, enforced by
+    # the fetcher rather than by the `git` binary. The unit is root and
+    # the repository is the resident's, so the switch cannot read the
+    # configuration it exists to activate.
+    #
+    # **Why an interactive `sudo nixos-rebuild` against the same
+    # repository succeeds where this unit does not**, which is the
+    # discrepancy any fix here has to explain or it is verified by
+    # coincidence: libgit2 accepts a path owned by `$SUDO_UID` when the
+    # effective uid is 0 (GIT_FS_PATH_OWNER_RUNNING_SUDO,
+    # src/util/fs_path.c at the 1.9.4 this flake's pin builds nix
+    # against). `sudo` sets that variable; a systemd system unit has no
+    # such variable and no such session.
+    #
+    # **Why /etc/gitconfig and not GIT_CONFIG_* on the two units**,
+    # which would look better scoped: libgit2 reads GIT_CONFIG_SYSTEM
+    # and GIT_CONFIG_GLOBAL only for a repository opened with
+    # GIT_REPOSITORY_OPEN_FROM_ENV, and nix's call site
+    # (src/libfetchers/git-utils.cc, `git_repository_open` with no
+    # flags) passes none — while git's GIT_CONFIG_COUNT/KEY_n/VALUE_n
+    # protocol is a CLI feature libgit2 does not implement at all.
+    # Either environment spelling installs cleanly, reads correctly to
+    # a reviewer, and is invisible to the code it was written for. The
+    # system config file is read unconditionally by
+    # `validate_ownership_config`, needs no $HOME (which this unit does
+    # not usefully have), and is honoured by the `git` binary too.
+    #
+    # **This grants root nothing the ExecStart line above did not
+    # already grant.** What safe.directory suppresses is git's refusal
+    # to trust the *contents* of somebody else's repository — its
+    # hooks, filters and config. The unit's whole purpose is to build
+    # and activate that repository's configuration as root, which
+    # delegates more to those bytes than any hook could take. It names
+    # exactly one path, so it says nothing about any other repository
+    # the resident owns.
+    #
+    # `programs.git` rather than a raw `environment.etc.gitconfig`
+    # write: its option merges across modules, so a host with its own
+    # system git config gets the union instead of a definition
+    # conflict. The cost is that `programs.git.enable` must be true,
+    # which puts pkgs.git in environment.systemPackages — not new
+    # authority, since agent/castle already cannot commit a pin bump or
+    # write a journal without `git` on PATH. Deliberately not
+    # `lib.mkDefault`: a host silently switching this off would leave
+    # exactly the grant-that-does-not-exist failure the polkit comment
+    # above warns about.
+    programs.git = lib.mkIf cfg.activation.enable {
+      enable = true;
+      config = {
+        safe.directory = cfg.repo.private;
+      };
+    };
+
     # /code-review caught this on the branch that introduced the switch
     # to sessionVariables above: nixos/modules/config/system-
     # environment.nix's own pamVariable writes `NAME   DEFAULT="value"`
@@ -1667,6 +1726,35 @@ in
           unit's command line. Set castle.agent.repo.private to the
           absolute path of your own configuration checkout before
           turning this on.
+        '';
+      }
+      {
+        # docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md:
+        # this path is also the value of the `safe.directory` entry the
+        # activation branch declares, and libgit2 compares that value
+        # against the repository's worktree path after appending a
+        # slash to it — skipping the comparison entirely for a value
+        # that already ends in one (`validate_ownership_cb`,
+        # src/libgit2/repository.c at v1.9.4). A trailing slash here
+        # therefore produces a grant that parses, installs, and never
+        # matches: the privileged switch fails to read the repository
+        # exactly as it did before that grant existed, with nothing
+        # anywhere saying why. Asserted at eval time rather than left
+        # to surface on a live host as the failure this task fixed.
+        assertion =
+          !cfg.activation.enable
+          || cfg.repo.private == null
+          || !(lib.hasSuffix "/" cfg.repo.private);
+        message = ''
+          castle.agent.repo.private ends in a `/`, and
+          castle.agent.activation.enable is true. That path is written
+          into the `safe.directory` entry this module declares so the
+          privileged switch can read your repository, and git's
+          ownership check ignores a safe.directory value with a
+          trailing slash — the grant would install and silently never
+          apply, leaving the switch refusing your repository with no
+          indication that the permission it needs is right there. Drop
+          the trailing slash.
         '';
       }
       {
