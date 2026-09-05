@@ -249,8 +249,12 @@ plant_applied_change() {
   if [ -n "$touches" ]; then
     mkdir -p "$(dirname "$PRIVATE/$touches")"
     printf '# %s\n' "$what" >> "$PRIVATE/$touches"
-    git -C "$PRIVATE" add -A
-    git -C "$PRIVATE" commit -q -m "fixture: $what"
+    # Path-scoped, never `add -A`: the list under test is exactly this
+    # commit's file list, and folding in whatever an earlier scenario
+    # left dirty would let this pass while exercising a different list
+    # than the one its assertions describe.
+    git -C "$PRIVATE" add -- "$touches"
+    git -C "$PRIVATE" commit -q -m "fixture: $what" -- "$touches"
     commit="$(git -C "$PRIVATE" rev-parse HEAD)"
   fi
   proposal="$("$CASTLE" record --type result --provenance requested --seat worker \

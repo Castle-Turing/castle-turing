@@ -86,12 +86,22 @@ boundary statement is the scope of the authority a resident spends;
 this text is not about authority at all, and putting it there would
 both dilute the statement and, worse, make a change to advisory prose
 a change to the sentence a decision was made under. The body is also
-what a digest renders and what `_fire_notification` carries, which is
-where the caveat went for the same reason.
+what a digest renders whole, so a resident who meets this question in
+a digest meets the paragraph with it — which is the reason the caveat
+went there too.
 
-The question's existing first line is unchanged. It is the picker's
-preview and the notification's line, and it still says the true and
-most important thing.
+**A notification carries the first line and nothing else**, which is
+worth stating because the comment above `ACTIVATION_QUESTION_CAVEAT`
+has claimed otherwise since 0048 and this task checked it:
+`route_journal` takes `body.strip().splitlines()[0]`. So the paragraph
+reaches the review screen and the digest, and never a notification.
+That comment is corrected in the same commit; the digest half of its
+reasoning stands on its own and nothing about 0048's design depended
+on the other half.
+
+The question's existing first line is therefore unchanged. It is the
+picker's preview and it is the whole of what a notification says, and
+it still says the true and most important thing.
 
 ### §B. What it says on the applied-change trigger
 
@@ -242,7 +252,9 @@ motivating incident actually needed.
   list from the apply commits a build accounted for;
   `_health_check_lines`, assembling the paragraph for either trigger;
   `_activate_one` computing them before the switch;
-  `_file_health_question` taking them and composing the body.
+  `_file_health_question` taking them and composing the body. Plus the
+  one-comment correction §A names, on a constant this task does not
+  otherwise touch.
 - `test/agent-loop/activation.sh` — the assertions, and a fixture
   extension so a planted applied change makes a real commit and stamps
   `apply-commit` the way the applier does.

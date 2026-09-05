@@ -11519,9 +11519,14 @@ ACTIVATION_QUESTION_BODY = (
 
 # What a resident is told about `switch`'s limits, in the question's own
 # body rather than only on the review screen — the body is what a digest
-# renders and what a notification's tail carries, and a resident who
-# approves from a digest must meet this too
-# (docs/tasks/0048-activation.md §E).
+# renders whole, and a resident who approves from a digest must meet
+# this too (docs/tasks/0048-activation.md §E).
+#
+# **Not what a notification carries**, which this comment claimed until
+# docs/tasks/0059 checked it: `route_journal` takes a question's first
+# line and nothing else, so a notification carries
+# `ACTIVATION_QUESTION_BODY` alone. The digest reason above stands on
+# its own; the notification half was never true.
 ACTIVATION_QUESTION_CAVEAT = (
     "Switching applies most of a configuration to the machine as it is running. A "
     "change to the kernel, the initrd, or firmware is staged into the new "
@@ -13127,8 +13132,22 @@ def _switch_touched_paths(
     for ref in build.refs:
         rec = records.get(ref)
         if rec is None or rec.type != "result":
+            # `load_all` skips a record file it cannot parse, and a
+            # build's own refs are the only list of what it accounted
+            # for — so a ref that resolves to nothing is a change whose
+            # files are unknown, not a change with no files. Silence
+            # here would drop it from the list *and* let the list read
+            # as complete, which is the one failure this flag exists to
+            # make impossible.
+            complete = False
             continue
         if rec.fields.get("seat") != APPLIER_SEAT:
+            # `_build_trigger` selects anchors by `apply-outcome` and
+            # never by seat, and `cmd_validate` does not tie the two, so
+            # these two selectors are free to disagree. Where they do,
+            # this says so rather than quietly narrowing the list to
+            # what one of them recognises.
+            complete = False
             continue
         sha = rec.fields.get(APPLY_COMMIT_FIELD, "").strip()
         if not sha or not private_root:
@@ -13227,13 +13246,16 @@ def _file_health_question(activation_result_id: str, check_lines: list[str]) -> 
     the **body** rather than in the boundary statement
     (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md §A).
     Two reasons, and the second is the load-bearing one: the body is
-    what a digest renders and what `_fire_notification` carries, which
-    is where `ACTIVATION_QUESTION_CAVEAT` went for the same reason; and
-    a boundary statement is the scope of an authority a resident spends,
-    so advisory prose sitting there would make a later improvement to it
-    a change to the sentence a decision was made under. The first line
-    is untouched — it is the picker's preview and the notification's
-    line, and it still says the most important thing.
+    what `_digest_body` renders whole, so a resident who meets this
+    question in a digest meets the paragraph with it; and a boundary
+    statement is the scope of an authority a resident spends, so
+    advisory prose sitting there would make a later improvement to it a
+    change to the sentence a decision was made under.
+
+    A notification carries the **first line only** — `route_journal`
+    takes `body.splitlines()[0]` — so nothing of this reaches one, and
+    that first line is left exactly as it was. It is also the picker's
+    preview, and it still says the most important thing.
     """
     try:
         result_bytes = (journal_dir() / f"{activation_result_id}.md").read_bytes()
