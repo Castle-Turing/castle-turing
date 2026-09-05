@@ -37,7 +37,9 @@ nothing may be derived from those details.
 
 **What any redesign keeps.** The invariants of the current surface,
 per `agent/README.md`: no reflex keypress authorizes, decides, or
-marks read — and one physical keypress must be one logical keypress;
+marks read — which [[an-arrow-key-is-three-dismissals]] extends with a
+consequence the README does not yet state: one physical keypress must
+become one logical keypress;
 quoted content (diffs, questions, results, the resident's own words)
 rendered verbatim and never truncated; the vocabulary rule — no
 journal internals on the surface, except the exact id inside a retry

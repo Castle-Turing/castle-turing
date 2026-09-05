@@ -45,9 +45,9 @@ dismissals — bare `Esc` keeps its meaning, and arrow keys do nothing
 instead of relying on the terminal's scrollback is a separate, larger
 question and deliberately not decided here.
 
-**Why it can wait.** The resident's stated priority (2026-09-05) is
-that Castle complete one request end to end before any surface is
-refined; and the larger question of whether this surface stays the
+**Why it can wait.** The project's gate, set by the resident
+2026-09-05: Castle completes one request end to end before any surface
+is refined. And the larger question of whether this surface stays the
 front door at all is open (see
 [[chat-mode-implies-a-conversational-turn-contract]]). Filed so the
 complaint survives outside the conversation that found it.
