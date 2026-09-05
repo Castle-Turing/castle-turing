@@ -11,7 +11,11 @@ branch that implements it. That convention is unchanged and lives in
   here is a task an agentic coding harness (emcee today — any harness
   that reads `Title:`-headed markdown files works) may pick up and run:
   a header of `Key: value` lines, a blank line, then a body that
-  becomes the working agent's brief. A task file is a *prompt*, not the
+  becomes the working agent's brief. `Title:` is the minimum. `Model:`
+  names the tier the task runs on and `Model-because:` says why that
+  tier rather than the adjacent one — both required, see CLAUDE.md's
+  Delegation section. `Requires:` names prerequisite tasks and needs a
+  `Requires-because:` beside it, which the harness enforces. A task file is a *prompt*, not the
   brief itself — it names the authoritative sources (usually a
   `docs/backlog/` entry) and instructs the implementer to author the
   numbered brief here on its own branch, deleting any promoted backlog
