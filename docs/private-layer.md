@@ -1046,13 +1046,19 @@ still runs them.
 `networking.hostName`.** This has always been the shape every template
 here uses, and since `docs/tasks/0024-config-target.md` a worker
 follows it: to find which host module applies to the machine it is
-running on, it reads `/proc/sys/kernel/hostname` and looks for the
+running on, it is told this machine's name and looks for the
 `nixosConfigurations` entry of that name in your `flake.nix`, then
-follows its imports. Read from the running kernel rather than declared
-as a third option that could silently drift from the truth. If your
-attribute is named something else the worker says what it looked for
-and asks you, rather than guessing at a near match — so a mismatch
-costs you a question, not the errand.
+follows its imports. The name is read from `/proc/sys/kernel/hostname`
+by the harness that starts the worker, not by the worker itself
+(`docs/tasks/0058-the-sandbox-allows-the-read-the-contract-names.md`) —
+the worker's own file access is confined to the repositories and
+directories it is granted, which do not include `/proc`, and the same
+file and fallback are what `castle apply` derives its flake attribute
+from, so the two agree by construction. Read from the running kernel
+rather than declared as a third option that could silently drift from
+the truth. If your attribute is named something else the worker says
+what it looked for and asks you, rather than guessing at a near match —
+so a mismatch costs you a question, not the errand.
 
 **The worker never evaluates your flake, and this is deliberate.** It
 reads the files. Evaluating a local flake copies its whole tracked
