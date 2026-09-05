@@ -1,0 +1,6 @@
+Title: No sweep tool for previewing foot appearance settings like padding
+Destination: mechanism
+
+**What.** tools/font-sweep.sh compares terminal and UI font specs side by side on the real panel, and tools/console-font-sweep.sh does the same for the virtual console. There is no equivalent for other single-value foot appearance settings a resident might want to calibrate by eye — padding being the obvious case: a resident who wants to compare a few padding values has no way to preview them live, and is left either guessing a number or hand-running one-off terminal instances themselves.
+
+**Why it matters.** This project's own convention treats exactly this class of value — a perceptual appearance setting with no answer derivable from a spec sheet — as something to calibrate by looking rather than reasoning about, specifically because guessing or arguing about such values has previously shipped wrong (a cursor-size value once argued into place instead of looked at, and shipped dramatically incorrect). Padding sits in the same category as the font sizes font-sweep.sh already serves, but has no comparable tool, so anyone hitting this ends up either improvising throwaway shell commands each time or asking someone else to eyeball it for them — the exact repeated-manual-step failure mode a purpose-built sweep tool exists to close off for fonts already.
