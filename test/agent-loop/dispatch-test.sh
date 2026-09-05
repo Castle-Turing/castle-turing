@@ -1253,6 +1253,31 @@ done
 [ "$(sort "$GRANT_DIRS" | uniq -d | wc -l)" -eq 0 ] \
   || fail "the added directories repeat: $(cat "$GRANT_DIRS")"
 
+log "  -- and NOTHING under /proc is granted, because the contract no longer orders a read there (docs/tasks/0058)"
+# THIS IS THE ASSERTION THAT PINS THE DECISION, not the symptom.
+#
+# Step 1 of the contract used to tell the tenant to read
+# /proc/sys/kernel/hostname to find which host module applies. Nothing
+# in this grant reaches /proc, and a headless session confines every
+# file read to its working directories — so the contract documented as
+# allowed a read its own enforcement refused, and a live worker turn
+# met that refusal on 2026-09-05. 0058 fixed it by moving the read into
+# the harness, which is not sandboxed, rather than by widening the
+# tenant's surface: a permission_dirs entry is a working DIRECTORY, so
+# the narrowest honest grant would have been the kernel's writable
+# tunables at /proc/sys/kernel, carrying the paired Edit deny this
+# script gives its other readable roots.
+#
+# The next case checks the prompt hands the name over. This one checks
+# the OTHER fix was not the one taken — a later change that granted
+# /proc/sys/kernel instead would satisfy every prompt assertion below
+# and fail here, which is the whole reason both halves are asserted.
+for grant_proc_section in "$GRANT_DIRS" "$GRANT_ALLOW" "$GRANT_DENY"; do
+  if grep -q '/proc' "$grant_proc_section"; then
+    fail "the tenant's grant reaches /proc ($(basename "$grant_proc_section")): 0058 removed the read that needed it rather than granting the kernel's tunable subtree, so a path here means that decision was reversed without the brief moving: $(cat "$grant_proc_section")"
+  fi
+done
+
 log "  -- and the packet still travels on stdin, not in the argv the grant now shares"
 if grep -qF 'CASTLE-PACKET-0123456789abcdef' "$GRANT_ARGV"; then
   fail "the prompt reached argv alongside the permission grant (E2BIG is back)"
@@ -1302,6 +1327,33 @@ for refusal_rule in \
   printf '%s' "$RENDERED_0039" | grep -qF "$refusal_rule" \
     || fail "the rendered prompt states no quotable rule for: $refusal_rule"
 done
+
+log "  -- and it hands the tenant this machine's name rather than ordering a read it cannot do (docs/tasks/0058)"
+# The other half of the pin above. That one proves the grant does not
+# reach /proc; this one proves the tenant does not need it to.
+#
+# The expected name is computed here, from the same file and with the
+# same fallback agent/castle's _hostname() uses, rather than written
+# down: this suite runs on whatever machine it runs on, and a literal
+# would be both wrong everywhere else and a real hostname committed to
+# a public repository.
+EXPECTED_HOSTNAME="$(cat /proc/sys/kernel/hostname 2>/dev/null || true)"
+[ -n "$EXPECTED_HOSTNAME" ] || EXPECTED_HOSTNAME="$(uname -n)"
+printf '%s' "$RENDERED_0039" | grep -qF "This machine's hostname is $EXPECTED_HOSTNAME" \
+  || fail "the rendered prompt does not tell the tenant this machine's name, so its host-module step has nothing to match a nixosConfigurations entry against"
+# The order, not the mention. The prompt still names the file as
+# PROVENANCE — where the harness got the name, and that it is the same
+# file castle apply uses — which is why this greps for the instruction
+# shape rather than for the path.
+if printf '%s' "$RENDERED_0039" | grep -qF 'Read /proc/sys/kernel/hostname'; then
+  fail "the prompt orders the tenant to read /proc/sys/kernel/hostname again — the read the sandbox refuses is back"
+fi
+# Said in the prompt rather than left for the tenant to discover by
+# being refused: a contract that omits a wall the harness enforces is
+# the same defect as one that promises a permission the harness
+# withholds.
+printf '%s' "$RENDERED_0039" | grep -qF 'nothing in your permission grant would let you' \
+  || fail "the prompt hands over the hostname without saying the tenant could not have read it, so a tenant that doubts the name has no rule telling it not to try"
 
 # ---------------------------------------------------------------------
 log "a request a tenant files during its own turn is stamped, and never auto-dispatched (docs/tasks/0021 §2.4(e))"
