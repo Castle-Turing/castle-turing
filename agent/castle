@@ -1855,6 +1855,15 @@ def prune_work_scratch() -> None:
     directory it is durable, and would accumulate one pair per killed
     turn forever inside the resident's private directory.
 
+    **Directories as well as files**, since
+    docs/tasks/0053-diffs-are-generated-not-composed.md put a per-turn
+    mirror of the configured checkouts in here beside the three output
+    files. `unlink()` raises `IsADirectoryError` on a directory, which
+    this function's own `except OSError` would have caught and skipped
+    forever — leaving exactly the durable accumulation 0039 §5 added
+    this prune to prevent, one whole tree per killed turn instead of
+    two files.
+
     Best effort throughout. A sweep's nonzero exit means "dispatch
     itself broke" (`cmd_dispatch`'s exit-code contract), and a scratch
     file that could not be deleted is emphatically not that.
@@ -1866,11 +1875,410 @@ def prune_work_scratch() -> None:
     cutoff = time.time() - WORK_SCRATCH_MAX_AGE_SECONDS
     for entry in entries:
         try:
-            if entry.stat().st_mtime >= cutoff:
+            # `lstat`, so a symlink is judged by its own age and
+            # unlinked as itself rather than followed to whatever it
+            # points at.
+            if entry.lstat().st_mtime >= cutoff:
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
                 continue
             entry.unlink()
         except OSError:
             continue
+
+
+# The fourth path a worker turn hands its tenant, and the only one that
+# is a directory (docs/tasks/0053-diffs-are-generated-not-composed.md).
+# Its subdirectories are named with exactly the words
+# $CASTLE_TARGET_FILE accepts, so which checkout a change targets is a
+# fact about where the tenant wrote rather than a claim it makes
+# afterwards.
+EDIT_DIR_ENV = "CASTLE_EDIT_DIR"
+
+# What one turn will copy into that directory, per configured checkout.
+#
+# A ceiling, not an expectation: a resident's configuration repository
+# is a handful of files, and this framework's own checkout is a couple
+# of hundred. What the bounds stop is a turn spending minutes copying a
+# repository somebody keeps their photographs in. Past either one the
+# mirror is short some files, and the tenant's contract already says
+# what to do about a file the mirror does not carry — it is not
+# proposable from that seat, and the honest move is to say so.
+EDIT_MIRROR_MAX_FILES = 5000
+EDIT_MIRROR_MAX_BYTES = 32 * 1024 * 1024
+
+# Bytes are compared, never lines, and a patch is refused outright when
+# either side of a changed path holds one of these. `git diff` answers
+# "Binary files a/x and b/x differ", which is not something `git apply`
+# can consume, and an unappliable patch is the whole defect 0053
+# exists to remove.
+NUL = b"\0"
+
+
+def _mirror_roles(env: dict[str, str]) -> list[tuple[str, str]]:
+    """The (role, root) pairs a turn mirrors, in a fixed order.
+
+    Exactly the two roots `run_worker_turn` puts in the tenant's
+    environment, under exactly the two words `$CASTLE_TARGET_FILE`
+    accepts. A configured-but-unusable mechanism checkout
+    (MECHANISM_ROOT_INVALID_ENV) is deliberately absent: it is not a
+    checkout, there is nothing to copy out of it, and a mirror
+    directory named after it would tell a tenant it could propose
+    against something this turn already told it was unavailable.
+    """
+    roles: list[tuple[str, str]] = []
+    for role, key in (("private", PRIVATE_ROOT_ENV), ("mechanism", MECHANISM_ROOT_ENV)):
+        root = env.get(key)
+        if root:
+            roles.append((role, root))
+    return roles
+
+
+def _tracked_files(root: str) -> tuple[list[str] | None, str]:
+    """Every path in `root`'s index, or `None` and a phrase saying why.
+
+    `git ls-files` rather than a directory walk, and that choice is
+    load-bearing three times over. It excludes `.git`. It excludes
+    every untracked build artefact. And it excludes a state directory
+    sitting inside a configured root — which
+    docs/tasks/done/0047-tenant-permission-allowlist.md documents as a
+    live deployment, and which is untracked in the recommended layout
+    or a gitlink when it is a submodule; either way `ls-files` does not
+    list its contents, so the mirror cannot come to contain the
+    directory it is being written into.
+
+    `--no-optional-locks` for the reason the tenant's own git rules
+    give: this reads a resident's repository and must take no lock and
+    write nothing in it, not even `.git/index`.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None, "`git` is not on this session's PATH"
+    try:
+        probe = subprocess.run(
+            [git, "--no-optional-locks", "-C", root, *GIT_ISOLATION_ARGS, "ls-files", "-z"],
+            capture_output=True,
+            timeout=CHECKOUT_PROBE_SECONDS,
+            env=_git_stripped_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"`git ls-files` could not be run there ({exc})"
+    if probe.returncode != 0:
+        detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+        return None, detail or f"git exited {probe.returncode}"
+    # A path is bytes, and `os.fsdecode` is the round-trippable decode
+    # — the same posture `_patch_paths` takes about paths git hands
+    # back. Anything that cannot survive the round trip is skipped by
+    # the copy below rather than guessed at.
+    return [os.fsdecode(raw) for raw in (probe.stdout or b"").split(b"\0") if raw], ""
+
+
+def _populate_edit_mirror(
+    role: str, root: str, base_root: pathlib.Path, edit_root: pathlib.Path
+) -> list[str]:
+    """Copy `root`'s tracked regular files into both mirrors.
+
+    Two copies of the same bytes: `base_root`, which nothing but this
+    file ever reads, and `edit_root`, which is the tenant's. The patch
+    is generated by diffing one against the other, so the "before"
+    image is the checkout as it stood when the turn started — not as it
+    stands when the turn ends. A resident is free to edit their own
+    repository while an errand runs, and a patch computed against the
+    live checkout would carry their edit away inside the proposal and
+    apply cleanly while doing it. Computed against the base copy it
+    carries only what the tenant changed, and fails loudly at
+    docs/tasks/done/0026-apply-validate.md's own check if the
+    resident's edit overlaps it.
+
+    **Symlinks are skipped, not copied.** A symlink inside the one
+    directory this tenant may write is a way out of it: an editor
+    following it writes wherever it points, which can be the resident's
+    checkout. Nothing about a symlink is proposable from this seat
+    anyway — its content is not what a configuration change edits.
+
+    Returns notes for the result record; never raises.
+    """
+    notes: list[str] = []
+    tracked, why = _tracked_files(root)
+    if tracked is None:
+        notes.append(
+            f"The {role} checkout at `{root}` could not be listed, so nothing was "
+            f"copied into `{EDIT_DIR_ENV}/{role}` and no change could be proposed "
+            f"against it this turn ({why})."
+        )
+        return notes
+    files = 0
+    written = 0
+    skipped_special = 0
+    unreadable = 0
+    truncated = False
+    for rel in tracked:
+        source = pathlib.Path(root) / rel
+        if source.is_symlink() or not source.is_file():
+            # A gitlink (a submodule's own directory), a symlink, or a
+            # path the index carries and the working tree does not.
+            skipped_special += 1
+            continue
+        if files >= EDIT_MIRROR_MAX_FILES or written >= EDIT_MIRROR_MAX_BYTES:
+            truncated = True
+            break
+        try:
+            size = source.stat().st_size
+            base_path = base_root / rel
+            base_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, base_path)
+            edit_path = edit_root / rel
+            edit_path.parent.mkdir(parents=True, exist_ok=True)
+            # Copied from the base copy rather than from the checkout a
+            # second time, so the two mirrors cannot start out
+            # different however the file changes underneath.
+            shutil.copy2(base_path, edit_path)
+        except OSError:
+            unreadable += 1
+            continue
+        files += 1
+        written += size
+    if truncated:
+        notes.append(
+            f"The {role} checkout is larger than one turn will copy "
+            f"({EDIT_MIRROR_MAX_FILES} files or {EDIT_MIRROR_MAX_BYTES} bytes), so "
+            f"`{EDIT_DIR_ENV}/{role}` carries only its first {files} files. A change "
+            "to a file that is not in the copy could not have been proposed this "
+            "turn."
+        )
+    if unreadable:
+        notes.append(
+            f"{unreadable} tracked file(s) in the {role} checkout could not be "
+            f"copied into `{EDIT_DIR_ENV}/{role}` and were not available to change "
+            "this turn."
+        )
+    return notes
+
+
+def _changed_mirror_paths(
+    base_root: pathlib.Path, edit_root: pathlib.Path
+) -> tuple[list[str], list[str]]:
+    """The relative paths under `edit_root` whose bytes are not what
+    this turn put there, plus notes.
+
+    Absence is never a deletion. A path under `base_root` with no
+    counterpart under `edit_root` is read as "this turn did not change
+    it", which is the conservative reading and deliberately so: a
+    mirror that fell short — a bound hit, a copy that failed, an
+    editor that moved a file aside — would otherwise generate a patch
+    deleting a resident's files, which is the worst artifact this
+    function could produce. The tenant's contract says by name that a
+    deletion is not proposable from this seat.
+    """
+    changed: list[str] = []
+    notes: list[str] = []
+    skipped = 0
+    for dirpath, dirnames, filenames in os.walk(edit_root, followlinks=False):
+        # Sorted so a patch's file order is a property of the paths and
+        # not of the filesystem's readdir order: two turns proposing
+        # the same change must produce the same bytes, or
+        # docs/tasks/done/0033-byte-exact-proposal.md's digest means
+        # less than it says.
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = pathlib.Path(dirpath) / name
+            if path.is_symlink() or not path.is_file():
+                skipped += 1
+                continue
+            rel = str(path.relative_to(edit_root))
+            try:
+                new_bytes = path.read_bytes()
+            except OSError:
+                skipped += 1
+                continue
+            base_path = base_root / rel
+            try:
+                old_bytes = base_path.read_bytes() if base_path.is_file() else None
+            except OSError:
+                skipped += 1
+                continue
+            if old_bytes is not None and old_bytes == new_bytes:
+                continue
+            changed.append(rel)
+    if skipped:
+        notes.append(
+            f"{skipped} path(s) under `{EDIT_DIR_ENV}` were not regular files and "
+            "were left out of the generated patch."
+        )
+    return changed, notes
+
+
+def _generate_worker_patch(
+    mirror_dir: pathlib.Path, roles: list[tuple[str, str]]
+) -> tuple[bytes, str, list[str]]:
+    """The unified diff for whatever the tenant edited in its mirror.
+
+    Returns `(patch bytes, role, notes)`; empty bytes and an empty role
+    mean no patch, with the notes saying why whenever that was a
+    refusal rather than "the tenant changed nothing".
+
+    **This function exists so that no model ever writes a hunk header.**
+    On 2026-09-05 the first live errand to produce a real proposal
+    produced one `git apply` refused to parse — a hunk header off by
+    one, and a blank context line written as an empty line rather than
+    as a single space. Both are what asking a language model to
+    hand-compute a patch's framing produces; neither is reachable from
+    here.
+
+    **Staged into directories literally named `a` and `b`.**
+    `--no-prefix` makes git emit the paths it was given, so two
+    directories with those names produce exactly the conventional
+    `a/<rel>` and `b/<rel>` headers `git apply` strips with its default
+    `-p1` — with no post-processing of git's output anywhere, which is
+    the same rule this whole task applies to the tenant.
+    """
+    notes: list[str] = []
+    per_role: list[tuple[str, list[str]]] = []
+    for role, _root in roles:
+        base_root = mirror_dir / "base" / role
+        edit_root = mirror_dir / "edit" / role
+        if not edit_root.is_dir():
+            continue
+        changed, role_notes = _changed_mirror_paths(base_root, edit_root)
+        notes += role_notes
+        if changed:
+            per_role.append((role, changed))
+    if not per_role:
+        return b"", "", notes
+    if len(per_role) > 1:
+        # The contract's "ONE DIFF, ONE TARGET", enforced rather than
+        # asked for. Nothing downstream can apply a patch spanning two
+        # repositories, so a two-repository proposal strands the errand
+        # rather than finishing it — and the two checkouts legitimately
+        # hold the same relative paths, so a patch mixing them cannot
+        # even be untangled by hand afterwards.
+        notes.append(
+            "No patch was generated: the worker tenant edited its copies of "
+            + " and ".join(f"the {role} checkout" for role, _ in per_role)
+            + ". A proposal applies to one checkout, so a change spanning both "
+            "cannot be recorded as one — nothing downstream could apply it. The "
+            "reasoning above still stands; the edits themselves are gone with the "
+            "turn's scratch directory."
+        )
+        return b"", "", notes
+    role, changed = per_role[0]
+    base_root = mirror_dir / "base" / role
+    edit_root = mirror_dir / "edit" / role
+
+    git = shutil.which("git")
+    if git is None:
+        notes.append(
+            "No patch was generated: `git` is not on this session's PATH, and the "
+            "patch for what the tenant edited is produced by running it."
+        )
+        return b"", "", notes
+
+    try:
+        gen_dir = pathlib.Path(tempfile.mkdtemp(prefix="gen-", dir=mirror_dir))
+    except OSError as exc:
+        notes.append(f"No patch was generated: no scratch directory for it ({exc}).")
+        return b"", "", notes
+
+    try:
+        for rel in changed:
+            old_path = base_root / rel
+            new_path = edit_root / rel
+            new_bytes = new_path.read_bytes()
+            old_bytes = old_path.read_bytes() if old_path.is_file() else None
+            if NUL in new_bytes or (old_bytes is not None and NUL in old_bytes):
+                notes.append(
+                    f"No patch was generated: `{rel}` holds binary content, and a "
+                    "diff of binary content is not something the applier can "
+                    "consume. Nothing partial was recorded — a patch missing one "
+                    "of the files the tenant changed would be worse than none."
+                )
+                return b"", "", notes
+            staged_new = gen_dir / "b" / rel
+            staged_new.parent.mkdir(parents=True, exist_ok=True)
+            staged_new.write_bytes(new_bytes)
+            if old_bytes is None:
+                # A creation. `a` deliberately gets no counterpart:
+                # git reads the absence as a new file and writes the
+                # `new file mode` header itself.
+                os.chmod(staged_new, 0o644)
+                continue
+            staged_old = gen_dir / "a" / rel
+            staged_old.parent.mkdir(parents=True, exist_ok=True)
+            staged_old.write_bytes(old_bytes)
+            # The mode comes from the original, always. An editor that
+            # rewrote a `0755` file `0644` would otherwise produce an
+            # `old mode`/`new mode` pair in the patch — a change to the
+            # resident's repository nobody proposed and nobody reviewed.
+            shutil.copymode(old_path, staged_old)
+            shutil.copymode(old_path, staged_new)
+        (gen_dir / "a").mkdir(exist_ok=True)
+        (gen_dir / "b").mkdir(exist_ok=True)
+
+        # **The mechanism must not inherit its output format from the
+        # private layer** (Principle 01), and this is not a hypothetical
+        # tidiness. `diff.suppressBlankEmpty = true` in a resident's own
+        # `~/.gitconfig` makes git write a blank context line as an
+        # empty line — which is defect 2 of the finding this task came
+        # from, reproduced by the mechanism itself out of private
+        # configuration. Measured, not inferred.
+        #
+        # The environment half matters as much: the state directory is
+        # itself a git repository in the layout docs/private-layer.md
+        # recommends, so without a ceiling this runs inside one and
+        # reads its configuration.
+        gen_env = _git_stripped_env()
+        gen_env["GIT_CONFIG_GLOBAL"] = os.devnull
+        gen_env["GIT_CONFIG_NOSYSTEM"] = "1"
+        gen_env["GIT_ATTR_NOSYSTEM"] = "1"
+        gen_env["GIT_CEILING_DIRECTORIES"] = str(gen_dir)
+        try:
+            probe = subprocess.run(
+                [
+                    git,
+                    *GIT_ISOLATION_ARGS,
+                    "-c", "diff.suppressBlankEmpty=false",
+                    "-c", "diff.noprefix=false",
+                    "-c", "diff.mnemonicPrefix=false",
+                    "-c", "diff.algorithm=myers",
+                    "-c", "diff.context=3",
+                    "-c", "diff.renames=false",
+                    "-c", "core.autocrlf=false",
+                    "diff",
+                    "--no-index",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-prefix",
+                    "--",
+                    "a",
+                    "b",
+                ],
+                cwd=str(gen_dir),
+                capture_output=True,
+                timeout=CHECKOUT_PROBE_SECONDS,
+                env=gen_env,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            notes.append(f"No patch was generated: `git diff` could not be run ({exc}).")
+            return b"", "", notes
+        # 1 is "there were differences", which is the ordinary case
+        # here; 0 means the comparison found none after all.
+        if probe.returncode not in (0, 1):
+            detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
+            notes.append(
+                "No patch was generated: `git diff` exited "
+                f"{probe.returncode} ({detail or 'no message'})."
+            )
+            return b"", "", notes
+        patch = probe.stdout or b""
+        if not patch.strip():
+            return b"", "", notes
+        return patch, role, notes
+    except OSError as exc:
+        notes.append(f"No patch was generated: {exc}.")
+        return b"", "", notes
+    finally:
+        shutil.rmtree(gen_dir, ignore_errors=True)
 
 
 # The marker's body: two ASCII header lines, a `paths:` line, then the
@@ -5570,6 +5978,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             # in the scratch directory until the age-based prune, orphaned
             # by a turn that never started.
             allocated: list[pathlib.Path] = []
+            mirror_dir: pathlib.Path | None = None
             try:
                 for prefix in (
                     "castle-work-diff-",
@@ -5581,9 +5990,29 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                     )
                     os.close(scratch_fd)
                     allocated.append(pathlib.Path(scratch_path_str))
+                # The fourth handover, and the only one that is a
+                # directory (docs/tasks/0053-diffs-are-generated-not-
+                # composed.md). It holds two copies of every configured
+                # checkout: `edit/`, which the tenant is given as
+                # $CASTLE_EDIT_DIR and edits in place, and `base/`,
+                # which nothing but `_generate_worker_patch` ever reads.
+                # Allocated here, with the three files and under the
+                # same check, because the argument is identical — a
+                # directory this process cannot create is a turn with
+                # nowhere to put the work, and refusing before a tenant
+                # starts spends nothing.
+                #
+                # `mkdtemp` for the same two properties `mkstemp` is
+                # used for above: mode 0700 and a name nothing can
+                # collide with.
+                mirror_dir = pathlib.Path(tempfile.mkdtemp(prefix="castle-work-mirror-", dir=scratch_dir))
+                (mirror_dir / "edit").mkdir()
+                (mirror_dir / "base").mkdir()
             except OSError:
                 for scratch in allocated:
                     scratch.unlink(missing_ok=True)
+                if mirror_dir is not None:
+                    shutil.rmtree(mirror_dir, ignore_errors=True)
                 raise
             diff_path, target_path, finding_path = allocated
         except OSError as exc:
@@ -5691,6 +6120,41 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 env[RESUME_ANSWER_IDS_ENV] = ",".join(answer.id for answer in resuming)
             else:
                 env.pop(RESUME_ANSWER_IDS_ENV, None)
+
+            # **The writable copy of every configured checkout**
+            # (docs/tasks/0053-diffs-are-generated-not-composed.md).
+            # The tenant edits a file here and this function runs the
+            # diff afterwards, so that no model ever writes a hunk
+            # header: on 2026-09-05 the first live errand to produce a
+            # real proposal produced one `git apply` refused to parse,
+            # and hand-composing the framing is what the contract had
+            # been asking for.
+            #
+            # Populated after `env` is assembled and not before,
+            # because the roots this copies from are exactly the ones
+            # just put in it — including the popping above, so a stale
+            # export cannot decide what gets mirrored.
+            #
+            # Failures here are NOTES, not refusals. A mirror that
+            # could not be filled leaves a tenant that can diagnose,
+            # answer, question and file a finding, and cannot propose a
+            # diff; that is a degraded turn and the record says which
+            # part degraded. Refusing outright would spend the errand's
+            # attempt over a channel the turn might never have needed.
+            mirror_roles = _mirror_roles(env)
+            mirror_notes: list[str] = []
+            for mirror_role, mirror_root in mirror_roles:
+                for half in ("base", "edit"):
+                    (mirror_dir / half / mirror_role).mkdir(parents=True, exist_ok=True)
+                mirror_notes += _populate_edit_mirror(
+                    mirror_role,
+                    mirror_root,
+                    mirror_dir / "base" / mirror_role,
+                    mirror_dir / "edit" / mirror_role,
+                )
+            for mirror_note in mirror_notes:
+                print(f"castle work: {mirror_note}", file=sys.stderr)
+            env[EDIT_DIR_ENV] = str(mirror_dir / "edit")
 
             try:
                 # start_new_session=True puts the tenant in its own
@@ -5921,12 +6385,71 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                 finding_bytes = finding_path.read_bytes()
             except OSError:
                 finding_bytes = b""
+
+            # **The patch, generated from what the tenant edited**
+            # (docs/tasks/0053-diffs-are-generated-not-composed.md).
+            # Run here rather than after the `finally` below, because
+            # that `finally` is what deletes the mirror this reads.
+            #
+            # `$CASTLE_DIFF_FILE` is not retired by this: it is still
+            # allocated, still handed over, still read back above, and
+            # a tenant that produces its patch some other honest way —
+            # every scripted tenant in `test/agent-loop/`, and anything
+            # a resident points `castle.agent.worker.command` at — keeps
+            # working unchanged. What the reference tenant's prompt no
+            # longer does is ask a model to compose one.
+            generated_bytes, generated_role, generated_notes = _generate_worker_patch(
+                mirror_dir, mirror_roles
+            )
+            if generated_bytes:
+                if diff_text:
+                    # A tenant that both edited its copy and wrote a
+                    # diff has contradicted itself, and one of the two
+                    # is mechanically derived from bytes on disk while
+                    # the other is prose a model wrote. The derived one
+                    # wins — and the discard is stated, because nothing
+                    # this turn drops may drop silently.
+                    generated_notes.append(
+                        "The worker tenant also wrote a diff to $CASTLE_DIFF_FILE by "
+                        "hand. It has been discarded in favour of the patch generated "
+                        "from the files it edited: that one is computed from the bytes "
+                        "themselves rather than composed, which is the whole reason "
+                        "this channel exists."
+                    )
+                if target_text and target_text != generated_role:
+                    # A derived fact beats a claim. Which checkout a
+                    # patch's paths resolve against is settled by which
+                    # copy the tenant edited, and this is the one place
+                    # the contract's own worry — that the two checkouts
+                    # legitimately hold the same relative paths and
+                    # nothing downstream can tell them apart — stops
+                    # being true. A wrong stamp is how a resident's own
+                    # file would end up committed to a public
+                    # repository, so the disagreement is recorded
+                    # rather than smoothed over.
+                    generated_notes.append(
+                        f"The worker tenant stamped `{target_text}` in "
+                        "$CASTLE_TARGET_FILE, and the files it edited are in its copy "
+                        f"of the {generated_role} checkout. This result records "
+                        f"`{generated_role}`, which is where the paths in the patch "
+                        "above actually resolve; the stamp was a claim about the same "
+                        "thing and disagreed with it."
+                    )
+                diff_bytes = generated_bytes
+                diff_text = diff_bytes.decode("utf-8", errors="replace").strip()
+                target_text = generated_role
         finally:
             for scratch in (diff_path, target_path, finding_path):
                 try:
                     scratch.unlink()
                 except OSError:
                     pass
+            # The mirror goes the same way and for the same reason: it
+            # is scratch, not a record, and a copy of a resident's
+            # checkout must not outlive the turn that needed it. The
+            # sweep's `prune_work_scratch` is the backstop for a turn
+            # this `finally` never reaches (docs/tasks/0039 §5).
+            shutil.rmtree(mirror_dir, ignore_errors=True)
 
         if timed_out:
             outcome = "timeout"
@@ -5984,8 +6507,24 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         else:
             body_lines.append(
                 "(no diff produced — either no change was proposed, or the worker "
-                "tenant did not write one to $CASTLE_DIFF_FILE)"
+                "tenant neither edited its copy of a checkout under $CASTLE_EDIT_DIR "
+                "nor wrote a diff to $CASTLE_DIFF_FILE)"
             )
+        # What the copy-and-generate channel had to say about itself
+        # (docs/tasks/0053-diffs-are-generated-not-composed.md). Every
+        # one of these is a sentence about why the patch above is what
+        # it is — a checkout that could not be copied, a file the copy
+        # did not carry, a refusal to generate, a hand-written diff
+        # discarded, a stamp that disagreed with where the tenant
+        # actually edited. They are placed after the diff and before
+        # the target prose because that is the order a reader meets the
+        # things they are about, and none of them is ever dropped: a
+        # channel that degrades quietly is the failure
+        # docs/tasks/done/0039-worker-writable-deliverables.md exists
+        # to have ended.
+        for note in mirror_notes + generated_notes:
+            body_lines.append("")
+            body_lines.append(note)
         # The role goes in the frontmatter field; the resolved path goes
         # here, in prose next to the diff it belongs to
         # (docs/tasks/0024 §6). Splitting them that way is the point: a
@@ -6187,8 +6726,9 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         if timed_out:
             body_lines.append("")
             body_lines.append(
-                "Anything above was read from $CASTLE_DIFF_FILE as it stood when the "
-                "tenant was killed, so it may be partial."
+                "Anything above was generated from the files the tenant had edited "
+                "under $CASTLE_EDIT_DIR, or read from $CASTLE_DIFF_FILE, as they "
+                "stood when the tenant was killed — so it may be partial."
             )
         if not drained:
             body_lines.append("")
