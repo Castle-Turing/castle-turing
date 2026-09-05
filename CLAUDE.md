@@ -102,6 +102,30 @@ deviation. Mechanical work against an exact, already-verified spec is
 Haiku work. Work where the brief itself might be wrong is not, however
 small the edit looks.
 
+**State why you chose that tier, in the file.** A task file carries
+`Model-because:` beside `Model:` — one line on what about this task
+makes that tier right, phrased against the tier you did not choose.
+Every task file states both: routing is not optional, so a missing
+`Model:` is a silent default rather than an absence, and the silent
+ones are exactly the ones worth catching. A reason that would have
+supported the opposite choice equally well is not a reason. Say what
+breaks if the implementer is smaller, or what is mechanical enough
+that nothing does.
+
+This exists because on 2026-09-04 task 0051 was written with
+`Model: deep` copied from the neighbouring task file being used as a
+template, and its justification was assembled only when the human
+asked for it — the agent could have argued either way and had argued
+neither. The header recorded an answer with no evidence anyone had
+chosen it, which is the same defect the dispositions rule closes for
+review findings: silence must not be able to look like a decision.
+
+The check this cannot be is a validator. A harness can only confirm
+that some string is present, and a required free-text field with
+nothing reading it produces ritual compliance rather than reasoning.
+It is enforced by the agent writing the file and by whoever reads the
+diff, which is why it lives here rather than in the harness.
+
 What delegation does not relax:
 
 - **Clarifying questions belong to the human.** No sub-agent can ask
