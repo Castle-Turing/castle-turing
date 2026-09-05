@@ -11519,9 +11519,14 @@ ACTIVATION_QUESTION_BODY = (
 
 # What a resident is told about `switch`'s limits, in the question's own
 # body rather than only on the review screen — the body is what a digest
-# renders and what a notification's tail carries, and a resident who
-# approves from a digest must meet this too
-# (docs/tasks/0048-activation.md §E).
+# renders whole, and a resident who approves from a digest must meet
+# this too (docs/tasks/0048-activation.md §E).
+#
+# **Not what a notification carries**, which this comment claimed until
+# docs/tasks/0059 checked it: `route_journal` takes a question's first
+# line and nothing else, so a notification carries
+# `ACTIVATION_QUESTION_BODY` alone. The digest reason above stands on
+# its own; the notification half was never true.
 ACTIVATION_QUESTION_CAVEAT = (
     "Switching applies most of a configuration to the machine as it is running. A "
     "change to the kernel, the initrd, or firmware is staged into the new "
@@ -11532,6 +11537,35 @@ ACTIVATION_QUESTION_CAVEAT = (
 HEALTH_QUESTION_BODY = (
     "This machine has switched to the new configuration. Is it working? If nothing "
     "says so in time, Castle rolls back to the previous generation."
+)
+
+# What a resident is told to go and check, and why the obvious check is
+# worthless (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md
+# §B). Fixed prose, identical on both triggers, joined to the question's
+# body rather than to its boundary statement: this is not part of the
+# sentence any authority is spent under, and 0025's discipline is that
+# nothing which is not may sit there.
+#
+# **The breadth is the whole of it, and it is not a turn of phrase.** In
+# the switch this exists to prevent, the two keybindings the change had
+# added were the only two left working on the machine — every other one
+# had been silently discarded. A suggestion to "check a binding or two"
+# would have passed on a machine with no way to open a terminal. So the
+# text names what to check *against* rather than what to check, and says
+# why the reassuring answer is not evidence.
+HEALTH_CHECK_OPENING = "Before you confirm, check something this switch did not add."
+HEALTH_CHECK_WHY = (
+    "A change that adds one setting and silently discards the ones that were "
+    "already there leaves its own setting working perfectly, so the new thing "
+    "working is not evidence that the rest of it survived."
+)
+# Said out loud rather than swallowed. A short list read as a complete
+# one narrows exactly the attention this paragraph exists to widen, so a
+# derivation that came back partial has to admit it — an under-reporting
+# suggestion is worse than the silence it replaces.
+HEALTH_CHECK_INCOMPLETE = (
+    "Castle could not establish every file this change touched, so that list may "
+    "be short."
 )
 
 
@@ -12832,6 +12866,14 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
     approved = build.fields.get(BUILD_TOPLEVEL_FIELD, "").strip()
     target_rev = build.fields.get(BUILD_TARGET_REV_FIELD, "").strip()
     base_commit = build.fields.get(BUILD_BASE_COMMIT_FIELD, "").strip()
+    # Derived here, before anything is asked to move
+    # (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md
+    # §D). Every fact it needs is already in hand, and running `git` in
+    # the resident's repository *after* the switch would mean deriving
+    # this on a machine that may be broken in exactly the way the
+    # paragraph exists to catch — a suggestion that disappears when it
+    # is needed is not a suggestion.
+    check_lines = _health_check_lines(build, records)
     detail: list[str] = []
     commit_sha = ""
 
@@ -12917,7 +12959,7 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
         detail_lines=detail,
         commit_sha=commit_sha,
     )
-    _file_health_question(result_id)
+    _file_health_question(result_id, check_lines)
     return result_id, "switched"
 
 
@@ -13058,7 +13100,131 @@ def _bump_pin(
     return verified or ""
 
 
-def _file_health_question(activation_result_id: str) -> str:
+def _switch_touched_paths(
+    build: Record, records: dict[str, Record]
+) -> tuple[list[str], bool]:
+    """The files an approved change rewrote in the resident's own
+    configuration repository, and whether that list is complete
+    (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md §B).
+
+    **Derived from the applier's own commits, not from a second copy of
+    the fact.** A build result names every apply result it accounts for
+    (0048 §B — one build can cover several), and an apply result that
+    landed carries `apply-commit`, which 0026 stamps only where exactly
+    one commit was verified to have landed. `git show --name-only` over
+    those is the same authority the applier used, and it needs no new
+    record field that could later disagree with the commit.
+
+    The second slot is `False` where anything the build named could not
+    be resolved — no `apply-commit` on it, no configured repository, git
+    unavailable or refusing. The caller says so on the screen rather
+    than showing a short list as if it were the whole one.
+
+    `core.quotePath=false` so an ordinary non-ASCII path reads as
+    itself. `_run_git` decodes with `errors="replace"`, so what comes
+    back is already safe to write into a UTF-8 record and needs no
+    `_displayable` — and unlike `_patch_paths`' output, none of this is
+    ever handed back to git, so nothing depends on it round-tripping.
+    """
+    private_root = os.environ.get(PRIVATE_ROOT_ENV, "").strip()
+    paths: list[str] = []
+    complete = True
+    for ref in build.refs:
+        rec = records.get(ref)
+        if rec is None or rec.type != "result":
+            # `load_all` skips a record file it cannot parse, and a
+            # build's own refs are the only list of what it accounted
+            # for — so a ref that resolves to nothing is a change whose
+            # files are unknown, not a change with no files. Silence
+            # here would drop it from the list *and* let the list read
+            # as complete, which is the one failure this flag exists to
+            # make impossible.
+            complete = False
+            continue
+        if rec.fields.get("seat") != APPLIER_SEAT:
+            # `_build_trigger` selects anchors by `apply-outcome` and
+            # never by seat, and `cmd_validate` does not tie the two, so
+            # these two selectors are free to disagree. Where they do,
+            # this says so rather than quietly narrowing the list to
+            # what one of them recognises.
+            complete = False
+            continue
+        sha = rec.fields.get(APPLY_COMMIT_FIELD, "").strip()
+        if not sha or not private_root:
+            complete = False
+            continue
+        probe, _fault = _run_git(
+            private_root,
+            ["show", "--name-only", "--format=", sha],
+            config=["core.quotePath=false"],
+            timeout=CHECKOUT_PROBE_SECONDS,
+        )
+        if probe is None or probe.returncode != 0:
+            complete = False
+            continue
+        for line in probe.stdout.splitlines():
+            name = line.strip()
+            if name and name not in paths:
+                paths.append(name)
+    return paths, complete
+
+
+def _health_check_lines(build: Record, records: dict[str, Record]) -> list[str]:
+    """The paragraph the health question carries under its first line
+    (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md).
+
+    **It acts on the change and on nothing else**, which is what keeps
+    it on the right side of the line
+    `docs/backlog/the-modal-could-choose-its-opening-view.md` records: a
+    surface may act on information it was given and may not volunteer
+    help nobody asked for. Which files the resident's own approved
+    change rewrote, or which framework revision their approved pin bump
+    adopted, are facts this seat was handed in the course of doing what
+    it was asked to do. Nothing here reads history, models intent, or
+    says a word about any other change.
+
+    **Files, not option paths.** Naming
+    `wayland.windowManager.sway.config.keybindings` would be better and
+    means parsing Nix out of a diff — a parser this repo would then own
+    forever and which would be wrong on the first expression it did not
+    anticipate. Files are what git will say exactly, and they point at
+    a neighbourhood, which is what the resident has to be pointed at.
+
+    **A pin bump names its revision instead.** Its commit touches
+    `flake.lock`, and saying so would be true and useless: what moved is
+    what the whole configuration evaluates to, not one file.
+    `build-target-rev` is present on exactly that trigger and absent on
+    the other (0048 §F), which is how the two are told apart.
+
+    Never empty: the closing sentence is true of every switch and needs
+    no derivation, so a machine that can answer nothing else still gets
+    the part the motivating incident actually needed.
+    """
+    target_rev = build.fields.get(BUILD_TARGET_REV_FIELD, "").strip()
+    if target_rev:
+        return [
+            f"{HEALTH_CHECK_OPENING} It adopted framework revision {target_rev}, "
+            "which is not confined to any one file — it can change anything on this "
+            "machine that your configuration takes from the framework.",
+            "",
+            HEALTH_CHECK_WHY,
+        ]
+    paths, complete = _switch_touched_paths(build, records)
+    if not paths:
+        return [HEALTH_CHECK_OPENING, "", HEALTH_CHECK_WHY]
+    lines = [
+        f"{HEALTH_CHECK_OPENING} It rewrote these files in your configuration "
+        "repository:",
+        "",
+    ]
+    lines += [f"    {path}" for path in paths]
+    if not complete:
+        lines += ["", HEALTH_CHECK_INCOMPLETE]
+    lines += ["", HEALTH_CHECK_WHY]
+    return lines
+
+
+def _file_health_question(activation_result_id: str, check_lines: list[str]) -> str:
     """The question that opens the health window
     (docs/tasks/0048-activation.md §E).
 
@@ -13075,6 +13241,21 @@ def _file_health_question(activation_result_id: str) -> str:
 
     Self-anchored in `refs`, because the switch is the root of its own
     little story and nothing precedes it that this question is about.
+
+    `check_lines` is `_health_check_lines`' paragraph, and it goes in
+    the **body** rather than in the boundary statement
+    (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md §A).
+    Two reasons, and the second is the load-bearing one: the body is
+    what `_digest_body` renders whole, so a resident who meets this
+    question in a digest meets the paragraph with it; and a boundary
+    statement is the scope of an authority a resident spends, so
+    advisory prose sitting there would make a later improvement to it a
+    change to the sentence a decision was made under.
+
+    A notification carries the **first line only** — `route_journal`
+    takes `body.splitlines()[0]` — so nothing of this reaches one, and
+    that first line is left exactly as it was. It is also the picker's
+    preview, and it still says the most important thing.
     """
     try:
         result_bytes = (journal_dir() / f"{activation_result_id}.md").read_bytes()
@@ -13084,7 +13265,9 @@ def _file_health_question(activation_result_id: str) -> str:
             provenance="requested",
             seat=ACTIVATION_SEAT,
             refs=[activation_result_id, activation_result_id],
-            body=HEALTH_QUESTION_BODY,
+            body="\n".join(
+                [HEALTH_QUESTION_BODY] + (["", *check_lines] if check_lines else [])
+            ),
             extra={
                 PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest(),
                 CONFIRMS_ACTIVATION_FIELD: activation_result_id,
