@@ -1098,9 +1098,33 @@ log "refused: the kept copy is not a patch at all (a malformed patch is not a st
 # from a turn whose good patch stopped fitting the tree. Confusing the
 # two told a resident to go looking for a change in their own
 # repository that never happened. Nothing here validates a tenant's
-# diff before filing it as a proposal, so this fixture is a normal
-# approved proposal whose kept copy is not a diff at all.
-read -r REQ_MF R_MF Q_MF A_MF <<<"$(new_approval APPLYABLE-MALFORMED)"
+# diff before filing it as a proposal, so what the tenant wrote is kept
+# byte-exact and is not a diff at all.
+#
+# **Getting one as far as the applier takes a machine that could not
+# check it.** Since docs/tasks/0054-a-proposal-is-checked-before-it-is-
+# offered.md, a patch git cannot parse is refused at filing time and
+# never becomes a question — wherever git can be asked. The route that
+# survives is the one 0054 built for a machine where it cannot:
+# `offered-unchecked`, the question filed with nothing known either
+# way. So this turn runs with a `git` that cannot be executed, and the
+# apply runs with the ordinary PATH, where git works perfectly and
+# reads the kept copy for the first time. (Before 0056 this scenario
+# called `new_approval` on the ordinary PATH and had been failing on
+# `main` since the two tasks merged: no question was filed, and every
+# assertion below it went unrun.)
+BROKEN_GIT_BIN="$WORKDIR/broken-git-bin"
+mkdir -p "$BROKEN_GIT_BIN"
+# On PATH, executable, and impossible to exec: the interpreter its
+# shebang names does not exist, so the kernel refuses the exec and
+# Python raises OSError. `shutil.which` finds it, which is the whole
+# point — this is "git could not be run", not "git is not there", and
+# the two are different conditions the applier must not confuse.
+printf '#!%s/no-such-interpreter\n' "$WORKDIR" > "$BROKEN_GIT_BIN/git"
+chmod +x "$BROKEN_GIT_BIN/git"
+read -r REQ_MF R_MF Q_MF A_MF <<<"$(PATH="$BROKEN_GIT_BIN:$PATH" new_approval APPLYABLE-MALFORMED)"
+grep -q '^proposal-outcome: offered-unchecked$' "$JOURNAL/$R_MF.md" \
+  || fail "a turn that could not ask git about its patch did not offer it unchecked: $(field_of "$JOURNAL/$R_MF.md" proposal-outcome)"
 "$CASTLE" apply "$A_MF" >/dev/null 2>&1 && fail "an unparseable patch was applied anyway"
 AP_MF="$(newest_apply_result_for "$A_MF")"
 grep -q '^apply-outcome: refused-patch-malformed$' "$AP_MF" \
