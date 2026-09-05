@@ -1,12 +1,12 @@
 # Upgrading the framework is still a manual errand
 
 **What.** On 2026-09-05 the machine was brought from framework revision
-`61bfdce` to `2ac3ac3` — four merged pull requests, including fixes the
-resident was actively waiting on — and every step happened outside the
-system: an agent session edited `flake.lock` in the private checkout
-and committed it by hand, pre-built the closure by hand, and the
-resident typed `nixos-rebuild switch` at a prompt. No record was
-written, no question was filed, no approval was spent. The resident's
+`61bfdce` to `2ac3ac3` — seven merged pull requests, including fixes
+the resident was actively waiting on — and every step happened outside
+the system: an agent session edited `flake.lock` in the private
+checkout and committed it by hand, pre-built the closure by hand, and
+the resident typed `nixos-rebuild switch` at a prompt. No journal
+entry was written, no question was filed, no approval was spent. The resident's
 direction, stated the same day: **they should never have to run the
 rebuild command themselves.** Entering a password somewhere along the
 way is acceptable; typing the command is not.
@@ -22,9 +22,10 @@ anywhere *produces* that pin bump: no seat watches the framework's
 main branch, notices the deployed revision has fallen behind, and
 proposes the upgrade. The loop has a motor for its second half and no
 ignition for its first — so the first half keeps being done by hand,
-and a hand-made bump in a working tree bypasses the journal entirely,
-which is how today's upgrade produced no record despite riding the
-exact mechanism 0048 was built to replace.
+and a hand-made bump in a working tree bypasses the journal entirely.
+That is why today's upgrade left nothing on the books: it took the
+manual path whose downstream half 0048 already retired, and so never
+reached the half that would have journaled it.
 
 **Why it matters.** An upgrade is the change most likely to carry the
 fixes the resident is waiting on, so it is the change most often
@@ -53,7 +54,7 @@ terminal is not an acceptable place for a command.
 act instead of four: a resident (or session) can bump the pin as an
 ordinary journaled change and let 0048 carry it from there — worth
 doing on the very next upgrade, both as rehearsal and as the habit
-this entry wants to make structural. And the proving-ground entry
-above is the honest prerequisite: an initiator that files upgrades
-into an unproven activation cycle just automates the queue in front
-of an untested door.
+this entry wants to make structural. And
+[[activation-is-not-proven-on-a-real-vm]] is the honest prerequisite:
+an initiator that files upgrades into an unproven activation cycle
+just automates the queue in front of an untested door.
