@@ -314,8 +314,13 @@ fi
 # coincidence. Command substitution strips the trailing newline, which
 # is the only whitespace that file carries.
 castle_hostname="$(cat /proc/sys/kernel/hostname 2>/dev/null || true)"
+hostname_source="/proc/sys/kernel/hostname"
 if [ -z "$castle_hostname" ]; then
   castle_hostname="$(uname -n 2>/dev/null || true)"
+  # The note below names its source, and on this branch the source is
+  # the fallback — a provenance sentence that always claimed the proc
+  # file would be false exactly here (cross-vendor review of 0058).
+  hostname_source="\`uname -n\` (/proc/sys/kernel/hostname was not readable)"
 fi
 
 # TWO BRANCHES, for the reason mechanism_note above has three: a note
@@ -327,10 +332,10 @@ fi
 # machine and not about the errand, so it goes to 1d rather than to a
 # guess.
 hostname_note="This machine's hostname is ${castle_hostname}. This harness read
-   that from /proc/sys/kernel/hostname before starting you — the same
-   file, and the same rule, \`castle apply\` uses to pick the
-   configuration it validates — so it is the name your resident's
-   applier will check too. You do not need to read it yourself, and
+   that from ${hostname_source} before starting you — by the same
+   rule, the proc file first and \`uname -n\` as its fallback, that
+   \`castle apply\` uses to pick the configuration it validates — so it
+   is the name your resident's applier will check too. You do not need to read it yourself, and
    nothing in your permission grant would let you."
 if [ -z "$castle_hostname" ]; then
   hostname_note="THIS HARNESS COULD NOT READ THIS MACHINE'S HOSTNAME. Neither
