@@ -123,11 +123,15 @@ def main() -> int:
         )
         return 6
 
+    # A creation patch, byte-identical to scripted-worker-blocking.sh's
+    # — the whole point of this pair is that two differently-shaped
+    # tenants produce the same journal. See that file, and
+    # docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md, for
+    # why a synthetic diff now has to be one git could actually apply.
     pathlib.Path(diff_file).write_text(
-        "--- a/docs/backlog/example-item (synthetic, harness fixture only)\n"
+        "--- /dev/null\n"
         "+++ b/docs/backlog/example-item (synthetic, harness fixture only)\n"
-        "@@ -1 +1 @@\n"
-        "-placeholder before the resumed turn\n"
+        "@@ -0,0 +1 @@\n"
         "+placeholder after the resumed turn\n"
     )
     # Every fixture that produces a diff also declares which checkout

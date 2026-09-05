@@ -534,6 +534,52 @@ APPLY_OUTCOME_VALUES = (
     "refused-tree-dirty",
 )
 
+# What happened to the PROPOSAL, on a result written by the worker seat
+# (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md §B).
+# The same `outcome`-versus-its-own-field split the applier established
+# and the builder reused, for the identical reason: `outcome` stays what
+# agent/README.md reserves it as, an observation about this seat's own
+# run, and this is an observation about the thing the run produced.
+#
+# Stamped by `run_worker_turn` and by nothing else, on exactly the
+# turns that reach the question-filing decision: completed, with a
+# diff, against a resolved non-`mechanism` target. Absence therefore
+# keeps one meaning — this turn never got that far — plus the reading
+# every field in an append-only journal carries, that the record
+# predates the field.
+PROPOSAL_OUTCOME_FIELD = "proposal-outcome"
+
+# `offered*` filed the question; `refused-*` did not.
+#
+# **`refused-patch-stale` is the applier's own code, verbatim.** Today
+# that single value covers both halves of what `git apply` refuses —
+# `_apply_one` writes it when `_patch_paths` cannot read the bytes as a
+# patch at all, and again when `git apply --check` says the patch no
+# longer fits. docs/tasks/0055 splits malformed from stale; this task
+# deliberately does not pre-empt that split and does not invent a third
+# spelling, and when 0055 lands it moves this vocabulary with the
+# applier's. A value here that the applier no longer knows is exactly
+# the divergence reusing the code is meant to prevent.
+PROPOSAL_OUTCOME_VALUES = (
+    # git was asked and the patch applies against the target checkout
+    # as it stands right now.
+    "offered",
+    # It does not apply, and the resident has uncommitted work under the
+    # files it touches, so the failure cannot be charged to the patch
+    # (§C). Offered anyway: the applier re-checks at apply time and has
+    # its own `refused-tree-dirty` with a remedy attached.
+    "offered-tree-dirty",
+    # git never answered — not on PATH, would not exec, or outlived its
+    # bound. Nothing is known about the patch either way, and refusing
+    # on the strength of a check that produced no answer would repeat
+    # this task's own defect at the opposite pole (`_checkout_fault`
+    # takes the same posture by name).
+    "offered-unchecked",
+    # git was asked, the patch does not apply, and nothing about the
+    # resident's working tree excuses it. No question was filed.
+    "refused-patch-stale",
+)
+
 # The field name a proposal's sidecar digest is stamped under
 # (docs/tasks/0033-byte-exact-proposal.md). Distinct from
 # PROPOSAL_SHA256_FIELD by what each proves: proposal-sha256 is
@@ -826,6 +872,12 @@ FIELD_ORDER = (
     "activation-outcome",
     "activation-commit",
     "target",
+    # Result-only, and immediately after `target` because it qualifies
+    # it: `target` names the checkout the diff is against, and this says
+    # whether the diff was found to apply there and therefore whether
+    # anything was filed for the resident to decide
+    # (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md §F).
+    "proposal-outcome",
     # Result-only, and beside `target` for the same presentation-only
     # reason: it is machine-readable structure about the body below,
     # not prose (docs/tasks/0025-approval.md).
@@ -5346,6 +5398,7 @@ def _write_worker_result(
     body_lines: list[str],
     claim_id: str,
     target: str | None = None,
+    proposal_outcome: str | None = None,
     diff_boundary: str | None = None,
     patch_sha256: str | None = None,
 ) -> str:
@@ -5377,6 +5430,14 @@ def _write_worker_result(
     # are in no position to make.
     if target:
         extra[TARGET_FIELD] = target
+    # Stamped only on the turns that reached the question-filing
+    # decision, which is a strict subset of the ones carrying a
+    # `target`: a mechanism-targeted diff files no question (0044 §1)
+    # and is not checked, so it gets no verdict either. Absence is the
+    # positive fact that no proposal was ever on the table here
+    # (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md §B).
+    if proposal_outcome:
+        extra[PROPOSAL_OUTCOME_FIELD] = proposal_outcome
     # Stamped only when this turn actually wrapped a diff in the body.
     # Absent means "no embedded diff to find", which is the honest
     # reading for every result that produced none — and for every
@@ -5401,6 +5462,165 @@ def _write_worker_result(
         body="\n".join(body_lines),
         extra=extra,
     )
+
+
+def _check_proposal_applies(root: str, diff_bytes: bytes) -> tuple[str, list[str]]:
+    """Can this patch be applied to `root` at all? Returns
+    `(proposal-outcome, body lines)`
+    (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md §A).
+
+    **The same check the applier runs, at the moment the question is
+    filed.** On 2026-09-05 a worker filed a proposal question against a
+    patch git cannot parse; the resident approved it; the applier spent
+    that approval on `refused-patch-stale` and the approval was gone.
+    Nothing between the tenant writing the patch and the review screen
+    had looked at it. This is that look, and it costs one `git apply
+    --check` on the working path.
+
+    **It reads and nothing else** (§D). `--check` reports whether the
+    patch would apply and stops; `--numstat` likewise; everything goes
+    through `_run_git`, so `GIT_*` is stripped and the resident's hooks
+    and attributes are disabled — a check that runs a hook is not a
+    check, because a hook is arbitrary code. The one probe below that
+    would otherwise write is `git status`, which refreshes the index as
+    a side effect; `_dirty_entries` carries `--no-optional-locks` for
+    exactly the reason the worker contract makes every git command a
+    tenant may run carry it (docs/tasks/done/0047 §4).
+
+    **The bytes are a private temp file, not the `.patch` sidecar.**
+    The sidecar is named after a `result_id` that does not exist yet at
+    this point in the turn — the record has not been written. These are
+    the same `diff_bytes` the sidecar will hold, so what was checked is
+    what will be applied, and the applier's own snapshot idiom is
+    reused rather than a second one invented.
+
+    **The order is `--check` first, attribution only on failure** (§C).
+    One git invocation on the working path instead of three, and a
+    patch that applies right now against a tree the resident happens to
+    be mid-edit in is `offered` — that is the true fact, and degrading
+    it because a status probe found something would report a doubt the
+    check has already resolved.
+
+    **A dirty tree excuses the failure; an unanswerable dirty probe
+    does not.** git has already spoken about the patch, and the
+    resident's uncommitted work is the excuse — an excuse that cannot
+    be established is not one. Being wrong there costs an errand the
+    resident can file again, which is the direction this whole task
+    chooses to fail in. Whereas `check is None` — git not on PATH,
+    would not exec, outlived its bound — means nothing is known about
+    the patch at all, and refusing on the strength of a check that
+    produced no answer would be this task's own defect at the opposite
+    pole. `_checkout_fault` takes that posture by name and for the same
+    reason: `git` reaches a dispatched worker only through the optional
+    `modules/dev`, and a tenant can write a unified diff by hand.
+
+    Nothing here names a file the resident is working on. `_dirty_under`
+    exists precisely to summarise as status letters and a count, and a
+    record is durable and leaves the machine more easily than a journal
+    does (CLAUDE.md's hard rule).
+    """
+    # **Nothing in here may raise**, which is why the temp file is
+    # inside the `try` and not above it. This runs after the tenant has
+    # exited and BEFORE `_write_worker_result`, so at this instant the
+    # turn's diff exists only in memory: an OSError escaping — a full
+    # or unwritable `TMPDIR` is the realistic one — would take the
+    # errand's whole hard-won output with it, to buy a check that is
+    # only ever advisory. Every other fallible call in this tail is
+    # guarded for the same reason (`_file_proposal_question`'s catch,
+    # `_file_finding`'s catch-all), and a defect in the newest, least
+    # load-bearing lane must not cost the oldest one.
+    #
+    # `_run_git`, `_patch_paths` and `_dirty_under` never raise by
+    # contract, so what this catches is the temp-file half alone — and
+    # it degrades to exactly the value that means "nothing is known
+    # about this patch", which is the truth in that case.
+    snapshot_path = ""
+    try:
+        snapshot_fd, snapshot_path = tempfile.mkstemp(
+            prefix="castle-propose-check-", suffix=".patch"
+        )
+        with os.fdopen(snapshot_fd, "wb") as fh:
+            fh.write(diff_bytes)
+        snapshot = pathlib.Path(snapshot_path)
+        # `CHECKOUT_PROBE_SECONDS`, not `APPLY_GIT_SECONDS`: this writes
+        # nothing and runs inside a worker turn that has already spent
+        # its model call, so the bound that belongs here is the one for
+        # a probe that should answer instantly.
+        check, check_fault = _run_git(
+            root,
+            ["apply", "--check", "--", str(snapshot)],
+            timeout=CHECKOUT_PROBE_SECONDS,
+        )
+        if check is None:
+            return "offered-unchecked", [
+                "",
+                "Whether this change can be applied at all could not be established "
+                f"({check_fault}), so it is offered to you unchecked. Nothing here "
+                "says the change is bad and nothing says it is good: the question "
+                "was not answered. If it turns out not to fit, approving it will "
+                "reach a refusal rather than a change.",
+            ]
+        if check.returncode == 0:
+            return "offered", []
+        detail = (check.stderr or check.stdout or "").strip()
+
+        # Scoped to the patch's own paths, never repo-wide: three
+        # documented private-layer layouts leave a healthy config repo
+        # dirty, so a repo-wide probe would excuse every failure forever
+        # (docs/tasks/done/0026-apply-validate.md's reasoning, reused).
+        paths, _why_paths = _patch_paths(root, snapshot)
+        dirty = None
+        if paths:
+            dirty, _why_dirty = _dirty_under(root, paths)
+        if dirty:
+            return "offered-tree-dirty", [
+                "",
+                "This change does not currently apply to that checkout — but you "
+                f"have uncommitted work under the files it touches ({dirty}), which "
+                "is reason enough on its own, so the failure is not evidence about "
+                "the change. It is offered to you as it stands, and whatever "
+                "applies it will ask git again then. How many of your own edits are "
+                "involved is all this says about them; your `git status` will name "
+                "them, and this record is durable in a way your file names should "
+                "not have to be. Git's account below names only files this change "
+                "itself touches, which are the ones above:",
+                "",
+                "```",
+                detail,
+                "```",
+            ]
+        return "refused-patch-stale", [
+            "",
+            "**Nothing was filed for you to approve.** This change does not apply "
+            "to that checkout, so approving it could only ever have reached a "
+            "refusal — and the cost of that would have been charged to your "
+            "decision rather than to the turn that produced the change. The diff "
+            "above is still here, and this errand can be asked again. Git's own "
+            "account:",
+            "",
+            "```",
+            detail,
+            "```",
+        ]
+    except OSError as exc:
+        return "offered-unchecked", [
+            "",
+            "Whether this change can be applied at all could not be established: "
+            f"the check could not be set up on this host ({exc}). It is offered to "
+            "you unchecked — nothing here says the change is bad and nothing says "
+            "it is good. If it turns out not to fit, approving it will reach a "
+            "refusal rather than a change.",
+        ]
+    finally:
+        # Best-effort: a leftover temp file is a cleanup nit, never a
+        # correctness question. `_apply_one`'s snapshot does the same.
+        # Guarded on the name, because `mkstemp` itself is one of the
+        # calls the handler above exists for.
+        if snapshot_path:
+            try:
+                os.unlink(snapshot_path)
+            except OSError:
+                pass
 
 
 def _file_proposal_question(request: Record, result_id: str, target: str) -> None:
@@ -6812,6 +7032,44 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
                     "is not lost either way, since it is above and in this result's "
                     "own `.patch` file."
                 )
+        # **Not `mechanism`**, which is the whole of
+        # docs/tasks/0044-mechanism-findings-not-proposals.md §1: a
+        # completed turn whose diff is against the framework checkout
+        # files no approval question, because nothing here can spend
+        # such an approval and asking for one is the small betrayal
+        # that task exists to remove — the resident reads a change,
+        # decides it is right, and is told afterwards that the decision
+        # could never have had an effect
+        # (docs/tasks/done/0015-filed-not-in-progress.md's shape).
+        #
+        # Spelled as an exclusion rather than as `== "private"` on
+        # purpose. docs/tasks/0044 removes ONE filing path; a future
+        # third role would go on filing a question, which is what
+        # docs/tasks/done/0025-approval.md specified, rather than
+        # silently inheriting this exception.
+        #
+        # The applier's `refused-target-mechanism` is untouched and is
+        # not now dead code: mechanism-targeted proposal questions
+        # already sit in append-only journals, decided and undecided,
+        # and a resident who approves one tomorrow must still meet that
+        # refusal.
+        #
+        # Computed here rather than beside the filing call below,
+        # because the pre-flight on the next line is gated on exactly
+        # the same condition and has to run BEFORE the result is
+        # written — its verdict is a field on that record
+        # (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md
+        # §A).
+        candidate_target = stamped_target == "mechanism"
+        proposal_outcome = ""
+        if stamped_target and not candidate_target:
+            # `resolved` is non-empty whenever `stamped_target` is: the
+            # branch above clears the stamp rather than record a role
+            # this turn has just established it cannot resolve.
+            proposal_outcome, proposal_lines = _check_proposal_applies(
+                resolved, diff_bytes
+            )
+            body_lines += proposal_lines
         if timed_out:
             body_lines.append("")
             body_lines.append(
@@ -6837,6 +7095,7 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             body_lines=body_lines,
             claim_id=claim_id,
             target=stamped_target,
+            proposal_outcome=proposal_outcome,
             diff_boundary=diff_boundary,
             patch_sha256=patch_sha256,
         )
@@ -6872,29 +7131,25 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
         # reaches its "nowhere to file this" refusal rather than writing
         # into a directory the turn already refused to hand over.
 
-        # **Not `mechanism`**, which is the whole of
-        # docs/tasks/0044-mechanism-findings-not-proposals.md §1: a
-        # completed turn whose diff is against the framework checkout
-        # files no approval question, because nothing here can spend
-        # such an approval and asking for one is the small betrayal
-        # that task exists to remove — the resident reads a change,
-        # decides it is right, and is told afterwards that the decision
-        # could never have had an effect
-        # (docs/tasks/done/0015-filed-not-in-progress.md's shape).
+        # The question, on the same `candidate_target` exclusion
+        # docs/tasks/0044-mechanism-findings-not-proposals.md §1
+        # established — computed and reasoned about above, where the
+        # pre-flight that shares its gate had to run.
         #
-        # Spelled as an exclusion rather than as `== "private"` on
-        # purpose. This task removes ONE filing path; a future third
-        # role would go on filing a question, which is what
-        # docs/tasks/done/0025-approval.md specified, rather than
-        # silently inheriting this exception.
-        #
-        # The applier's `refused-target-mechanism` is untouched and is
-        # not now dead code: mechanism-targeted proposal questions
-        # already sit in append-only journals, decided and undecided,
-        # and a resident who approves one tomorrow must still meet that
-        # refusal.
-        candidate_target = stamped_target == "mechanism"
-        if stamped_target and not candidate_target:
+        # **And only when that pre-flight did not refuse.** A proposal
+        # that cannot be applied does not become a question
+        # (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md
+        # §A): the result above already says so, in a field and in
+        # prose, and routes like any other result. Tested against the
+        # `offered` prefix rather than against a list of refusals, so a
+        # value added to `PROPOSAL_OUTCOME_VALUES` later has to say
+        # which side of this line it falls on rather than defaulting to
+        # "file it" by omission.
+        if (
+            stamped_target
+            and not candidate_target
+            and proposal_outcome.startswith("offered")
+        ):
             _file_proposal_question(request, result_id, stamped_target)
         if outcome == "completed" and (finding_bytes.strip() or candidate_target):
             # **Last, and behind a catch-all.** Everything above this
@@ -8524,8 +8779,24 @@ def _dirty_entries(
             # two status letters off each record, but a path with a
             # newline in it would otherwise split one line into two and
             # inflate the count it reports.
+            # `--no-optional-locks`, because this is the one probe in
+            # the family that would otherwise WRITE: `git status`
+            # refreshes the index as a side effect, taking a lock to do
+            # it. That was tolerable when the only caller was the
+            # applier, which is about to write the checkout anyway; it
+            # is not tolerable now that `_check_proposal_applies` reaches
+            # here from inside a worker turn, in a checkout the resident
+            # may be using, where the whole claim is that the check
+            # reads and nothing else
+            # (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md
+            # §D). Same flag, same reasoning, as every git command the
+            # worker contract permits a tenant to run
+            # (docs/tasks/done/0047-tenant-permission-allowlist.md §4).
+            # Nothing here reads anything the refresh would have
+            # updated: the status letters are computed either way, at
+            # the cost of a slower comparison on a large tree.
             [
-                git, "-C", root, *GIT_ISOLATION_ARGS,
+                git, "-C", root, "--no-optional-locks", *GIT_ISOLATION_ARGS,
                 "status", "--porcelain", "-z", "--", *_literal(paths),
             ],
             capture_output=True,
@@ -13537,6 +13808,31 @@ def cmd_validate(args: argparse.Namespace) -> int:
             errors.append(
                 f"{path.name}: '{APPLY_OUTCOME_FIELD}' ({apply_outcome_raw!r}) is not "
                 f"one of {', '.join(APPLY_OUTCOME_VALUES)}"
+            )
+
+        # `proposal-outcome` (result-only,
+        # docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md
+        # §F), given `apply-outcome`'s treatment exactly: well-formed if
+        # present, never required, and a membership test rather than
+        # `target`'s open non-blank check because this vocabulary too is
+        # closed by construction — one writer (`run_worker_turn`), and
+        # the one surface that reads it branches on the value.
+        proposal_outcome_raw = rec.fields.get(PROPOSAL_OUTCOME_FIELD)
+        if proposal_outcome_raw is not None and rtype != "result":
+            errors.append(
+                f"{path.name}: '{PROPOSAL_OUTCOME_FIELD}' is a result-record field "
+                f"and this is a {rtype!r} record. Nothing reads it here, so it would "
+                "validate, read as meaningful, and do nothing "
+                "(docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md)."
+            )
+        elif (
+            proposal_outcome_raw is not None
+            and proposal_outcome_raw not in PROPOSAL_OUTCOME_VALUES
+        ):
+            errors.append(
+                f"{path.name}: '{PROPOSAL_OUTCOME_FIELD}' ({proposal_outcome_raw!r}) "
+                f"is not one of {', '.join(PROPOSAL_OUTCOME_VALUES)} "
+                "(docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md)."
             )
 
         # The activation family (docs/tasks/0048-activation.md §F), each

@@ -658,6 +658,25 @@ in
     # the real dispatch unit's environment, not only the plain-bash
     # harness's.
     assert "target: private" in result_record, result_record
+    # docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md: the
+    # pre-flight that decides whether a proposal is offered at all runs
+    # `git apply --check` in the target checkout, and this VM is the
+    # only place it runs under the real dispatch unit's pinned PATH
+    # rather than a developer shell's. Asserted on the `offered` prefix,
+    # not on a single value: `git` reaches a dispatched worker only
+    # through the optional modules/dev, so `offered-unchecked` is a
+    # correct answer on a host without it, and pinning the exact value
+    # here would make this assertion about that module rather than about
+    # the field surviving the unit's environment. What must not happen
+    # is a refusal, which is what a check pointed at the wrong checkout
+    # would produce — and the proposal question asserted below would
+    # then never exist.
+    proposal_outcome = [
+        line for line in result_record.splitlines()
+        if line.startswith("proposal-outcome: ")
+    ]
+    assert proposal_outcome, result_record
+    assert proposal_outcome[0].startswith("proposal-outcome: offered"), result_record
     print("OK: a worker turn ran and wrote a completed result, with no resident CLI action")
 
     # The routing decision, produced by the same sweep's tail step.

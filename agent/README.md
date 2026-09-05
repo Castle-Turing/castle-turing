@@ -1509,6 +1509,70 @@ see `docs/backlog/approval-channel-has-no-transfer-of-control-
 strategy.md` before copying it anywhere a third party is on the other
 end.
 
+### Whether a proposal was ever offered: `proposal-outcome`
+
+From `docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md`.
+A proposal question used to be filed for every completed, targeted,
+non-`mechanism` turn, whatever was in the diff. On 2026-09-05 one was
+filed against a patch git cannot parse; the resident approved it; the
+applier spent that approval on `refused-patch-stale`, and the approval
+was gone. The resident had been asked to authorize a change that could
+never have been made, and the cost of the malformed patch was charged
+to their decision rather than to the turn that produced it.
+
+So the harness now runs, at filing time, the same check the applier
+runs — `git apply --check` against the target checkout as it stands,
+over the exact bytes that become the `.patch` sidecar — and **a
+proposal that cannot be applied does not become a question.** The
+result record says what happened in a closed vocabulary:
+
+| `proposal-outcome` | question filed | means |
+| --- | --- | --- |
+| `offered` | yes | git was asked and the patch applies. |
+| `offered-tree-dirty` | yes | the patch does not apply, and the resident has uncommitted work under the files it touches, so the failure is not evidence about the patch. |
+| `offered-unchecked` | yes | git never answered — not on `PATH`, would not exec, or outlived its bound. Nothing is known either way. |
+| `refused-patch-stale` | **no** | git was asked, the patch does not apply, and the tree is clean under the paths it touches. |
+
+`outcome` is unaffected: the turn *completed*, and `outcome` stays what
+this document reserves it as, an observation about the writer's own
+run. `proposal-outcome` is the observation about what the run produced,
+the same split `apply-outcome` and `build-outcome` make one authority
+further out.
+
+`refused-patch-stale` is the applier's own code rather than a new
+spelling. Today that value covers both halves of what `git apply`
+refuses — bytes it cannot read, and a patch that no longer fits — and
+`docs/tasks/0055` is where that splits. Reusing it is what keeps the
+two vocabularies from drifting apart in an append-only journal.
+
+**A refusal is not a silence.** The result is written, carries the diff
+and git's own message, and routes exactly as any other result does. The
+resident learns the errand produced nothing usable, which is true,
+instead of being asked to approve it. The diff also survives in the
+`.patch` sidecar, so nothing about a refusal throws work away.
+
+**The dirty-tree case is advisory on purpose.** A resident mid-edit
+under the files a patch touches makes the check fail for a reason that
+is not the patch's, and withholding the question there would be the same
+defect wearing the opposite hat. The applier re-checks at apply time and
+has its own `refused-tree-dirty` with a remedy attached. What the record
+must never do is let "your patch is bad" and "your tree was busy" read
+the same, which is why they are two values and not one.
+
+**The check reads and adds no authority.** `git apply --check` and
+`--numstat` write nothing; `git status` is the one probe that would
+(it refreshes the index), so it carries `--no-optional-locks` for the
+same reason every git command the worker contract permits a tenant does.
+Everything runs through `_run_git`, so `GIT_*` is stripped and the
+resident's hooks are disabled — a check that runs a hook is not a check.
+
+**Absence keeps one meaning:** this turn never reached the
+question-filing decision — no diff, no clean finish, or a `mechanism`
+target, which files no question at all
+(`docs/tasks/0044-mechanism-findings-not-proposals.md`) and is not
+checked here. Plus the reading every field in an append-only journal
+carries, that the record predates the field.
+
 ### Applying an approved change: `castle apply` and `apply-outcome`
 
 From `docs/tasks/0026-apply-validate.md`. `castle apply` is the first

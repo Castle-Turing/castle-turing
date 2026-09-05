@@ -35,7 +35,13 @@ follow_up="$("$CASTLE_TEST_CASTLE_BIN" ask "Follow-up filed by the tenant during
 printf 'contract-worker-filer: filed follow-up request %s while working %s\n' \
   "$follow_up" "$CASTLE_REQUEST_ID"
 
-printf -- '--- a/synthetic (harness fixture only)\n+++ b/synthetic (harness fixture only)\n' > "$CASTLE_DIFF_FILE"
+# A creation patch, and appliable on purpose: since
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md a
+# diff that does not apply to its target checkout files no proposal
+# question, so a header-only diff here would put this fixture's
+# scenario on the refusal branch — which is not the branch it is
+# about. Same reasoning and same shape as contract-worker.sh's.
+printf -- '--- /dev/null\n+++ b/synthetic (harness fixture only)\n@@ -0,0 +1 @@\n+placeholder after\n' > "$CASTLE_DIFF_FILE"
 # Every fixture here that produces a diff also declares which checkout
 # it is against, since docs/tasks/0024-config-target.md. These
 # fixtures predate that mechanism — they omitted a target because
