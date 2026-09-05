@@ -237,8 +237,22 @@ assert_no_direct_rebuild() {
 # rather than by running the applier, so this file tests the activation
 # seats and not that one — and held to the schema either way, because
 # `castle validate` at the end reads all of it.
+# $2, optional, is a path under $PRIVATE the change "rewrote": the
+# fixture commits it and stamps `apply-commit` the way the applier does
+# where exactly one commit was verified to have landed. Omitted, the
+# result carries no commit — the shape an applier leaves when it could
+# not verify one — which is what the confirmation's degraded path is
+# tested against (docs/tasks/0059-confirming-a-switch-suggests-what-to-
+# check.md §B).
 plant_applied_change() {
-  local what="$1" proposal question answer
+  local what="$1" touches="${2:-}" proposal question answer commit=""
+  if [ -n "$touches" ]; then
+    mkdir -p "$(dirname "$PRIVATE/$touches")"
+    printf '# %s\n' "$what" >> "$PRIVATE/$touches"
+    git -C "$PRIVATE" add -A
+    git -C "$PRIVATE" commit -q -m "fixture: $what"
+    commit="$(git -C "$PRIVATE" rev-parse HEAD)"
+  fi
   proposal="$("$CASTLE" record --type result --provenance requested --seat worker \
     --refs "" --outcome completed --target private --body "$what")"
   question="$("$CASTLE" record --type question --provenance requested --seat worker \
@@ -252,9 +266,9 @@ path.write_text(path.read_text().replace(
     "created:", f"authorizes-apply: true\nproposal-sha256: {digest}\ncreated:", 1))
 PLANT
   answer="$("$CASTLE" answer --decision approve "$question" <<< "fixture approval")"
-  python3 - "$JOURNAL" "$answer" "$question" <<'PLANT'
+  python3 - "$JOURNAL" "$answer" "$question" "$commit" <<'PLANT'
 import pathlib, subprocess, sys
-journal, answer, question = sys.argv[1:4]
+journal, answer, question, commit = sys.argv[1:5]
 out = subprocess.run(
     ["agent/castle", "record", "--type", "result", "--provenance", "requested",
      "--seat", "applier", "--refs", f"{answer},{question}", "--outcome", "completed",
@@ -263,8 +277,10 @@ out = subprocess.run(
 )
 rid = out.stdout.strip()
 path = pathlib.Path(journal) / f"{rid}.md"
-path.write_text(path.read_text().replace(
-    "outcome: completed", "outcome: completed\napply-outcome: applied-validated", 1))
+stamps = "outcome: completed\napply-outcome: applied-validated"
+if commit:
+    stamps += f"\napply-commit: {commit}"
+path.write_text(path.read_text().replace("outcome: completed", stamps, 1))
 print(rid)
 PLANT
 }
@@ -393,6 +409,22 @@ printf '%s\n' "$HREVIEW" | grep -q "SETTING IT ASIDE DECIDES NOTHING, AND THE WI
 printf '%s\n' "$HREVIEW" | grep -q "Nothing you press here switches" \
   || fail "the health review does not say the switch already happened: $HREVIEW"
 
+log "   ... and it suggests what to check, even when it can name nothing"
+# This change's apply result carries no `apply-commit`, so there is
+# nothing to name and the question falls back to the sentence that is
+# true of every switch (docs/tasks/0059 §B). The suggestion is in the
+# question's own body, so it reaches the digest and the notification as
+# well as this screen — and the screen is asserted too, because the body
+# reaching the record is not the same fact as the resident meeting it.
+grep -q "check something this switch did not add" "$HEALTH_Q" \
+  || fail "the confirmation suggests nothing to check: $(cat "$HEALTH_Q")"
+grep -q "rewrote these files" "$HEALTH_Q" \
+  && fail "the confirmation named files nothing here could have established"
+grep -q "is not evidence that the rest of it survived" "$HEALTH_Q" \
+  || fail "the confirmation does not say why the new thing working proves nothing"
+printf '%s\n' "$HREVIEW" | grep -q "check something this switch did not add" \
+  || fail "the review screen does not carry the suggestion: $HREVIEW"
+
 log "   ... and confirming keeps the generation, with nothing privileged run"
 BEFORE="$(grep -c . "$SYSTEMCTL_ARGV")"
 printf 'a\n.\n' | "$MODAL" --mode review --question "$HEALTH_Q_ID" > "$WORKDIR/confirm.txt" 2>&1 \
@@ -520,6 +552,15 @@ log "12. a window nothing confirms rolls the machine back"
 # ---------------------------------------------------------------------
 HEALTH_Q2="$(newest_with "confirms-activation: $SWITCHED2_ID" question)"
 [ -n "$HEALTH_Q2" ] || fail "the second switch filed no health question"
+# A pin bump's commit touches flake.lock, and saying so would be true
+# and useless: what moved is what the whole configuration evaluates to
+# (docs/tasks/0059 §C).
+grep -q "adopted framework revision $NEW_REV" "$HEALTH_Q2" \
+  || fail "the confirmation does not name the revision this adopted: $(cat "$HEALTH_Q2")"
+grep -q "flake.lock" "$HEALTH_Q2" \
+  && fail "the pin confirmation points at flake.lock, which is true and useless"
+grep -q "is not evidence that the rest of it survived" "$HEALTH_Q2" \
+  || fail "the pin confirmation does not say why the new thing working proves nothing"
 "$CASTLE" activate --sweep > "$WORKDIR/act7.txt" 2>&1 || true
 grep -qx "start castle-rollback.service" "$SYSTEMCTL_ARGV" \
   && fail "the resident's own sweep rolled back a window nobody had decided"
@@ -581,7 +622,40 @@ grep -q "landed on a different revision" "$DISAGREE" \
   || fail "a refusal it could not describe was still offered for approval"
 
 # ---------------------------------------------------------------------
-log "14. a worker turn cannot build or switch, whatever its prompt says"
+log "14. the confirmation names what the change touched, and admits what it cannot"
+# ---------------------------------------------------------------------
+# Two applied changes at once, which one build accounts for together
+# (docs/tasks/0048 §B): one the applier committed and stamped, one it
+# did not. So the file list is real and incomplete at the same time, and
+# the question has to say both — a short list read as a complete one
+# narrows exactly the attention this paragraph exists to widen.
+plant_applied_change "A change to the desktop." home/desktop.nix > /dev/null
+plant_applied_change "A change nothing stamped a commit for." > /dev/null
+"$CASTLE" build > "$WORKDIR/build8.txt" 2>&1 \
+  || fail "the applied-change rebuild failed: $(cat "$WORKDIR/build8.txt")"
+LAST_Q_ID="$(id_of "$(newest_with "authorizes-activation: true" question)")"
+printf 'a\n.\n' | "$MODAL" --mode review --question "$LAST_Q_ID" > "$WORKDIR/approve5.txt" 2>&1 \
+  || fail "approving the applied-change rebuild failed: $(cat "$WORKDIR/approve5.txt")"
+"$CASTLE" activate --sweep > "$WORKDIR/act10.txt" 2>&1 \
+  || fail "the last activation failed: $(cat "$WORKDIR/act10.txt")"
+SWITCHED3="$(newest_with "activation-outcome: switched" result)"
+SWITCHED3_ID="$(id_of "$SWITCHED3")"
+[ "$SWITCHED3_ID" != "$SWITCHED2_ID" ] || fail "no third switch was recorded"
+HEALTH_Q3="$(newest_with "confirms-activation: $SWITCHED3_ID" question)"
+[ -n "$HEALTH_Q3" ] || fail "the third switch filed no health question"
+grep -qx "    home/desktop.nix" "$HEALTH_Q3" \
+  || fail "the confirmation does not name the file the change rewrote: $(cat "$HEALTH_Q3")"
+grep -q "flake.nix" "$HEALTH_Q3" \
+  && fail "the confirmation named a file the change never touched"
+grep -q "so that list may be short" "$HEALTH_Q3" \
+  || fail "the confirmation showed a partial file list as if it were the whole one"
+grep -q "check something this switch did not add" "$HEALTH_Q3" \
+  || fail "the confirmation does not say to check what the change did not add"
+assert_mechanism_untouched "the applied-change rebuild"
+assert_no_direct_rebuild "the applied-change rebuild"
+
+# ---------------------------------------------------------------------
+log "15. a worker turn cannot build or switch, whatever its prompt says"
 # ---------------------------------------------------------------------
 CASTLE_WORKER_CLAIM="20260301T000000Z-claim-fixture" "$CASTLE" build > "$WORKDIR/guard1.txt" 2>&1 \
   && fail "a worker turn was allowed to start a build"
@@ -593,7 +667,7 @@ grep -q "refusing to change this machine from inside a worker turn" "$WORKDIR/gu
   || fail "the activation guard said something else: $(cat "$WORKDIR/guard2.txt")"
 
 # ---------------------------------------------------------------------
-log "15. the journal validates, and nothing in it names this machine"
+log "16. the journal validates, and nothing in it names this machine"
 # ---------------------------------------------------------------------
 "$CASTLE" validate || fail "the journal this run produced does not validate"
 if grep -rIl "$HOME" "$JOURNAL" >/dev/null 2>&1; then
