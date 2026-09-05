@@ -179,8 +179,13 @@ docs/tasks/0009). One product-level constraint holds regardless of
 tenant: **the worker proposes a diff; it never deploys.** No
 `nixos-rebuild`, no `git commit`, no applying anything to a running
 system, from this seat, in this slice — applying a reviewed diff stays
-a resident action. Autonomous deployment is a real authority-taxonomy
-question for a later task, not a side effect of this one. Since
+a resident action. **Since docs/tasks/0048-activation.md a switch can
+be performed by the machine, and that changes nothing about this
+sentence**: it is a different seat, unreachable from a worker turn,
+spending an authorization the resident granted on a screen of its own.
+Autonomous deployment — a switch with no per-change approval behind it
+— remains a real authority-taxonomy question for a later task, and is
+not something this one grants. Since
 docs/tasks/0021-auto-dispatch.md the seat's *invocation* can be
 automatic — a resident who opts into `castle.agent.dispatch.enable`
 has filed requests start themselves — and that changes nothing about
@@ -277,6 +282,51 @@ it a policy about which findings are worth landing, or a say in whether
 to land one, would make it a reasoning seat; that is precisely what
 this paragraph exists to stop a later agent from "completing" it into.
 
+**Builder** (plumbing, not a reasoning seat). The mechanism that
+notices this machine is owed a build and makes one: either because the
+applier has just moved the resident's configuration repository, or
+because the framework revision that repository pins has fallen behind
+the one the machine's framework checkout last fetched. It **fetches
+nothing** — `origin/main` here means what the last fetch saw, the
+outbox's rule verbatim — it writes no checkout, and it **activates
+nothing**. A failed build files an honest result and asks nothing; a
+clean one files a question. Nothing it does needs an authorization,
+because **a build changes nothing**, and a question whose only honest
+answer is yes is a question that teaches a resident to stop reading
+questions. `seat: builder` is a new value in an existing category, as
+`dispatch`, `applier` and `outbox` were. Giving it a policy about which
+triggers are worth building, or a say in whether to build at all, would
+make it a reasoning seat; that is precisely what this paragraph exists
+to stop a later agent from "completing" it into.
+
+**Activation** (plumbing, not a reasoning seat). The mechanism that
+spends one recorded approval on the running system: it writes and
+commits the framework pin the resident authorized, if the approval was
+for one, and then asks this machine to switch to the configuration that
+produces. It is the first thing in this architecture that changes the
+machine rather than a file, and the only one — it **pushes nothing**,
+it never writes a checkout of this framework, and it activates exactly
+one approval at a time. Every switch spends exactly one `answer`
+record, whose question said at the moment it was shown that approving
+switches the running system to the build described below; an approval
+granted under any other wording is inert forever, by construction, for
+the reason the applier's paragraph gives. After a switch it opens a
+**health window**: a question asking whether the machine is working,
+and a bounded deadline after which, with no confirmation, it rolls back
+to the previous generation. That is the one thing in this system that
+decides without the resident, and the asymmetry is why — a good
+generation rolled back costs one cheap re-approval, a bad generation
+left running costs a physical trip to the machine. `seat: activation`
+is a new value in an existing category, and a distinct name from
+`builder`'s for the same reason the applier's is distinct from the
+worker's: a seat is what reads and writes, and "which seat changed the
+machine I am using" must not have the same answer as "which seat
+compiled something". Giving it a policy about which approvals are worth
+spending, or a say in whether to spend one at all, would make it a
+reasoning seat; that is precisely what this paragraph exists to stop a
+later agent from "completing" it into
+(`docs/tasks/0048-activation.md`).
+
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers
 "right now" and forgets; an observation becomes durable only by being
@@ -352,6 +402,28 @@ as its own document:
   do with nobody watching, which is an authority question rather than a
   storage one. Commits stay local-only, with pushes left to the
   resident, until that is answered.
+- Activation (`castle.agent.activation.enable`,
+  docs/tasks/0048-activation.md) is a **standing authority** and the
+  first one in this project that is a **standing root grant**: it
+  declares two privileged systemd units, carrying `nixos-rebuild switch
+  --flake <repo>#<host>` and `nixos-rebuild switch --rollback` and no
+  argument reaching them from anywhere, and a polkit rule permitting one
+  named account to start exactly those two. What is standing is the
+  *ability to be asked*; every individual switch is still authorized
+  one at a time, by a specific answer record, under a screen that says
+  in capitals what approving does — so the applier bullet's "a
+  per-change authorization needs no standing one" does not apply here,
+  and this needs both. Which taxonomy category the grant belongs in is
+  deferred to the authority-taxonomy task exactly as the bullets above
+  defer; what is settled now is that it is off unless a resident turns
+  it on, that its scope is two commands, and that a switch nothing
+  confirms is undone rather than kept.
+- The worker's product-level constraint is unchanged by any of this.
+  The worker proposes and never deploys; what changed is that a
+  *separate* seat can now deploy, on a resident's individual say-so, and
+  no tenant can reach it — `castle build` and `castle activate` both
+  refuse outright from inside a worker turn, by the same environment
+  check `castle apply` uses.
 - Automatic dispatch of resident-filed errands
   (`castle.agent.dispatch.enable`, docs/tasks/0021-auto-dispatch.md) is
   a **standing authority** too: opt-in and default-off, because it lets

@@ -14,16 +14,21 @@ older generation from the bootloader menu*. Nothing anywhere proves that
 menu appears. The harness proves the machine boots, which is the case
 where you do not need the menu.
 
-It gets sharper with `docs/tasks/0027`. That task owns activation — the
-first time this system produces a new generation — and its rollback
-story leans on exactly this menu. A fixture that cannot show the menu
-cannot be extended to prove "the previous generation is still
-selectable after an activation", which is the assertion 0027 will most
-want. Better to know that now than to discover it while writing 0027's
-verification plan.
+It was filed expecting to get sharper with the activation task, on the
+expectation that its rollback story would lean on exactly this menu.
 
-Found during the 0027 re-baselining pass, and independent of anything
-0027 decides.
+**It did not, and that is now settled.** `docs/tasks/0048-activation.md`
+landed and its rollback is `nixos-rebuild switch --rollback` on a
+running machine, which never reaches a bootloader at all: the previous
+generation is selected by the system profile, not by a menu. The menu is
+the recovery path for a generation that will not *boot*, which is
+`headless-recovery.md`'s territory, and this entry stays filed against
+that rather than against activation. The condition it set for changing
+`hosts/vm-test`'s timeout — a consumer that needs the menu rendered —
+has not arrived.
+
+Found during the re-baselining pass for the task that became 0048, and
+independent of anything that task decided.
 
 **What we already know.**
 
@@ -45,14 +50,18 @@ Found during the 0027 re-baselining pass, and independent of anything
   generated `loader.conf` rather than on the rendered screen. The
   cheapest honest check may be that the bootloader is *configured* to
   present a menu with more than one entry, which needs no boot at all.
-  Whether that is enough depends on what 0027 actually wants to claim.
+- 0048 also found that the other half of this — proving the previous
+  generation is present and selectable *after* an activation — cannot
+  live in `test/vm-install` at all, for a reason unrelated to the
+  timeout: `hosts/vm-test` deliberately imports no agent module, and
+  that is the anti-bricking regression test rather than an oversight.
+  See `docs/backlog/activation-is-not-proven-on-a-real-vm.md`.
 
 **Open questions.** Fix the fixture, or prove the menu another way? If
 the fixture changes, what is the smallest timeout that is reliably
 observable in a VM screenshot, and does the existing NVRAM-wipe
-assertion still hold across it? Does 0027 need the menu *rendered*, or
-only the previous generation *present and selectable* — those are very
-different tests, and only the first needs a timeout at all.
+assertion still hold across it? And now that no task needs the menu
+rendered, is this worth doing at all before something does?
 
 **What to re-run when it changes.** `test/vm-install/run.sh` (the host's
 own harness, and the one whose timing the change moves) and

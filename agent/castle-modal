@@ -408,6 +408,31 @@ def _authorizes_apply(castle, question) -> bool:
     return question.fields.get(castle.AUTHORIZES_APPLY_FIELD, "").strip() == "true"
 
 
+def _authorizes_activation(castle, question) -> bool:
+    """Does approving this question switch the machine the resident is
+    using (docs/tasks/0048-activation.md §D)?
+
+    `_authorizes_apply`'s third sibling, written the same way and never
+    as a widening of `_is_proposal`: what it decides is which two
+    sentences this surface says, and those sentences are what the
+    resident's authority *means*. Exact match on the one spelling —
+    absence means no, an unrecognised value means no, and the safe
+    direction is the default.
+    """
+    return question.fields.get(castle.AUTHORIZES_ACTIVATION_FIELD, "").strip() == "true"
+
+
+def _confirms_activation(castle, question) -> bool:
+    """Is this the health question that closes an activation's window
+    (docs/tasks/0048-activation.md §E)?
+
+    The one question on this surface where `defer` does something, which
+    is exactly why it needs its own boundary statement rather than
+    inheriting one whose last line promises that nothing expires.
+    """
+    return bool(question.fields.get(castle.CONFIRMS_ACTIVATION_FIELD, "").strip())
+
+
 def _about_line(castle, records: dict, question) -> str:
     """The first line of the request this question came out of, or "" if
     the walk reaches no request. No placeholder and no error in that
@@ -857,6 +882,70 @@ Rejecting says this change is wrong. Setting it aside says you are not
 deciding it now. Both close it for good — nothing expires, and nothing
 decides on your behalf."""
 
+# The statement an activation question is offered under
+# (docs/tasks/0048-activation.md §E). A third one rather than a widening
+# of the two above, for the reason the second exists at all: those are
+# what residents were told, and for a question carrying neither
+# activation stamp they stay true forever.
+#
+# Four things it must keep saying, each of them a decision:
+#
+#   * "switches the running system to the build described below", in
+#     those words. This is the sentence the resident's own instruction
+#     specified, and it is the scope of the grant. Not "authorizes
+#     Castle to switch" — unlike an apply, where a second option decides
+#     whether anything happens promptly, approving this *is* the switch
+#     starting, so the honest tense is the present one.
+#   * What `switch` cannot fully apply. A kernel, initrd or firmware
+#     change is staged into the new generation and takes effect at the
+#     next boot. A resident who reads "switched" as "everything I
+#     approved is live" has been misled by omission, and this is a
+#     surprise that would otherwise be discovered at a reboot weeks
+#     later.
+#   * That the window exists, and which way it falls. This is the one
+#     screen in this system where something expires and something
+#     decides on the resident's behalf, and it says so rather than
+#     inheriting the other two statements' closing promise.
+#   * That it still pushes nothing. Same reason as the apply statement:
+#     "commit" is the word most likely to be read as "publish".
+REVIEW_BOUNDARY_STATEMENT_ACTIVATION = """\
+Approving this is you authorizing this exact change, and that
+authorization is kept.
+
+APPROVING SWITCHES THE RUNNING SYSTEM TO THE BUILD DESCRIBED BELOW —
+this machine, now, without asking again. If the change below includes a
+new framework pin, approving also writes and commits it in your
+configuration repository first. It pushes nothing anywhere.
+
+A SWITCH DOES NOT APPLY EVERYTHING: a kernel, initrd or firmware change
+is staged into the new generation and takes effect at the next boot.
+
+CASTLE WILL THEN ASK WHETHER THIS MACHINE IS WORKING, AND ROLL BACK ON
+ITS OWN IF NOTHING SAYS SO IN TIME. That is the one thing in this system
+that decides without you, and it is deliberate: a good generation rolled
+back costs you one keypress, a bad one left running costs you a trip to
+the machine.
+
+Rejecting says this change is wrong. Setting it aside says you are not
+deciding it now. Both close it for good, and neither switches
+anything."""
+
+# The statement the health confirmation is offered under. Its last
+# paragraph is the deliberate opposite of the other three: here
+# something *does* expire, and a resident learns that from the screen
+# rather than from the consequence (docs/tasks/0015's defect, in the
+# form where the label omits rather than misstates).
+REVIEW_BOUNDARY_STATEMENT_HEALTH = """\
+This machine has already switched. Nothing you press here switches
+anything; what you are deciding is whether it stays.
+
+APPROVING KEEPS THE GENERATION THIS MACHINE IS RUNNING. Rejecting rolls
+it back to the previous generation now.
+
+SETTING IT ASIDE DECIDES NOTHING, AND THE WINDOW STILL RUNS OUT — as
+does walking away. When it does, Castle rolls back. This is the one
+question here that expires; every other one waits for you forever."""
+
 # The window this mode runs in opens at 720x480 (the fixed geometry
 # modules/home's `window.commands` gives every castle-modal window),
 # which cannot show a diff and an explanation at once. Rather than a
@@ -1031,7 +1120,15 @@ def _split_proposal_body(castle, result) -> tuple[str, str, str]:
     # journal is read as markdown. Dropped here only on an exact match,
     # so a body that somehow lacks it loses nothing but a reader's
     # tidiness.
-    if diff_lines and diff_lines[0] == "```diff":
+    # The opening fence the harness writes just inside the boundary is
+    # decoration, kept so the record still renders as a code block
+    # wherever a journal is read as markdown. Its language tag varies by
+    # what is inside — `diff` for a worker's proposed change, `json` for
+    # the `flake.lock` an activation question carries — so this drops
+    # the fence by shape rather than by an exact string, and only where
+    # the closing fence below matches too. A body that somehow lacks
+    # either loses nothing but a reader's tidiness.
+    if diff_lines and re.fullmatch(r"```[A-Za-z0-9_+-]*", diff_lines[0]):
         diff_lines = diff_lines[1:]
     if diff_lines and diff_lines[-1] == "```":
         diff_lines = diff_lines[:-1]
@@ -1154,16 +1251,7 @@ def _render_proposal(castle, question, records: dict, out) -> None:
         print(f"  {where}", file=out)
         print(file=out)
 
-    # Selected by the question's own stamp, never by a date and never
-    # by which text reads better: a proposal offered under the older,
-    # narrower statement is decided under that statement, forever
-    # (docs/tasks/0026-apply-validate.md §A).
-    print(
-        REVIEW_BOUNDARY_STATEMENT
-        if _authorizes_apply(castle, question)
-        else REVIEW_BOUNDARY_STATEMENT_PRE_APPLY,
-        file=out,
-    )
+    print(_boundary_statement(castle, question), file=out)
     print(file=out)
     # Three distinct, labelled, non-adjacent keys, printed here rather
     # than under the diff so that no resident can meet the keys without
@@ -1261,17 +1349,79 @@ REVIEW_CONFIRMATION_APPROVE_APPLYABLE = (
     "repository. Nothing will be activated."
 )
 
+# What each verdict confirms on an activation question. All three have
+# their own wording here, unlike the apply case, because all three now
+# mean something different: approving starts a switch, rejecting closes
+# a question about *this machine*, and setting aside leaves the machine
+# exactly as it is.
+REVIEW_CONFIRMATIONS_ACTIVATION = {
+    "approve": (
+        "Approved. This machine is switching now, and Castle will ask whether it "
+        "worked."
+    ),
+    "reject": "Declined. This machine is not switching.",
+    "defer": "Set aside — this machine is not switching, and it will not be offered again.",
+}
 
-def _review_confirmation(decision: str, *, authorizes_apply: bool) -> str:
-    """The one line printed after a decision is written
-    (docs/tasks/0026-apply-validate.md §A.2).
+# And on the health question, where the whole point is which way the
+# window falls. Setting it aside says so outright rather than letting a
+# resident walk away believing they closed it.
+REVIEW_CONFIRMATIONS_HEALTH = {
+    "approve": "Confirmed. This machine keeps the configuration it switched to.",
+    "reject": "Rolling back to the generation this machine was running before.",
+    "defer": (
+        "Set aside. The window is still running, and when it closes with nothing "
+        "confirmed, this machine rolls back."
+    ),
+}
 
-    A helper rather than a second dict, so the predicate that selects
-    between the two approve wordings is spelled once, in the same place
-    as the strings it selects between — the review surface's own third
-    place that had to stop saying nothing is applied.
+
+def _boundary_statement(castle, question) -> str:
+    """Which of the four statements this question is offered under.
+
+    **Selected by the question's own stamps, never by a date and never
+    by which text reads better**: a proposal offered under a narrower
+    statement is decided under that statement, forever
+    (docs/tasks/0026-apply-validate.md §A). One function so the four
+    strings and the predicate that picks between them sit together, and
+    so a fifth cannot be added at only one of two call sites.
+
+    Ordered most-specific first. `agent/castle`'s validator refuses a
+    question carrying two of these stamps at once, so the order is a
+    belt rather than a rule — but a surface that grants authority does
+    not get to depend on a validator having run.
     """
-    if decision == "approve" and authorizes_apply:
+    if _confirms_activation(castle, question):
+        return REVIEW_BOUNDARY_STATEMENT_HEALTH
+    if _authorizes_activation(castle, question):
+        return REVIEW_BOUNDARY_STATEMENT_ACTIVATION
+    if _authorizes_apply(castle, question):
+        return REVIEW_BOUNDARY_STATEMENT
+    return REVIEW_BOUNDARY_STATEMENT_PRE_APPLY
+
+
+def _review_confirmation(castle, question, decision: str) -> str:
+    """The one line printed after a decision is written
+    (docs/tasks/0026-apply-validate.md §A.2,
+    docs/tasks/0048-activation.md §E).
+
+    A helper rather than a dict lookup, so the predicates that select
+    between the wordings are spelled once, in the same place as the
+    strings they select between — the review surface's own third place
+    that had to stop saying nothing is applied, and now its fourth and
+    fifth.
+
+    Takes the question rather than a precomputed flag since
+    docs/tasks/0048: with four boundary statements the caller was about
+    to have to compute three flags and pass them all, which is how the
+    surface and the statement it printed would eventually come to
+    disagree.
+    """
+    if _confirms_activation(castle, question):
+        return REVIEW_CONFIRMATIONS_HEALTH[decision]
+    if _authorizes_activation(castle, question):
+        return REVIEW_CONFIRMATIONS_ACTIVATION[decision]
+    if decision == "approve" and _authorizes_apply(castle, question):
         return REVIEW_CONFIRMATION_APPROVE_APPLYABLE
     return REVIEW_CONFIRMATIONS[decision]
 
@@ -1364,9 +1514,7 @@ def run_review_for(
 
     print(file=out)
     print(
-        _review_confirmation(
-            decision, authorizes_apply=_authorizes_apply(castle, question)
-        ),
+        _review_confirmation(castle, question, decision),
         file=out,
     )
 
@@ -1525,6 +1673,25 @@ _INBOX_LABELS = {
     "result": "an answer to read",
 }
 
+# Two proposals that are not changes to a file, and would be mislabelled
+# by the noun above (docs/tasks/0048-activation.md). Kept as a second
+# lookup rather than as two more `_inbox_items` kinds, deliberately:
+# `kind` decides which flow opens the item, and both of these open the
+# review flow exactly like every other proposal. What differs is only
+# what the list calls them.
+_INBOX_PROPOSAL_LABELS = {
+    "activation": "this machine, to switch",
+    "health": "did the switch work?",
+}
+
+
+def _proposal_label(castle, question) -> str:
+    if _confirms_activation(castle, question):
+        return _INBOX_PROPOSAL_LABELS["health"]
+    if _authorizes_activation(castle, question):
+        return _INBOX_PROPOSAL_LABELS["activation"]
+    return _INBOX_LABELS["proposal"]
+
 
 def _inbox_items(castle, records: dict, seen: set) -> list:
     """Everything waiting on the resident, in the brief's order:
@@ -1585,7 +1752,9 @@ def _inbox_items(castle, records: dict, seen: set) -> list:
 
 def _print_inbox_entries(castle, records: dict, shown: list, out) -> None:
     for index, (kind, rec) in enumerate(shown, start=1):
-        label = _INBOX_LABELS[kind]
+        label = (
+            _proposal_label(castle, rec) if kind == "proposal" else _INBOX_LABELS[kind]
+        )
         if kind == "result":
             # A result's own first line is the harness's turn header —
             # a record id and a store path, the two things this surface

@@ -57,6 +57,24 @@ let
     '';
     meta.description = "Castle Turing agent-layer CLI (record schema, router, digest, modal, worker wrapper)";
   };
+
+  # The window-closer's environment, snapshotted from *this* generation
+  # by `castle-activate.service`'s `ExecStartPre` before it runs
+  # `nixos-rebuild switch`, and read back by `castle-activation-window
+  # .service` via `EnvironmentFile` — caught by Codex's review of this
+  # task's PR. `nixos-rebuild switch` reloads unit files before that
+  # `ExecStartPre`/`ExecStart`/`ExecStartPost` sequence finishes, so if
+  # the approved switch also changes `castle.agent.stateDir`, the
+  # window-closer that later fires is the *new* generation's unit and
+  # reads `CASTLE_STATE_DIR` baked from the *new* value — the wrong
+  # journal, with nothing in it to confirm or roll back. This file is
+  # what lets it read the journal the switch that opened the window was
+  # actually using instead.
+  activationWindowSnapshot = pkgs.writeText "castle-activation-window.env" ''
+    CASTLE_STATE_DIR=${toString cfg.stateDir}
+    CASTLE_ACTIVATION_WINDOW=${toString cfg.activation.windowSeconds}
+    CASTLE_ROLLBACK_UNIT=castle-rollback.service
+  '';
 in
 {
   # docs/tasks/0024-config-target.md §1. `castle.agent.worker.repoRoot`
@@ -490,6 +508,168 @@ in
       '';
     };
 
+    activation.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Let this machine build, and — on your say-so, one switch at a
+        time — activate its own configuration
+        (docs/tasks/0048-activation.md).
+
+        **This is the first standing root grant in this project, and
+        turning it on is a larger decision than anything else in this
+        module.** `dispatch.enable` lets a model tenant spend money;
+        `apply.enable` lets the agent layer change your configuration
+        *files*; this one lets it change the machine you are using.
+
+        **What turning it on authorizes, exactly.** Two things, and they
+        are deliberately unequal:
+
+        - *Building, freely and with no question asked.* Whenever your
+          configuration repository has moved, or the framework revision
+          it pins has fallen behind the one your framework checkout last
+          fetched, Castle builds the configuration that produces. A
+          build changes nothing, and a question whose only honest answer
+          is yes is a question that teaches you to stop reading
+          questions.
+        - *Switching, once per approval.* A clean build files a question
+          on the review screen. Approving it switches this machine, and
+          nothing else does. There is no standing, autonomous or batched
+          activation tier and this task deliberately does not add one.
+
+        **The root grant, and its scope.** Two system units are
+        declared, carrying exactly two commands:
+
+            nixos-rebuild switch --flake <your repo>#<this host>
+            nixos-rebuild switch --rollback
+
+        and a polkit rule lets `castle.agent.activation.user` start
+        those two units and nothing else. No argument reaches them from
+        your session, so there is nothing for a process running as you
+        to forge. What that costs is stated rather than hidden: the
+        privileged step rebuilds from your repository rather than
+        activating a store path it was handed, so the closure that ends
+        up running is not *by construction* the one you were shown. It
+        is in practice, and where it is not, the record says so — every
+        activation records what you approved beside what
+        `/run/current-system` says afterwards.
+
+        **The health window.** After a switch, Castle asks whether this
+        machine is working. If nothing says so within
+        `castle.agent.activation.windowSeconds`, it rolls back to the
+        previous generation on its own. That is the one thing in this
+        system that decides without you, and the asymmetry is the
+        argument: a good generation rolled back costs you one keypress,
+        a bad one left running costs you a trip to the machine with a
+        USB stick.
+
+        **What a switch cannot fully apply.** A kernel, initrd or
+        firmware change is staged into the new generation and takes
+        effect at the next boot. The review screen says so before you
+        approve.
+
+        **It cannot reach an approval you gave before this existed**,
+        and there is no migration — see `apply.enable`'s identical
+        paragraph for why a change of wording never reaches backwards.
+
+        Requires `castle.agent.stateDir`, `castle.agent.repo.private`
+        and `castle.agent.activation.user`, all asserted below. Enable
+        it on at most one host per journal, for the sharpest version of
+        the reason `apply.enable` gives.
+
+        It pushes nothing anywhere. `docs/architecture.md`'s push bullet
+        is untouched by this.
+      '';
+    };
+
+    activation.user = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        The one account whose session may start the two privileged units
+        `castle.agent.activation.enable` declares
+        (docs/tasks/0048-activation.md §H). Written into a polkit rule
+        that permits `org.freedesktop.systemd1.manage-units` on exactly
+        those two unit names, for exactly this user, and nothing else.
+
+        Principle 01's split, in its plainest form: the units, the rule
+        and the sweep are public mechanism; *who* holds the grant is
+        private configuration, and this framework has no business
+        guessing it. Null by default, and asserted non-null only inside
+        the branch a resident opted into.
+
+        This is normally the same account as `castle.admin.username`,
+        but it is a separate option on purpose — the account that
+        administers a machine and the account a resident's agent layer
+        runs as need not be the same one, and conflating them here would
+        hand the grant to whichever a host happened to name first.
+      '';
+    };
+
+    activation.windowSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 900;
+      description = ''
+        How long a health confirmation has to arrive after a switch
+        before Castle rolls this machine back
+        (docs/tasks/0048-activation.md §E). Wired into
+        `CASTLE_ACTIVATION_WINDOW` and into the system timer that
+        enforces it.
+
+        Fifteen minutes is chosen, not derived: long enough to notice a
+        machine is fine and click a notification, short enough that a
+        machine which lost its network or its display is not left that
+        way for an afternoon. Raise it if you routinely switch and then
+        walk away; lower it if you would rather find out sooner.
+
+        What this bounds is the *confirmation*, never the switch. A
+        switch that is still running when this expires has not finished
+        being asked for, and the window starts when the privileged unit
+        starts, not when it ends.
+      '';
+    };
+
+    activation.timeoutSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 3600;
+      description = ''
+        How long `castle build` lets one `nix` invocation run before
+        killing it and recording the failure
+        (docs/tasks/0048-activation.md). Wired into
+        `CASTLE_ACTIVATION_TIMEOUT`.
+
+        An hour, and deliberately longer than
+        `castle.agent.apply.timeoutSeconds`' thirty minutes: that one
+        bounds a check of a configuration that has just been changed by
+        a few lines, this one may be building the whole system after a
+        framework bump moved nixpkgs, which is a kernel and a desktop
+        from source in the worst case.
+      '';
+    };
+
+    activation.frameworkInput = lib.mkOption {
+      type = lib.types.str;
+      default = "castle-turing";
+      description = ''
+        What your private flake calls this framework in its `inputs`
+        (docs/tasks/0048-activation.md §B). Wired into
+        `CASTLE_FRAMEWORK_INPUT`, and read out of your `flake.lock` to
+        decide whether the pin is behind.
+
+        The default is the name `docs/private-layer.md`'s own template
+        publishes. A resident who called it something else says so here
+        rather than having the pin trigger silently never fire — which
+        is what an unrecognised name produces, with a record saying so.
+
+        The pin trigger also needs `castle.agent.repo.mechanism`. Castle
+        compares your lock against `origin/main` in that checkout and
+        **never fetches**, because a fetch is network run unattended
+        with nobody watching; what `origin/main` means here is exactly
+        what your last fetch saw. A host with no framework checkout gets
+        the applied-change trigger only.
+      '';
+    };
+
     notify.command = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -622,7 +802,19 @@ in
       // (lib.optionalAttrs (cfg.repo.mechanism != null) { CASTLE_MECHANISM_ROOT = cfg.repo.mechanism; })
       // { CASTLE_APPLY_EVALUATE_FLAKE = lib.boolToString cfg.apply.evaluateFlake; }
       // { CASTLE_APPLY_TIMEOUT = toString cfg.apply.timeoutSeconds; }
-      // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; });
+      // (lib.optionalAttrs (cfg.notify.command != null) { CASTLE_NOTIFY_COMMAND = cfg.notify.command; })
+      # docs/tasks/0048-activation.md, for the apply variables' own
+      # reason above: a `castle build` or `castle activate <answer-id>`
+      # a resident runs by hand must read the same timeout, window and
+      # framework input the automatic unit does, not silently fall back
+      # to agent/castle's own defaults (caught by Codex's review of
+      # this task's PR). All three ride unconditionally — each always
+      # has a value, exactly like the two apply variables above.
+      // {
+        CASTLE_ACTIVATION_TIMEOUT = toString cfg.activation.timeoutSeconds;
+        CASTLE_ACTIVATION_WINDOW = toString cfg.activation.windowSeconds;
+        CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
+      };
 
     # ---------------------------------------------------------------
     # Automatic dispatch (docs/tasks/0021-auto-dispatch.md), off by
@@ -1056,6 +1248,232 @@ in
       };
     };
 
+    # ---------------------------------------------------------------
+    # The activation seats (docs/tasks/0048-activation.md).
+    #
+    # Three user units and four system ones. The split down the
+    # privilege boundary is the design rather than a packaging choice:
+    # everything that reads the journal, builds, decides eligibility and
+    # writes records runs as the resident, and the only things that run
+    # as root are two fixed commands and the timer that may need to run
+    # the second of them.
+    # ---------------------------------------------------------------
+    systemd.user.paths.castle-activation = lib.mkIf cfg.activation.enable {
+      description = "Watch the castle journal for builds to make and switches to spend";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      pathConfig = {
+        # The whole journal directory, for the reason the dispatch and
+        # apply path units both give: the wakeup is a hint and the fold
+        # is the authority. Here the records that matter are an apply
+        # result (a build is owed) and an answer (a switch is
+        # authorized), which no single filename shape covers.
+        PathChanged = "${toString cfg.stateDir}/journal";
+      };
+    };
+
+    systemd.user.services.castle-activation = lib.mkIf cfg.activation.enable {
+      description = "Build what this machine is owed, then spend one approved switch";
+      # No wantedBy, same as castle-dispatch and castle-apply: the path
+      # unit and the timer activate this, and a Type=oneshot pulled into
+      # default.target would hold the user manager's activation open for
+      # a whole system build.
+      unitConfig.ConditionUser = "!@system";
+      serviceConfig = {
+        Type = "oneshot";
+        # Two ExecStart lines, in this order, and the `-` on the first
+        # is load-bearing: a build that fails is an ordinary, recorded
+        # outcome, and it must not stop an approval the resident already
+        # granted from being spent. They are one unit rather than two
+        # because they are one seat's concern and serialize naturally on
+        # one lock — the applier's argument for its own separate trio
+        # (a build inside the *dispatch* sweep would stall every errand)
+        # does not apply between these two.
+        ExecStart = [
+          "-${castleCli}/bin/castle build --sweep"
+          "${castleCli}/bin/castle activate --sweep"
+        ];
+        WorkingDirectory = "%h";
+      };
+      environment = {
+        # `nix` for the build, `git` for the worktree and the pin-bump
+        # commit, `systemctl` for the one privileged step, and
+        # `notify-send` for the routing tail. mkForce for the reason
+        # dispatch gives.
+        PATH = lib.mkForce "/run/current-system/sw/bin:/etc/profiles/per-user/%u/bin:%h/.nix-profile/bin";
+        CASTLE_STATE_DIR = toString cfg.stateDir;
+        CASTLE_PRIVATE_ROOT = cfg.repo.private;
+        CASTLE_ACTIVATION_TIMEOUT = toString cfg.activation.timeoutSeconds;
+        CASTLE_ACTIVATION_WINDOW = toString cfg.activation.windowSeconds;
+        CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
+        CASTLE_ACTIVATE_UNIT = "castle-activate.service";
+        CASTLE_ROLLBACK_UNIT = "castle-rollback.service";
+      }
+      # The framework checkout is passed here and NOT to the applier,
+      # and the asymmetry is deliberate in both directions: the applier
+      # refuses a mechanism-targeted change by name and never needs a
+      # path to that checkout, while the pin trigger's whole question is
+      # what that checkout's `origin/main` says. It is read, never
+      # written and never fetched.
+      // (lib.optionalAttrs (cfg.repo.mechanism != null) {
+        CASTLE_MECHANISM_ROOT = cfg.repo.mechanism;
+      })
+      // (lib.optionalAttrs (cfg.notify.command != null) {
+        CASTLE_NOTIFY_COMMAND = cfg.notify.command;
+      });
+    };
+
+    systemd.user.timers.castle-activation = lib.mkIf cfg.activation.enable {
+      description = "Backstop for the castle activation path unit";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = "!@system";
+      timerConfig = {
+        # 30s rather than apply's 15s and dispatch's 5s, and the
+        # ordering is the point: at login this is the unit most likely
+        # to start a long build and the least likely to have anything
+        # urgent to do, so it goes last.
+        OnStartupSec = "30s";
+        OnUnitActiveSec = "1min";
+      };
+    };
+
+    # ---------------------------------------------------------------
+    # The privileged half. Two units, two fixed commands, no arguments
+    # from anywhere (docs/tasks/0048-activation.md §H).
+    # ---------------------------------------------------------------
+    systemd.services.castle-activate = lib.mkIf cfg.activation.enable {
+      description = "Switch this machine to its configured system configuration";
+      # No wantedBy anywhere: this runs when, and only when, a resident's
+      # session starts it through the polkit rule below. A unit pulled
+      # into a target would switch this machine at boot on its own,
+      # which is the standing authority this task explicitly does not
+      # grant.
+      serviceConfig = {
+        Type = "oneshot";
+        # Snapshot this generation's window context to a tmpfs path
+        # before switching to a possibly-different one — see
+        # `activationWindowSnapshot`'s comment.
+        ExecStartPre = "${pkgs.coreutils}/bin/install -m0644 ${activationWindowSnapshot} /run/castle-activation-window.env";
+        # `nixos-rebuild switch --flake`, and nothing configurable
+        # beyond the flakeref this module already knows. This line IS
+        # the grant: a resident can read it in /etc/systemd/system and
+        # see the whole of what they gave away.
+        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild switch --flake ${cfg.repo.private}#${config.networking.hostName}";
+        # Arming the window from inside the unit that opened it, rather
+        # than from the resident's session, so the deadline exists even
+        # if that session dies in the same instant the switch lands —
+        # which is one of the failure modes the window is for.
+        ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block castle-activation-window.timer";
+        Environment = [ "PATH=/run/current-system/sw/bin" ];
+      };
+    };
+
+    systemd.services.castle-rollback = lib.mkIf cfg.activation.enable {
+      description = "Roll this machine back to its previous generation";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild switch --rollback";
+        Environment = [ "PATH=/run/current-system/sw/bin" ];
+      };
+    };
+
+    systemd.timers.castle-activation-window = lib.mkIf cfg.activation.enable {
+      description = "The health window a switch has to be confirmed within";
+      # Started by castle-activate.service, never wanted by a target:
+      # a window that opened at boot would roll a machine back for not
+      # confirming something it never did.
+      timerConfig = {
+        # Relative to when this timer is activated, which is the moment
+        # the switch was asked for.
+        OnActiveSec = "${toString cfg.activation.windowSeconds}s";
+        Unit = "castle-activation-window.service";
+        # One shot: the service it fires either finds a confirmation or
+        # rolls back, and either way the window is closed for good.
+        RemainAfterElapse = false;
+      };
+    };
+
+    systemd.services.castle-activation-window = lib.mkIf cfg.activation.enable {
+      description = "Close the health window: confirm, or roll back";
+      serviceConfig = {
+        Type = "oneshot";
+        # **The only `castle` invocation on this machine that runs as
+        # root**, and it is root because what it may have to do is roll
+        # back. It writes records into the resident's journal and hands
+        # each one back to that journal's owner immediately (agent/castle's
+        # `_chown_to_journal_owner`), so a window that closed while
+        # nobody was logged in does not leave root-owned files in a
+        # git-tracked state repository.
+        ExecStart = "${castleCli}/bin/castle activate --close-window";
+        Environment = [
+          "PATH=/run/current-system/sw/bin"
+          # Notifications off on this one unit, and it is the option's
+          # own documented spelling for it rather than an omission: a
+          # notification waiter spawned by root from a system unit has
+          # no session bus to talk to and no window to open. The record
+          # is durable either way, and the resident's own sweep — which
+          # routes on every tick — is what announces it, from a session
+          # that can.
+          "CASTLE_NOTIFY_COMMAND="
+        ];
+        # Two files, in this order: systemd merges `EnvironmentFile`
+        # entries in list order, a later one overriding an earlier one
+        # for the same name. The first is this *generation's* own
+        # `CASTLE_STATE_DIR`/`CASTLE_ACTIVATION_WINDOW`/`CASTLE_ROLLBACK_UNIT`
+        # — the ordinary case, and what applies when nothing about them
+        # changed. The second is `castle-activate.service`'s own
+        # snapshot of whatever generation actually opened this window,
+        # taken before it switched away from itself; it overrides the
+        # first when the switch changed one of these settings, which is
+        # the case this pair of files exists for (see
+        # `activationWindowSnapshot`'s comment). The leading `-`
+        # tolerates the runtime file being absent, which is the
+        # ordinary case for the first activation this mechanism ever
+        # runs.
+        EnvironmentFile = [
+          activationWindowSnapshot
+          "-/run/castle-activation-window.env"
+        ];
+      };
+    };
+
+    # The grant itself. `org.freedesktop.systemd1.manage-units` scoped
+    # to two unit names and one user, in polkit's own rule language,
+    # which is what makes it reviewable as a rule rather than as a
+    # program's argument handling.
+    #
+    # **Read `action.lookup("unit")` and not `action.lookup("verb")`
+    # alone.** systemd puts the unit name in the action's `unit`
+    # detail; a rule that checked only the action id would grant this
+    # user start/stop/restart over *every* unit on the machine, which
+    # is the widening this whole design exists to avoid.
+    #
+    # `security.polkit.enable` is turned on here rather than assumed:
+    # it defaults false in nixpkgs, and a rule installed into a polkit
+    # that is not running is a grant that silently does not exist —
+    # which surfaces as an activation that always fails, a long way
+    # from its cause.
+    security.polkit = lib.mkIf cfg.activation.enable {
+      enable = true;
+      extraConfig = ''
+        // Castle Turing: the activation grant (docs/tasks/0048-activation.md).
+        // Scope: starting exactly two units, for exactly one user.
+        polkit.addRule(function(action, subject) {
+          if (action.id != "org.freedesktop.systemd1.manage-units") {
+            return polkit.Result.NOT_HANDLED;
+          }
+          if (subject.user != "${toString cfg.activation.user}") {
+            return polkit.Result.NOT_HANDLED;
+          }
+          var unit = action.lookup("unit");
+          if (unit == "castle-activate.service" || unit == "castle-rollback.service") {
+            return polkit.Result.YES;
+          }
+          return polkit.Result.NOT_HANDLED;
+        });
+      '';
+    };
+
     # /code-review caught this on the branch that introduced the switch
     # to sessionVariables above: nixos/modules/config/system-
     # environment.nix's own pamVariable writes `NAME   DEFAULT="value"`
@@ -1208,6 +1626,74 @@ in
           second attempt. Set castle.agent.repo.private to the absolute
           path of your own configuration checkout before turning this
           on.
+        '';
+      }
+      {
+        # docs/tasks/0048-activation.md §K, mirroring the apply
+        # assertion above it and for a sharper version of its reason:
+        # an activation writes a durable record of a change to the
+        # running machine, and it is the record a rollback decision is
+        # read out of.
+        assertion = !cfg.activation.enable || cfg.stateDir != null;
+        message = ''
+          castle.agent.activation.enable is true but castle.agent.stateDir
+          is unset. Switching this machine writes a durable record of
+          what it did — including which generation it switched to, which
+          is what a rollback is expressed against. That record must land
+          in the journal you chose, not in a per-user fallback
+          (~/.local/state/castle) that nothing backs up. See
+          docs/private-layer.md's "The agent's state".
+        '';
+      }
+      {
+        # The privileged unit's ExecStart interpolates this path
+        # directly, so an unset value would produce
+        # `nixos-rebuild switch --flake #<host>`, which is not a
+        # flakeref. Asserted at eval time rather than left to fail on a
+        # live host as a switch that never works.
+        assertion = !cfg.activation.enable || cfg.repo.private != null;
+        message = ''
+          castle.agent.activation.enable is true but castle.agent.repo.private
+          is unset, so there is no configuration for this machine to be
+          switched to. That path is written straight into the privileged
+          unit's command line. Set castle.agent.repo.private to the
+          absolute path of your own configuration checkout before
+          turning this on.
+        '';
+      }
+      {
+        # The one assertion in this module about a *person*, and it sits
+        # inside a branch the resident opted into — Principle 02
+        # consequence 2 is not violated, exactly as the apply
+        # assertions' own comment argues. Without it the polkit rule
+        # would interpolate to `subject.user != ""`, which matches
+        # nobody: a grant that silently does not exist, surfacing as an
+        # activation that always fails a long way from its cause.
+        assertion = !cfg.activation.enable || cfg.activation.user != null;
+        message = ''
+          castle.agent.activation.enable is true but castle.agent.activation.user
+          is unset, so the polkit rule this declares would name no
+          account and permit nobody. This is the one thing about
+          activation that this framework cannot guess and will not:
+          which account's session may tell this machine to switch is
+          yours to say. Set it to that user name — normally the same as
+          castle.admin.username, though deliberately a separate option.
+        '';
+      }
+      {
+        # A quote here would break the polkit rule's JavaScript string
+        # literal, and the failure mode is not a syntax error a resident
+        # would see: polkit logs a rule it could not parse and carries
+        # on, so the grant simply does not exist. Same class of defect
+        # as the PAM-format assertions above, one language over.
+        assertion = cfg.activation.user == null || !(lib.hasInfix "\"" cfg.activation.user);
+        message = ''
+          castle.agent.activation.user contains a literal `"` character,
+          which would end the string in the polkit rule this module
+          generates. polkit does not fail loudly on a rule it cannot
+          parse — it logs and carries on — so the result would be an
+          activation grant that silently does not exist. Use a user name
+          without a quote in it.
         '';
       }
       {
