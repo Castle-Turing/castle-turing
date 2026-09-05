@@ -157,11 +157,13 @@ scratch directories literally named `a` and `b` — the base bytes into
     git diff --no-index --no-prefix -- a b
 
 run with `a` and `b` as relative paths produces the patch. `--no-prefix`
-against directories named `a` and `b` is what makes the headers read
-`a/<rel>` and `b/<rel>`: the conventional form `git apply` strips with
-its default `-p1`, with no post-processing of git's output anywhere.
-Measured against a real checkout: `git apply --check` accepts it, for a
-modification and for a creation alike.
+makes git emit the paths it was given, so a modification's headers read
+`a/<rel>` and `b/<rel>` — the conventional form `git apply` strips with
+its default `-p1`, with no post-processing of git's output anywhere. A
+creation is spelled slightly differently, `--- /dev/null` under a
+`diff --git b/<rel> b/<rel>` line, because there is no `a` side to name;
+that is git's own output and `git apply` reads it under the same `-p1`.
+Measured against a real checkout: `git apply --check` accepts both.
 
 **Against the base copy, not against the checkout.** They are the same
 bytes at the moment the turn starts and can differ by the time it ends,
@@ -178,14 +180,26 @@ That is `0026`'s failure path doing its job rather than a silent revert.
 
 **Private git configuration is neutralized, and one line of it is
 load-bearing.** The generation runs with `GIT_*` stripped
-(`_git_stripped_env`), with `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM`
-pointed at `/dev/null`, with `GIT_CEILING_DIRECTORIES` set so no
-enclosing repository's config or attributes is discovered — the state
-directory is itself a git repository in the recommended layout — with
-`--no-ext-diff --no-textconv`, with `GIT_ISOLATION_ARGS`, and with
-`diff.suppressBlankEmpty`, `diff.algorithm`, `diff.context`,
-`diff.mnemonicPrefix`, `diff.noprefix` and `core.autocrlf` pinned on the
-command line. `diff.suppressBlankEmpty = true` in a resident's
+(`_git_stripped_env`), with `GIT_CONFIG_GLOBAL` at `/dev/null` and
+`GIT_CONFIG_NOSYSTEM` and `GIT_ATTR_NOSYSTEM` set, with
+`GIT_CEILING_DIRECTORIES` set to the scratch directory's **parent** so
+that no enclosing repository's config or attributes is discovered, with
+`--no-ext-diff --no-textconv --no-color`, with `GIT_ISOLATION_ARGS`, and
+with `diff.suppressBlankEmpty`, `diff.algorithm`, `diff.context`,
+`diff.mnemonicPrefix`, `diff.noprefix`, `core.autocrlf` and `color.ui`
+pinned on the command line.
+
+The ceiling being the parent rather than the directory itself is not a
+detail: git honours a ceiling entry only where it is a strict ancestor
+of where it is walking up from, so the obvious spelling stops nothing.
+The state directory is itself a git repository in the layout
+`docs/private-layer.md` recommends, and `color.ui = always` in it is
+enough to make every generated patch an ANSI-coloured file `git apply`
+refuses outright — a live errand producing a proposal nothing could ever
+apply, out of a setting with nothing to do with this framework. Found by
+the review pass on this branch, measured both ways round, and pinned in
+`generated-diff.sh` against a state repository configured exactly that
+way. `diff.suppressBlankEmpty = true` in a resident's
 `~/.gitconfig` makes git emit a blank context line as an empty line —
 **defect 2 of the finding, reproduced by the mechanism itself, out of
 private configuration.** Measured, not inferred. `git apply` forgives

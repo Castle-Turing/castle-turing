@@ -2020,11 +2020,19 @@ def _populate_edit_mirror(
             # path the index carries and the working tree does not.
             skipped_special += 1
             continue
-        if files >= EDIT_MIRROR_MAX_FILES or written >= EDIT_MIRROR_MAX_BYTES:
+        try:
+            size = source.stat().st_size
+        except OSError:
+            unreadable += 1
+            continue
+        # Measured against the file about to be copied, not against the
+        # running total alone: the other spelling lets one oversized
+        # file through in full, twice, which is exactly what the bound
+        # exists to stop.
+        if files >= EDIT_MIRROR_MAX_FILES or written + size > EDIT_MIRROR_MAX_BYTES:
             truncated = True
             break
         try:
-            size = source.stat().st_size
             base_path = base_root / rel
             base_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, base_path)
@@ -2052,6 +2060,17 @@ def _populate_edit_mirror(
             f"{unreadable} tracked file(s) in the {role} checkout could not be "
             f"copied into `{EDIT_DIR_ENV}/{role}` and were not available to change "
             "this turn."
+        )
+    if skipped_special:
+        # Symlinks, submodule gitlinks, and index entries with nothing
+        # in the working tree. Each is deliberate (see above) and each
+        # is still a file the tenant could not change, which is the same
+        # thing the two notes above report and is reported the same way.
+        notes.append(
+            f"{skipped_special} path(s) in the {role} checkout are not regular "
+            f"files — a symlink, a submodule, or an index entry with nothing on "
+            f"disk — and are not in `{EDIT_DIR_ENV}/{role}`. A change to one of "
+            "them could not have been proposed this turn."
         )
     return notes
 
@@ -2144,6 +2163,28 @@ def _generate_worker_patch(
         notes += role_notes
         if changed:
             per_role.append((role, changed))
+    # Anything the tenant wrote that is not inside a copy of a
+    # configured checkout. It cannot become part of a patch — there is
+    # no checkout for its paths to resolve against — but it is work, and
+    # every other discard on this path says so rather than letting the
+    # record report a turn that edited nothing.
+    known = {role for role, _root in roles}
+    try:
+        strays = sorted(
+            entry.name
+            for entry in (mirror_dir / "edit").iterdir()
+            if entry.name not in known
+        )
+    except OSError:
+        strays = []
+    if strays:
+        notes.append(
+            "The worker tenant wrote under "
+            + ", ".join(f"`{EDIT_DIR_ENV}/{name}`" for name in strays)
+            + ", which is not a copy of any checkout configured for this turn. "
+            "Nothing there could be proposed: a patch needs a checkout for its "
+            "paths to resolve against, and that directory names none."
+        )
     if not per_role:
         return b"", "", notes
     if len(per_role) > 1:
@@ -2228,12 +2269,23 @@ def _generate_worker_patch(
         # The environment half matters as much: the state directory is
         # itself a git repository in the layout docs/private-layer.md
         # recommends, so without a ceiling this runs inside one and
-        # reads its configuration.
+        # reads its configuration — `color.ui = always` there is enough
+        # to make every patch this produces an ANSI-coloured file git
+        # apply rejects with "No valid patches in input". Measured.
+        #
+        # **The ceiling is the PARENT, and that is not a detail.** git
+        # honours a ceiling entry only where it is a strict ancestor of
+        # the directory it is walking up from, so naming `gen_dir`
+        # itself stops nothing and the enclosing repository is found
+        # anyway. Checked with `git rev-parse --show-toplevel` under
+        # both spellings. `--no-color` and the pin below say the same
+        # thing a second way, because a guard that fails open in the one
+        # layout this is deployed under has to fail closed somewhere.
         gen_env = _git_stripped_env()
         gen_env["GIT_CONFIG_GLOBAL"] = os.devnull
         gen_env["GIT_CONFIG_NOSYSTEM"] = "1"
         gen_env["GIT_ATTR_NOSYSTEM"] = "1"
-        gen_env["GIT_CEILING_DIRECTORIES"] = str(gen_dir)
+        gen_env["GIT_CEILING_DIRECTORIES"] = str(gen_dir.parent)
         try:
             probe = subprocess.run(
                 [
@@ -2246,8 +2298,11 @@ def _generate_worker_patch(
                     "-c", "diff.context=3",
                     "-c", "diff.renames=false",
                     "-c", "core.autocrlf=false",
+                    "-c", "color.ui=false",
+                    "-c", "color.diff=false",
                     "diff",
                     "--no-index",
+                    "--no-color",
                     "--no-ext-diff",
                     "--no-textconv",
                     "--no-prefix",
@@ -6146,8 +6201,26 @@ def run_worker_turn(request: Record, *, require_resumable: bool = False) -> tupl
             mirror_roles = _mirror_roles(env)
             mirror_notes: list[str] = []
             for mirror_role, mirror_root in mirror_roles:
-                for half in ("base", "edit"):
-                    (mirror_dir / half / mirror_role).mkdir(parents=True, exist_ok=True)
+                try:
+                    for half in ("base", "edit"):
+                        (mirror_dir / half / mirror_role).mkdir(
+                            parents=True, exist_ok=True
+                        )
+                except OSError as mirror_exc:
+                    # Caught rather than allowed to escape, because an
+                    # exception here leaves `run_worker_turn` with the
+                    # claim written and no result — a dangling claim the
+                    # reaper later turns into a false `interrupted`,
+                    # which reads as "a turn was killed" when what
+                    # happened was a full disk before one started. The
+                    # note is the same degradation every other failure
+                    # in this block gets.
+                    mirror_notes.append(
+                        f"No copy of the {mirror_role} checkout could be made for "
+                        f"this turn ({mirror_exc}), so no change could be proposed "
+                        "against it."
+                    )
+                    continue
                 mirror_notes += _populate_edit_mirror(
                     mirror_role,
                     mirror_root,

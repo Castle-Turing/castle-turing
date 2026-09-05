@@ -328,6 +328,36 @@ git -C "$PRIVATE" apply --check "$PATCH10" \
   || fail "the patch generated under a hostile git configuration does not apply"
 
 # ---------------------------------------------------------------------
+log "nor from the git repository the state directory itself is"
+# ---------------------------------------------------------------------
+# The copy and the diff both live under the state directory, which
+# docs/private-layer.md recommends be a git repository of the
+# resident's own — so the generation runs INSIDE one unless something
+# stops the discovery. `color.ui = always` in that repository is enough
+# to make every patch an ANSI-coloured file, which `git apply` refuses
+# with "No valid patches in input": a live errand would produce a
+# proposal nothing could ever apply, out of a setting that has nothing
+# to do with this framework.
+#
+# Local config rather than global, deliberately: this is the layer
+# GIT_CONFIG_GLOBAL cannot reach, and the only thing that keeps it out
+# is the ceiling that stops repository discovery.
+git -C "$STATE_REPO" config color.ui always
+git -C "$STATE_REPO" config diff.suppressBlankEmpty true
+read -r _ RESULT11 <<<"$(run_turn "GENDIFF-ONELINE-delta")"
+git -C "$STATE_REPO" config --unset color.ui
+git -C "$STATE_REPO" config --unset diff.suppressBlankEmpty
+PATCH11="$(sidecar_of "$RESULT11")"
+[ -f "$PATCH11" ] || fail "the turn produced no patch at all under a coloured state repository: $(cat "$RESULT11")"
+if LC_ALL=C grep -q $'\033' "$PATCH11"; then
+  fail "the generated patch carries terminal colour escapes, so the state repository's own config decided its bytes: $(cat -A "$PATCH11")"
+fi
+grep -qx ' ' "$PATCH11" \
+  || fail "the state repository's suppressBlankEmpty reached the patch: $(cat -A "$PATCH11")"
+git -C "$PRIVATE" apply --check "$PATCH11" \
+  || fail "the patch generated inside a configured state repository does not apply: $(cat "$PATCH11")"
+
+# ---------------------------------------------------------------------
 log "the scratch directory is empty afterwards: no copy of a checkout outlives its turn"
 # ---------------------------------------------------------------------
 LEFTOVERS="$(find "$CASTLE_STATE_DIR/work" -mindepth 1 2>/dev/null || true)"
