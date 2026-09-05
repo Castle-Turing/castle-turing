@@ -26,10 +26,25 @@ comment explaining it. Its *framing* was wrong in two independent ways:
 2. The blank context line inside the hunk was written as an empty line
    rather than as a single space, which unified diff requires.
 
-Measured, not inferred: restoring the space alone still fails to parse,
-correcting the count alone still fails to parse, and with both
-corrected `git apply --check` returns 0. Git's own error was
-`corrupt patch at <file>:19`.
+Git's own error was `corrupt patch at <file>:19`.
+
+**Which of the two was fatal, measured rather than assumed** — and the
+answer corrects the finding this task was handed. Running `git apply
+--check` (git 2.55.0) over the recorded bytes and over each half-fix:
+with both defects it is a corrupt patch; with the empty line restored
+to a space and the count left wrong it is still a corrupt patch; with
+the count corrected and the empty line left as it was, **it parses**.
+`git apply` tolerates an empty line where a blank context line belongs,
+which is a documented leniency toward tools that strip trailing
+whitespace. So the miscounted header was the fatal defect and the
+context line was a deviation git happened to forgive — from `patch(1)`
+or a stricter reader it need not be forgiven, and it is not the
+canonical form docs/tasks/done/0033-byte-exact-proposal.md records
+byte for byte either way.
+
+That sharpens the argument rather than softening it. The fatal half is
+the arithmetic, and arithmetic over lines a model cannot see is exactly
+what the old contract asked for.
 
 ## Why this is a design finding rather than a bad turn
 
@@ -173,9 +188,11 @@ directory is itself a git repository in the recommended layout — with
 command line. `diff.suppressBlankEmpty = true` in a resident's
 `~/.gitconfig` makes git emit a blank context line as an empty line —
 **defect 2 of the finding, reproduced by the mechanism itself, out of
-private configuration.** Measured, not inferred. Pinning it is
-Principle 01 in one flag: the mechanism must not inherit its output
-format from the private layer.
+private configuration.** Measured, not inferred. `git apply` forgives
+that shape (see the finding above); `patch(1)` and a human reader need
+not, and a proposal whose bytes depend on whose machine generated them
+is not a mechanism. Pinning it is Principle 01 in one flag: the
+mechanism must not inherit its output format from the private layer.
 
 Binary content is refused by name rather than diffed: if either side of
 a changed path holds a NUL byte, no patch is produced and the result
@@ -337,9 +354,19 @@ Automated, and the bar is that a *generated* patch round-trips:
   disagreement between the mirror and the stamped word; a turn that
   edits nothing; and a symlink in the checkout, asserting it is not
   mirrored.
-- A regression fixture carrying the finding's two defects together,
-  asserting `git apply --check` rejects it, rejects each half-fix, and
-  accepts the patch the new mechanism generates for the same edit.
+- A regression fixture reproducing the finding's shape on invented
+  content, asserting what was measured above: both defects together are
+  a corrupt patch, the count alone left wrong is still a corrupt patch,
+  the empty context line alone is forgiven, and the corrected form
+  applies. The fixture is invented rather than the recorded bytes: those
+  are a resident's own configuration, and `CLAUDE.md`'s rule against
+  writing the private layer into this repository outranks quoting
+  evidence verbatim.
+- A machine check over every patch the suite generated, re-deriving each
+  hunk header's line counts from the hunk and refusing an empty line
+  inside one. That is the assertion that neither defect is reachable
+  from the new mechanism, rather than that these particular patches
+  happened to be right.
 - The existing suites, all of which drive this code path:
   `dispatch-test.sh`, `resume.sh`, `config-target.sh`, `approval.sh`,
   `apply.sh`, `outbox.sh`, `run.sh`, `activation.sh`, `state-layout.sh`,

@@ -185,6 +185,17 @@ jobs:
       # job for the same reason apply.sh is: real `git`, real `castle
       # work`, no Nix, zero models.
       - run: test/agent-loop/outbox.sh
+      # A proposed diff being GENERATED rather than composed
+      # (docs/tasks/0053-diffs-are-generated-not-composed.md): a tenant
+      # that edits its copy of a checkout, the patch `castle work`
+      # derives from it applying against that checkout with `git apply
+      # --check`, the copy carrying tracked files and nothing else, the
+      # shapes it refuses by name, and the regression fixture for the
+      # hand-composed patch git would not parse. In this job for
+      # apply.sh's reason: real `git`, real `castle work`, no Nix, zero
+      # models. The bar it holds is not "a record was written" but "the
+      # bytes in the journal are a patch git accepts."
+      - run: test/agent-loop/generated-diff.sh
 
       # Building the machine's own configuration and switching to it
       # (docs/tasks/0048-activation.md): both triggers and both
