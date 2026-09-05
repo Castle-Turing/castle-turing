@@ -231,10 +231,12 @@ rather than as a modification of a file that is not there. A creation
 patch applies cleanly in any checkout that does not already have the
 file, which every one of these fixtures is, and it stays as invented as
 it was — no fixture starts naming a real path and no harness starts
-applying anything. This covers `contract-worker.sh`, the
-`scripted-worker-blocking` pair (changed identically, since the whole
-point of that pair is that two differently-shaped tenants produce the
-same journal), and approval.sh's private-plus-finding tenant.
+applying anything. This covers `contract-worker.sh`, its `-detach`,
+`-straggler` and `-filer` siblings (which wrote a header-only diff and
+still stamped `private`), the `scripted-worker-blocking` pair (changed
+identically, since the whole point of that pair is that two
+differently-shaped tenants produce the same journal), and approval.sh's
+private-plus-finding tenant.
 
 Verified against git 2.5x: a creation patch whose `+++` path contains
 spaces (`docs/backlog/example-item (synthetic, harness fixture only)`)
@@ -295,4 +297,21 @@ gains:
    outside the list.
 
 The other agent-loop harnesses are the regression surface for the
-fixture change and are run unchanged.
+fixture change and are run unchanged — with one addition, in
+`dispatch-test.sh`, where the shared `contract-worker.sh` fixture's own
+happy path asserts `proposal-outcome: offered`. Without it the way this
+change rots is silent: a fixture drifts back to naming a file that is
+not there, every scenario built on it moves to the refusal branch, and
+nothing says the harness stopped exercising the path it is about. That
+is precisely how three sibling fixtures were found still doing it, and
+the assertion is cheaper than finding it that way twice.
+
+`_check_proposal_applies` also has to be **unable to raise**. It runs
+after the tenant exits and before the result is written, so at that
+instant the turn's diff exists only in memory; an `OSError` from the
+temp file — a full `TMPDIR` — would take the errand's whole output with
+it to buy a check that is only ever advisory. It degrades to
+`offered-unchecked`, which is what is true in that case. Same posture
+`_file_proposal_question` and `_file_finding` already take in the same
+tail, and for the same reason: a defect in the newest lane must not
+cost the oldest one.

@@ -295,6 +295,17 @@ grep -q '^seat: worker$' "$RESULT1_FILE" || fail "$RESULT1_FILE should carry sea
 grep -q '^provenance: requested$' "$RESULT1_FILE" || fail "$RESULT1_FILE lost the request's provenance — automatic starting must not change who wanted the work"
 grep -q "contract-worker: handled $REQ1" "$RESULT1_FILE" || fail "$RESULT1_FILE does not carry the tenant's stdout reasoning"
 grep -q 'placeholder after' "$RESULT1_FILE" || fail "$RESULT1_FILE does not carry the diff the tenant wrote to \$CASTLE_DIFF_FILE"
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md: a diff
+# that does not apply to its target checkout no longer becomes a
+# proposal question. Every tenant fixture in this directory writes a
+# deliberately synthetic diff, and the failure mode this pins is a
+# quiet one — a fixture drifts back to naming a file that is not there,
+# every scenario built on it silently moves to the refusal branch, and
+# nothing anywhere says the harness stopped exercising the path it is
+# about. This is the assertion that says so, on the fixture the whole
+# contract-worker family shares.
+grep -q '^proposal-outcome: offered$' "$RESULT1_FILE" \
+  || fail "the shared tenant fixture's diff no longer applies to the private checkout, so this harness is silently exercising the refusal branch: $(grep '^proposal-outcome:' "$RESULT1_FILE" || echo '(no proposal-outcome field at all)')"
 
 CLAIM1_FILE="$(referencing claim "$REQ1")"
 grep -q '^type: claim$' "$CLAIM1_FILE" || fail "$CLAIM1_FILE is not a claim record"

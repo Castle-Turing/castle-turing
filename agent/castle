@@ -5054,10 +5054,26 @@ def _check_proposal_applies(root: str, diff_bytes: bytes) -> tuple[str, list[str
     record is durable and leaves the machine more easily than a journal
     does (CLAUDE.md's hard rule).
     """
-    snapshot_fd, snapshot_path = tempfile.mkstemp(
-        prefix="castle-propose-check-", suffix=".patch"
-    )
+    # **Nothing in here may raise**, which is why the temp file is
+    # inside the `try` and not above it. This runs after the tenant has
+    # exited and BEFORE `_write_worker_result`, so at this instant the
+    # turn's diff exists only in memory: an OSError escaping — a full
+    # or unwritable `TMPDIR` is the realistic one — would take the
+    # errand's whole hard-won output with it, to buy a check that is
+    # only ever advisory. Every other fallible call in this tail is
+    # guarded for the same reason (`_file_proposal_question`'s catch,
+    # `_file_finding`'s catch-all), and a defect in the newest, least
+    # load-bearing lane must not cost the oldest one.
+    #
+    # `_run_git`, `_patch_paths` and `_dirty_under` never raise by
+    # contract, so what this catches is the temp-file half alone — and
+    # it degrades to exactly the value that means "nothing is known
+    # about this patch", which is the truth in that case.
+    snapshot_path = ""
     try:
+        snapshot_fd, snapshot_path = tempfile.mkstemp(
+            prefix="castle-propose-check-", suffix=".patch"
+        )
         with os.fdopen(snapshot_fd, "wb") as fh:
             fh.write(diff_bytes)
         snapshot = pathlib.Path(snapshot_path)
@@ -5121,13 +5137,25 @@ def _check_proposal_applies(root: str, diff_bytes: bytes) -> tuple[str, list[str
             detail,
             "```",
         ]
+    except OSError as exc:
+        return "offered-unchecked", [
+            "",
+            "Whether this change can be applied at all could not be established: "
+            f"the check could not be set up on this host ({exc}). It is offered to "
+            "you unchecked — nothing here says the change is bad and nothing says "
+            "it is good. If it turns out not to fit, approving it will reach a "
+            "refusal rather than a change.",
+        ]
     finally:
         # Best-effort: a leftover temp file is a cleanup nit, never a
         # correctness question. `_apply_one`'s snapshot does the same.
-        try:
-            os.unlink(snapshot_path)
-        except OSError:
-            pass
+        # Guarded on the name, because `mkstemp` itself is one of the
+        # calls the handler above exists for.
+        if snapshot_path:
+            try:
+                os.unlink(snapshot_path)
+            except OSError:
+                pass
 
 
 def _file_proposal_question(request: Record, result_id: str, target: str) -> None:
