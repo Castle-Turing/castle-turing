@@ -88,7 +88,7 @@ cat > "$work/sample.sh" <<'SAMPLE'
 printf '\n  \033[1m=== %s ===\033[0m\n\n' "$1"
 cat <<'EOF'
   The quick brown fox jumps over the lazy dog. 0123456789
-  Il1| O0o rn/m cl/d ,.;: `'" -_= {}[]()<>
+  ,.;: `'" -_= {}[]()<>
 EOF
 printf '\n  columns: %s   rows: %s\n\n' "$(tput cols)" "$(tput lines)"
 # Hold the pane open. The sweep script closes it on teardown.
