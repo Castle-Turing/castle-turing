@@ -826,8 +826,17 @@ PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$STUB_PROMPT" \
   CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out.txt" 2>&1 \
   || fail "castle-worker-claude failed on a packet larger than one argv entry (E2BIG is back): $(cat "$WORKDIR/stub-out.txt")"
-grep -q "argv was \[-p\]" "$WORKDIR/stub-out.txt" \
-  || fail "the prompt is being passed as an argument again: $(cat "$WORKDIR/stub-out.txt")"
+# argv is no longer just [-p]: since docs/tasks/0047 the tenant also
+# carries its permission grant there. What this case has always been
+# about is unchanged — the PROMPT is not in argv — so it is asserted
+# directly, against the packet's own marker, rather than by pinning the
+# whole argument list to a literal that now moves whenever the grant
+# does.
+grep -q "argv was \[-p " "$WORKDIR/stub-out.txt" \
+  || fail "the tenant no longer leads its argv with -p: $(cat "$WORKDIR/stub-out.txt")"
+if grep -qF "$REQUEST_MARKER" "$WORKDIR/stub-out.txt"; then
+  fail "the prompt is being passed as an argument again — the packet text reached argv"
+fi
 [ "$(wc -c < "$STUB_PROMPT")" -gt "$ARG_MAX_ONE" ] || fail "the tenant handed over a prompt smaller than the packet it was given — something truncated it"
 
 log "  -- and the harness's own instructions are told apart from a record that impersonates them"

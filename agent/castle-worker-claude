@@ -95,7 +95,14 @@ errand_records="$(cat)"
 #
 # The last line of this file execs `claude -p`, and that process runs
 # under Claude Code's own sandbox, which permits writes only beneath
-# the resident's home directory. `castle work` hands over three paths for
+# the resident's home directory. That boundary is really the session's
+# WORKING DIRECTORIES, and it lands on the home directory by way of the
+# dispatch unit: `castle work` passes no cwd, so the tenant inherits
+# %h. Same rule, stated with its cause — a reader who moves the working
+# directory has moved this boundary with it
+# (docs/tasks/0047-tenant-permission-allowlist.md, and the permission
+# grant at the end of this file, which declares the additions to it).
+# `castle work` hands over three paths for
 # the tenant to WRITE — the proposed diff, the checkout it targets, and
 # one finding about the framework itself
 # (docs/tasks/0042-finding-outbox.md) — and until 0039 allocated them with a bare mktemp under /tmp, which
@@ -116,6 +123,16 @@ errand_records="$(cat)"
 # write them, which is not the question. What this file can do, and no
 # other file in the repo can, is STATE the rule its own tenant runs
 # under, because it is the file that chose that tenant.
+#
+# CONSERVATIVE SINCE 0047, DELIBERATELY. The permission grant at the end
+# of this file adds the deliverables' own directory to the tenant's
+# working directories, so a state directory outside $HOME would in fact
+# be writable now, and this check refuses a layout that would work. It
+# is left as it is: what it encodes is the deployment modules/agent
+# actually configures, and loosening a guard on the strength of a
+# second mechanism added the same day is how a guard quietly stops
+# guarding. A wrong refusal here names the rule it applied and is
+# diagnosable in one reading.
 #
 # Refusing costs the errand one automatic attempt and puts the stderr
 # below into the result record, which is the honest failure and the
@@ -647,17 +664,51 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
 
    Forbidden, listed rather than left to be inferred from "read-only":
    nixos-rebuild in any form; systemctl; git commit, git add, git
-   checkout, git apply, git stash; any swaymsg invocation that is not
+   checkout, git apply, git stash, git push, git reset, git restore,
+   git clean — and, generally, any git subcommand other than the three
+   read-only shapes named in the allowed list above; any swaymsg
+   invocation that is not
    -t get_* (a bare swaymsg <command> mutates the live session);
-   gsettings set; setfont; sudo; nix eval, nix build, nix flake and
-   nixos-rebuild against either configured root (they copy the tree
-   into the world-readable store — see 1); any network access beyond
-   your own model call; and ANY WRITE UNDER EITHER CONFIGURED ROOT — including
+   gsettings set; setfont; sudo; nix eval, nix build and nix flake in
+   any form, and nixos-rebuild against either configured root — run
+   against a root they copy the tree into the world-readable store
+   (see 1), and this seat has no other use for them; any network access beyond
+   your own model call, which means curl, wget, git push and anything
+   else that reaches a remote; and ANY WRITE UNDER EITHER CONFIGURED ROOT — including
    editing a file in order to make a "git diff" show something. The
    resident's checkout is yours to read and never to modify. Your
    whole output is the reasoning on stdout, the composed diff in
    \$CASTLE_DIFF_FILE, the one word in \$CASTLE_TARGET_FILE, and at
    most one finding in \$CASTLE_FINDING_FILE (8).
+
+   THESE TWO LISTS ARE ENFORCED, NOT MERELY STATED. The harness that
+   started you hands them to your own tenant as a permission allowlist
+   and a permission denylist, so a command in the allowed list is one
+   you can actually run, and a command in the forbidden list is refused
+   by the environment before it executes rather than by your judgment
+   after it occurs to you.
+
+   WHERE THE ENFORCEMENT STOPS, said plainly rather than left for you to
+   find out. The prohibition on writing under a configured root is
+   carried by a rule of its own, and the harness drops that rule for
+   any root this turn's own deliverable files happen to sit inside,
+   saying so on its stderr when it does — a rule of that kind cannot
+   carry an exception, so the alternative would be refusing the diff
+   you are here to write. The forbidden git subcommands are not a
+   closure over git either. So there are shapes the environment will
+   let through that this contract still forbids, and in those the
+   sentence above is the only thing standing between you and a
+   resident's checkout. Read the forbidden list as binding on you
+   whether or not anything stops you.
+
+   That cuts both ways, and the second way is the one to read twice. If
+   something this contract permits comes back refused, that is a defect
+   in the harness, not a rule to route around: say so plainly on
+   stdout, quote the command and the refusal exactly, and carry on with
+   the rest of the errand. Do NOT reword the command, wrap it in
+   another program, or look for a shape that gets past the refusal. A
+   refusal you report is a one-line fix in the harness; a refusal you
+   work around is a seat whose stated boundaries mean nothing.
 
    Two traps worth naming so you do not spend a cycle rediscovering
    them. nixos-option ships on \$PATH and looks like exactly the right
@@ -683,7 +734,10 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
 
    castle record --type question --provenance requested --seat worker --refs "${CASTLE_REQUEST_ID}" --body "..."
 
-   if the castle CLI is on \$PATH in this environment — always with
+   if the castle CLI is on \$PATH in this environment. That exact
+   command shape is one your environment permits, so if it is refused,
+   report the refusal verbatim on stdout as 4 says rather than
+   rewording it until something runs — always with
    --refs "${CASTLE_REQUEST_ID}" naming this errand's own request, so
    whatever picks the question up later can find its way back to this
    errand. Add --blocking only if the errand genuinely cannot proceed
@@ -950,6 +1004,300 @@ does not.
 ${packet_nonce} END
 PROMPT
 
+# THE PERMISSION GRANT IS THIS CONTRACT'S ENFORCEMENT
+# (docs/tasks/0047-tenant-permission-allowlist.md).
+#
+# Everything above tells the tenant what it may run and what it must
+# never run. Until this block existed, both halves were exhortation:
+# prose in a prompt, obeyed by a model that felt like obeying it, with
+# the harness holding no opinion either way. The lists below are the
+# same two lists, said again in the one language the environment
+# enforces — so the forbidden-commands prose stops being advice the
+# tenant must choose to follow and becomes a wall it cannot reach.
+# Same move as the nonce fences ("trust this instruction, not that
+# quotation") and 0039's path check ("the deliverables must be
+# writable"): a rule that can be made structural should be.
+#
+# THE HALF THAT WAS SIMPLY BROKEN. `exec claude -p` carried no
+# permission configuration at all, and headless Claude Code refuses any
+# Bash call no rule allows — there is nobody to raise a prompt to. So
+# the `castle record` invocation 5 instructs a tenant to file its
+# question with had never once been permitted to run, and neither had
+# the read-only git lines in 4. A live worker tenant could not ask its
+# resident a question; the question, answer and resume machinery had
+# never run end to end against a real tenant until a resident completed
+# one by hand on 2026-09-03. The scripted tenants in test/agent-loop
+# are shell scripts that ask nobody's permission, so every assertion
+# about the question lane passed while the shipped tenant could not use
+# it.
+#
+# FLAGS, NOT A SETTINGS FILE, and the reason is in `claude --help`
+# under -p: "Settings files that fail validation are silently ignored
+# in this mode." A settings file is a thing that can stop working
+# without saying so, and what it would stop doing is enforcing this
+# contract. A bad flag fails loudly at startup, costs the errand one
+# attempt, and puts the reason in the result record — the same honest
+# failure 0039 chose over a silent empty channel.
+#
+# WHY THERE IS A DENY LIST AS WELL AS AN ALLOW LIST. This tenant runs
+# as the resident and loads the resident's own ~/.claude/settings.json,
+# which is theirs to write and routinely allows things this contract
+# forbids — git commit, git push, web access. A deny rule beats an
+# allow rule at every level, including one in a settings file, so these
+# are the lines that stop a resident's ordinary personal configuration
+# from quietly handing this seat permission to deploy. They grant
+# nothing; they only refuse.
+#
+# EVERY SHAPE BELOW WAS CHECKED AGAINST THE INSTALLED `claude`, not
+# recalled. Four of those checks are load-bearing and non-obvious:
+# writes are matched against `Edit(path)` rules and never `Write(path)`
+# (a Write path rule is accepted, never consulted, and warned about);
+# an absolute path in such a rule takes a `//` anchor, because a single
+# leading slash anchors at the settings source instead of the
+# filesystem root; an ALLOW rule may not carry a wildcard before the
+# subcommand, which is why each root is written into the git rules
+# rather than starred out; and reads and writes are confined to the
+# session's working directories independently of any rule, which is why
+# --add-dir is here at all.
+permission_allow=(
+  # 5, the whole point: filing a question instead of guessing. Pinned
+  # to the `record` subcommand, so it grants nothing else the CLI can
+  # do — `castle apply` and `castle work` stay refused, checked.
+  "Bash(castle record:*)"
+  # 4, read-only by IPC type. Enumerated rather than written as
+  # `swaymsg -t:*`, which would also cover `send_tick` and a blocking
+  # `subscribe`. The inverse — allowing swaymsg broadly and denying the
+  # mutating forms — is not expressible: a deny rule cannot carry
+  # exceptions, so a deny on `swaymsg *` would kill these five too.
+  "Bash(swaymsg -t get_config:*)"
+  "Bash(swaymsg -t get_outputs:*)"
+  "Bash(swaymsg -t get_inputs:*)"
+  "Bash(swaymsg -t get_seats:*)"
+  "Bash(swaymsg -t get_version:*)"
+  # 4, the home-manager-generated files and the framebuffer geometry.
+  # Broader than the files 4 names, because a rule matches a command
+  # prefix and the paths are arguments: pinning them exactly would
+  # refuse `cat a b`, refuse a quoted path, and refuse the same path
+  # written through $HOME — spurious denials of exactly the kind this
+  # block exists to remove. Both commands are read-only and confined to
+  # the working directories below, and 4's last bullet already allows
+  # reading anything under a configured root.
+  #
+  # `cat` is redundant today: it is in Claude Code's built-in read-only
+  # set and runs without a rule. It is granted anyway because that set
+  # is a vendor's internal list, documented as not configurable and not
+  # versioned here — a contract quietly depending on it is the shape of
+  # defect this block exists to remove. `readlink` is not in that set.
+  "Bash(cat:*)"
+  "Bash(readlink -f:*)"
+  "Bash(fc-list:*)"
+  "Bash(fc-match:*)"
+)
+
+# 4's read-only git, one rule per subcommand per configured root.
+#
+# The root has to be written into the rule. An allow rule matches
+# everything before its first wildcard literally, and Claude Code warns
+# about and ignores an allow rule whose wildcard precedes the
+# subcommand — so `git --no-optional-locks -C * status:*`, which is the
+# rule anyone would reach for first, matches nothing at all. Checked.
+# Pinning the subcommand is what makes the grant read-only: no
+# `commit`, no `add`, no `apply`, whatever flags precede them.
+#
+# The cost is that a root needing shell quoting will not match, and
+# that diagnostic gets refused. 4 already tells the tenant a failed
+# diagnostic is not a reason to stop the errand, so that is a degraded
+# turn rather than a lost one.
+for grant_root in "${CASTLE_MECHANISM_ROOT:-}" "$CASTLE_PRIVATE_ROOT"; do
+  [ -n "$grant_root" ] || continue
+  for grant_subcommand in status log diff; do
+    permission_allow+=("Bash(git --no-optional-locks -C ${grant_root} ${grant_subcommand}:*)")
+  done
+done
+
+# 2 and 8's channels: the three files the tenant writes, granted by
+# name.
+#
+# THIS IS THE LINE THAT STOPS A PUBLIC MECHANISM STANDING ON A PRIVATE
+# FILE. The Write tool is denied by default in a headless session
+# (checked), so until now the tenant's ability to write $CASTLE_DIFF_FILE
+# at all came from whatever the resident happened to have in their own
+# ~/.claude/settings.json. On a host whose resident writes a stricter
+# one, every errand this framework produces would have diagnosed
+# correctly and delivered nothing — the 0039 failure again, from a
+# different cause. The grant is Principle 01: the mechanism grants its
+# own channels rather than inheriting them from private configuration.
+#
+# `Edit(...)`, not `Write(...)`: file writes are matched against Edit
+# and Read rules only, and a Write path rule is accepted, never
+# consulted, and warned about at startup. Checked both ways round.
+#
+# Both the path as handed over and its resolved form are granted when
+# they differ, because a symlinked state directory is checked against
+# the target it resolves to.
+for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+  deliverable_path="${!deliverable_var}"
+  permission_allow+=("Edit(/${deliverable_path})")
+  deliverable_resolved="$(castle_resolve_path "$deliverable_path")"
+  if [ "$deliverable_resolved" != "$deliverable_path" ]; then
+    permission_allow+=("Edit(/${deliverable_resolved})")
+  fi
+done
+
+# 4's forbidden list, said in rules. Each line here has a line up there
+# behind it; nothing is denied that the prose does not forbid, because
+# a wall the contract never mentions is the same defect wearing the
+# other hat.
+#
+# Three shapes per mutating git subcommand, and each one covers a case
+# the others miss. `Bash(git commit:*)` covers `git commit -am x` and
+# bare `git commit`; it does not cover `git -C /root commit -am x`,
+# where a flag precedes the subcommand. A deny rule, unlike an allow
+# rule, may carry a wildcard before the subcommand, so
+# `Bash(git * commit *)` catches that — checked, refused by name. But a
+# trailing wildcard only matches the bare command when it is the rule's
+# ONLY wildcard, so that second shape misses an argument-less
+# `git -C /root stash`, and the third shape exists for exactly that.
+#
+# THIS LIST IS NOT A CLOSURE OVER GIT and cannot be: the subcommands
+# are open-ended, and a deny list that tried to name all of them would
+# quietly stop being true. What bounds git in this seat is the ALLOW
+# side — only the three read-only shapes above are granted, so every
+# other subcommand is refused by default. These rules exist for the one
+# case the allow side cannot reach: a resident settings file that
+# allows something broader.
+#
+# `Bash(nix eval:*)` and its siblings carry a space, so none of them
+# reaches `nixos-option` — which 4 names as a trap to avoid, not a
+# forbidden command.
+permission_deny=(
+  "Bash(nixos-rebuild:*)"
+  "Bash(systemctl:*)"
+  "Bash(sudo:*)"
+  # The three subcommands 4 names, not a blanket `nix *`. A rule
+  # denying more than the prose forbids is the same defect as prose
+  # forbidding more than the rules deny: a tenant meets a refusal its
+  # contract does not explain, and the honest thing it then does is
+  # file a finding about a harness defect that is not one.
+  "Bash(nix eval:*)"
+  "Bash(nix build:*)"
+  "Bash(nix flake:*)"
+  "Bash(gsettings set:*)"
+  "Bash(setfont:*)"
+  # 4's "any network access beyond your own model call", named as
+  # commands so a rule can carry it. A bare tool name in a deny list
+  # removes the tool from the tenant's context entirely.
+  "Bash(curl:*)"
+  "Bash(wget:*)"
+  "WebFetch"
+  "WebSearch"
+)
+for git_mutation in commit add checkout apply stash push reset restore clean; do
+  permission_deny+=("Bash(git ${git_mutation}:*)")
+  permission_deny+=("Bash(git * ${git_mutation} *)")
+  permission_deny+=("Bash(git * ${git_mutation})")
+done
+
+# 4's central prohibition — ANY WRITE UNDER EITHER CONFIGURED ROOT —
+# said as a rule rather than left as the one forbidden item with
+# nothing behind it. Both roots are added to the tenant's working
+# directories below so it can READ them, and a resident settings file
+# that allows Edit or Write broadly would otherwise turn that read
+# access into write access over the resident's own checkout. A deny
+# rule beats every allow rule at every level, so this closes it.
+#
+# SKIPPED FOR A ROOT THAT CONTAINS A DELIVERABLE, and that guard is
+# load-bearing: a deny rule cannot carry exceptions, so if a resident
+# points castle.agent.stateDir inside a configured root, denying writes
+# under that root would deny the three channels this turn exists to
+# write. The honest trade is to leave that root's rule off and say so
+# in the errand rather than silently produce another empty channel —
+# the 0039 failure this file is built around.
+for grant_root in "${CASTLE_MECHANISM_ROOT:-}" "$CASTLE_PRIVATE_ROOT"; do
+  [ -n "$grant_root" ] || continue
+  grant_root_resolved="$(castle_resolve_path "$grant_root")"
+  grant_root_holds_deliverable=""
+  for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+    case "$(castle_resolve_path "${!deliverable_var}")/" in
+      "$grant_root_resolved"/*) grant_root_holds_deliverable=yes ;;
+    esac
+  done
+  if [ -n "$grant_root_holds_deliverable" ]; then
+    echo "castle-worker-claude: not denying writes under ${grant_root}, because castle work put a deliverable inside it. A deny rule cannot carry exceptions, so the rule that enforces \"no writes under a configured root\" would also refuse the diff this turn is here to write. Point castle.agent.stateDir (modules/agent) outside the configured roots to get that rule back (docs/tasks/0047-tenant-permission-allowlist.md)." >&2
+    continue
+  fi
+  permission_deny+=("Edit(/${grant_root_resolved}/**)")
+  if [ "$grant_root_resolved" != "$grant_root" ]; then
+    permission_deny+=("Edit(/${grant_root}/**)")
+  fi
+done
+
+# The directories the tenant may read in, which is a SEPARATE check
+# from the rules above and cannot be reached by them: a headless
+# session confines every file read and every file write to its working
+# directories, so `cat /sys/class/graphics/fb0/virtual_size` is refused
+# with `Bash(cat:*)` allowed and permitted once the directory is added.
+# Checked, both halves.
+#
+# Only additions are declared here. The BASE working directory is
+# whatever `castle work` was started in — %h under the dispatch unit —
+# because that call passes no cwd, which is the accident this list sits
+# on top of rather than replaces
+# (docs/backlog/worker-tenant-working-directory-is-inherited.md).
+#
+# A directory that does not exist is accepted silently, so there is no
+# existence guard here: the guard would buy nothing and could itself be
+# wrong.
+permission_dirs=(
+  "$HOME/.config"
+  /etc/pam
+  /sys/class/graphics/fb0
+  "$CASTLE_PRIVATE_ROOT"
+)
+if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
+  permission_dirs+=("$CASTLE_MECHANISM_ROOT")
+fi
+# All three deliverables usually live in one directory, and repeating
+# it three times in argv would be noise a reader has to check is not a
+# mistake.
+# Both the directory as handed over and its resolved form, for the same
+# reason the Edit rules grant both: the working-directory check is
+# applied to the path a write RESOLVES to, so a symlinked state
+# directory that passed the rule check would fail this one — and fail
+# it silently, losing every deliverable, which is 0039 over again from
+# a third cause.
+for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+  deliverable_dir="$(dirname -- "${!deliverable_var}")"
+  for deliverable_candidate in "$deliverable_dir" "$(castle_resolve_path "$deliverable_dir")"; do
+    for permission_dir in "${permission_dirs[@]}"; do
+      if [ "$permission_dir" = "$deliverable_candidate" ]; then
+        deliverable_candidate=""
+        break
+      fi
+    done
+    if [ -n "$deliverable_candidate" ]; then
+      permission_dirs+=("$deliverable_candidate")
+    fi
+  done
+done
+
+# Assembled as an array so the exec below stays ONE LINE. That is not
+# cosmetic: two harness tests render this file's prompt by replacing
+# `^exec claude.*` with a `cat`, and a backslash-continued invocation
+# would leave its continuation lines behind as stray commands.
+#
+# --permission-mode manual is passed explicitly even though it appears
+# to be the default in print mode. The grant should not change meaning
+# because a default did.
+#
+# --add-dir goes last. It and the two rule flags are variadic: each
+# consumes arguments until the next flag, and nothing follows the last
+# one because the prompt arrives on stdin, not in argv.
+claude_argv=(-p --permission-mode manual)
+claude_argv+=(--allowedTools "${permission_allow[@]}")
+claude_argv+=(--disallowedTools "${permission_deny[@]}")
+claude_argv+=(--add-dir "${permission_dirs[@]}")
+
 # Open the prompt, unlink it, and hand it over as stdin — never as an
 # argv string (docs/tasks/0023, pass-4 review finding 1).
 #
@@ -995,4 +1343,4 @@ PROMPT
 exec 3< "$prompt_file"
 rm -f "$prompt_file"
 
-exec claude -p <&3 3<&-
+exec claude "${claude_argv[@]}" <&3 3<&-

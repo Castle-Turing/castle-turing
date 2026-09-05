@@ -988,6 +988,219 @@ PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_
   || fail "castle-worker-claude refused paths that are inside the sandbox it declares: $(cat "$WORKDIR/sandbox-accepted.out")"
 [ -f "$CLAUDE_WITNESS" ] || fail "the tenant did not reach its model call with both deliverable paths inside the sandbox"
 
+# ---------------------------------------------------------------------
+log "the reference tenant grants its own permission allowlist, so the contract is enforced and not merely stated"
+# ---------------------------------------------------------------------
+# docs/tasks/0047-tenant-permission-allowlist.md. The contract's 4 and 5
+# tell the tenant which commands it may run; until 0047 the harness
+# passed no permission configuration at all, and a headless claude
+# refuses any Bash call no rule allows. So the `castle record`
+# invocation 5 instructs a tenant to file its question with had never
+# been permitted to run, and a live worker could not ask its resident a
+# question. Nothing here caught it, because every scripted tenant in
+# this directory is a shell script that asks nobody's permission.
+#
+# WHAT THIS CASE CAN AND CANNOT PROVE. It drives the real tenant with a
+# stub `claude` that records its argv, so it proves the grant is
+# RENDERED: the flags are present, the rules name the contract's own
+# commands, the deliverables are granted as Edit rules rather than the
+# Write rules Claude Code accepts and never consults. Whether a real
+# headless claude then honours them is not observable from here at any
+# price — it needs a model call and a sandbox, and the scripted tenants
+# have neither. That half is a live errand on the reference host, named
+# in 0047's verification plan.
+GRANT_STUBDIR="$WORKDIR/grant-stub"
+mkdir -p "$GRANT_STUBDIR"
+cat > "$GRANT_STUBDIR/claude" <<'GRANT_STUB'
+#!/usr/bin/env bash
+# Swallows the prompt on stdin and writes argv, one argument per line,
+# so an assertion can match a whole rule without quoting games.
+cat > /dev/null
+printf '%s\n' "$@" > "$CLAUDE_ARGV_OUT"
+GRANT_STUB
+chmod +x "$GRANT_STUBDIR/claude"
+
+GRANT_HOME="$WORKDIR/grant-home"
+GRANT_STATE="$GRANT_HOME/state"
+GRANT_MECH="$GRANT_HOME/mechanism"
+GRANT_PRIV="$GRANT_HOME/private"
+mkdir -p "$GRANT_STATE" "$GRANT_MECH" "$GRANT_PRIV"
+GRANT_ARGV="$WORKDIR/grant-argv.txt"
+PATH="$GRANT_STUBDIR:$PATH" HOME="$GRANT_HOME" CLAUDE_ARGV_OUT="$GRANT_ARGV" \
+  CASTLE_REQUEST_ID=probe \
+  CASTLE_DIFF_FILE="$GRANT_STATE/diff" CASTLE_TARGET_FILE="$GRANT_STATE/target" \
+  CASTLE_FINDING_FILE="$GRANT_STATE/finding" \
+  CASTLE_MECHANISM_ROOT="$GRANT_MECH" CASTLE_PRIVATE_ROOT="$GRANT_PRIV" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
+  > "$WORKDIR/grant-run.out" 2>&1 \
+  || fail "castle-worker-claude failed while rendering its permission grant: $(cat "$WORKDIR/grant-run.out")"
+[ -f "$GRANT_ARGV" ] || fail "the tenant never reached its model call, so no grant was rendered"
+
+# The three sections of argv, split apart so an allow rule cannot be
+# mistaken for a deny rule by a grep over the whole list — which is the
+# one mistake that would make this whole case assert the opposite of
+# what it says.
+grant_section() {
+  awk -v want="$1" '
+    /^--/ { section = $0; next }
+    section == want { print }
+  ' "$GRANT_ARGV"
+}
+GRANT_ALLOW="$WORKDIR/grant-allow.txt"
+GRANT_DENY="$WORKDIR/grant-deny.txt"
+GRANT_DIRS="$WORKDIR/grant-dirs.txt"
+grant_section --allowedTools > "$GRANT_ALLOW"
+grant_section --disallowedTools > "$GRANT_DENY"
+grant_section --add-dir > "$GRANT_DIRS"
+
+head -1 "$GRANT_ARGV" | grep -qx -- '-p' \
+  || fail "the tenant no longer leads its argv with -p: $(cat "$GRANT_ARGV")"
+grep -qx -- '--permission-mode' "$GRANT_ARGV" \
+  || fail "the tenant passes no explicit permission mode, so its grant means whatever a vendor default says this week"
+grep -qx 'manual' "$GRANT_ARGV" \
+  || fail "the permission mode is not manual: $(cat "$GRANT_ARGV")"
+
+log "  -- the command 5 tells a tenant to file its question with is granted"
+grep -qxF 'Bash(castle record:*)' "$GRANT_ALLOW" \
+  || fail "the castle record invocation the contract's 5 instructs a tenant to use is not in the allowlist: $(cat "$GRANT_ALLOW")"
+# Pinned to the subcommand: a grant that reached the rest of the CLI
+# would hand a worker seat `castle apply`, which approves and applies a
+# diff without a resident.
+if grep -qxF 'Bash(castle:*)' "$GRANT_ALLOW"; then
+  fail "the allowlist grants the whole castle CLI, not just record — a worker seat could apply its own proposal"
+fi
+
+log "  -- and so is the read-only diagnostic set 4 names, per configured root"
+for grant_expected in \
+  'Bash(swaymsg -t get_config:*)' \
+  'Bash(swaymsg -t get_outputs:*)' \
+  'Bash(swaymsg -t get_inputs:*)' \
+  'Bash(swaymsg -t get_seats:*)' \
+  'Bash(swaymsg -t get_version:*)' \
+  'Bash(cat:*)' \
+  'Bash(readlink -f:*)' \
+  'Bash(fc-list:*)' \
+  'Bash(fc-match:*)' \
+  "Bash(git --no-optional-locks -C $GRANT_MECH status:*)" \
+  "Bash(git --no-optional-locks -C $GRANT_MECH log:*)" \
+  "Bash(git --no-optional-locks -C $GRANT_MECH diff:*)" \
+  "Bash(git --no-optional-locks -C $GRANT_PRIV status:*)" \
+  "Bash(git --no-optional-locks -C $GRANT_PRIV log:*)" \
+  "Bash(git --no-optional-locks -C $GRANT_PRIV diff:*)" \
+  ; do
+  grep -qxF "$grant_expected" "$GRANT_ALLOW" \
+    || fail "the contract permits $grant_expected but the harness does not grant it: $(cat "$GRANT_ALLOW")"
+done
+# The roots are written into the git rules rather than wildcarded
+# because an allow rule whose wildcard precedes the subcommand is
+# ignored — so a rule of that shape reaching the allowlist means the
+# git diagnostics are silently dead again.
+if grep -q 'Bash(git .*-C \*' "$GRANT_ALLOW"; then
+  fail "a git allow rule wildcards the root before the subcommand, a shape Claude Code ignores"
+fi
+
+log "  -- the three deliverable channels are granted as Edit rules, which are the ones that are consulted"
+for grant_deliverable in "$GRANT_STATE/diff" "$GRANT_STATE/target" "$GRANT_STATE/finding"; do
+  grep -qxF "Edit(/$grant_deliverable)" "$GRANT_ALLOW" \
+    || fail "the tenant is not granted the deliverable path $grant_deliverable, so it can write nothing unless the resident's own settings happen to allow it"
+done
+# A Write path rule is accepted, never consulted, and warned about at
+# startup: writing one here would look like a grant and be none.
+if grep -q '^Write(' "$GRANT_ALLOW"; then
+  fail "the grant uses a Write path rule, which Claude Code accepts and never consults — the deliverables would stay unwritable"
+fi
+
+log "  -- and 4's forbidden list is denied by the environment rather than left to the tenant's judgment"
+for grant_forbidden in \
+  'Bash(nixos-rebuild:*)' \
+  'Bash(systemctl:*)' \
+  'Bash(sudo:*)' \
+  'Bash(nix eval:*)' \
+  'Bash(nix build:*)' \
+  'Bash(nix flake:*)' \
+  'Bash(gsettings set:*)' \
+  'Bash(setfont:*)' \
+  'Bash(curl:*)' \
+  'Bash(wget:*)' \
+  'WebFetch' \
+  'WebSearch' \
+  ; do
+  grep -qxF "$grant_forbidden" "$GRANT_DENY" \
+    || fail "the contract forbids $grant_forbidden but nothing stops a tenant running it: $(cat "$GRANT_DENY")"
+done
+# Two shapes each: the bare form, and the form that catches a flag
+# before the subcommand, which is how a tenant told to use
+# `git --no-optional-locks -C <root> ...` would reach a commit.
+for grant_mutation in commit add checkout apply stash push reset restore clean; do
+  grep -qxF "Bash(git $grant_mutation:*)" "$GRANT_DENY" \
+    || fail "git $grant_mutation is not denied: $(cat "$GRANT_DENY")"
+  grep -qxF "Bash(git * $grant_mutation *)" "$GRANT_DENY" \
+    || fail "git $grant_mutation is denied only in its bare form, so git -C <root> $grant_mutation still runs: $(cat "$GRANT_DENY")"
+  # A trailing wildcard matches the bare command only when it is the
+  # rule's only wildcard, so the shape above misses an argument-less
+  # `git -C <root> stash`. This is the rule that catches it.
+  grep -qxF "Bash(git * $grant_mutation)" "$GRANT_DENY" \
+    || fail "an argument-less git -C <root> $grant_mutation is denied by nothing: $(cat "$GRANT_DENY")"
+done
+
+log "  -- and 4's central prohibition, no write under a configured root, is a rule rather than the one item with nothing behind it"
+# Both roots are added to the tenant's working directories so it can
+# read them; without this deny, a resident settings file allowing Edit
+# broadly would turn that into write access over the resident's own
+# checkout.
+for grant_root in "$GRANT_MECH" "$GRANT_PRIV"; do
+  grep -qxF "Edit(/$grant_root/**)" "$GRANT_DENY" \
+    || fail "writes under $grant_root are forbidden by the contract and denied by nothing: $(cat "$GRANT_DENY")"
+done
+
+log "  -- unless the deliverables are inside that root, where the rule would refuse the diff the turn exists to write"
+# A deny rule cannot carry exceptions. The honest behaviour is to drop
+# the rule for that root and say so on stderr, rather than enforce it
+# and hand back another empty channel — which is the failure 0039 is
+# about.
+GRANT_ARGV_INSIDE="$WORKDIR/grant-argv-inside.txt"
+mkdir -p "$GRANT_PRIV/state"
+PATH="$GRANT_STUBDIR:$PATH" HOME="$GRANT_HOME" CLAUDE_ARGV_OUT="$GRANT_ARGV_INSIDE" \
+  CASTLE_REQUEST_ID=probe \
+  CASTLE_DIFF_FILE="$GRANT_PRIV/state/diff" CASTLE_TARGET_FILE="$GRANT_PRIV/state/target" \
+  CASTLE_FINDING_FILE="$GRANT_PRIV/state/finding" \
+  CASTLE_MECHANISM_ROOT="$GRANT_MECH" CASTLE_PRIVATE_ROOT="$GRANT_PRIV" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
+  > "$WORKDIR/grant-inside.out" 2>&1 \
+  || fail "castle-worker-claude failed with a deliverable inside a configured root: $(cat "$WORKDIR/grant-inside.out")"
+if grep -qxF "Edit(/$GRANT_PRIV/**)" "$GRANT_ARGV_INSIDE"; then
+  fail "the no-writes-under-a-root rule was kept for the root holding this turn's deliverables, so the diff channel is denied"
+fi
+grep -qF 'castle.agent.stateDir' "$WORKDIR/grant-inside.out" \
+  || fail "the harness dropped a rule and said nothing a resident could act on: $(cat "$WORKDIR/grant-inside.out")"
+grep -qxF "Edit(/$GRANT_MECH/**)" "$GRANT_ARGV_INSIDE" \
+  || fail "dropping the rule for one root dropped it for the other as well: $(cat "$GRANT_ARGV_INSIDE")"
+# Deny beats allow at every level, so a mutation appearing in both
+# lists would still be refused — but it would mean the allowlist had
+# stopped describing the contract, which is what this file asserts.
+# Anchored on the subcommand position, not on the word anywhere in the
+# line: the git rules carry a configured root verbatim, and a resident
+# whose checkout is named ~/commit-notes would otherwise fail this
+# suite against a perfectly correct grant.
+if grep -qE '^Bash\(git .*(commit|add|apply|checkout|stash|push|reset|restore|clean):\*\)$' "$GRANT_ALLOW"; then
+  fail "the allowlist grants a mutating git subcommand — the grant no longer matches the contract it enforces"
+fi
+
+log "  -- and the directories 4's reads live in are added, since no rule can reach outside them"
+for grant_dir in /sys/class/graphics/fb0 /etc/pam "$GRANT_HOME/.config" "$GRANT_MECH" "$GRANT_PRIV" "$GRANT_STATE"; do
+  grep -qxF "$grant_dir" "$GRANT_DIRS" \
+    || fail "$grant_dir is not among the tenant's working directories, so every read under it is refused whatever the rules say: $(cat "$GRANT_DIRS")"
+done
+# The same directory three times over would be argv noise a reader has
+# to check is not a mistake.
+[ "$(sort "$GRANT_DIRS" | uniq -d | wc -l)" -eq 0 ] \
+  || fail "the added directories repeat: $(cat "$GRANT_DIRS")"
+
+log "  -- and the packet still travels on stdin, not in the argv the grant now shares"
+if grep -qF 'CASTLE-PACKET-0123456789abcdef' "$GRANT_ARGV"; then
+  fail "the prompt reached argv alongside the permission grant (E2BIG is back)"
+fi
+
 log "  -- and the prompt tells the tenant never to stage a deliverable somewhere else when a write fails"
 # The mechanism above cannot cover a write that fails for a reason it
 # does not model (a full disk, a read-only mount), and the behaviour
