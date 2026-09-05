@@ -363,7 +363,10 @@ Automated, and the bar is that a *generated* patch round-trips:
   that checkout and that the checkout itself never moved. Scenarios: a
   one-line edit; a two-file edit; a new file in an existing directory;
   a hostile global git configuration (`diff.suppressBlankEmpty = true`)
-  that reproduced the finding's second defect; a tenant that writes
+  in the resident's own home, and a hostile *local* one
+  (`color.ui = always`) in the state repository the generation runs
+  inside, both of which reproduce the finding's second defect or worse;
+  a tenant that writes
   `$CASTLE_DIFF_FILE` as well (generated wins, discard stated); a role
   disagreement between the mirror and the stamped word; a turn that
   edits nothing; and a symlink in the checkout, asserting it is not
