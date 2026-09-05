@@ -194,11 +194,16 @@ if grep -qF -- "RESUME-FIXTURE-MUST-NOT-REACH-A-TENANT" "$packet_file"; then
   exit 6
 fi
 
+# A creation patch, for the reason contract-worker.sh states at length
+# (docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md): a
+# synthetic diff naming a file that does not exist can no longer become
+# a proposal question, and this fixture means to exercise the ordinary
+# path. Kept byte-identical to scripted-worker-blocking-alt.py's, which
+# is the whole point of that pair.
 cat <<EOF > "$CASTLE_DIFF_FILE"
---- a/docs/backlog/example-item (synthetic, harness fixture only)
+--- /dev/null
 +++ b/docs/backlog/example-item (synthetic, harness fixture only)
-@@ -1 +1 @@
--placeholder before the resumed turn
+@@ -0,0 +1 @@
 +placeholder after the resumed turn
 EOF
 

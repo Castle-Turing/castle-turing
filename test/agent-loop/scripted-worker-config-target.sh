@@ -40,6 +40,19 @@ CASTLE_BIN="${CASTLE_TEST_CASTLE_BIN:?scripted-worker-config-target.sh: CASTLE_T
 
 say() { printf 'config-target-worker: %s\n' "$*"; }
 
+# **The hunk headers below name the file's REAL line numbers**, since
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md: a
+# proposal that does not apply to its target checkout is no longer
+# offered to the resident, so a fixture whose diff was anchored at
+# `@@ -1` out of habit would file nothing and prove nothing. git anchors
+# a hunk starting at line 1 to the beginning of the file and will not
+# search past it, which is why the wrong number failed rather than
+# quietly succeeding with an offset.
+#
+# These diffs are computed against the two synthetic checkouts this
+# harness builds (`config-target.sh`, "building the two checkouts"), so
+# changing either fixture's `resident.nix` means changing these too.
+
 # Which of the mechanism checkout's three states this turn is in
 # (docs/tasks/0024 §16). All three are reported on stdout, because the
 # harness asserts the tenant could tell them apart — a fixture that
@@ -116,7 +129,7 @@ if packet_has "CONFIG-TARGET-FIXTURE-PERCEPTUAL"; then
   cat <<EOF > "$CASTLE_DIFF_FILE"
 --- a/resident.nix
 +++ b/resident.nix
-@@ -1,3 +1,4 @@
+@@ -8,3 +8,4 @@
    castle.display = {
 +    terminalFontSize = $chosen;
      cursorTheme = "Example-Cursors";
@@ -169,7 +182,7 @@ if packet_has "CONFIG-TARGET-FIXTURE-CURSOR"; then
     cat <<EOF > "$CASTLE_DIFF_FILE"
 --- a/resident.nix
 +++ b/resident.nix
-@@ -1,3 +1,4 @@
+@@ -8,3 +8,4 @@
    castle.display = {
      cursorTheme = "Example-Cursors";
 +    cursorSize = 32;
@@ -181,11 +194,12 @@ EOF
     cat <<EOF > "$CASTLE_DIFF_FILE"
 --- a/resident.nix
 +++ b/resident.nix
-@@ -1,2 +1,4 @@
-   castle.display = {
+@@ -4,1 +4,4 @@
+-  castle.display = { };
++  castle.display = {
 +    cursorTheme = "Example-Cursors";
 +    cursorSize = 32;
-   };
++  };
 EOF
   fi
   printf 'private\n' > "$CASTLE_TARGET_FILE"

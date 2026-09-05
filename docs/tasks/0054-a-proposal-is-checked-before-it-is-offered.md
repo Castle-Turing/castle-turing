@@ -223,18 +223,45 @@ check in place those turns would all take the new refusal branch, and
 the harnesses asserting a question is filed would fail. That is the
 check working, not a reason to weaken it.
 
-The fix is one line per fixture and keeps every diff synthetic: express
-it as a file **creation** (`--- /dev/null`, `@@ -0,0 +1 @@`) rather than
-a modification of a file that is not there. A creation patch applies
-cleanly in any checkout that does not already have the file, which every
-one of these fixtures is, and it stays as invented as it was — no
-fixture starts naming a real path, and no harness starts applying
-anything.
+The fix keeps every diff synthetic, and takes one of three shapes
+depending on what the fixture is for.
+
+**Express it as a file creation** (`--- /dev/null`, `@@ -0,0 +1 @@`)
+rather than as a modification of a file that is not there. A creation
+patch applies cleanly in any checkout that does not already have the
+file, which every one of these fixtures is, and it stays as invented as
+it was — no fixture starts naming a real path and no harness starts
+applying anything. This covers `contract-worker.sh`, the
+`scripted-worker-blocking` pair (changed identically, since the whole
+point of that pair is that two differently-shaped tenants produce the
+same journal), and approval.sh's private-plus-finding tenant.
 
 Verified against git 2.5x: a creation patch whose `+++` path contains
 spaces (`docs/backlog/example-item (synthetic, harness fixture only)`)
 still passes `--check` and still reports that whole path through
 `--numstat -z`.
+
+**Give the hunk header the file's real line numbers**, where the
+fixture already diffs a file that exists.
+`scripted-worker-config-target.sh` reads the checkout to decide how big
+its proposal has to be — the sibling-option coupling rule — so a
+creation patch would delete the point of the fixture. Its hunks said
+`@@ -1,3` out of habit against content living at line 8. **git anchors a
+hunk beginning at line 1 to the beginning of the file and will not
+search past it**, which is why the wrong number failed outright rather
+than succeeding with an offset; verified by running it.
+
+**Grow the fixture, where the diff genuinely needs `-` lines.**
+approval.sh's fenced-diff scenario asserts that all four of
+`FENCED-{BEFORE,AFTER}-{INSIDE,AFTER}` survive the round trip, which a
+creation patch cannot express. So that harness's private checkout gains
+a synthetic `README.md` holding exactly the pre-image its diff assumes.
+Still invented, still never applied.
+
+That last fixture then does double duty: run once against a clean tree
+it is the `offered` control, and run again with an uncommitted edit
+under the same file it is the dirty-tree case, with nothing differing
+between the two but the dirt.
 
 ## Verification plan
 

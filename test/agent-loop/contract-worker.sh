@@ -57,11 +57,21 @@ if [ -n "${CASTLE_TEST_WORKER_BINARY:-}" ]; then
   printf 'contract-worker: here comes a stray byte: \377\n'
 fi
 
+# **A creation patch, and that is load-bearing since
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md.** A
+# proposal that cannot be applied no longer becomes a question, so a
+# fixture diff naming a file that does not exist — which is what this
+# was, and what every synthetic fixture here was — would take the new
+# refusal branch and file nothing for the harnesses to assert about.
+#
+# Expressed as a creation rather than by naming a real path, so the
+# diff stays exactly as invented as it was: `git apply --check` accepts
+# it in any checkout that does not already have this file, which every
+# fixture using this tenant is, and no harness starts applying anything.
 cat <<EOF > "$CASTLE_DIFF_FILE"
---- a/docs/backlog/example-item (synthetic, harness fixture only)
+--- /dev/null
 +++ b/docs/backlog/example-item (synthetic, harness fixture only)
-@@ -1 +1 @@
--placeholder before
+@@ -0,0 +1 @@
 +placeholder after
 EOF
 

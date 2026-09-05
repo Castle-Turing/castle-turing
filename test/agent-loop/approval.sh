@@ -123,6 +123,24 @@ cat > "$PRIVATE/resident.nix" <<'EOF'
   ];
 }
 EOF
+# The file the fenced-diff scenario below proposes a change to. It has
+# to really exist, with really these bytes, since
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md: that
+# scenario needs a diff carrying both `-` and `+` lines around a code
+# fence, which a creation patch cannot express, and a proposal that
+# does not apply is no longer offered. So the fixture grows the file
+# instead of the diff pretending about it. Still synthetic, still
+# invented, and still never applied — `assert_checkouts_untouched` is
+# the teeth on that.
+cat > "$PRIVATE/README.md" <<'EOF'
+Prose above a fenced block.
+
+```diff
+FENCED-BEFORE-INSIDE
+```
+
+FENCED-BEFORE-AFTER
+EOF
 git -C "$PRIVATE" init -q
 git -C "$PRIVATE" add -A
 git -C "$PRIVATE" commit -q -m "fixture: a synthetic private layer"
@@ -213,6 +231,11 @@ clear_pending_proposals() {
   [ -z "$(pending_proposals)" ] || fail "changes are still pending after clearing: $(pending_proposals)"
 }
 journal_file_count() { find "$JOURNAL" -name '*.md' | wc -l | tr -d ' '; }
+# One frontmatter field off one record. Defined up here with the
+# other readers rather than beside its first caller: since
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md it
+# is read from two sections, and the earlier one came first.
+field_of() { sed -n "s/^$2: //p" "$1"; }
 model_byte_count() {
   if [ -f "$CASTLE_STATE_DIR/resident-model.md" ]; then
     wc -c < "$CASTLE_STATE_DIR/resident-model.md" | tr -d ' '
@@ -794,6 +817,145 @@ for NEEDLE in FENCED-BEFORE-INSIDE FENCED-AFTER-INSIDE FENCED-BEFORE-AFTER FENCE
 done
 
 # ---------------------------------------------------------------------
+log "a proposal that cannot be applied never becomes a question"
+# ---------------------------------------------------------------------
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md. On
+# 2026-09-05 a worker filed a proposal question against a patch git
+# cannot parse; the resident approved it; the applier spent that
+# approval on `refused-patch-stale` and the approval was gone. The
+# resident was asked to authorize a change that could never have been
+# made, and the cost was charged to their decision rather than to the
+# turn that produced it. What follows is the pre-flight that stops
+# that, in all four of its outcomes.
+
+log "  -- the control: the well-formed proposal above was CHECKED, and says so"
+# Without this the three cases below are satisfied by a check that
+# simply refuses everything.
+[ "$(field_of "$R_FENCED" proposal-outcome)" = "offered" ] \
+  || fail "a proposal that really does apply is not stamped 'offered': $(field_of "$R_FENCED" proposal-outcome)"
+
+log "  -- a patch git cannot read at all: no question, and the result says why"
+MALFORMED_TENANT="$WORKDIR/malformed-tenant.sh"
+cat > "$MALFORMED_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'malformed tenant: what it wrote to $CASTLE_DIFF_FILE is not a patch\n'
+cat > "$CASTLE_DIFF_FILE" <<'DIFF'
+I have changed README.md so that it says the right thing now. The
+change is small and I am confident it is correct.
+DIFF
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+TENANT
+chmod +x "$MALFORMED_TENANT"
+REQ_MALFORMED="$("$CASTLE" ask "APPROVAL-FIXTURE-MALFORMED: an invented complaint whose tenant writes prose where a patch belongs.")"
+CASTLE_WORKER_COMMAND="$MALFORMED_TENANT" "$CASTLE" work "$REQ_MALFORMED" >/dev/null
+R_MALFORMED="$(newest_result_for "$REQ_MALFORMED")"
+grep -q '^outcome: completed$' "$R_MALFORMED" || fail "the malformed-patch turn did not complete"
+grep -q '^target: private$' "$R_MALFORMED" \
+  || fail "the malformed-patch turn stamped no target, so this case proves nothing about the filing branch"
+[ -z "$(proposal_question_for "$REQ_MALFORMED")" ] \
+  || fail "a patch git cannot read was still filed for the resident to approve"
+[ "$(field_of "$R_MALFORMED" proposal-outcome)" = "refused-patch-stale" ] \
+  || fail "the refusal is not in a field, only in prose: $(field_of "$R_MALFORMED" proposal-outcome)"
+grep -q 'Nothing was filed for you to approve' "$R_MALFORMED" \
+  || fail "the result does not tell the resident that nothing is waiting on them: $(cat "$R_MALFORMED")"
+# git's own account, not this harness's paraphrase of it. `error:` is
+# git's own prefix and is what makes this an assertion about the real
+# message rather than about a sentence `castle` wrote.
+grep -q '^error: ' "$R_MALFORMED" \
+  || fail "the result does not carry git's own message: $(cat "$R_MALFORMED")"
+# And the diff is not lost: a refused proposal is still an artifact the
+# resident can read and the errand can be asked again from.
+grep -q 'I have changed README.md' "$R_MALFORMED" \
+  || fail "the refusal threw away what the turn produced"
+
+log "  -- and it routes like any other result: the resident is told, not left in silence"
+"$CASTLE" route >/dev/null
+R_MALFORMED_ID="$(basename "$R_MALFORMED" .md)"
+[ "$(count_referencing decision "$R_MALFORMED_ID")" -eq 1 ] \
+  || fail "the refused-proposal result was not routed exactly once"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after a refused proposal"
+assert_checkouts_untouched "after a proposal that could not be applied"
+
+log "  -- a well-formed patch that no longer fits: same refusal, and this one 0053 cannot remove"
+# The case that survives docs/tasks/0053: a patch git parses perfectly
+# and that simply does not describe the checkout any more. Nothing here
+# is malformed; the tree moved, or never was what the patch assumed.
+STALE_TENANT="$WORKDIR/stale-patch-tenant.sh"
+cat > "$STALE_TENANT" <<'TENANT'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf 'stale-patch tenant: a well-formed diff against a line that is not there\n'
+cat > "$CASTLE_DIFF_FILE" <<'DIFF'
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-STALE-FIXTURE-LINE-THAT-IS-NOT-IN-THE-FILE
++STALE-FIXTURE-REPLACEMENT
+DIFF
+printf 'private\n' > "$CASTLE_TARGET_FILE"
+TENANT
+chmod +x "$STALE_TENANT"
+REQ_STALE_PATCH="$("$CASTLE" ask "APPROVAL-FIXTURE-STALE-PATCH: an invented complaint whose diff no longer fits the checkout.")"
+CASTLE_WORKER_COMMAND="$STALE_TENANT" "$CASTLE" work "$REQ_STALE_PATCH" >/dev/null
+R_STALE_PATCH="$(newest_result_for "$REQ_STALE_PATCH")"
+[ -z "$(proposal_question_for "$REQ_STALE_PATCH")" ] \
+  || fail "a patch that does not fit the checkout was still filed for the resident to approve"
+[ "$(field_of "$R_STALE_PATCH" proposal-outcome)" = "refused-patch-stale" ] \
+  || fail "a patch that does not fit is not stamped refused: $(field_of "$R_STALE_PATCH" proposal-outcome)"
+grep -q 'does not apply' "$R_STALE_PATCH" \
+  || fail "the result does not carry git's own account of what did not fit: $(cat "$R_STALE_PATCH")"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after a stale proposal"
+assert_checkouts_untouched "after a proposal that no longer fits"
+
+log "  -- a DIRTY tree is not the patch's fault: the question is filed, and the record says which"
+# The distinction docs/tasks/0054 §C exists for. A resident mid-edit
+# under the files a patch touches makes `git apply --check` fail for a
+# reason that is not the patch's, and refusing to file the question
+# there would be this task's own defect wearing the opposite hat: the
+# errand did its work, the change may be perfect, and the resident
+# would never be shown it.
+#
+# The harness dirties the checkout deliberately and restores it before
+# the assertion below — the mutation is this fixture's, not the code
+# under test's, and `assert_checkouts_untouched` is what proves the
+# difference.
+printf 'A resident is in the middle of editing this file.\n' > "$PRIVATE/README.md"
+[ -n "$(git -C "$PRIVATE" status --porcelain -- README.md)" ] \
+  || fail "the dirty-tree scenario did not actually dirty the checkout"
+REQ_DIRTY="$("$CASTLE" ask "APPROVAL-FIXTURE-DIRTY: an invented complaint decided while the resident is mid-edit.")"
+CASTLE_WORKER_COMMAND="$FENCED_TENANT" "$CASTLE" work "$REQ_DIRTY" >/dev/null
+git -C "$PRIVATE" checkout -- README.md
+R_DIRTY="$(newest_result_for "$REQ_DIRTY")"
+[ "$(field_of "$R_DIRTY" proposal-outcome)" = "offered-tree-dirty" ] \
+  || fail "a check that failed on the resident's own uncommitted work was charged to the patch: $(field_of "$R_DIRTY" proposal-outcome)"
+# The control that makes the line above mean something: the SAME
+# tenant, against the same checkout with nothing uncommitted in it, is
+# `offered` (asserted at the top of this section on $R_FENCED). So the
+# only thing that changed is the dirt, and the record charged it to the
+# dirt — "your tree was busy" and "your patch is bad" are two different
+# records, which is what 0054 §C requires.
+[ -n "$(proposal_question_for "$REQ_DIRTY")" ] \
+  || fail "a change was withheld from the resident because they happened to be mid-edit"
+grep -q 'uncommitted work under the files it touches' "$R_DIRTY" \
+  || fail "the dirty-tree note does not say what could not be established: $(cat "$R_DIRTY")"
+# Status letters and a count, never a file name, for the half of this
+# that is the RESIDENT'S own work: `_dirty_under` exists beside
+# `_dirty_entries` for exactly that reason, and a record is durable in a
+# way a resident's file names should not have to be (CLAUDE.md's hard
+# rule). git's own message below it does name files, and that is not the
+# same disclosure — every path in it is one the patch itself touches,
+# which is to say one already printed in the diff above.
+grep -qE '[0-9]+ path\(s\), status ' "$R_DIRTY" \
+  || fail "the dirty-tree note does not summarise the resident's own work as a count: $(cat "$R_DIRTY")"
+grep -q 'deliberately not named' "$R_DIRTY" \
+  && fail "the dirty-tree note claims it names no files, in a paragraph that goes on to quote git naming one"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after a dirty-tree proposal"
+assert_checkouts_untouched "after a proposal checked against a dirty tree"
+
+# ---------------------------------------------------------------------
 log "a change targeting the MECHANISM checkout is never filed for approval"
 # ---------------------------------------------------------------------
 # Until docs/tasks/0044-mechanism-findings-not-proposals.md this section
@@ -838,7 +1000,6 @@ chmod +x "$MECHANISM_TENANT"
 outbox_record_for() {
   grep -l "^refs: $1\$" "$JOURNAL"/*-result-*.md 2>/dev/null | head -1 || true
 }
-field_of() { sed -n "s/^$2: //p" "$1"; }
 
 REQ_MECH="$("$CASTLE" ask "APPROVAL-FIXTURE-MECHANISM: an invented complaint whose fix belongs in the framework, not the private layer.")"
 CASTLE_WORKER_COMMAND="$MECHANISM_TENANT" "$CASTLE" work "$REQ_MECH" >/dev/null
@@ -1003,10 +1164,9 @@ set -euo pipefail
 cat >/dev/null
 printf 'private tenant: a configuration change here, and a framework gap noticed in passing\n'
 cat > "$CASTLE_DIFF_FILE" <<'DIFF'
---- a/resident.nix (synthetic, harness fixture only)
+--- /dev/null
 +++ b/resident.nix (synthetic, harness fixture only)
-@@ -1 +1 @@
--PRIVATE-ONLY-MARKER-BEFORE
+@@ -0,0 +1 @@
 +PRIVATE-ONLY-MARKER-AFTER
 DIFF
 printf 'private\n' > "$CASTLE_TARGET_FILE"
@@ -1513,6 +1673,37 @@ plant_base
 plant 20260201T000003Z-result-eeeeee result 20260201T000000Z-request-aaaaaa \
   "outcome: completed" "diff-boundary: NOT-A-NONCE"
 expect_invalid "a malformed boundary" "16 lowercase hex"
+
+log "  -- a proposal verdict on a record that reads it nowhere"
+# docs/tasks/0054-a-proposal-is-checked-before-it-is-offered.md §F.
+# `apply-outcome`'s treatment exactly: nothing reads this off a
+# question, so one sitting there would validate, read as meaningful,
+# and do nothing.
+plant_base
+plant 20260201T000003Z-question-cccccd question \
+  "20260201T000000Z-request-aaaaaa,20260201T000001Z-result-bbbbbb" \
+  "proposal-outcome: offered"
+expect_invalid "a proposal verdict on a question" "is a result-record field"
+
+log "  -- a proposal verdict outside the vocabulary"
+# Closed by construction: one writer, and the one surface that reads it
+# branches on the value. A spelling nothing produces must not be able to
+# sit in a journal looking like a decision something made.
+plant_base
+plant 20260201T000003Z-result-eeeeee result 20260201T000000Z-request-aaaaaa \
+  "outcome: completed" "proposal-outcome: refused-because-i-said-so"
+expect_invalid "an unknown proposal verdict" "is not one of offered"
+
+log "  -- and the control: every value the checker can actually write validates"
+for VERDICT in offered offered-tree-dirty offered-unchecked refused-patch-stale; do
+  plant_base
+  plant 20260201T000003Z-answer-dddddd answer \
+    "20260201T000002Z-question-cccccc,20260201T000001Z-result-bbbbbb" \
+    "decision: approve" "proposal-sha256: $VALID_HASH"
+  plant 20260201T000004Z-result-eeeeee result 20260201T000000Z-request-aaaaaa \
+    "outcome: completed" "proposal-outcome: $VERDICT"
+  expect_valid "the proposal verdict $VERDICT"
+done
 
 log "  -- and the correction this task made in passing: an outcome on a record that is not a result"
 plant_base
