@@ -1693,7 +1693,8 @@ vocabulary, saying what happened to the change:
 | `refused-target-mechanism` | `completed`             | untouched | the change is to this framework, which this seat has no authority over |
 | `refused-artifact-changed` | `completed`             | untouched | a digest no longer matches |
 | `refused-no-patch`         | `completed`             | untouched | no sidecar, so no exact bytes to apply |
-| `refused-patch-stale`      | `completed`             | untouched | `git apply --check` refused it |
+| `refused-patch-malformed`  | `completed`             | untouched | git could not read the kept copy as a patch at all — the proposal was never usable, not stale |
+| `refused-patch-stale`      | `completed`             | untouched | git read it fine and `git apply --check` refused it against this tree |
 | `refused-tree-dirty`       | `completed`             | untouched | the resident has uncommitted work under those paths |
 
 An **`apply-commit`** field beside it, also result-only, carrying the

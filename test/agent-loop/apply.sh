@@ -1091,6 +1091,28 @@ grep -q '^apply-outcome: refused-no-patch$' "$(newest_apply_result_for "$A_BARE"
 assert_private_untouched "after the never-kept-a-copy refusal"
 
 # ---------------------------------------------------------------------
+log "refused: the kept copy is not a patch at all (a malformed patch is not a stale one)"
+# ---------------------------------------------------------------------
+# docs/tasks/0055-a-malformed-patch-is-not-a-stale-one.md: a turn that
+# never produced anything git can read as a patch is a different fact
+# from a turn whose good patch stopped fitting the tree. Confusing the
+# two told a resident to go looking for a change in their own
+# repository that never happened. Nothing here validates a tenant's
+# diff before filing it as a proposal, so this fixture is a normal
+# approved proposal whose kept copy is not a diff at all.
+read -r REQ_MF R_MF Q_MF A_MF <<<"$(new_approval APPLYABLE-MALFORMED)"
+"$CASTLE" apply "$A_MF" >/dev/null 2>&1 && fail "an unparseable patch was applied anyway"
+AP_MF="$(newest_apply_result_for "$A_MF")"
+grep -q '^apply-outcome: refused-patch-malformed$' "$AP_MF" \
+  || fail "an unparseable patch was refused for the wrong reason: $(field_of "$AP_MF" apply-outcome)"
+grep -q 'no longer fits your configuration repository' "$AP_MF" \
+  && fail "the malformed-patch refusal claims the repository moved, which is the exact confusion this task removes: $(cat "$AP_MF")"
+grep -qi 'No valid patches in input' "$AP_MF" \
+  || fail "the refusal does not carry git's own account: $(cat "$AP_MF")"
+assert_private_untouched "after the malformed-patch refusal"
+assert_mechanism_untouched "after the malformed-patch refusal"
+
+# ---------------------------------------------------------------------
 log "refused: the change no longer fits the repository"
 # ---------------------------------------------------------------------
 read -r REQ_ST R_ST Q_ST A_ST <<<"$(new_approval APPLYABLE-MODIFY-stale)"

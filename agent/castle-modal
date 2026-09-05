@@ -2150,6 +2150,7 @@ _APPLY_REFUSAL_REASONS = {
     ),
     "refused-artifact-changed": "what is on disk is no longer what you approved",
     "refused-no-patch": "no exact copy of the change was kept",
+    "refused-patch-malformed": "the kept copy could not be read as a patch at all",
     "refused-patch-stale": "it no longer fits your configuration repository",
     "refused-tree-dirty": "you have uncommitted edits to the same files",
 }
@@ -2164,7 +2165,7 @@ def _apply_outcome_label(apply_outcome: str) -> str:
     resident would otherwise assume otherwise.
 
     An unrecognised value renders verbatim rather than collapsing into
-    any of the nine, following `_outcome_label`'s own rule above and for
+    any of the ten, following `_outcome_label`'s own rule above and for
     the reason it gives: a surface quietly reporting a state because it
     did not understand what it was told is the failure both closed
     vocabularies exist to prevent.

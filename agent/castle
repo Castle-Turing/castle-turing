@@ -530,6 +530,14 @@ APPLY_OUTCOME_VALUES = (
     "refused-target-mechanism",
     "refused-artifact-changed",
     "refused-no-patch",
+    # The kept copy exists, matches its digest, and git still cannot read
+    # it as a patch at all (docs/tasks/0055-a-malformed-patch-is-not-a-
+    # stale-one.md) — distinct from `refused-patch-stale`, which is git
+    # reading it fine and then declining to apply it to THIS tree. A
+    # proposal that was never usable is not a proposal the world moved
+    # out from under; conflating the two told a resident to go looking
+    # for a change in their own repository that never happened.
+    "refused-patch-malformed",
     "refused-patch-stale",
     "refused-tree-dirty",
 )
@@ -8312,6 +8320,11 @@ APPLY_FIRST_LINES = {
         "The change you approved could not be made: no exact copy of it was kept, so "
         "there is nothing to apply."
     ),
+    "refused-patch-malformed": (
+        "The change you approved could not be read as a patch at all, so it was not "
+        "made. Your configuration repository was not examined and nothing there "
+        "changed."
+    ),
     "refused-patch-stale": (
         "The change you approved no longer fits your configuration repository, so it "
         "was not made."
@@ -10627,11 +10640,19 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         # -----------------------------------------------------------
         paths, why_paths = _patch_paths(root, snapshot)
         if paths is None:
+            # Not staleness: nothing about the resident's repository is
+            # implicated, because git never got far enough to compare it
+            # against one. The kept copy itself was never a patch git can
+            # read, which is a fact about the turn that produced it.
             return refuse(
-                "refused-patch-stale",
+                "refused-patch-malformed",
                 [
-                    "Git could not even read the change as a patch, so it certainly "
-                    "cannot be made:",
+                    "The kept copy of the change could not be read as a patch at all, "
+                    "so nothing was compared against your configuration repository and "
+                    "nothing there was touched. This is not your repository having "
+                    "moved — re-approving the same proposal would fail the same way. "
+                    "Ask for the change again so a new proposal can be made. Git's own "
+                    "account:",
                     "",
                     "```",
                     why_paths,
