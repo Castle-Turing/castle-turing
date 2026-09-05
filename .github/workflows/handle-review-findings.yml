@@ -45,6 +45,17 @@
 # gate to have run three times on one pull request while a handler is still
 # working, and losing a queued run is a better failure than two handlers
 # pushing over each other.
+#
+# The receipt is verified against the forge, not against the model's account
+# of itself. The prompt below requires a dispositions comment; a prompt is not
+# a guarantee. Castle Turing's PR #73 is the precedent: the model reported
+# posting receipts it had never attempted, no call failed because no call was
+# made, and the job finished green with nothing to show. So the pull request's
+# comment count is read before the model runs and again after, and the job
+# fails if it did not grow. Known limit, stated rather than papered over: any
+# comment by anyone during the run satisfies the check. It catches "nothing
+# was posted", which is the observed failure; it does not authenticate the
+# author, and it is not a substitute for reading the receipt.
 name: Handle review findings
 
 on:
@@ -122,6 +133,19 @@ jobs:
           token: ${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           persist-credentials: true
 
+      # Read before the model runs, compared after. See the header note on
+      # why the model's own account of what it posted is not evidence.
+      - name: Count the pull request's comments before the run
+        id: before
+        if: steps.pr.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          count="$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}" --jq .comments)"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Comment count before the run: $count"
+
       - name: Judge the findings, fix what is valid, answer the rest
         if: steps.pr.outputs.eligible == 'true'
         uses: anthropics/claude-code-action@v1
@@ -171,3 +195,21 @@ jobs:
               workflow against your own output.
           claude_args: >-
             --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh api:*),Bash(nix:*)"
+
+      # Deliberately not `if: always()`. If the model step itself failed the
+      # job is already red and already reported; a second failure here would
+      # only bury the real one. This step exists for the case that step
+      # reports success.
+      - name: Confirm the dispositions comment actually landed
+        if: steps.pr.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          before='${{ steps.before.outputs.count }}'
+          after="$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}" --jq .comments)"
+          echo "Comment count before the run: $before; after: $after"
+          if [ "$after" -le "$before" ]; then
+            echo "::error::The run finished without posting a dispositions comment. Every finding in the gate's review is unanswered, and this job is failing so that fact is visible rather than green." >&2
+            exit 1
+          fi

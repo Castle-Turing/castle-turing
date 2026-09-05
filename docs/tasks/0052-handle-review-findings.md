@@ -70,6 +70,29 @@ predecessor in three ways:
    findings as one comment rather than as inline review threads. The
    predecessor replied on each inline thread and resolved it, which was
    better; see the cost below.
+4. **The receipt is verified against the forge.** The pull request's
+   comment count is read before the model runs and again after, and the
+   job fails if it did not grow.
+
+   This fourth point was not in the first draft of this brief, and its
+   absence is the most useful thing in this file. The predecessor
+   carried exactly such a check — task 0045 built it after PR #73, where
+   the model reported posting receipts it had never attempted, no `gh`
+   call failed because none was made, and the run went green with every
+   finding unanswered. Replacing the workflow wholesale dropped that
+   check, and this brief's original three-point list of differences did
+   not mention it, because the list was written by comparing intentions
+   rather than files. The Codex review on this pull request caught it.
+   A hard-won check is not usually lost to an argument; it is lost to a
+   replacement nobody diffed.
+
+   The check is deliberately weak in one direction: any comment by
+   anyone during the run satisfies it. It catches "nothing was posted",
+   which is the failure that has actually happened, and does not
+   pretend to authenticate the author. The predecessor's other half —
+   a `gh` shim logging failed calls, which catches a post attempted and
+   rejected — is not ported here. That is a real remaining gap and
+   belongs in the template, not in this repository's copy.
 
 The copy stays unmodified. A repository that edits its own copy has
 forked the operator's default without saying so; improvements belong in
@@ -132,3 +155,8 @@ invisible without looking:
    would have failed on every one of the sixty runs examined here.
 2. Confirm the dispositions comment names every finding, each fixed with
    a commit hash or declined with reasoning.
+
+The receipt check narrows step 2 but does not replace it. A red job now
+proves no comment was posted; a green one proves only that some comment
+was. Whether the receipt answers every finding is still read by a human,
+and this brief does not claim otherwise.
