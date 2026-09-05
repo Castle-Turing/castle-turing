@@ -3097,12 +3097,174 @@ def _provenance_explanation(provenance: str) -> str:
     return "the system undertook this on its own initiative, so it defaults to the digest rather than an interruption"
 
 
+def _in_service_cgroup() -> bool:
+    """Whether this process sits in the cgroup of a systemd `.service`
+    — the question `_scope_wrapped` gates on (docs/tasks/0051).
+
+    Reads the unified-hierarchy line of `/proc/self/cgroup` (the one
+    whose controller field is empty, `0::/...`) and asks whether the
+    last path component names a service. A sweep run by
+    `castle-dispatch.service` answers
+    `/user.slice/user-1000.slice/user@1000.service/app.slice/castle-dispatch.service`;
+    a `castle route` typed at a terminal answers
+    `/user.slice/user-1000.slice/session-7.scope`. Both checked on the
+    reference host rather than recalled.
+
+    False on anything it cannot read or does not recognise — a cgroup
+    v1 host with no unified line, a kernel with no `/proc/self/cgroup`,
+    a path shape this does not expect. Every one of those means the
+    caller spawns the waiter the way it did before docs/tasks/0051,
+    which is a working notification, so guessing conservatively costs a
+    log line and guessing optimistically could cost the notification.
+    """
+    try:
+        raw = pathlib.Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return False
+    for line in raw.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) == 3 and fields[0] == "0" and fields[1] == "":
+            return fields[2].rstrip("/").rsplit("/", 1)[-1].endswith(".service")
+    return False
+
+
+def _scope_wrapped(argv: list[str], unit: str, description: str) -> list[str]:
+    """Wrap `argv` so it runs in a transient systemd scope of its own,
+    when — and only when — this process is itself running inside a
+    systemd service (docs/tasks/0051). Returns `argv` unchanged
+    otherwise, which is the whole of the hand-run path.
+
+    **What it is for.** `_fire_notification` detaches its waiter with
+    `start_new_session=True`, which leaves the calling unit's *process
+    group* and not its *cgroup*. The waiter therefore sat in
+    `castle-dispatch.service`'s cgroup for as long as the notification
+    stood — and the next sweep, two minutes later, found it there and
+    made systemd say so, once per leftover process:
+
+        castle-dispatch.service: Found left-over process 819594
+        (python3) in control group while starting unit. Ignoring.
+        castle-dispatch.service: This usually indicates unclean
+        termination of a previous run, or service implementation
+        deficiencies.
+
+    Nothing was failing: the sweep, the notification and the click all
+    worked, and `KillMode=process` on the unit (see modules/agent) is
+    what kept them working. The cost was legibility, which is not a
+    small thing on this surface — that journal is the first place a
+    resident or an agent looks when an errand seems to have gone
+    missing, and a line that always appears and never means anything is
+    how the line that does mean something gets skipped. A scope moves
+    the waiter into a cgroup that is not the unit's, so there is
+    nothing left over to report.
+
+    **`--scope`, not a transient service** (`--unit` + `Type=exec`),
+    for two reasons that are both about not changing anything else
+    while fixing this. A scope is registered around a process the
+    caller already has, so `systemd-run` execs `argv` in place: the
+    waiter keeps this process's environment (CASTLE_NOTIFY_COMMAND,
+    PATH, WAYLAND_DISPLAY, SWAYSOCK — the last two being exactly what
+    `_resolve_wayland_env` exists because units do not reliably have)
+    and this process's file descriptors, so the stderr routing
+    `_fire_notification` documents below survives untouched. A
+    transient service would be started by the manager instead, with a
+    fresh environment and its own journal identity, and would have
+    quietly changed both.
+
+    **The gate is three conditions, and the fallback is today's
+    behaviour.** The first is `_in_service_cgroup()`: this process's
+    own cgroup has to belong to a `.service`, which is the exact
+    question being asked — is the cgroup we would be left behind in one
+    that a later start scans and complains about? A hand-run `castle
+    route` at a terminal is in a session scope
+    (`/user.slice/user-1000.slice/session-7.scope`, checked), which
+    nothing re-runs and nothing sweeps, and takes this function's
+    identity path.
+
+    `INVOCATION_ID` was the first spelling of that question and is the
+    wrong one, which a code review caught: systemd sets it on a unit's
+    processes, but the environment is *inherited*, so every descendant
+    of any user service carries it — including a terminal launched as a
+    user unit by uwsm or by GNOME's systemd app launching, where a
+    hand-typed `castle route` would then have taken a hop it was
+    promised not to. Cgroup membership is a fact about this process
+    rather than a value handed down through an environment, and it
+    answers correctly in both directions: a terminal that genuinely IS
+    a service gets the hop, because its cgroup genuinely is one the
+    waiter should not be parked in.
+
+    Then `systemd-run` has to exist, and the user bus it talks to the
+    user manager over has to be reachable — checked the way sd-bus
+    itself resolves it, `DBUS_SESSION_BUS_ADDRESS` or
+    `$XDG_RUNTIME_DIR/bus`. Any of the three missing and the caller
+    gets its own argv back and spawns the waiter exactly as it did
+    before this task, which is a working notification with the
+    left-over-process line back; `KillMode=process` on the unit stays
+    in place to keep that fallback whole.
+
+    The residual, stated rather than hidden: all three conditions can
+    hold and `systemd-run` can still fail (a wedged manager, a refused
+    scope). The waiter then does not run at all and that notification
+    is lost — but not silently, because `systemd-run` writes its own
+    diagnosis to the stderr it inherited, which is the sweep's journal.
+    The alternative was for the caller to wait on `systemd-run`'s exit
+    status before deciding whether to fall back, and waiting is the one
+    thing `_fire_notification` promises never to do.
+
+    **The scope is named, and the name is the address of the waiter's
+    stderr.** Verified on the reference host rather than reasoned
+    about, because the reasoning was wrong: journald attributes a line
+    to the *writing process's* cgroup, not to the unit that opened the
+    stream it was written on. A waiter in a scope therefore no longer
+    logs under `castle-dispatch.service` — inheriting the sweep's
+    stderr file descriptor gets the bytes into the journal, and the
+    scope decides whose journal they are. `cmd_notify_waiter`'s one
+    non-silent failure would land under an auto-generated
+    `run-pNNN-iNNN.scope` that nothing could be told to look at, which
+    on a task about legibility is not a detail to shrug at. So the unit is
+    named for what it is and for the record it belongs to, and
+    `journalctl --user -u "castle-notify-waiter-*"` is the standing
+    answer to "where did that warning go".
+
+    The caller supplies the name and puts a short random suffix on it,
+    `make_id`'s trick for the same reason: `systemd-run` fails outright
+    if the unit name is taken, and a lost notification is a bad price
+    for a tidier name if one record is ever notified twice while the
+    first waiter still stands.
+
+    `--quiet` because the "Running scope as unit" line it otherwise
+    prints would land in the sweep's own journal on every notification,
+    and replacing two misleading lines per sweep with one uninformative
+    one is not what this task is for. The manager still logs "Started
+    <description>." against the scope itself, which is where a line
+    about the waiter belongs. `--collect` so a scope that fails is
+    unloaded rather than kept in memory as a failed unit nobody will
+    reset. `--description` because it is what `systemctl --user
+    list-units "castle-notify-waiter-*"` shows a resident who wonders
+    what that process is.
+    """
+    if not _in_service_cgroup():
+        return argv
+    systemd_run = shutil.which("systemd-run")
+    if systemd_run is None:
+        return argv
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime_dir or not pathlib.Path(runtime_dir, "bus").is_socket():
+            return argv
+    return [
+        systemd_run, "--user", "--scope", "--quiet", "--collect",
+        f"--unit={unit}", f"--description={description}", "--", *argv,
+    ]
+
+
 def _fire_notification(title: str, body: str, record_id: str) -> None:
     """Best-effort delivery on the router's `notify` channel
     (docs/tasks/0009 item 5, reshaped by docs/tasks/0034). Never raises
     and never blocks: the decision record is already durable, and the
     sweep must not wait on a notification daemon — so the whole
-    invocation moves into a detached waiter process (setsid), whose job
+    invocation moves into a detached waiter process (setsid, and — when
+    this sweep is itself a systemd unit — a transient scope of its own,
+    see `_scope_wrapped` and docs/tasks/0051), whose job
     is to run the notify command with an `open` action attached, block
     on it (`--action` implies `--wait`: the command exits when the
     notification is activated, dismissed, or expires, printing the
@@ -3133,24 +3295,45 @@ def _fire_notification(title: str, body: str, record_id: str) -> None:
         return
     try:
         subprocess.Popen(
-            [sys.executable, str(pathlib.Path(__file__).resolve()),
-             "notify-waiter", record_id, title, body],
+            # Two detachments, doing two different jobs.
+            # `start_new_session` below leaves this process's session
+            # and process group, so nothing that signals the sweep can
+            # reach the waiter. `_scope_wrapped` leaves the sweep
+            # unit's *cgroup*, which is the one systemd actually keeps
+            # books on — without it a waiter outliving the sweep is a
+            # left-over process the next sweep reports (docs/tasks/0051
+            # for the whole argument). Neither substitutes for the
+            # other, and on a hand-run `castle route` the second is a
+            # no-op by design.
+            _scope_wrapped(
+                [sys.executable, str(pathlib.Path(__file__).resolve()),
+                 "notify-waiter", record_id, title, body],
+                f"castle-notify-waiter-{record_id}-{os.urandom(2).hex()}.scope",
+                f"Castle notification waiter for {record_id}",
+            ),
             # stderr is deliberately NOT discarded, unlike stdin/stdout:
             # it inherits this process's own stderr, which for a
             # systemd-triggered sweep is the unit's own journal stream
-            # (`journalctl _SYSTEMD_USER_UNIT=castle-dispatch.service`,
-            # the exact scoping test/desktop-loop/test.nix's notify
-            # assertion already reads) and for a hand-run `castle
-            # route` is the terminal it was typed at. The waiter stays
-            # detached either way — inheriting an fd is not the same as
-            # being tied to this process's lifetime, and the "Unit
-            # process remains running after unit stopped" cgroup
-            # bookkeeping `castle-dispatch.service`'s KillMode=process
-            # exists for is unaffected by which file descriptors a
-            # surviving process happens to hold open. What this buys:
+            # and for a hand-run `castle route` is the terminal it was
+            # typed at. The scope hop does not change that and cannot:
+            # a scope has no `StandardError=` of its own, because
+            # `systemd-run --scope` execs the waiter in place with
+            # every file descriptor it was handed. What this buys:
             # `cmd_notify_waiter`'s one non-silent failure (see its own
             # docstring) has somewhere to land instead of nowhere at
             # all.
+            #
+            # What DOES change is the name journald files those bytes
+            # under, and it was measured rather than assumed
+            # (docs/tasks/0051, on the reference host): attribution
+            # follows the writing process's cgroup, not the unit that
+            # opened the stream. So a waiter's warning now appears
+            # under its own `castle-notify-waiter-*.scope` instead of
+            # under `castle-dispatch.service` — which is why the scope
+            # is named after the waiter and the record rather than left
+            # as an opaque `run-pNNN-iNNN.scope`, and why
+            # test/desktop-loop/test.nix's notify assertion now asks
+            # the whole journal rather than one unit's slice of it.
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             start_new_session=True,
         )
@@ -3434,8 +3617,12 @@ def cmd_notify_waiter(args: argparse.Namespace) -> int:
             # all, and would otherwise leave zero trace anywhere to
             # investigate from. Reaches wherever this process's own
             # stderr goes (see `_fire_notification`'s Popen call) —
-            # a systemd-triggered sweep's own unit journal, or a
-            # hand-run `castle route`'s terminal. Names one concrete,
+            # a hand-run `castle route`'s terminal, or, for a
+            # systemd-triggered sweep, this waiter's own transient
+            # scope in the journal: `journalctl --user -u
+            # "castle-notify-waiter-*"` (docs/tasks/0051, which moved
+            # it out of the sweep unit's cgroup and with it out of the
+            # sweep unit's log). Names one concrete,
             # checkable cause rather than staying generic: a foot
             # spawned from a systemd user unit with no WAYLAND_DISPLAY
             # or SWAYSOCK in its environment cannot connect to the
