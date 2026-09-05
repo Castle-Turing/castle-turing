@@ -277,6 +277,77 @@ describes a deliberate choice, and reporting the first as the second hides a
 typo behind a design decision."
 fi
 
+# THIS MACHINE'S OWN NAME, READ HERE RATHER THAN BY THE TENANT
+# (docs/tasks/0058-the-sandbox-allows-the-read-the-contract-names.md).
+# Where the read happens IS the whole of that task.
+#
+# Step 1 of the contract below used to tell the tenant to read
+# /proc/sys/kernel/hostname itself. It could not: a headless session
+# confines every file read to its working directories, the permission
+# grant at the end of this file adds no path under /proc, and so the
+# contract documented as allowed a read its own enforcement refused. A
+# live worker turn met that refusal on 2026-09-05 and filed it. Nothing
+# had caught it because the host defines a single configuration, so
+# nothing needed disambiguating — the failure is silent on exactly the
+# machines most residents have.
+#
+# THE FIX IS NOT A WIDER SANDBOX, and that was the choice rather than
+# the obvious move. A permission_dirs entry is a working DIRECTORY, so
+# the narrowest honest grant would have been /proc/sys/kernel — the
+# kernel's writable tunables — carrying the paired Edit deny this
+# script gives its other readable roots. A subtree granted and then
+# half-revoked, to fetch a string THIS process can read for free, is a
+# worse trade than moving the read. Same objection, quieter, to adding
+# `hostname` or `uname` to the allowed commands.
+#
+# What the tenant still has to do is untouched: find the
+# nixosConfigurations entry of this name, follow its imports, refuse a
+# near match. Only the string it matches against is handed over. The
+# prompt still decides nothing about where host modules live.
+#
+# THE SAME FILE AND THE SAME FALLBACK AS THE APPLIER, deliberately:
+# agent/castle's _hostname() reads HOSTNAME_PATH and falls back to
+# os.uname().nodename, and that is the name `castle apply` builds its
+# flake attribute from. Derived identically here, the host a tenant
+# proposes against and the configuration a resident's applier later
+# validates are the same host by construction rather than by
+# coincidence. Command substitution strips the trailing newline, which
+# is the only whitespace that file carries.
+castle_hostname="$(cat /proc/sys/kernel/hostname 2>/dev/null || true)"
+hostname_source="/proc/sys/kernel/hostname"
+if [ -z "$castle_hostname" ]; then
+  castle_hostname="$(uname -n 2>/dev/null || true)"
+  # The note below names its source, and on this branch the source is
+  # the fallback — a provenance sentence that always claimed the proc
+  # file would be false exactly here (cross-vendor review of 0058).
+  hostname_source="\`uname -n\` (/proc/sys/kernel/hostname was not readable)"
+fi
+
+# TWO BRANCHES, for the reason mechanism_note above has three: a note
+# that interpolated an empty name would hand the tenant a sentence
+# reading "This machine's hostname is ." and let it work out for itself
+# that the harness had failed. That is the same defect this task
+# closes, wearing the other hat. Reaching the second branch means
+# neither the proc file nor uname answered, which is a fact about this
+# machine and not about the errand, so it goes to 1d rather than to a
+# guess.
+hostname_note="This machine's hostname is ${castle_hostname}. This harness read
+   that from ${hostname_source} before starting you — by the same
+   rule, the proc file first and \`uname -n\` as its fallback, that
+   \`castle apply\` uses to pick the configuration it validates — so it
+   is the name your resident's applier will check too. You do not need to read it yourself, and
+   nothing in your permission grant would let you."
+if [ -z "$castle_hostname" ]; then
+  hostname_note="THIS HARNESS COULD NOT READ THIS MACHINE'S HOSTNAME. Neither
+   /proc/sys/kernel/hostname nor \`uname -n\` answered, which is a fault
+   in this machine rather than anything about your errand, and it
+   leaves you with no name to match against. Do not guess one and do
+   not try to read it yourself — nothing in your permission grant would
+   let you. If your diagnosis needs to know which host module applies,
+   say that the harness could not tell you the hostname and file a
+   question (1d)."
+fi
+
 # The copies the tenant edits, named in step 2
 # (docs/tasks/0053-diffs-are-generated-not-composed.md). THREE BRANCHES,
 # matching mechanism_note and sweep_note above, and for the reason
@@ -553,12 +624,12 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    question rather than guess. Being asked is cheap; a confident wrong
    layer produces a diff that changes nothing and looks like work.
 
-   WHICH HOST MODULE IS THIS MACHINE'S? Read
-   /proc/sys/kernel/hostname. A private flake may define several
-   hosts, and the one that applies here is the nixosConfigurations
-   entry matching that name — the convention every template in
-   docs/private-layer.md follows, pairing the attribute with
-   networking.hostName. Find that entry in
+   WHICH HOST MODULE IS THIS MACHINE'S? ${hostname_note}
+
+   A private flake may define several hosts, and the one that applies
+   here is the nixosConfigurations entry matching that name — the
+   convention every template in docs/private-layer.md follows, pairing
+   the attribute with networking.hostName. Find that entry in
    ${CASTLE_PRIVATE_ROOT}/flake.nix and follow its imports to the host
    module. If no entry matches this machine's hostname, do not pick
    one that looks close: say what you looked for and what you found,
