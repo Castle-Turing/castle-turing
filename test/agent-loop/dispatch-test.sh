@@ -910,6 +910,24 @@ touch -d '2020-01-01T00:00:00Z' "$STALE_SCRATCH"
 [ -f "$FRESH_SCRATCH" ] || fail "the sweep deleted a FRESH scratch file, which a live turn may still be writing"
 rm -f "$FRESH_SCRATCH"
 
+# The same, for a whole directory
+# (docs/tasks/0053-diffs-are-generated-not-composed.md §6). Since 0053 a
+# turn also leaves a per-turn copy of the configured checkouts in here,
+# and `unlink()` raises IsADirectoryError on a directory — which the
+# prune's own `except OSError` would catch and skip forever, leaving one
+# whole tree per killed turn where 0039 was worried about two files.
+STALE_MIRROR="$CASTLE_STATE_DIR/work/castle-work-mirror-stale"
+FRESH_MIRROR="$CASTLE_STATE_DIR/work/castle-work-mirror-fresh"
+mkdir -p "$STALE_MIRROR/edit/private" "$FRESH_MIRROR/edit/private"
+printf 'a copy of a resident file, left behind by a SIGKILLed turn\n' > "$STALE_MIRROR/edit/private/resident.nix"
+printf 'a copy a live turn may still be editing\n' > "$FRESH_MIRROR/edit/private/resident.nix"
+touch -d '2020-01-01T00:00:00Z' "$STALE_MIRROR"
+"$CASTLE" dispatch >/dev/null 2>&1 || fail "a sweep over a journal with a stale scratch directory exited nonzero"
+[ ! -e "$STALE_MIRROR" ] \
+  || fail "the sweep did not prune a stale scratch DIRECTORY — a copy of the resident checkout accumulates forever under the state dir"
+[ -e "$FRESH_MIRROR" ] || fail "the sweep deleted a FRESH scratch directory, which a live turn may still be editing"
+rm -rf "$FRESH_MIRROR"
+
 # ---------------------------------------------------------------------
 log "  -- and a worker timeout at or beyond the prune's cutoff is clamped below it, not honored"
 # ---------------------------------------------------------------------
@@ -962,6 +980,7 @@ rm -f "$CLAUDE_WITNESS"
 if PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
   CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$WORKDIR/outside-the-sandbox-diff" \
   CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
+  CASTLE_EDIT_DIR="$SANDBOX_HOME/edit" \
   CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
   > "$WORKDIR/sandbox-refusal.out" 2>&1; then
@@ -975,6 +994,25 @@ grep -qF 'castle.agent.stateDir' "$WORKDIR/sandbox-refusal.out" \
   || fail "the tenant's refusal does not say what a resident would change: $(cat "$WORKDIR/sandbox-refusal.out")"
 [ ! -f "$CLAUDE_WITNESS" ] || fail "the tenant reached its model call before checking whether it could deliver anything"
 
+log "  -- and the same refusal covers the copy the tenant edits, not only the three output files"
+# docs/tasks/0053: the copy is a fourth handover and is as unwritable
+# from inside the sandbox as the other three if it lands outside it. A
+# turn that reached its model call with nowhere to make the change would
+# produce the empty channel 0039 exists to have ended, one channel over.
+rm -f "$CLAUDE_WITNESS"
+if PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
+  CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" \
+  CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
+  CASTLE_EDIT_DIR="$WORKDIR/outside-the-sandbox-edit" \
+  CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
+  > "$WORKDIR/sandbox-refusal-edit.out" 2>&1; then
+  fail "castle-worker-claude accepted a copy directory outside the sandbox it declares it runs under"
+fi
+grep -qF "$WORKDIR/outside-the-sandbox-edit" "$WORKDIR/sandbox-refusal-edit.out" \
+  || fail "the refusal does not name the copy directory it rejected: $(cat "$WORKDIR/sandbox-refusal-edit.out")"
+[ ! -f "$CLAUDE_WITNESS" ] || fail "the tenant reached its model call with nowhere it could make the change"
+
 log "  -- and the positive control: the same call with both paths inside the sandbox runs the tenant"
 # Without this, the refusal above would pass just as well against a
 # script that refuses everything.
@@ -982,6 +1020,7 @@ rm -f "$CLAUDE_WITNESS"
 PATH="$SANDBOX_STUBDIR:$PATH" HOME="$SANDBOX_HOME" CLAUDE_STUB_WITNESS="$CLAUDE_WITNESS" \
   CASTLE_REQUEST_ID=probe CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" \
   CASTLE_TARGET_FILE="$SANDBOX_HOME/target" CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
+  CASTLE_EDIT_DIR="$SANDBOX_HOME/edit" \
   CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
   > "$WORKDIR/sandbox-accepted.out" 2>&1 \
@@ -1029,7 +1068,7 @@ GRANT_ARGV="$WORKDIR/grant-argv.txt"
 PATH="$GRANT_STUBDIR:$PATH" HOME="$GRANT_HOME" CLAUDE_ARGV_OUT="$GRANT_ARGV" \
   CASTLE_REQUEST_ID=probe \
   CASTLE_DIFF_FILE="$GRANT_STATE/diff" CASTLE_TARGET_FILE="$GRANT_STATE/target" \
-  CASTLE_FINDING_FILE="$GRANT_STATE/finding" \
+  CASTLE_FINDING_FILE="$GRANT_STATE/finding" CASTLE_EDIT_DIR="$GRANT_STATE/edit" \
   CASTLE_MECHANISM_ROOT="$GRANT_MECH" CASTLE_PRIVATE_ROOT="$GRANT_PRIV" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
   > "$WORKDIR/grant-run.out" 2>&1 \
@@ -1163,7 +1202,7 @@ mkdir -p "$GRANT_PRIV/state"
 PATH="$GRANT_STUBDIR:$PATH" HOME="$GRANT_HOME" CLAUDE_ARGV_OUT="$GRANT_ARGV_INSIDE" \
   CASTLE_REQUEST_ID=probe \
   CASTLE_DIFF_FILE="$GRANT_PRIV/state/diff" CASTLE_TARGET_FILE="$GRANT_PRIV/state/target" \
-  CASTLE_FINDING_FILE="$GRANT_PRIV/state/finding" \
+  CASTLE_FINDING_FILE="$GRANT_PRIV/state/finding" CASTLE_EDIT_DIR="$GRANT_PRIV/state/edit" \
   CASTLE_MECHANISM_ROOT="$GRANT_MECH" CASTLE_PRIVATE_ROOT="$GRANT_PRIV" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$SANDBOX_PACKET" \
   > "$WORKDIR/grant-inside.out" 2>&1 \
@@ -1186,8 +1225,15 @@ if grep -qE '^Bash\(git .*(commit|add|apply|checkout|stash|push|reset|restore|cl
   fail "the allowlist grants a mutating git subcommand — the grant no longer matches the contract it enforces"
 fi
 
+log "  -- and 2's copy is granted as a whole subtree, since which file a change lands in is not known before the turn"
+# docs/tasks/0053-diffs-are-generated-not-composed.md. The tenant makes
+# its proposal by editing files here, so a grant naming individual paths
+# could not be written: which file the fix belongs in IS the diagnosis.
+grep -qxF "Edit(/$GRANT_STATE/edit/**)" "$GRANT_ALLOW" \
+  || fail "the copy the tenant edits is not writable, so no proposal could be made at all: $(cat "$GRANT_ALLOW")"
+
 log "  -- and the directories 4's reads live in are added, since no rule can reach outside them"
-for grant_dir in /sys/class/graphics/fb0 /etc/pam "$GRANT_HOME/.config" "$GRANT_MECH" "$GRANT_PRIV" "$GRANT_STATE"; do
+for grant_dir in /sys/class/graphics/fb0 /etc/pam "$GRANT_HOME/.config" "$GRANT_MECH" "$GRANT_PRIV" "$GRANT_STATE" "$GRANT_STATE/edit"; do
   grep -qxF "$grant_dir" "$GRANT_DIRS" \
     || fail "$grant_dir is not among the tenant's working directories, so every read under it is refused whatever the rules say: $(cat "$GRANT_DIRS")"
 done
@@ -1213,13 +1259,38 @@ PROMPT_RENDER_0039="$WORKDIR/render-tenant-0039.sh"
 sed 's|^exec claude.*|cat <\&3|' "$REPO_ROOT/agent/castle-worker-claude" > "$PROMPT_RENDER_0039"
 RENDERED_0039="$(HOME="$SANDBOX_HOME" CASTLE_REQUEST_ID=probe \
   CASTLE_DIFF_FILE="$SANDBOX_HOME/diff" CASTLE_TARGET_FILE="$SANDBOX_HOME/target" \
-  CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" \
+  CASTLE_FINDING_FILE="$SANDBOX_HOME/finding" CASTLE_EDIT_DIR="$SANDBOX_HOME/edit" \
   CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   bash "$PROMPT_RENDER_0039" < "$SANDBOX_PACKET" 2>&1 | tr -s '[:space:]' ' ')"
-printf '%s' "$RENDERED_0039" | grep -qF 'THOSE TWO PATHS ARE THE ONLY CHANNEL' \
+printf '%s' "$RENDERED_0039" | grep -qF 'THAT DIRECTORY IS THE ONLY CHANNEL' \
   || fail "the rendered prompt carries no rule about what to do when a deliverable cannot be written"
-printf '%s' "$RENDERED_0039" | grep -qF 'do NOT put the diff somewhere else' \
-  || fail "the rendered prompt does not forbid staging the diff outside the two files it was given"
+printf '%s' "$RENDERED_0039" | grep -qF 'do NOT put the change somewhere else' \
+  || fail "the rendered prompt does not forbid staging the change outside the channel it was given"
+
+log "  -- and it tells the tenant to edit a copy rather than compose a diff (docs/tasks/0053)"
+# The whole of 0053 lives in this prompt and in what castle work does
+# with the copy afterwards. A prompt rule nothing checks is a comment,
+# and the sentence that was here before this task told the tenant to
+# COMPOSE a unified diff — which is what produced the first live
+# proposal git could not parse.
+printf '%s' "$RENDERED_0039" | grep -qF 'YOU DO NOT WRITE A DIFF' \
+  || fail "the rendered prompt still leaves the tenant to write the diff itself"
+printf '%s' "$RENDERED_0039" | grep -qF "$SANDBOX_HOME/edit/private" \
+  || fail "the rendered prompt does not name the copy the tenant is supposed to edit"
+if printf '%s' "$RENDERED_0039" | grep -qF 'You COMPOSE the unified diff'; then
+  fail "the prompt still instructs the tenant to compose a unified diff by hand"
+fi
+# The three shapes the copy cannot express, each stated as a sentence
+# 10's quoted-refusal rule can be satisfied with. Without these a tenant
+# meeting one of them has no rule to quote and, per the 2026-09-02
+# incident 0043 is about, is liable to invent one.
+for refusal_rule in \
+  'A DELETION IS NOT PROPOSABLE FROM THIS SEAT' \
+  'A FILE YOUR COPY DOES NOT CARRY IS NOT PROPOSABLE FROM THIS SEAT' \
+  'A RENAME IS NOT PROPOSABLE FROM THIS SEAT'; do
+  printf '%s' "$RENDERED_0039" | grep -qF "$refusal_rule" \
+    || fail "the rendered prompt states no quotable rule for: $refusal_rule"
+done
 
 # ---------------------------------------------------------------------
 log "a request a tenant files during its own turn is stamped, and never auto-dispatched (docs/tasks/0021 §2.4(e))"

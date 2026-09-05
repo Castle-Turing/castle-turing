@@ -17,10 +17,13 @@
 #
 # Per Proposal 03, the harness is free inside a seat; only the boundary
 # is a contract. This wrapper's whole job is turning that boundary into
-# a prompt: read the request, diagnose in the actual repo, write a diff
-# to $CASTLE_DIFF_FILE, explain the reasoning on stdout (the journal,
-# not a chat scrollback, is where the account has to live — see
-# docs/architecture.md's worker seat description).
+# a prompt: read the request, diagnose in the actual repo, make the
+# change in the writable copy at $CASTLE_EDIT_DIR — `castle work`
+# generates the diff from it, so no model here composes a hunk header
+# (docs/tasks/0053-diffs-are-generated-not-composed.md) — and explain
+# the reasoning on stdout (the journal, not a chat scrollback, is where
+# the account has to live — see docs/architecture.md's worker seat
+# description).
 #
 # THE PROMPT IS THE ONLY LEVER over how a real tenant uses `--blocking`
 # and `--refs`. Nothing else steers it: there is no flag, no setting and
@@ -54,6 +57,14 @@ set -euo pipefail
 # prompt heredoc below documents, met from a different direction.
 : "${CASTLE_TARGET_FILE:?castle-worker-claude: CASTLE_TARGET_FILE must be set (see cmd_work in agent/castle)}"
 : "${CASTLE_FINDING_FILE:?castle-worker-claude: CASTLE_FINDING_FILE must be set (see cmd_work in agent/castle, and docs/tasks/0042-finding-outbox.md for the lane it opens)}"
+# The writable copy of every configured checkout
+# (docs/tasks/0053-diffs-are-generated-not-composed.md). Required, not
+# defaulted: with no copy to edit, this tenant cannot propose anything
+# at all, and the prompt below would be telling a model to write to a
+# directory that is not there. A missing variable means an `agent/castle`
+# older than this file, which is a deployment fault worth one loud line
+# rather than a turn that quietly produces nothing.
+: "${CASTLE_EDIT_DIR:?castle-worker-claude: CASTLE_EDIT_DIR must be set (see cmd_work in agent/castle, and docs/tasks/0053-diffs-are-generated-not-composed.md for what the tenant does with it)}"
 # The tenant's own last resort, and only that. `castle work` no longer
 # supplies a fallback of its own — an unconfigured turn refuses before
 # a tenant is ever started (docs/tasks/0024-config-target.md §16) — so
@@ -158,7 +169,7 @@ castle_resolve_path() {
 }
 
 sandbox_root="$(castle_resolve_path "$HOME")"
-for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE CASTLE_EDIT_DIR; do
   deliverable_path="$(castle_resolve_path "${!deliverable_var}")"
   # The quoted portion of the pattern is literal in bash, so a home
   # directory containing a glob character is compared as itself. The
@@ -167,7 +178,7 @@ for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; 
   case "$deliverable_path/" in
     "$sandbox_root"/*) ;;
     *)
-      echo "castle-worker-claude: refusing to run. This tenant execs a headless claude, which is sandboxed to write only beneath ${sandbox_root}, and castle work handed it \$${deliverable_var} at ${deliverable_path} — outside that. Nothing would be able to write the errand deliverables, and a turn that cannot deliver must fail loudly rather than produce an empty channel with a completed result. Point castle.agent.stateDir (modules/agent) at a directory under ${sandbox_root}: castle work allocates both output files beneath it (docs/tasks/0039-worker-writable-deliverables.md)." >&2
+      echo "castle-worker-claude: refusing to run. This tenant execs a headless claude, which is sandboxed to write only beneath ${sandbox_root}, and castle work handed it \$${deliverable_var} at ${deliverable_path} — outside that. Nothing would be able to write the errand deliverables, and a turn that cannot deliver must fail loudly rather than produce an empty channel with a completed result. Point castle.agent.stateDir (modules/agent) at a directory under ${sandbox_root}: castle work allocates its output files and the copy this tenant edits beneath it (docs/tasks/0039-worker-writable-deliverables.md, docs/tasks/0053-diffs-are-generated-not-composed.md)." >&2
       exit 1
       ;;
   esac
@@ -264,6 +275,35 @@ ${CASTLE_MECHANISM_ROOT_INVALID} is not a usable checkout\" is a
 misconfiguration your resident can fix; \"no mechanism checkout is available\"
 describes a deliberate choice, and reporting the first as the second hides a
 typo behind a design decision."
+fi
+
+# The copies the tenant edits, named in step 2
+# (docs/tasks/0053-diffs-are-generated-not-composed.md). THREE BRANCHES,
+# matching mechanism_note and sweep_note above, and for the reason
+# stated there: `castle work` creates a copy per checkout it actually
+# configured, so on a host with no mechanism checkout there is no
+# mechanism directory, and a prompt that listed one anyway would be
+# telling the tenant to edit a path that is not there. That is the same
+# collapse of "absent" into "configured" the three-state channel exists
+# to prevent, met in the one place the copy makes it concrete.
+edit_dirs_note="     ${CASTLE_EDIT_DIR}/private
+       — a copy of ${CASTLE_PRIVATE_ROOT}
+
+   There is NO mechanism directory in your copy, because no mechanism
+   checkout is configured on this host. That is the normal case and the
+   MECHANISM bullet above says what follows from it."
+if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
+  edit_dirs_note="     ${CASTLE_EDIT_DIR}/private
+       — a copy of ${CASTLE_PRIVATE_ROOT}
+     ${CASTLE_EDIT_DIR}/mechanism
+       — a copy of ${CASTLE_MECHANISM_ROOT}"
+elif [ -n "${CASTLE_MECHANISM_ROOT_INVALID:-}" ]; then
+  edit_dirs_note="     ${CASTLE_EDIT_DIR}/private
+       — a copy of ${CASTLE_PRIVATE_ROOT}
+
+   There is NO mechanism directory in your copy. One IS configured, at
+   ${CASTLE_MECHANISM_ROOT_INVALID}, and it is not a usable checkout, so
+   there was nothing to copy out of it. Call it unusable, never missing."
 fi
 
 # The sweep tools ship in the PUBLIC repo, under tools/, which
@@ -535,11 +575,35 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    decides where host modules ought to live, and you must not decide
    it either — look.
 
-2. Produce a unified diff of the fix and write it, and only it, to the
-   file at \$CASTLE_DIFF_FILE (currently ${CASTLE_DIFF_FILE}). Write
-   ONE WORD to the file at \$CASTLE_TARGET_FILE (currently
-   ${CASTLE_TARGET_FILE}) naming which checkout that diff's paths
-   resolve against: either
+2. Make the change by EDITING A FILE. There is a writable copy of each
+   checkout above at \$CASTLE_EDIT_DIR (currently ${CASTLE_EDIT_DIR}),
+   one directory per checkout:
+
+${edit_dirs_note}
+
+   Every tracked file of a checkout is already in its copy, at the same
+   relative path and carrying the same bytes it carries in the
+   checkout. To change
+   resident.nix in the private layer, open the copy at
+   ${CASTLE_EDIT_DIR}/private/resident.nix and edit it in place; change
+   as many files as the fix needs, in ONE of those directories.
+
+   YOU DO NOT WRITE A DIFF. When you exit, this harness compares your
+   copy against an untouched one it kept and generates the unified diff
+   itself; that patch is what your resident reviews. The first proposal
+   this seat ever produced was composed by hand and git refused to parse
+   it — a hunk header off by one, and a blank context line written as an
+   empty line rather than as a single space. Nothing you can do here
+   reproduces either, because the arithmetic and the whitespace are no
+   longer yours to get right.
+
+   \$CASTLE_DIFF_FILE is still in your environment and is NOT yours to
+   write. It is there for tenants other than you. If you write one
+   anyway it is discarded in favour of the generated patch, and the
+   record says so.
+
+   Write ONE WORD to the file at \$CASTLE_TARGET_FILE (currently
+   ${CASTLE_TARGET_FILE}) naming which checkout you edited: either
 
      private
 
@@ -547,19 +611,48 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
 
      mechanism
 
-   Both files together, or neither. If no change is warranted, leave
-   both empty and say why on stdout.
+   That word is a cross-check and not the answer: the checkout is taken
+   from the copy you actually edited, and if your word disagrees with
+   that the record says so plainly. Write it anyway — a turn that
+   disagrees with itself about which repository it just changed is
+   exactly the confusion worth catching.
 
-   THOSE TWO PATHS ARE THE ONLY CHANNEL. If you cannot write either
-   file — a permission error, a sandbox refusal, a full disk, anything
-   — do NOT put the diff somewhere else. Not in your home directory,
-   not in either checkout, not in a scratch file you name on stdout.
-   Say plainly on stdout that the write failed, name the path and the
-   error, and stop. Nothing reads any other location: a diff written
+   If no change is warranted, edit nothing and say why on stdout.
+
+   THAT DIRECTORY IS THE ONLY CHANNEL. If you cannot write inside it —
+   a permission error, a sandbox refusal, a full disk, anything — do
+   NOT put the change somewhere else. Not in your home directory, not
+   in either checkout, not in a scratch file you name on stdout. Say
+   plainly on stdout that the write failed, name the path and the
+   error, and stop. Nothing reads any other location: a change written
    elsewhere is invisible to the resident review surface and to
    everything that applies an approved change, so it is not a partial
    success, it is a lost errand plus a stranded file for a later turn
    to explain. This has happened, twice, and cost two errands.
+
+   THREE SHAPES OF CHANGE CANNOT BE MADE THIS WAY. Each is stated here
+   as a sentence there is to quote, since 10 says a refusal that cannot
+   quote its rule is not one:
+
+     * A DELETION IS NOT PROPOSABLE FROM THIS SEAT. A file missing from
+       your copy means "this turn did not change it" and can never mean
+       "delete it" — deliberately, because a copy that fell short of the
+       checkout for any reason would otherwise become a patch deleting
+       your resident's files.
+     * A FILE YOUR COPY DOES NOT CARRY IS NOT PROPOSABLE FROM THIS SEAT.
+       The copy holds the checkout's tracked files as they stood when
+       this turn began. A path that is simply not there — a file in a
+       directory the checkout does not have, an untracked file, a file
+       this harness could not copy — cannot be changed here, and
+       creating it under a directory the copy does not have does not
+       reach the checkout either.
+     * A RENAME IS NOT PROPOSABLE FROM THIS SEAT, being a deletion and
+       an addition, and failing on the first half.
+
+   In each case: say so on stdout, quote the sentence, and file a
+   FINDING (8). Each of the three is a gap in this framework rather
+   than a fact about your resident's configuration, which is exactly
+   what that lane carries.
 
    A DIFF IS NOT THE ONLY THING A TURN MAY PRODUCE. If what you found
    is wrong with CASTLE ITSELF rather than with this configuration —
@@ -582,14 +675,18 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    AND IT BECOMES A FILE IN A PUBLIC REPOSITORY. The candidate patch is
    committed into a checkout of the framework, so every path, every
    context line and every value in it is written for strangers. Before
-   you stamp mechanism, check that the diff you wrote is against the
-   FRAMEWORK'S files and not against your resident's: the two checkouts
-   can legitimately hold the same relative paths — a private layer has
-   its own flake.nix and its own hosts/ — and nothing downstream can
-   tell them apart on your behalf. If you are not certain which
-   checkout your diff is against, DO NOT STAMP MECHANISM. Say so on
-   stdout and file a finding instead; a finding you wrote for strangers
-   is safe to publish and a diff you were unsure about is not.
+   you edit anything under ${CASTLE_EDIT_DIR}/mechanism, check that the
+   file you are about to change is the FRAMEWORK'S and not your
+   resident's: the two checkouts can legitimately hold the same
+   relative paths — a private layer has its own flake.nix and its own
+   hosts/ — and inside your copy the only thing telling them apart is
+   which of the two directories above you opened. That is a smaller
+   worry than it was, because the directory decides and nothing has to
+   infer it afterwards; it is not no worry, because the two copies look
+   alike. If you are not certain which checkout a change belongs to, DO
+   NOT EDIT THE MECHANISM COPY. Say so on stdout and file a finding
+   instead; a finding you wrote for strangers is safe to publish and a
+   change you were unsure about is not.
 
    SO WRITE THE FINDING AS WELL, whenever you target mechanism. The
    finding (8) is the problem statement the patch needs: what is wrong,
@@ -605,6 +702,9 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    change will be needed once that is adopted, and stop there. Nothing
    downstream can apply a patch spanning two repositories, so a
    two-repository diff strands the errand rather than finishing it.
+   This one is enforced rather than trusted: edit in both copies and
+   this harness generates NO patch at all and says why in the record,
+   which loses the whole turn. Pick one.
 3. Print your reasoning to stdout as plain prose: the diagnosis, why
    this layer, what you checked. This becomes the permanent journal
    record of the errand — nothing that lives only in your own scratch
@@ -648,9 +748,11 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
        "git diff" prints nothing on a clean tree, so using it to form
        a patch would mean editing a tracked file in the resident's real
        checkout first — a write under a configured root, which the
-       list below forbids outright. You COMPOSE the unified diff and
-       write it to \$CASTLE_DIFF_FILE, exactly as step 2 says; no
-       tracked file is touched at any point.
+       list below forbids outright. You do not have to and you must not
+       try: the change goes in your copy under \$CASTLE_EDIT_DIR, and
+       this harness runs the diff against a copy of its own after you
+       exit (2). No tracked file is touched at any point, and no hunk
+       header is ever written by hand.
 
        --no-optional-locks because "status" and "diff" REFRESH THE
        INDEX as a side effect, rewriting .git/index inside the
@@ -676,10 +778,12 @@ ${packet_nonce} BEGIN harness instruction: your contract (docs/architecture.md �
    your own model call, which means curl, wget, git push and anything
    else that reaches a remote; and ANY WRITE UNDER EITHER CONFIGURED ROOT — including
    editing a file in order to make a "git diff" show something. The
-   resident's checkout is yours to read and never to modify. Your
-   whole output is the reasoning on stdout, the composed diff in
-   \$CASTLE_DIFF_FILE, the one word in \$CASTLE_TARGET_FILE, and at
-   most one finding in \$CASTLE_FINDING_FILE (8).
+   resident's checkout is yours to read and never to modify; the copy
+   at \$CASTLE_EDIT_DIR is not under either root, which is the whole
+   point of it. Your whole output is the reasoning on stdout, the files
+   you edited under \$CASTLE_EDIT_DIR, the one word in
+   \$CASTLE_TARGET_FILE, and at most one finding in
+   \$CASTLE_FINDING_FILE (8).
 
    THESE TWO LISTS ARE ENFORCED, NOT MERELY STATED. The harness that
    started you hands them to your own tenant as a permission allowlist
@@ -1144,6 +1248,29 @@ for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; 
   fi
 done
 
+# The channel item 2 now writes through, which is a whole directory
+# rather than one file (docs/tasks/0053-diffs-are-generated-not-
+# composed.md): the copy of each configured checkout that this tenant
+# edits in place, and the one place in the filesystem it may write
+# freely. A subtree grant rather than a list of paths, because which
+# file a change belongs in is the diagnosis this seat exists to make and
+# cannot be known before the turn runs.
+#
+# THIS IS THE WHOLE OF THE WIDENING. No command was added to the allowed
+# list for it: no cp, no mkdir, no rm. A bash write is not covered by
+# the Edit deny below that keeps this tenant out of the resident
+# checkout (docs/backlog/bash-redirection-defeats-root-write-deny.md),
+# so granting any of those to save the harness a copy it can make itself
+# would widen that hole rather than this one.
+#
+# Both the path as handed over and its resolved form, for the same
+# reason the three files above grant both.
+permission_allow+=("Edit(/${CASTLE_EDIT_DIR}/**)")
+edit_dir_resolved="$(castle_resolve_path "$CASTLE_EDIT_DIR")"
+if [ "$edit_dir_resolved" != "$CASTLE_EDIT_DIR" ]; then
+  permission_allow+=("Edit(/${edit_dir_resolved}/**)")
+fi
+
 # 4's forbidden list, said in rules. Each line here has a line up there
 # behind it; nothing is denied that the prose does not forbid, because
 # a wall the contract never mentions is the same defect wearing the
@@ -1217,7 +1344,7 @@ for grant_root in "${CASTLE_MECHANISM_ROOT:-}" "$CASTLE_PRIVATE_ROOT"; do
   [ -n "$grant_root" ] || continue
   grant_root_resolved="$(castle_resolve_path "$grant_root")"
   grant_root_holds_deliverable=""
-  for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
+  for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE CASTLE_EDIT_DIR; do
     case "$(castle_resolve_path "${!deliverable_var}")/" in
       "$grant_root_resolved"/*) grant_root_holds_deliverable=yes ;;
     esac
@@ -1253,6 +1380,7 @@ permission_dirs=(
   /etc/pam
   /sys/class/graphics/fb0
   "$CASTLE_PRIVATE_ROOT"
+  "$CASTLE_EDIT_DIR"
 )
 if [ -n "${CASTLE_MECHANISM_ROOT:-}" ]; then
   permission_dirs+=("$CASTLE_MECHANISM_ROOT")
@@ -1266,6 +1394,18 @@ fi
 # directory that passed the rule check would fail this one — and fail
 # it silently, losing every deliverable, which is 0039 over again from
 # a third cause.
+# $CASTLE_EDIT_DIR is added as ITSELF, in the list above, rather than
+# through the loop below that adds a deliverable file by its parent
+# directory. It is already a directory; adding its parent would name the
+# turn scratch directory, which is a wider grant than anything asks for.
+#
+# Stated honestly rather than claimed: that parent is granted anyway,
+# because it is where the three deliverable files live and the loop
+# below adds their dirname. So the pristine copy `castle work` diffs
+# against is READABLE by this tenant. It is not writable — no Edit rule
+# matches it, and file writes are matched against Edit rules only — and
+# it is a copy of a checkout this tenant may read directly in any case,
+# so what it could learn there it already knows.
 for deliverable_var in CASTLE_DIFF_FILE CASTLE_TARGET_FILE CASTLE_FINDING_FILE; do
   deliverable_dir="$(dirname -- "${!deliverable_var}")"
   for deliverable_candidate in "$deliverable_dir" "$(castle_resolve_path "$deliverable_dir")"; do

@@ -823,7 +823,7 @@ STUB_PROMPT="$WORKDIR/stub-prompt.txt"
 # 0039 requires"; pointing the guard somewhere it cannot see would
 # be a test that disables the thing it is standing next to.
 PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$STUB_PROMPT" \
-  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_EDIT_DIR="$WORKDIR/stub-edit" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out.txt" 2>&1 \
   || fail "castle-worker-claude failed on a packet larger than one argv entry (E2BIG is back): $(cat "$WORKDIR/stub-out.txt")"
 # argv is no longer just [-p]: since docs/tasks/0047 the tenant also
@@ -863,7 +863,7 @@ log "  -- the same prompt rendered on a RESUMED turn, where the resume note exis
 STUB_PROMPT_RESUMED="$WORKDIR/stub-prompt-resumed.txt"
 PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$STUB_PROMPT_RESUMED" \
   CASTLE_RESUME_ANSWER_IDS="$A12" \
-  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  CASTLE_REQUEST_ID="$REQ12" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_EDIT_DIR="$WORKDIR/stub-edit" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$BIG_PACKET" > "$WORKDIR/stub-out-resumed.txt" 2>&1 \
   || fail "castle-worker-claude failed rendering a resumed turn: $(cat "$WORKDIR/stub-out-resumed.txt")"
 grep -q "^CASTLE-PACKET-abcdef0123456789 BEGIN harness instruction: this is a resumed turn$" "$STUB_PROMPT_RESUMED" \
@@ -1170,7 +1170,7 @@ log "the reference tenant refuses a prompt it could not authenticate"
 # remove, so the tenant refuses to run instead.
 printf 'a bare request body with no packet structure at all\n' > "$WORKDIR/tokenless-packet.txt"
 if PATH="$STUBDIR:$PATH" HOME="$WORKDIR" STUB_PROMPT_OUT="$WORKDIR/tokenless-prompt.txt" \
-  CASTLE_REQUEST_ID="$REQ1" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
+  CASTLE_REQUEST_ID="$REQ1" CASTLE_DIFF_FILE="$WORKDIR/stub-diff" CASTLE_TARGET_FILE="$WORKDIR/stub-target" CASTLE_FINDING_FILE="$WORKDIR/stub-finding" CASTLE_EDIT_DIR="$WORKDIR/stub-edit" CASTLE_PRIVATE_ROOT="$CASTLE_PRIVATE_ROOT" \
   "$REPO_ROOT/agent/castle-worker-claude" < "$WORKDIR/tokenless-packet.txt" \
   >"$WORKDIR/tokenless-out.txt" 2>&1; then
   fail "castle-worker-claude ran against a packet with no boundary token, so its own stated rule was false"

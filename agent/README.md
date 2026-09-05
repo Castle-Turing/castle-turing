@@ -249,12 +249,27 @@ castle show ID
   `request` record, runs `CASTLE_WORKER_COMMAND` (default: a headless
   `claude -p` via `agent/castle-worker-claude`) with the request body
   on its stdin and `$CASTLE_REQUEST_ID`/`$CASTLE_DIFF_FILE`/
-  `$CASTLE_TARGET_FILE`/`$CASTLE_FINDING_FILE` in its environment, and
+  `$CASTLE_TARGET_FILE`/`$CASTLE_FINDING_FILE`/`$CASTLE_EDIT_DIR` in its
+  environment, and
   folds the command's
-  stdout (reasoning), `$CASTLE_DIFF_FILE` (a diff, or nothing) and
+  stdout (reasoning), a diff and
   `$CASTLE_TARGET_FILE` (one word, or nothing) into a `result` record.
   `$CASTLE_FINDING_FILE` (one finding about the framework, or nothing)
   goes to the outbox instead — see "Filing a finding" below.
+  **The diff is generated, not collected**
+  (`docs/tasks/0053-diffs-are-generated-not-composed.md`):
+  `$CASTLE_EDIT_DIR` holds a writable copy of each configured checkout
+  (`private/`, `mechanism/`) with every tracked file in it, the tenant
+  edits files there, and after it exits `castle work` diffs that copy
+  against a pristine one it kept and records the result. The role is
+  taken from which copy was edited; `$CASTLE_TARGET_FILE`'s word is
+  kept as a cross-check and a disagreement is stated in the record.
+  `$CASTLE_DIFF_FILE` stays a supported channel for any tenant that
+  writes it — every scripted tenant in `test/agent-loop/` does — and
+  when both channels carry something the generated patch wins and the
+  discard is stated. The reference tenant no longer composes one: a
+  model hand-computing hunk headers is what produced the first live
+  proposal `git apply` refused to parse.
   **Those three files live under `<stateDir>/work/`, not under `/tmp`**
   (`docs/tasks/0039-worker-writable-deliverables.md`), and the reason
   is that a tenant has to be able to *write* them: the default tenant
@@ -1302,7 +1317,8 @@ a separate decision this task does not take.
 
 The resident runs the sweep, answers with a number, and
 one further turn — a fresh tenant handed that account and that answer —
-writes the diff around their number and stamps its target.
+makes the change around their number in its copy of the checkout, from
+which the patch is generated.
 
 This costs two model calls where one would have done, and an errand
 nobody answers yields no proposal at all, ever. Both are accepted: the
@@ -2157,6 +2173,7 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
 test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
 test/agent-loop/config-target.sh         # two real checkouts: which one a diff targets, and what happens when one is missing or broken
 test/agent-loop/approval.sh              # the resident approves, rejects or defers a proposed change — and nothing moves
+test/agent-loop/generated-diff.sh        # a tenant edits its copy, the harness generates the patch, and git apply --check accepts it
 ```
 
 `test/agent-loop/pty-drive.py` is not a harness: it is the shared pty

@@ -104,7 +104,9 @@ in
         Where the `castle` CLI's journal (and the resident model) live
         — see docs/architecture.md's "Where runtime state lives" and
         docs/private-layer.md. A `work/` subdirectory appears here too,
-        holding a worker turn's two output files while it runs: they
+        holding a worker turn's output files while it runs, and a copy
+        of each configured checkout for the tenant to edit
+        (docs/tasks/0053-diffs-are-generated-not-composed.md): they
         have to sit somewhere the worker tenant can write, and the
         default tenant is sandboxed to the resident's home directory
         (docs/tasks/0039-worker-writable-deliverables.md). It is
@@ -169,15 +171,21 @@ in
         The contract, whatever holds this option: the request body is
         piped to the command's stdin; `$CASTLE_REQUEST_ID`,
         `$CASTLE_DIFF_FILE`, `$CASTLE_TARGET_FILE`,
-        `$CASTLE_FINDING_FILE`, and — when
+        `$CASTLE_FINDING_FILE`, `$CASTLE_EDIT_DIR`, and — when
         configured and usable — `$CASTLE_PRIVATE_ROOT` and
         `$CASTLE_MECHANISM_ROOT` are set in its environment; reasoning
-        goes to stdout, a diff (or nothing) goes to
-        `$CASTLE_DIFF_FILE`, and the one word naming which checkout
-        that diff targets (`private` or `mechanism`) goes to
+        goes to stdout, and a proposed change is made by editing files
+        in `$CASTLE_EDIT_DIR`, a writable copy of each configured
+        checkout that `castle work` diffs afterwards
+        (docs/tasks/0053-diffs-are-generated-not-composed.md). A tenant
+        may instead write a diff to `$CASTLE_DIFF_FILE` itself; when
+        both carry something the generated patch wins. The one word
+        naming which checkout the change targets (`private` or
+        `mechanism`) goes to
         `$CASTLE_TARGET_FILE`, from where `castle work` folds it into
         the result record's `target` field
-        (docs/tasks/0024-config-target.md). One finding about the
+        (docs/tasks/0024-config-target.md) — cross-checked against, and
+        overridden by, the copy the tenant actually edited. One finding about the
         framework itself (or nothing) goes to `$CASTLE_FINDING_FILE`,
         from where the outbox commits it as a backlog entry on a new
         branch in the mechanism checkout, if one is configured — it is
