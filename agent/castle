@@ -559,15 +559,20 @@ PROPOSAL_OUTCOME_FIELD = "proposal-outcome"
 
 # `offered*` filed the question; `refused-*` did not.
 #
-# **`refused-patch-stale` is the applier's own code, verbatim.** Today
-# that single value covers both halves of what `git apply` refuses —
-# `_apply_one` writes it when `_patch_paths` cannot read the bytes as a
-# patch at all, and again when `git apply --check` says the patch no
-# longer fits. docs/tasks/0055 splits malformed from stale; this task
-# deliberately does not pre-empt that split and does not invent a third
-# spelling, and when 0055 lands it moves this vocabulary with the
-# applier's. A value here that the applier no longer knows is exactly
-# the divergence reusing the code is meant to prevent.
+# **`refused-patch-stale` is the applier's own code, verbatim** — and
+# it now says less than the applier's does. This single value still
+# covers both halves of what `git apply` refuses here: bytes git cannot
+# read as a patch at all, and a patch it reads fine and declines
+# against this tree. docs/tasks/0055 split those two in the applier,
+# where `refused-patch-malformed` names the first; this vocabulary was
+# meant to move with it and did not, so proposal time tells a resident
+# their change "does not apply to that checkout" for a patch that was
+# never a patch. Filed as
+# docs/backlog/proposal-time-cannot-name-a-malformed-patch.md rather
+# than closed in passing: a new value here needs prose on two more
+# surfaces and a decision about whether a malformed proposal should be
+# refused differently from a stale one, which is a task and not a
+# detail of one.
 PROPOSAL_OUTCOME_VALUES = (
     # git was asked and the patch applies against the target checkout
     # as it stands right now.
@@ -5576,7 +5581,17 @@ def _check_proposal_applies(root: str, diff_bytes: bytes) -> tuple[str, list[str
         # documented private-layer layouts leave a healthy config repo
         # dirty, so a repo-wide probe would excuse every failure forever
         # (docs/tasks/done/0026-apply-validate.md's reasoning, reused).
-        paths, _why_paths = _patch_paths(root, snapshot)
+        # **An environment fault here does not reopen a question git
+        # has already answered** (docs/tasks/0056-an-environment-fault-
+        # is-not-a-malformed-patch.md). At apply time the same fault
+        # aborts the sweep, because there `_patch_paths` runs before
+        # anything has established anything; here `--check` has already
+        # spoken about this patch, and this call is only looking for an
+        # excuse. An excuse that cannot be established is not one — the
+        # rule this function's own docstring states about `_dirty_under`
+        # — so both halves of a failed attribution fall through to the
+        # refusal below, which rests on git's answer and not on this.
+        paths, _why_paths, _paths_fault = _patch_paths(root, snapshot)
         dirty = None
         if paths:
             dirty, _why_dirty = _dirty_under(root, paths)
@@ -8668,9 +8683,46 @@ def _hostname() -> str:
     return name or os.uname().nodename
 
 
-def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, str]:
-    """The repository paths a patch touches, per git's own parser, or
-    `(None, why)`.
+def _patch_paths(
+    root: str, sidecar: pathlib.Path
+) -> tuple[list[str] | None, str, str]:
+    """The repository paths a patch touches, per git's own parser, or a
+    reason there are none to give.
+
+    Three answers in three slots, because they mean three different
+    things to a caller choosing between refusing a change and aborting
+    a sweep (docs/tasks/0056-an-environment-fault-is-not-a-malformed-
+    patch.md):
+
+    - `(paths, "", "")` — git read the patch, and these are its paths.
+    - `(None, why, "")` — git read the bytes and refused them. The kept
+      copy is not a patch, which is a fact about the proposal, and
+      `_apply_one` stamps `refused-patch-malformed` on it.
+    - `(None, "", fault)` — git could not be asked at all, or answered
+      in a shape this code cannot read. That is a fact about **this
+      machine** and says nothing whatever about the proposal, so
+      `_apply_one` gives it the shape `git apply --check` already gives
+      the same condition twenty lines below: `outcome: failed`, no
+      `apply-outcome`, and `ApplyEnvironmentFault` so one broken
+      machine cannot burn every pending authorization in a single
+      sweep.
+
+    Two slots rather than one string the caller parses, because the
+    difference between them is the difference between telling a
+    resident their proposal was never usable and telling them their
+    machine is broken — nothing that consequential may rest on a
+    substring match. `_run_git` splits the same two facts the same way
+    and for the same reason.
+
+    **Output this parser cannot read is the machine's fault, not the
+    proposal's.** git exited zero: it parsed the patch, and what failed
+    afterwards is this code meeting `--numstat -z` output it did not
+    expect. No re-proposal fixes that and no resident can act on it, so
+    routing it to `refused-patch-malformed` would tell them to ask for
+    the change again — the false remedy this whole split exists to
+    remove. Being wrong in this direction costs a sweep that stops
+    early and runs again; being wrong in the other spends an
+    authorization on a record that misdescribes it.
 
     `git apply --numstat -z` and not a hand-rolled reader of `+++`
     lines: this is the same code that will apply the patch a moment
@@ -8704,10 +8756,18 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
     reaches a record body, an error message or a notification must go
     through `_displayable` first. Nothing here renders one; the two
     places that do are marked.
+
+    **And that holds for `why` and `fault`, not only for the paths.**
+    An `OSError` stringifies with the path it failed on, and git's own
+    complaint names files; both strings can therefore carry a lone
+    surrogate into a record that must be UTF-8. Every caller routes
+    them through `_displayable` at the point of rendering, which is why
+    this returns them raw rather than sanitising here — the value a
+    caller might one day hand back to git keeps its bytes.
     """
     git = shutil.which("git")
     if git is None:
-        return None, "`git` is not on this session's PATH"
+        return None, "", "`git` is not on this session's PATH"
     try:
         probe = subprocess.run(
             [git, "-C", root, *GIT_ISOLATION_ARGS, "apply", "--numstat", "-z", "--", str(sidecar)],
@@ -8716,12 +8776,14 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
             env=_git_stripped_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, f"`git apply --numstat` could not be run there ({exc})"
+        return None, "", f"`git apply --numstat` could not be run there ({exc})"
     if probe.returncode != 0:
-        # git's own message, which may itself name a path, so it is
-        # decoded for display rather than for operation.
+        # The one case that is about the patch: git read these bytes and
+        # said they are not a patch. git's own message, which may itself
+        # name a path, so it is decoded for display rather than for
+        # operation.
         detail = (probe.stderr or b"").decode("utf-8", "replace").strip()
-        return None, detail or f"git exited {probe.returncode}"
+        return None, detail or f"git exited {probe.returncode}", ""
 
     tokens = (probe.stdout or b"").split(b"\0")
     if tokens and tokens[-1] == b"":
@@ -8731,11 +8793,14 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
     while index < len(tokens):
         fields = tokens[index].split(b"\t", 2)
         if len(fields) != 3:
-            return None, f"could not read git's own numstat output: {tokens[index]!r}"
+            return None, "", (
+                f"git's own `--numstat -z` output could not be read here: "
+                f"{tokens[index]!r}"
+            )
         if fields[2] == b"":
             # A rename: the two paths are the next two records.
             if index + 2 >= len(tokens):
-                return None, "git's numstat output ended mid-rename"
+                return None, "", "git's `--numstat -z` output ended mid-rename"
             paths.extend(
                 token.decode("utf-8", "surrogateescape")
                 for token in tokens[index + 1 : index + 3]
@@ -8744,7 +8809,7 @@ def _patch_paths(root: str, sidecar: pathlib.Path) -> tuple[list[str] | None, st
         else:
             paths.append(fields[2].decode("utf-8", "surrogateescape"))
             index += 1
-    return paths, ""
+    return paths, "", ""
 
 
 def _displayable(value: str) -> str:
@@ -10638,12 +10703,42 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
         # -----------------------------------------------------------
         # C.6 — the resident's own uncommitted work, under these paths only.
         # -----------------------------------------------------------
-        paths, why_paths = _patch_paths(root, snapshot)
+        paths, why_paths, paths_fault = _patch_paths(root, snapshot)
+        if paths_fault:
+            # git could not be asked which files this touches, or
+            # answered in a shape this code cannot read — a fact about
+            # this machine, and nothing at all about the change
+            # (docs/tasks/0056-an-environment-fault-is-not-a-malformed-
+            # patch.md). So it takes §C.1's shape rather than a refusal:
+            # `outcome: failed`, no `apply-outcome`, and the sweep
+            # aborts, because the next approval would meet the identical
+            # broken machine and an authorization spent is spent.
+            #
+            # `_displayable` on both, per `_patch_paths`' own docstring:
+            # an `OSError` stringifies with the path it failed on, and a
+            # record is UTF-8 by definition.
+            shown = _displayable(paths_fault)
+            result_id = _write_apply_result(
+                answer,
+                question,
+                outcome="failed",
+                apply_outcome="",
+                detail_lines=detail_lines
+                + [
+                    "",
+                    "Castle could not establish which files the change touches: "
+                    f"{shown}. Your configuration repository was not examined and "
+                    "nothing was written anywhere.",
+                ],
+            )
+            raise ApplyEnvironmentFault(shown, result_id)
         if paths is None:
             # Not staleness: nothing about the resident's repository is
             # implicated, because git never got far enough to compare it
-            # against one. The kept copy itself was never a patch git can
-            # read, which is a fact about the turn that produced it.
+            # against one. git read these bytes and refused them, so the
+            # kept copy was never a patch — a fact about the turn that
+            # produced it, and the one condition of the four here that
+            # is.
             return refuse(
                 "refused-patch-malformed",
                 [
@@ -10655,7 +10750,7 @@ def _apply_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]:
                     "account:",
                     "",
                     "```",
-                    why_paths,
+                    _displayable(why_paths),
                     "```",
                 ],
             )
