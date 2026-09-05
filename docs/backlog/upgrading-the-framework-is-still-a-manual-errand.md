@@ -39,11 +39,17 @@ stays unproven because upgrades keep going around it, and upgrades
 keep going around it because nobody trusts an unproven cycle with the
 machine.
 
-**What it needs, roughly.** An initiator: something periodic (the
-dispatch timer's shape, or `emcee tend`'s) that compares the pinned
+**What it needs, roughly.** An initiator: something periodic in the
+mechanism itself, the dispatch timer's shape, that compares the pinned
 framework revision against upstream main and, on a gap, files the pin
-bump through the existing lanes — as a proposal the resident approves,
-riding 0048's own framework-pin trigger from there. Judgment about
+bump through the existing lanes. Not a job for the development harness
+(the resident's ruling, on this entry's first draft): emcee runs
+sprints against the framework's repositories from a development
+machine, and a deployed system's ability to keep itself current must
+not depend on a tool the deployed system does not carry. The initiator
+ships in `modules/agent` like every other seat, and it files the bump
+as a proposal the resident approves, riding 0048's own framework-pin
+trigger from there. Judgment about
 *when* to propose (every commit? weekly? on request?) is private-layer
 configuration; the mechanism is public. The resident's password
 boundary maps onto what 0048 already built: the polkit-gated start of
