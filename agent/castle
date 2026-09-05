@@ -1913,7 +1913,7 @@ EDIT_MIRROR_MAX_BYTES = 32 * 1024 * 1024
 # "Binary files a/x and b/x differ", which is not something `git apply`
 # can consume, and an unappliable patch is the whole defect 0053
 # exists to remove.
-NUL = b"\0"
+MIRROR_NUL_BYTE = b"\0"
 
 
 def _mirror_roles(env: dict[str, str]) -> list[tuple[str, str]]:
@@ -2186,7 +2186,9 @@ def _generate_worker_patch(
             new_path = edit_root / rel
             new_bytes = new_path.read_bytes()
             old_bytes = old_path.read_bytes() if old_path.is_file() else None
-            if NUL in new_bytes or (old_bytes is not None and NUL in old_bytes):
+            if MIRROR_NUL_BYTE in new_bytes or (
+                old_bytes is not None and MIRROR_NUL_BYTE in old_bytes
+            ):
                 notes.append(
                     f"No patch was generated: `{rel}` holds binary content, and a "
                     "diff of binary content is not something the applier can "

@@ -1317,7 +1317,8 @@ a separate decision this task does not take.
 
 The resident runs the sweep, answers with a number, and
 one further turn — a fresh tenant handed that account and that answer —
-writes the diff around their number and stamps its target.
+makes the change around their number in its copy of the checkout, from
+which the patch is generated.
 
 This costs two model calls where one would have done, and an errand
 nobody answers yields no proposal at all, ever. Both are accepted: the
@@ -2172,6 +2173,7 @@ test/agent-loop/dispatch-test.sh         # the automatic-dispatch sweep: waterma
 test/agent-loop/resume.sh                # an answered blocking question resumes its errand, cold, exactly once
 test/agent-loop/config-target.sh         # two real checkouts: which one a diff targets, and what happens when one is missing or broken
 test/agent-loop/approval.sh              # the resident approves, rejects or defers a proposed change — and nothing moves
+test/agent-loop/generated-diff.sh        # a tenant edits its copy, the harness generates the patch, and git apply --check accepts it
 ```
 
 `test/agent-loop/pty-drive.py` is not a harness: it is the shared pty

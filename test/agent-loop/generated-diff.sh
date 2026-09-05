@@ -465,4 +465,8 @@ for path in sys.argv[1:]:
 PY
 
 assert_checkouts_untouched "at the end of the run"
+# Every record this suite wrote, read back by the validator: the notes
+# 0053 adds are prose in a body, and prose in a body is exactly where a
+# malformed record hides until something reads it.
+"$CASTLE" validate >/dev/null || fail "the journal this suite wrote does not validate"
 log "all assertions passed"
