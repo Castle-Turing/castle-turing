@@ -1540,10 +1540,12 @@ the same split `apply-outcome` and `build-outcome` make one authority
 further out.
 
 `refused-patch-stale` is the applier's own code rather than a new
-spelling. Today that value covers both halves of what `git apply`
-refuses — bytes it cannot read, and a patch that no longer fits — and
-`docs/tasks/0055` is where that splits. Reusing it is what keeps the
-two vocabularies from drifting apart in an append-only journal.
+spelling, and reusing it is what keeps the two vocabularies from
+drifting apart in an append-only journal. Here it still covers both
+halves of what `git apply` refuses — bytes it cannot read, and a patch
+that no longer fits — while the applier's copy split them in
+`docs/tasks/0055`. That is a gap rather than a decision:
+`docs/backlog/proposal-time-cannot-name-a-malformed-patch.md`.
 
 **A refusal is not a silence.** The result is written, carries the diff
 and git's own message, and routes exactly as any other result does. The
@@ -1693,7 +1695,7 @@ vocabulary, saying what happened to the change:
 | `refused-target-mechanism` | `completed`             | untouched | the change is to this framework, which this seat has no authority over |
 | `refused-artifact-changed` | `completed`             | untouched | a digest no longer matches |
 | `refused-no-patch`         | `completed`             | untouched | no sidecar, so no exact bytes to apply |
-| `refused-patch-malformed`  | `completed`             | untouched | git could not read the kept copy as a patch at all — the proposal was never usable, not stale |
+| `refused-patch-malformed`  | `completed`             | untouched | git read the kept copy and refused it as a patch — the proposal was never usable, not stale, and not this machine's fault either |
 | `refused-patch-stale`      | `completed`             | untouched | git read it fine and `git apply --check` refused it against this tree |
 | `refused-tree-dirty`       | `completed`             | untouched | the resident has uncommitted work under those paths |
 
@@ -1717,7 +1719,11 @@ they would actually type.
 Several shapes carry `outcome: failed` and **no `apply-outcome` at
 all**, because none of them says anything about the change: an
 environment fault, a `target` naming a role this applier has no
-checkout for, a `git apply` git never finished, and a commit that
+checkout for, a `git apply` git never finished, a `git apply
+--numstat` that could not be run or whose output this code could not
+read (`docs/tasks/0056-an-environment-fault-is-not-a-malformed-
+patch.md` — a machine that cannot answer "which files does this
+touch" has said nothing about the proposal), and a commit that
 reported success while leaving the repository in a state that
 contradicts it. Those records still name the answer, so they still bar
 it from a second automatic attempt — which is why `castle-modal --mode

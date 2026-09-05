@@ -1325,6 +1325,139 @@ assert_mechanism_untouched "after the environment-fault remedy"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after the refusal scenarios"
 
 # ---------------------------------------------------------------------
+log "an environment fault reading the patch is not a malformed patch"
+# ---------------------------------------------------------------------
+# docs/tasks/0056-an-environment-fault-is-not-a-malformed-patch.md.
+# `_patch_paths` answers "no paths" for four conditions, and only one of
+# them — git reading the bytes and refusing them — is a fact about the
+# proposal. The other three are facts about this machine, and a record
+# that tells the resident to ask for the change again is prescribing a
+# remedy that cannot work: the same proposal on a working machine
+# applies. Each case below asserts the shape §C.1 established for
+# exactly this — `outcome: failed`, no `apply-outcome`, no
+# `apply-commit` — and that it is NOT the malformed refusal.
+
+log "  -- no git on the applier's PATH: the sweep aborts rather than burning every approval"
+# Two eligible approvals, and they touch different files on purpose: the
+# second must still apply cleanly after the first one has, or this
+# scenario could not tell "the abort protected it" from "the abort cost
+# it".
+read -r REQ_NG1 R_NG1 Q_NG1 A_NG1 <<<"$(new_approval APPLYABLE-MODIFY-nogit)"
+read -r REQ_NG2 R_NG2 Q_NG2 A_NG2 <<<"$(new_approval APPLYABLE-NEWFILE-nogitb)"
+# One thing borrowed onto the stripped PATH — the interpreter `castle`'s
+# own shebang resolves through `/usr/bin/env` — and deliberately not
+# git, which is the condition under test. The EMPTY_BIN scenario further
+# down borrows both because it is about `nix` being absent instead.
+NOGIT_BIN="$WORKDIR/nogit-bin"
+mkdir -p "$NOGIT_BIN"
+ln -sf "$(command -v python3)" "$NOGIT_BIN/python3"
+FILES_BEFORE="$(journal_file_count)"
+if PATH="$NOGIT_BIN" "$CASTLE" apply --sweep \
+  >"$WORKDIR/nogit-sweep.out" 2>"$WORKDIR/nogit-sweep.err"; then
+  fail "a sweep on a machine with no git reported success: $(cat "$WORKDIR/nogit-sweep.out")"
+fi
+grep -q 'Aborting the sweep' "$WORKDIR/nogit-sweep.err" \
+  || fail "a sweep that could not read a patch did not abort: $(cat "$WORKDIR/nogit-sweep.err")"
+[ "$(journal_file_count)" = "$((FILES_BEFORE + 1))" ] \
+  || fail "the aborted sweep wrote more than the one record it accounts for"
+[ "$(count_apply_results_for "$A_NG2")" = "0" ] \
+  || fail "one broken machine spent the second authorization as well, which is what the abort exists to prevent"
+AP_NG1="$(newest_apply_result_for "$A_NG1")"
+grep -q '^outcome: failed$' "$AP_NG1" \
+  || fail "a machine that could not read the patch did not record a failed run: $(field_of "$AP_NG1" outcome)"
+grep -q '^apply-outcome:' "$AP_NG1" \
+  && fail "a broken machine claimed something about the change: $(field_of "$AP_NG1" apply-outcome)"
+grep -q '^apply-commit:' "$AP_NG1" \
+  && fail "an attempt that made no commit stamped one anyway: $(field_of "$AP_NG1" apply-commit)"
+grep -q 'could not establish which files the change touches' "$AP_NG1" \
+  || fail "the record does not say what could not be established: $(cat "$AP_NG1")"
+grep -q "not on this session" "$AP_NG1" \
+  || fail "the record does not name the missing git: $(cat "$AP_NG1")"
+# The defect this task removes, asserted at the sentence: a machine
+# fault must never send the resident back to ask for the change again.
+grep -q 'Ask for the change again' "$AP_NG1" \
+  && fail "a machine fault prescribed re-asking for the change, which would fail the same way: $(cat "$AP_NG1")"
+assert_private_untouched "after the no-git sweep"
+assert_mechanism_untouched "after the no-git sweep"
+"$CASTLE" validate >/dev/null || fail "the journal does not validate after the no-git sweep"
+
+log "  -- and the abort cost a delay, not an authorization: both changes still land"
+# A whole second, for the reason the environment-fault scenario above
+# gives: two apply records for one approval written inside the same
+# second sort by their random suffix.
+sleep 1
+"$CASTLE" apply "$A_NG1" >/dev/null \
+  || fail "the hand retry on a repaired machine failed"
+assert_private_changed_exactly "the hand retry after the no-git abort" "$A_NG1" resident.nix
+"$CASTLE" apply --sweep >/dev/null \
+  || fail "the sweep did not resume once git was reachable again"
+assert_private_changed_exactly "the authorization the abort protected" "$A_NG2" \
+  hosts/example/new-nogitb.nix
+assert_mechanism_untouched "after the no-git recovery"
+
+log "  -- git on PATH and unrunnable: the same shape, reached the other way"
+# `_checkout_fault` degrades past this exactly as its own docstring says
+# it does — git resolved but would not run, so it falls back to the
+# filesystem test and lets the apply proceed — and `_patch_paths` is
+# where the machine's state is met. Reuses the shebang trick the
+# malformed scenario builds.
+read -r REQ_NX R_NX Q_NX A_NX <<<"$(new_approval APPLYABLE-NEWFILE-nogitx)"
+if PATH="$BROKEN_GIT_BIN:$PATH" "$CASTLE" apply "$A_NX" \
+  >/dev/null 2>"$WORKDIR/brokengit.err"; then
+  fail "an apply on a machine whose git will not run reported success"
+fi
+AP_NX="$(newest_apply_result_for "$A_NX")"
+grep -q '^outcome: failed$' "$AP_NX" \
+  || fail "a git that would not run did not record a failed run: $(field_of "$AP_NX" outcome)"
+grep -q '^apply-outcome:' "$AP_NX" \
+  && fail "a git that would not run claimed something about the change: $(field_of "$AP_NX" apply-outcome)"
+grep -q 'could not be run there' "$AP_NX" \
+  || fail "the record does not say that git could not be run: $(cat "$AP_NX")"
+assert_private_untouched "after the unrunnable-git apply"
+assert_mechanism_untouched "after the unrunnable-git apply"
+
+log "  -- and git answering in a shape this code cannot read: still the machine, not the change"
+# The fourth condition, and the judgment call this task records: git
+# exits zero, so it parsed the patch perfectly well, and what fails is
+# this parser meeting `--numstat -z` output it did not expect. Nothing a
+# resident can act on, so it takes the environment shape rather than
+# telling them their proposal was never usable.
+read -r REQ_NS R_NS Q_NS A_NS <<<"$(new_approval APPLYABLE-NEWFILE-nogits)"
+NUMSTAT_BIN="$WORKDIR/numstat-bin"
+mkdir -p "$NUMSTAT_BIN"
+REAL_GIT="$(command -v git)"
+cat > "$NUMSTAT_BIN/git" <<GITSHIM
+#!/usr/bin/env bash
+# Everything through to the real git except the one probe that asks
+# which files a patch touches, which answers with a record carrying two
+# fields where the format has three. Exit 0, because that is the whole
+# point: git succeeded.
+for arg in "\$@"; do
+  if [ "\$arg" = "--numstat" ]; then
+    printf '1\t2'
+    exit 0
+  fi
+done
+exec "$REAL_GIT" "\$@"
+GITSHIM
+chmod +x "$NUMSTAT_BIN/git"
+if PATH="$NUMSTAT_BIN:$PATH" "$CASTLE" apply "$A_NS" \
+  >/dev/null 2>"$WORKDIR/numstat.err"; then
+  fail "an apply whose numstat output could not be read reported success"
+fi
+AP_NS="$(newest_apply_result_for "$A_NS")"
+grep -q '^outcome: failed$' "$AP_NS" \
+  || fail "unreadable numstat output did not record a failed run: $(field_of "$AP_NS" outcome)"
+grep -q '^apply-outcome:' "$AP_NS" \
+  && fail "unreadable numstat output was charged to the change: $(field_of "$AP_NS" apply-outcome)"
+grep -q 'could not be read here' "$AP_NS" \
+  || fail "the record does not say git's own output could not be read: $(cat "$AP_NS")"
+assert_private_untouched "after the unreadable-numstat apply"
+assert_mechanism_untouched "after the unreadable-numstat apply"
+"$CASTLE" validate >/dev/null \
+  || fail "the journal does not validate after the environment-fault scenarios"
+
+# ---------------------------------------------------------------------
 log "the evaluation gate, off: nothing is even reached for"
 # ---------------------------------------------------------------------
 # Behavioural rather than a grep over the source: a grep cannot tell a
