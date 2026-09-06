@@ -1,5 +1,6 @@
 Title: Task 0064 — the abort test reads a coin as a clock
 Model: deep
+Milestone: none — hygiene
 Model-because: the diff is a mechanical rewrite of one test scenario,
 but it is the transcription of a root-cause diagnosis this session
 performed against live CI history, and the wrong fix (a sleep between
