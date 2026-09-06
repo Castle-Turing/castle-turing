@@ -1,6 +1,8 @@
 # modules/dev — the tools this project's own development happens with:
-# Emacs, git, gh, ripgrep, fd, claude-code, and python3 (so the test
-# harnesses can run agent/castle from a checkout). System packages only
+# Emacs, git, gh, ripgrep, fd, claude-code, python3 (so the test
+# harnesses can run agent/castle from a checkout), and poppler-utils
+# (PDF text extraction for research work done in dev sessions — see
+# the note at its entry). System packages only
 # (no private data, no host assumptions) — the point of
 # docs/tasks/0005-dogfooding-desktop.md is that this project can host its
 # own development, so this module is deliberately boring: install the
@@ -28,5 +30,12 @@
     fd
     claude-code
     python3
+    # PDF text extraction is a predictable need of research tasks, and
+    # its absence is worse than a missing feature: on 2026-09-06 an
+    # agent improvised it via repeated `nix shell nixpkgs#poppler-utils`
+    # invocations, whose concurrent nixpkgs evaluations exhausted
+    # memory and hung the host (task 0063). A tool agents will
+    # predictably want is declared here once, not summoned per-command.
+    poppler-utils
   ];
 }
