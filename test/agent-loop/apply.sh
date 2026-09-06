@@ -1367,20 +1367,23 @@ grep -q 'Aborting the sweep' "$WORKDIR/nogit-sweep.err" \
 # version asserted the FIRST-created approval specifically, reading
 # that coin as a clock, and failed on CI whenever it landed the other
 # way — the 0046 hazard's fifth documented catch, this time in the
-# suite, a dozen lines above a sleep whose comment explains the same
-# fact about apply records (task 0064). The abort's contract is
+# suite, twenty-odd lines above a sleep whose comment explains the
+# same fact about apply records (task 0064; the suite convention this
+# bought is test/agent-loop/README.md). The abort's contract is
 # "exactly one authorization spent, whichever it was", and these
 # assertions now say exactly that.
+NG1_FILE="resident.nix"
+NG2_FILE="hosts/example/new-nogitb.nix"
 N_NG1="$(count_apply_results_for "$A_NG1")"
 N_NG2="$(count_apply_results_for "$A_NG2")"
 [ "$((N_NG1 + N_NG2))" = "1" ] \
   || fail "one broken machine spent $((N_NG1 + N_NG2)) authorizations, not exactly the one the abort accounts for"
 if [ "$N_NG1" = "1" ]; then
-  A_SPENT="$A_NG1" SPENT_FILE="resident.nix"
-  A_SPARED="$A_NG2" SPARED_FILE="hosts/example/new-nogitb.nix"
+  A_SPENT="$A_NG1" SPENT_FILE="$NG1_FILE"
+  A_SPARED="$A_NG2" SPARED_FILE="$NG2_FILE"
 else
-  A_SPENT="$A_NG2" SPENT_FILE="hosts/example/new-nogitb.nix"
-  A_SPARED="$A_NG1" SPARED_FILE="resident.nix"
+  A_SPENT="$A_NG2" SPENT_FILE="$NG2_FILE"
+  A_SPARED="$A_NG1" SPARED_FILE="$NG1_FILE"
 fi
 AP_SPENT="$(newest_apply_result_for "$A_SPENT")"
 grep -q '^outcome: failed$' "$AP_SPENT" \
