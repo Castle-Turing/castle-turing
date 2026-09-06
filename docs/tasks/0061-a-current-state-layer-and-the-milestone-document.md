@@ -1,5 +1,6 @@
 Title: Task 0061 — a current-state layer, and the milestone document as its first page
 Model: deep
+Milestone: m2-done
 Model-because: nothing here is mechanical and everything here is a
 commitment — this task decides which text in the repo is authoritative
 *now* versus historical record, a distinction every later task and
@@ -7,13 +8,13 @@ every generated report will lean on. The diff is small; a standard-tier
 implementer would produce the same files with plausibly-wrong authority
 semantics, and no test can catch "this document quietly claims more
 than was decided." The judgment is the deliverable.
-Requires: none
 
 # Task 0061 — a current-state layer, and the milestone document as its first page
 
-**Status: DRAFT — written 2026-09-05 during the workflow-design
-conversation, awaiting the resident's approval. Not yet committed;
-the resident's read of this file is the approval step.**
+**Status: approved by the resident 2026-09-06 (read via
+dovetail-show) and committed on its implementing branch — this PR is
+the implementation. The milestone content in §Decisions was updated
+2026-09-06 with the resident's stated direction before approval.**
 
 **Before starting:** read `CLAUDE.md` and
 `.claude/skills/implement-brief/SKILL.md`. Then

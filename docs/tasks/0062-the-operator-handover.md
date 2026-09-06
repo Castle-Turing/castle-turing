@@ -1,26 +1,15 @@
 Title: Task 0062 — the operator handover, a generated where-we-are report
 Model: deep
-Model-because: the deliverable is resident-facing text whose measured
-failure mode is calibrated-looking fiction — agent self-reports of
-completion are false 45–76% of the time and fluent summaries raise
-reader confidence without raising accuracy. The implementer's central
-job is *refusing* to write fluent prose where the ledger does not
-support it, and deriving every claim from artifact state instead. A
-standard-tier implementer would produce exactly the plausible summary
-this task exists to prevent, and no test distinguishes plausible from
-grounded until the generator's claim-checker exists — which is itself
-part of this task.
 Requires: 0061
 Milestone: m2-done
-Requires-because: every handover restates the milestone and reports
-the delta against it; without `docs/state/MILESTONE.md` there is no
-intent to report against, only activity.
+Model-because: the deliverable is resident-facing text whose measured failure mode is calibrated-looking fiction — agent self-reports of completion are false 45–76% of the time and fluent summaries raise reader confidence without raising accuracy. The implementer's central job is *refusing* to write fluent prose where the ledger does not support it, and deriving every claim from artifact state instead. A standard-tier implementer would produce exactly the plausible summary this task exists to prevent, and no test distinguishes plausible from grounded until the generator's claim-checker exists — which is itself part of this task.
+Requires-because: every handover restates the milestone and reports the delta against it; without `docs/state/MILESTONE.md` there is no intent to report against, only activity.
 
 # Task 0062 — the operator handover, a generated where-we-are report
 
-**Status: DRAFT — written 2026-09-05 during the workflow-design
-conversation, awaiting the resident's approval. Not yet committed;
-the resident's read of this file is the approval step.**
+**Status: approved by the resident 2026-09-06 (read via
+dovetail-show); queued — implementation follows task 0061's merge,
+which this file's Requires: header exists to enforce.**
 
 **Before starting:** read `CLAUDE.md` and
 `.claude/skills/implement-brief/SKILL.md`. Then

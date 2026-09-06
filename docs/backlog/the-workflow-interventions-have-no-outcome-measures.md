@@ -56,6 +56,12 @@ versioned public metric definitions, content-free-by-construction
 shareable measures, infrastructure facts as first-class variables,
 and a pre-registered clustered analysis plan.
 
+**Current consumer:** `docs/state/MILESTONE.md` [m2-constraints]
+first clause states this entry's baseline-before-intervention
+substance as a binding constraint — revise the two together, and a
+brief that finally specs the logging promotes this entry and cites
+that clause.
+
 **Where it lands.** A measurement section belongs in each
 intervention's brief as it is implemented (0061 and 0062 drafts
 already carry falsifiers; the ledger metrics above should be added

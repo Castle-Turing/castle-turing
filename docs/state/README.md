@@ -37,6 +37,23 @@ below are its remainder, stated for a stranger.
    *propose* one, citing the recurring instances — only the resident
    closes that question.
 
+## The public/private line, drawn explicitly
+
+CLAUDE.md's hard rule bans the resident's *stated priorities* from
+this repo, and a milestone document is exactly the kind of file that
+could drift across that line — so the line is stated rather than
+assumed, per Principle 01's test. What belongs here: the public
+framework's own direction — what the castle is building next, which
+is mechanism anyone deploying this repo inherits and every worker
+must read. What must never appear here: the resident's life — email
+priorities, calendar shape, people, plans, the stated-priorities
+document the vision describes, which lives in the private layer and
+nowhere else. The test for a milestone clause is the same as for any
+file: would this sentence be true and appropriate for a stranger's
+deployment of the framework to contain about *its* development? "The
+modal's UX gets redesigned by the pipeline" passes; anything about
+what the resident does with their days does not.
+
 ## How state documents are written
 
 Small structured prose — headings and clause keys, never an invented

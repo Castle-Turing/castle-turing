@@ -1,24 +1,17 @@
 Title: Task 0065 — the clarifying-questions intake
 Model: deep
-Model-because: the deliverable is the phase that decides what gets
-built — a requirements state document plus the discipline that fills
-it — and every measured failure in its literature is a plausible
-artifact hiding a wrong reading (silent commitment). A smaller
-implementer would produce a working question loop whose questions are
-the wrong questions; nothing mechanical can tell it so. What is
-mechanical here (the lints, the probe harness) is not the part that
-can be got wrong.
 Requires: 0061
-Requires-because: the phase's output is a `docs/state/` requirements
-document using 0061's clause keys, stated-versus-inferred marks, and
-ambiguity tags; without that layer there is nothing disciplined for
-answers to patch.
 Milestone: m2-done
+Model-because: the deliverable is the phase that decides what gets built — a requirements state document plus the discipline that fills it — and every measured failure in its literature is a plausible artifact hiding a wrong reading (silent commitment). A smaller implementer would produce a working question loop whose questions are the wrong questions; nothing mechanical can tell it so. What is mechanical here (the lints, the probe harness) is not the part that can be got wrong.
+Requires-because: the phase's output is a `docs/state/` requirements document using 0061's clause keys, stated-versus-inferred marks, and ambiguity tags; without that layer there is nothing disciplined for answers to patch.
 
 # Task 0065 — the clarifying-questions intake
 
-**Status: DRAFT — written 2026-09-06 at the close of the research
-loop, awaiting the resident's approval before implementation.**
+**Status: drafted 2026-09-06 at the close of the research loop,
+after the resident approved tasks 0061/0062 but NOT yet read by the
+resident. The review of this PR is the approval gate: merging queues
+this brief; requesting changes sends it back. It must not be
+implemented from a branch state the resident has not merged.**
 
 **Before starting:** read `CLAUDE.md` and
 `.claude/skills/implement-brief/SKILL.md`. Then

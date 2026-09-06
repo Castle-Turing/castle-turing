@@ -66,10 +66,12 @@ it explicitly.
 ### Position [m2-now] — patched per PR
 
 - Current-state layer: landing with task 0061's PR (this file).
-- Operator handover: brief approved (task 0062, queued), not built.
+- Operator handover: brief approved [stated 2026-09-06] (task 0062,
+  queued), not built.
 - Clarifying-questions intake: research complete
-  (`docs/research/elicitation-papers.md`); brief approved-for-queue
-  (task 0065), not built.
+  (`docs/research/elicitation-papers.md`); brief drafted (task 0065),
+  awaiting the resident's approval at this PR's review — [inferred]
+  that merging constitutes it.
 - Decomposition of a milestone into task briefs: not designed.
   [inferred] the largest unspecced piece of [m2-done].
 - Question routing to the resident: product plumbing exists (the
