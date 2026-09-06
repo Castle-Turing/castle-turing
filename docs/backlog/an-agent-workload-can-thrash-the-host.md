@@ -15,10 +15,14 @@ the host — stated or enforced a resource bound.
 less: parallel sessions, research dives, an emcee queue keeping
 multiple workers busy. Every layer currently assumes some other layer
 is watching memory. The host-side net is its own entry
-(`the-host-has-no-working-oom-defense.md`); this one is about the
-workload side, because even a working oomd only converts a hang into
-killed work — the crash this stems from destroyed in-flight tasks in
-four sessions either way.
+(the oomd half fixed by task 0063; the swap half in
+`the-kernel-oom-killer-has-no-swap-headroom.md`); this one is about
+the workload side, because even a working oomd only converts a hang
+into killed work — the crash this stems from killed in-flight work
+across all three Claude sessions then running (the delegating
+castle-turing session with its three research subagents, plus
+unrelated sessions in two other projects) and the castle timers that
+had just started and never printed a first line.
 
 **What went wrong at the delegation layer, specifically.** The
 subagent was never told the host's constraints, so it improvised —

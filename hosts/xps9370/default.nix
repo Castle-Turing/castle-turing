@@ -48,7 +48,7 @@
   # runaway workload gets its cgroup killed by memory pressure before
   # the whole machine starves. Disk-swap headroom for the kernel killer
   # is the deferred second half — see
-  # docs/backlog/the-host-has-no-working-oom-defense.md.
+  # docs/backlog/the-kernel-oom-killer-has-no-swap-headroom.md.
   systemd.oomd.enableUserSlices = true;
 
   # Wi-Fi is this chassis's network path; NetworkManager belongs here, not

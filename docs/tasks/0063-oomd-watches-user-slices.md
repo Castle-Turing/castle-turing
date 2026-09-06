@@ -56,25 +56,35 @@ pressure dynamics anyway.
 
 The tool whose absence the runaway improvised around is now declared:
 `poppler-utils` (for `pdftotext`) joins `modules/dev`'s packages, per
-the resident's direction on 2026-09-06. It lands in `modules/dev`
-rather than the host module because needing PDF text extraction is a
-fact about research workloads, not about this chassis. This partially
-promotes the tooling fix-direction of
-`docs/backlog/an-agent-workload-can-thrash-the-host.md`; the
-concurrency-cap and worker-contract directions there stay open. The
+the resident's direction on 2026-09-06. Placement, argued both ways:
+not the host module, because needing PDF text extraction is a fact
+about research workloads, not about this chassis; and `modules/dev`
+rather than `modules/agent`, because the improvising agents were
+subagents of an interactive development session — `modules/dev` is
+where those sessions and their tools (claude-code itself) live, while
+`modules/agent` is the castle seat runtime, which does no PDF
+research today. If the castle workers ever do, that is the moment to
+revisit. The tooling fix-direction in
+`docs/backlog/an-agent-workload-can-thrash-the-host.md` is addressed
+in part by this change and says so inline; its concurrency-cap and
+worker-contract directions stay open. The
 companion instruction — install or report missing tools, never
 per-command nixpkgs invocations — went to the resident's agent
 profile, which is outside this repo and noted here so the pairing is
 findable.
 
-## What this promotes, and what stays
+## What this specs, and what it defers
 
-This brief promotes the oomd half of
-`docs/backlog/the-host-has-no-working-oom-defense.md`; that entry is
-trimmed in this commit to its remainder — the disk-swap partition
-(more involved: disko layout, resize) and the two open questions
-(kill-target policy, telling the agent layer when oomd kills its
-work), which the resident explicitly deferred.
+The incident's OOM-defense finding splits in two, and this brief
+specs the userspace half directly from the diagnosis — no
+pre-existing backlog entry is promoted for it; the finding went from
+the resident's root-cause report straight to this brief. The kernel
+half — disk-swap headroom, more involved (disko layout, resize),
+which the resident explicitly deferred — is recorded alongside this
+brief as a fresh entry,
+`docs/backlog/the-kernel-oom-killer-has-no-swap-headroom.md`,
+which also carries the open questions this task leaves behind
+(kill-target policy among them; see the entry for the full list).
 
 ## Verification
 

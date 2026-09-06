@@ -57,6 +57,7 @@ the inquest is buildable from the journal alone, on this host, today.
 What the manual run cost is the argument for the mechanism: the
 evidence sat unread until a human asked, and the answer surfaced two
 distinct config defects that had been silently latent — see
-`the-host-has-no-working-oom-defense.md` and
+`the-kernel-oom-killer-has-no-swap-headroom.md` (its oomd sibling was
+specced and fixed directly by task 0063) and
 `an-agent-workload-can-thrash-the-host.md`, both filed from that
 diagnosis.

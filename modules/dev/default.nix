@@ -1,6 +1,8 @@
 # modules/dev — the tools this project's own development happens with:
-# Emacs, git, gh, ripgrep, fd, claude-code, and python3 (so the test
-# harnesses can run agent/castle from a checkout). System packages only
+# Emacs, git, gh, ripgrep, fd, claude-code, python3 (so the test
+# harnesses can run agent/castle from a checkout), and poppler-utils
+# (PDF text extraction for research work done in dev sessions — see
+# the note at its entry). System packages only
 # (no private data, no host assumptions) — the point of
 # docs/tasks/0005-dogfooding-desktop.md is that this project can host its
 # own development, so this module is deliberately boring: install the
