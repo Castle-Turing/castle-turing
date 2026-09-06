@@ -28,5 +28,12 @@
     fd
     claude-code
     python3
+    # PDF text extraction is a predictable need of research tasks, and
+    # its absence is worse than a missing feature: on 2026-09-06 an
+    # agent improvised it via repeated `nix shell nixpkgs#poppler-utils`
+    # invocations, whose concurrent nixpkgs evaluations exhausted
+    # memory and hung the host (task 0063). A tool agents will
+    # predictably want is declared here once, not summoned per-command.
+    poppler-utils
   ];
 }

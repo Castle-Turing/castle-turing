@@ -39,6 +39,18 @@
   # RAM swap instead of a swap partition keeps the disk layout simpler.
   zramSwap.enable = true;
 
+  # The cost of zram-only swap, learned the hard way (2026-09-06, task
+  # 0063): with no disk swap the kernel OOM killer effectively never
+  # trips — under exhaustion the machine thrashes in reclaim until
+  # someone holds the power button. systemd-oomd runs by default on
+  # NixOS but watches zero cgroups; this points it at the user slices,
+  # which is where every agent session on this host actually runs, so a
+  # runaway workload gets its cgroup killed by memory pressure before
+  # the whole machine starves. Disk-swap headroom for the kernel killer
+  # is the deferred second half — see
+  # docs/backlog/the-host-has-no-working-oom-defense.md.
+  systemd.oomd.enableUserSlices = true;
+
   # Wi-Fi is this chassis's network path; NetworkManager belongs here, not
   # in modules/base, since a headless/wired host wouldn't want it.
   #
