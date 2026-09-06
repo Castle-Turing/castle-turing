@@ -15,7 +15,12 @@ branch that implements it. That convention is unchanged and lives in
   names the tier the task runs on and `Model-because:` says why that
   tier rather than the adjacent one — both required, see CLAUDE.md's
   Delegation section. `Requires:` names prerequisite tasks and needs a
-  `Requires-because:` beside it, which the harness enforces. A task file is a *prompt*, not the
+  `Requires-because:` beside it, which the harness enforces.
+  `Milestone:` names the `docs/state/MILESTONE.md` clause key the
+  task serves, or the explicit value `none — hygiene` — so a task
+  serving nothing must say so rather than imply it (task 0061).
+  Deriving briefs cite the clause keys they build from, so a
+  milestone revision identifies exactly the tasks it invalidates. A task file is a *prompt*, not the
   brief itself — it names the authoritative sources (usually a
   `docs/backlog/` entry) and instructs the implementer to author the
   numbered brief here on its own branch, deleting any promoted backlog

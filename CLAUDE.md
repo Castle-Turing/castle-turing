@@ -25,6 +25,10 @@ decisions.
 - Design principles are numbered sequentially (`01-`, `02-`, …) and are only
   added deliberately — a principle doc is a commitment, not a note. Drafts
   live in PRs, not in `docs/principles/`.
+- Current truth lives in `docs/state/`, patched in the same PR that
+  changes it; briefs and backlog entries are records, cited by task
+  number as names. Deriving work cites state clause keys — see
+  `docs/state/README.md` (task 0061).
 - Deferred work lives in `docs/backlog/`, one plain-text file per item,
   not in an issue tracker — see that directory's README. Speccing an
   entry promotes it to a numbered brief and deletes the backlog file in
