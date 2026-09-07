@@ -461,14 +461,31 @@ clause. Each names the reversible side and why it was taken.
 4. **The window opens at the first sweep after the reboot, not at boot.**
    That means a machine nobody logs into never opens a window, which is
    correct: there is nobody to answer it and nothing watching would help.
+5. **`_running_system`, the system profile and the boot id are readable
+   from the environment**, so the harness can point them at fixture
+   closures and simulate a reboot. Nothing is granted by any of the
+   three: the privileged units take no arguments and polkit scopes the
+   grant by unit name, so a path this process was handed cannot widen
+   anything, and a fabricated boot id can at worst open a window on a
+   generation that is genuinely running.
 
 ## §J. Verification plan
 
 Agent-verifiable, and all of it in the existing harness:
 
-- `test/agent-loop/activation.sh` gains scenarios:
-  - a churn-free plan switches live — the existing scenarios, which must
-    keep passing unchanged with a `CASTLE_SESSION_UNITS` set;
+- `test/agent-loop/activation.sh` gains scenarios. Its fixture
+  generations are directories carrying `etc/systemd/system` trees of
+  symlinks into a shared "store" — including a drop-in directory beside
+  every unit, without which the churn-free scenario would pass by
+  accident of a fixture simpler than a real closure. The build stub
+  cannot produce them (`_last_store_path` checks the shape of what
+  `nix build` printed, rightly, since castle now opens that path), so
+  the fixture writes the closure into the build result afterwards and
+  re-stamps the question's `proposal-sha256` over the rewritten bytes.
+  - a churn-free change switches live, with `CASTLE_SESSION_UNITS` set
+    and a session unit carrying a drop-in;
+  - every scenario predating this task keeps passing with the variable
+    unset, which is the option's own "off" position;
   - a change touching a session-load-bearing unit **stages**: the
     staging unit is the one named to `systemctl`, the switch unit is
     not, the result carries `activation-outcome: staged` and names the
@@ -509,6 +526,8 @@ not pretend to.
   environment variables on the activation user unit.
 - `flake.nix` — the `example-activation` assertions.
 - `test/agent-loop/activation.sh` — the scenarios above.
+- `docs/architecture.md` — the activation bullet, which described the
+  standing root grant as two units.
 - `docs/backlog/the-switch-classifier-over-approximates.md`,
   `docs/backlog/the-check-paragraph-cannot-name-a-stale-surface.md` —
   the two residuals, filed rather than absorbed.
