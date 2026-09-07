@@ -692,6 +692,18 @@ make_generation() {
     name="${spec%%=*}"
     version="${spec##*=}"
     ln -sfn "$UNIT_STORE/$name-$version" "$dir/etc/systemd/system/$name"
+    # A drop-in directory beside every unit, because in a real closure
+    # these are *real directories inside the generation's own store
+    # path* rather than symlinks — so resolving one names the
+    # generation, and a comparison that did would report every unit
+    # carrying a drop-in as changed on every switch. With
+    # `dbus.service` in the default classification set that means
+    # staging everything, forever, and nothing about the failure would
+    # look like a bug. The fixture carries them so the churn-free
+    # scenario below is a real assertion rather than an accident of a
+    # simpler fixture.
+    mkdir -p "$dir/etc/systemd/system/$name.d"
+    ln -sfn "$UNIT_STORE/$name-$version" "$dir/etc/systemd/system/$name.d/overrides.conf"
   done
 }
 GEN_RUNNING="$WORKDIR/gen-running"

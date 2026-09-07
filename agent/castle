@@ -12908,6 +12908,44 @@ def _running_system() -> str:
 UNIT_TREES = ("etc/systemd/system", "etc/systemd/user")
 
 
+def _resolve_unit_entry(entry: pathlib.Path) -> str:
+    """What one entry in a generation's unit directory resolves to, in a
+    form that says nothing about *which* generation it came from.
+
+    That last clause is the whole of this function and it is not
+    obvious. A plain unit entry is a symlink into a per-unit store path
+    (`/nix/store/…-unit-dbus-broker.service/dbus-broker.service`), so
+    resolving it gives a value two generations can share. A drop-in
+    directory (`dbus-broker.service.d`) and a `.wants` directory are
+    **real directories inside the generation's own `system-units` store
+    path**, so resolving *those* gives a value that changes whenever any
+    unit in the generation changes — and every unit carrying a drop-in
+    would then look changed on every switch, which for a default naming
+    `dbus.service` means staging everything forever.
+
+    So a directory is resolved one level down instead: its children are
+    symlinks (absolute for a drop-in, relative-to-a-sibling for a
+    `.wants` entry), and both kinds resolve out into per-unit store
+    paths.
+
+    An entry that cannot be read is reported by name and not by path,
+    for the same reason: a value carrying the generation's own path
+    would compare unequal to itself.
+    """
+    if entry.is_dir() and not entry.is_symlink():
+        try:
+            children = sorted(entry.iterdir(), key=lambda child: child.name)
+        except OSError:
+            return f"(unreadable directory: {entry.name})"
+        return "\n".join(
+            f"{child.name} -> {os.path.realpath(child)}" for child in children
+        )
+    try:
+        return os.path.realpath(entry)
+    except OSError:
+        return f"(unreadable: {entry.name})"
+
+
 def _unit_map(toplevel: str) -> dict[str, str] | None:
     """Every unit name a generation carries, against what that name
     resolves to — or None if the generation's unit trees cannot be read
@@ -12915,7 +12953,10 @@ def _unit_map(toplevel: str) -> dict[str, str] | None:
 
     A `<unit>.d` drop-in directory is folded onto `<unit>`: either of
     the two differing is the unit differing, and keeping them apart
-    would report a drop-in as a unit name nothing matches.
+    would report a drop-in as a unit name nothing matches. What such an
+    entry resolves to is `_resolve_unit_entry`'s problem, and reading
+    that function is the only way to see why this one is not a two-line
+    `realpath` comparison.
 
     Both trees are read into one map. A name carried in system scope and
     in user scope at once is a name this treats as one unit, which
@@ -12935,15 +12976,7 @@ def _unit_map(toplevel: str) -> dict[str, str] | None:
         read_something = True
         for entry in entries:
             name = entry.name[:-2] if entry.name.endswith(".d") else entry.name
-            try:
-                target = os.path.realpath(entry)
-            except OSError:
-                # Not fatal and not silent: an entry that cannot be
-                # resolved compares unequal to whatever the other
-                # generation has there, which stages. `entry` is in the
-                # value so two unreadable entries with different names
-                # do not compare equal to each other.
-                target = f"(unreadable: {entry})"
+            target = _resolve_unit_entry(entry)
             previous = mapping.get(name)
             mapping[name] = target if previous is None else f"{previous}\n{target}"
     return mapping if read_something else None
@@ -13451,6 +13484,14 @@ def _stage_one(
         detail_lines=detail,
         commit_sha=commit_sha,
     )
+    # The return is deliberately not acted on: the record is already
+    # durable and the machine's boot default has already moved, so
+    # there is nothing left to refuse. What a failed marker costs is
+    # said on stderr by the writer — no reboot will be recognised and
+    # no further approval will be blocked — and it is a write to the
+    # same directory the journal lives in, so a journal that was
+    # writable a moment ago and this failing is not a case with a
+    # better answer than saying so.
     _write_staged_marker(
         answer_id=answer.id,
         result_id=result_id,

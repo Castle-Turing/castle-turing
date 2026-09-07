@@ -182,6 +182,28 @@ The changed set is then matched against a configured list of
 **session-load-bearing unit patterns** (`fnmatch`, so `home-manager-*`
 needs no username). A non-empty intersection means stage.
 
+**One trap in this, and it is invisible if you do not look.** A plain
+unit entry is a symlink into a *per-unit* store path
+(`/nix/store/…-unit-dbus-broker.service/dbus-broker.service`), which two
+generations can share. A drop-in directory (`dbus-broker.service.d`) and
+a `.wants` directory are **real directories inside the generation's own
+`system-units` store path**, so resolving one of those names the
+generation rather than the unit — and every unit carrying a drop-in
+would compare unequal on every switch. With `dbus.service` in the
+default set that is "stage everything, forever", and nothing about it
+would look like a defect. `_resolve_unit_entry` therefore resolves a
+directory entry one level down, where the children are symlinks that do
+resolve out into per-unit store paths.
+
+**Measured, not asserted.** Against two real generations of this
+project's own host (`system-8-link` and `system-9-link`, ordinary
+day-to-day switches), the classifier reports **7 changed units out of
+303** — `home-manager-wesley.service`, `dbus-broker.service`,
+`polkit.service`, `systemd-udevd.service`, `upower.service`,
+`castle-password-reminder-check.service` and `multi-user.target.wants`.
+That is a signal, not a smear. Without the drop-in fix above it is a
+smear.
+
 **Why this catches the incident exactly.** `home-manager-<user>.service`
 has `ExecStart=<setup-env> <activationPackage>`; the activation package's
 store path changes with any change to the resident's home content,
