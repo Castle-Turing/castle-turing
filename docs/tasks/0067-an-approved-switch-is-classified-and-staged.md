@@ -257,9 +257,13 @@ A new privileged unit, and it is the only privilege this task adds:
 Same fixed-command discipline as 0048 §H: one flakeref this module
 already knows, no arguments from any session, readable whole in
 `/etc/systemd/system`. It is strictly weaker than
-`castle-activate.service`, which the same resident may already start:
-`boot` sets the system profile and installs the bootloader and runs no
-activation script at all.
+`castle-activate.service`, which the same resident may already start —
+and that is read out of the pinned `switch-to-configuration`
+(`main.rs:1843–1861`) rather than assumed: the `boot` action installs
+the bootloader, syncs `/nix/store`, and calls `std::process::exit(0)`
+before the code that reads unit files, spawns the per-user switch, or
+runs the activation script. Zero runtime churn is what the program
+does, not a description of what it is for.
 
 It is added to the polkit rule's unit allowlist. It has **no
 `ExecStartPost`**: staging opens no health window, because nothing has
