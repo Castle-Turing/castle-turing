@@ -545,14 +545,28 @@ in
           nothing else does. There is no standing, autonomous or batched
           activation tier and this task deliberately does not add one.
 
-        **The root grant, and its scope.** Two system units are
-        declared, carrying exactly two commands:
+        **When the switch happens is Castle's call, not yours**
+        (docs/tasks/0067). An approved switch is classified by what its
+        activation would restart: one that would touch the units your
+        logged-in session is standing on — see
+        `castle.agent.activation.sessionUnits` — is made this machine's
+        boot default instead of run under that session, and you are told
+        so. Nothing on the machine changes until you reboot, and nothing
+        else is activated until you do.
+
+        **The root grant, and its scope.** Three system units are
+        declared, carrying exactly three commands:
 
             nixos-rebuild switch --flake <your repo>#<this host>
+            nixos-rebuild boot --flake <your repo>#<this host>
             nixos-rebuild switch --rollback
 
         and a polkit rule lets `castle.agent.activation.user` start
-        those two units and nothing else. No argument reaches them from
+        those three, plus the timer that opens a health window — which
+        your own session has to arm after a reboot that activated a
+        staged switch, and which can do nothing the rollback unit beside
+        it does not already permit outright. Nothing else. No argument
+        reaches any of them from
         your session, so there is nothing for a process running as you
         to forge. What that costs is stated rather than hidden: the
         privileged step rebuilds from your repository rather than
@@ -562,8 +576,9 @@ in
         activation records what you approved beside what
         `/run/current-system` says afterwards.
 
-        **The health window.** After a switch, Castle asks whether this
-        machine is working. If nothing says so within
+        **The health window.** After a switch — or after the reboot that
+        activates a staged one — Castle asks whether this machine is
+        working. If nothing says so within
         `castle.agent.activation.windowSeconds`, it rolls back to the
         previous generation on its own. That is the one thing in this
         system that decides without you, and the asymmetry is the
@@ -594,7 +609,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        The one account whose session may start the two privileged units
+        The one account whose session may start the privileged units
         `castle.agent.activation.enable` declares
         (docs/tasks/0048-activation.md §H). Written into a polkit rule
         that permits `org.freedesktop.systemd1.manage-units` on exactly
