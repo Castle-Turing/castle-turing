@@ -896,6 +896,13 @@ decides on your behalf."""
 #     Castle to switch" — unlike an apply, where a second option decides
 #     whether anything happens promptly, approving this *is* the switch
 #     starting, so the honest tense is the present one.
+#   * Since docs/tasks/0067, the condition on that sentence: it is true
+#     when nobody is logged in, and with a session open the change is
+#     staged for the next boot instead. The words above are kept
+#     because the grant did not narrow — what changed is *when* it is
+#     spent on the running machine — and a resident who is told only
+#     the unconditional half would be told something that is false
+#     every time they approve from their own desktop.
 #   * What `switch` cannot fully apply. A kernel, initrd or firmware
 #     change is staged into the new generation and takes effect at the
 #     next boot. A resident who reads "switched" as "everything I
@@ -905,7 +912,11 @@ decides on your behalf."""
 #   * That the window exists, and which way it falls. This is the one
 #     screen in this system where something expires and something
 #     decides on the resident's behalf, and it says so rather than
-#     inheriting the other two statements' closing promise.
+#     inheriting the other two statements' closing promise. Since 0067
+#     it also says that a staged change gets no window: a resident who
+#     read this screen and then found nothing watching their machine
+#     would have been misled by the omission, in exactly the shape the
+#     kernel clause above exists to prevent.
 #   * That it still pushes nothing. Same reason as the apply statement:
 #     "commit" is the word most likely to be read as "publish".
 REVIEW_BOUNDARY_STATEMENT_ACTIVATION = """\
@@ -913,22 +924,27 @@ Approving this is you authorizing this exact change, and that
 authorization is kept.
 
 APPROVING SWITCHES THE RUNNING SYSTEM TO THE BUILD DESCRIBED BELOW —
-this machine, now, without asking again. If the change below includes a
-new framework pin, approving also writes and commits it in your
-configuration repository first. It pushes nothing anywhere.
+this machine, without asking again — WHEN NOBODY IS LOGGED IN. WITH A
+SESSION OPEN IT IS STAGED INSTEAD, AND YOUR NEXT BOOT STARTS IT:
+switching restarts the units a session is made of, and Castle does not
+do that underneath you. If the change below includes a new framework
+pin, approving also writes and commits it in your configuration
+repository first, either way. It pushes nothing anywhere.
 
 A SWITCH DOES NOT APPLY EVERYTHING: a kernel, initrd or firmware change
 is staged into the new generation and takes effect at the next boot.
 
-CASTLE WILL THEN ASK WHETHER THIS MACHINE IS WORKING, AND ROLL BACK ON
-ITS OWN IF NOTHING SAYS SO IN TIME. That is the one thing in this system
-that decides without you, and it is deliberate: a good generation rolled
-back costs you one keypress, a bad one left running costs you a trip to
-the machine.
+IF IT SWITCHES, CASTLE THEN ASKS WHETHER THIS MACHINE IS WORKING AND
+ROLLS BACK ON ITS OWN IF NOTHING SAYS SO IN TIME. That is the one thing
+in this system that decides without you, and it is deliberate: a good
+generation rolled back costs you one keypress, a bad one left running
+costs you a trip to the machine. A STAGED CHANGE GETS NO SUCH WINDOW —
+nothing about the running machine changed, and the generation it is
+running now stays in your boot menu.
 
 Rejecting says this change is wrong. Setting it aside says you are not
-deciding it now. Both close it for good, and neither switches
-anything."""
+deciding it now. Both close it for good, and neither switches nor
+stages anything."""
 
 # The statement the health confirmation is offered under. Its last
 # paragraph is the deliberate opposite of the other three: here
@@ -1354,10 +1370,18 @@ REVIEW_CONFIRMATION_APPROVE_APPLYABLE = (
 # mean something different: approving starts a switch, rejecting closes
 # a question about *this machine*, and setting aside leaves the machine
 # exactly as it is.
+#
+# The approve line states the rule rather than predicting which half of
+# it applies (docs/tasks/0067 §F). This surface could infer the answer
+# — it runs inside a session, so a session exists — but that inference
+# would be a second implementation of a policy `agent/castle` already
+# owns, free to drift from it and wrong on the host where the resident
+# set `whenSessionActive = "switch"`.
 REVIEW_CONFIRMATIONS_ACTIVATION = {
     "approve": (
-        "Approved. This machine is switching now, and Castle will ask whether it "
-        "worked."
+        "Approved. While somebody is logged in Castle stages this for your next "
+        "boot rather than switching underneath the session; with nobody logged in "
+        "it switches now and asks whether it worked."
     ),
     "reject": "Declined. This machine is not switching.",
     "defer": "Set aside — this machine is not switching, and it will not be offered again.",

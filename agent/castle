@@ -710,6 +710,12 @@ ACTIVATION_OUTCOME_VALUES = (
     # a health question open and a window running.
     "switched",
     "switch-failed",
+    # Somebody was logged in, so the approved generation was made this
+    # machine's next boot instead of applied under their session
+    # (docs/tasks/0067 §B). No health question, no window: nothing about
+    # the running machine changed, so there is nothing to confirm.
+    "staged",
+    "stage-failed",
     # The window closed with the resident's confirmation in it.
     "confirmed",
     # The window closed without one, or the resident said the machine
@@ -733,16 +739,47 @@ ACTIVATION_OUTCOME_VALUES = (
 FRAMEWORK_INPUT_ENV = "CASTLE_FRAMEWORK_INPUT"
 DEFAULT_FRAMEWORK_INPUT = "castle-turing"
 
-# The two system units the polkit rule permits, and the ONLY two things
-# this seat may ask a privileged process to do
+# The three system units the polkit rule permits, and the ONLY three
+# things this seat may ask a privileged process to do
 # (docs/tasks/0048-activation.md §H). Overridable so the module names
 # them once and the harness can point them at a stub, never so a caller
 # can widen the grant: a name this process invents reaches a `systemctl`
 # that will refuse it, because polkit scopes the grant by unit name.
+#
+# The third arrived with docs/tasks/0067 and is the weakest of them: it
+# carries `nixos-rebuild boot`, which makes a generation the boot
+# default and touches no running unit.
 ACTIVATE_UNIT_ENV = "CASTLE_ACTIVATE_UNIT"
 ROLLBACK_UNIT_ENV = "CASTLE_ROLLBACK_UNIT"
+STAGE_UNIT_ENV = "CASTLE_STAGE_UNIT"
 DEFAULT_ACTIVATE_UNIT = "castle-activate.service"
 DEFAULT_ROLLBACK_UNIT = "castle-rollback.service"
+DEFAULT_STAGE_UNIT = "castle-stage.service"
+
+# What an approved activation does when somebody is logged in
+# (docs/tasks/0067-an-approved-switch-tears-down-the-session-that-
+# approved-it.md §B). `stage` makes the approved generation this
+# machine's next boot and leaves the running one alone; `switch`
+# applies it now, which restarts the units a session is made of.
+#
+# The default is `stage` and the fallback for anything unrecognised is
+# `stage`, in both cases because the other direction is the incident
+# this exists to prevent: a live switch tore down the desktop it then
+# asked, through that desktop, whether everything was working.
+WHEN_SESSION_ACTIVE_ENV = "CASTLE_ACTIVATION_WHEN_SESSION_ACTIVE"
+WHEN_SESSION_ACTIVE_VALUES = ("stage", "switch")
+DEFAULT_WHEN_SESSION_ACTIVE = "stage"
+
+# A logind session class this seat counts as somebody being logged in
+# (docs/tasks/0067 §D). Matched as a prefix, which is how `user-early`
+# and `user-incomplete` are covered without naming a list systemd is
+# free to extend.
+#
+# What is deliberately NOT counted: `manager`, which logind reports for
+# a running `user@.service` — count that and a host with lingering
+# enabled looks permanently occupied, which is the one configuration
+# where a live switch is safe — and `greeter`, where nobody is working.
+INTERACTIVE_SESSION_CLASS_PREFIX = "user"
 
 # How long the builder's `nix` invocations get, and how long a health
 # confirmation has to arrive. Both wired from modules/agent; both read
@@ -11348,6 +11385,130 @@ def rollback_unit() -> str:
     return os.environ.get(ROLLBACK_UNIT_ENV, "").strip() or DEFAULT_ROLLBACK_UNIT
 
 
+def stage_unit() -> str:
+    return os.environ.get(STAGE_UNIT_ENV, "").strip() or DEFAULT_STAGE_UNIT
+
+
+def when_session_active() -> str:
+    """The configured policy for an approved activation that meets a
+    login session (docs/tasks/0067 §B).
+
+    Tolerant in `_tolerant_seconds`' shape and for its reason — a
+    misconfigured value is a warning and a fallback, never a reason an
+    authorized activation silently never happens. The fallback is the
+    cautious one: an unreadable policy stages.
+    """
+    raw = os.environ.get(WHEN_SESSION_ACTIVE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_WHEN_SESSION_ACTIVE
+    if raw not in WHEN_SESSION_ACTIVE_VALUES:
+        print(
+            f"castle activate: {WHEN_SESSION_ACTIVE_ENV}={raw!r} is not one of "
+            f"{', '.join(WHEN_SESSION_ACTIVE_VALUES)}; using "
+            f"{DEFAULT_WHEN_SESSION_ACTIVE!r}",
+            file=sys.stderr,
+        )
+        return DEFAULT_WHEN_SESSION_ACTIVE
+    return raw
+
+
+def _interactive_sessions() -> tuple[list[str], str]:
+    """Who is logged in, as `(session ids, fault)`
+    (docs/tasks/0067 §D).
+
+    **The question is "is anybody logged in", not "is the resident
+    logged in".** `switch-to-configuration`'s user pass walks every
+    logind user with a live `/run/user/<uid>` and reloads that user's
+    manager, so a session belonging to somebody else is torn down by a
+    live switch exactly as the resident's is. No username is consulted
+    here and `castle.agent.activation.user` is not the answer to this
+    question.
+
+    One `loginctl` call, in its own JSON form rather than by parsing
+    the table it prints for people. `class` is the only field this
+    needs, and `State` is deliberately not fetched: `list-sessions`
+    does not carry it, so it would cost a `show-session` per session,
+    and the only thing it could buy is treating a `closing` session as
+    absent — a second call whose one possible effect is to choose the
+    live switch more often. A session that is closing still has a user
+    manager for the switch to reload.
+
+    `fault` is non-empty where logind could not be asked or did not
+    answer in a shape this understands. Every such case is the caller's
+    cue to take the cautious path, so nothing here guesses that the
+    machine is empty.
+    """
+    loginctl = shutil.which("loginctl")
+    if loginctl is None:
+        return [], "`loginctl` is not on this session's PATH"
+    try:
+        proc = subprocess.run(
+            [loginctl, "list-sessions", "--json=short"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=CHECKOUT_PROBE_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return [], f"logind did not answer within {CHECKOUT_PROBE_SECONDS}s"
+    except OSError as exc:
+        return [], f"`loginctl` could not be run ({exc})"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return [], (
+            "`loginctl list-sessions` failed"
+            + (f": {detail[-1]}" if detail else f" (exit {proc.returncode})")
+        )
+    try:
+        listed = json.loads(proc.stdout or "")
+    except ValueError as exc:
+        return [], f"logind's session list is not readable as JSON ({exc})"
+    if not isinstance(listed, list):
+        return [], "logind's session list is not a JSON array"
+    sessions: list[str] = []
+    for entry in listed:
+        if not isinstance(entry, dict):
+            return [], "logind listed a session this does not understand"
+        klass = str(entry.get("class", "")).strip()
+        if klass.startswith(INTERACTIVE_SESSION_CLASS_PREFIX):
+            sessions.append(str(entry.get("session", "?")).strip() or "?")
+    return sessions, ""
+
+
+def _activation_mode() -> tuple[str, list[str]]:
+    """Whether to switch this machine now or stage the approved
+    generation for its next boot, and what to say about it in the
+    record (docs/tasks/0067 §B).
+
+    Returns `("switch" | "stage", detail_lines)`. Every uncertainty
+    resolves to `stage`, which changes nothing about the machine as it
+    is running.
+    """
+    sessions, fault = _interactive_sessions()
+    if fault:
+        return "stage", [
+            "Castle could not ask this machine who is logged in "
+            f"({fault}), so it took the path that changes nothing "
+            "about the session you are in.",
+        ]
+    if not sessions:
+        return "switch", [
+            "Nobody is logged in to this machine, so the switch was applied to it "
+            "as it is running.",
+        ]
+    if when_session_active() == "switch":
+        return "switch", [
+            f"{len(sessions)} login session(s) are open on this machine, and "
+            "castle.agent.activation.whenSessionActive is set to \"switch\", so the "
+            "switch was applied under them.",
+        ]
+    return "stage", [
+        f"{len(sessions)} login session(s) are open on this machine. Switching "
+        "restarts the units a session is made of — the user manager, its services, "
+        "the desktop's own — so Castle did not do that underneath you.",
+    ]
+
+
 def activation_lock_path() -> pathlib.Path:
     """One builder-or-activation at a time, machine-wide — including the
     root-run health-window closer, which is why this is under
@@ -11483,6 +11644,14 @@ ACTIVATION_FIRST_LINES = {
         "Castle could not switch this machine to the configuration you approved. It "
         "is still running what it was running before."
     ),
+    "staged": (
+        "Castle staged the configuration you approved: this machine starts it at "
+        "your next boot. Nothing about the machine as it is running has changed."
+    ),
+    "stage-failed": (
+        "Castle could not stage the configuration you approved for the next boot. "
+        "This machine is unchanged, and it will start what it started last time."
+    ),
     "confirmed": (
         "You confirmed the new configuration is working, so Castle is keeping it."
     ),
@@ -11513,8 +11682,9 @@ ACTIVATION_FIRST_LINES = {
 # two reasons: it is the picker's first-line preview, and it is the line
 # `_fire_notification` sends.
 ACTIVATION_QUESTION_BODY = (
-    "Castle built a new system configuration for this machine. Approving switches "
-    "this machine to it. Nothing has been activated yet."
+    "Castle built a new system configuration for this machine. Approving adopts it: "
+    "switched now if nobody is logged in, staged for your next boot if somebody is. "
+    "Nothing has been activated yet."
 )
 
 # What a resident is told about `switch`'s limits, in the question's own
@@ -11532,6 +11702,23 @@ ACTIVATION_QUESTION_CAVEAT = (
     "change to the kernel, the initrd, or firmware is staged into the new "
     "generation and takes effect at the next boot instead — so a switch that "
     "succeeds does not mean every part of this is live."
+)
+
+# The second half of what approving buys, and it is in the body for
+# `ACTIVATION_QUESTION_CAVEAT`'s reason: a resident who approves from a
+# digest meets the whole body and nothing else
+# (docs/tasks/0067-an-approved-switch-tears-down-the-session-that-
+# approved-it.md §F). The wording a decision is spent under has to be
+# true of what spending it does, and since 0067 what it does depends on
+# whether anybody is logged in when it is spent — a fact the builder
+# cannot know when it files this question, which is why the sentence
+# names both outcomes rather than predicting one.
+ACTIVATION_SESSION_CAVEAT = (
+    "Castle does not switch this machine while somebody is logged in. Switching "
+    "restarts the units a session is made of — the user manager, its services, the "
+    "desktop's own — and doing that underneath a running session has already broken "
+    "one. With a session open it stages the change instead, and your next boot "
+    "starts it."
 )
 
 HEALTH_QUESTION_BODY = (
@@ -11566,6 +11753,28 @@ HEALTH_CHECK_WHY = (
 HEALTH_CHECK_INCOMPLETE = (
     "Castle could not establish every file this change touched, so that list may "
     "be short."
+)
+
+# The same paragraph, addressed to a resident who has not met the change
+# yet (docs/tasks/0067 §E). Only the opening moves: what to check
+# against, and why the reassuring answer is not evidence, are as true
+# after a reboot as they are before a confirmation.
+STAGED_CHECK_OPENING = "After you reboot, check something this change did not add."
+
+# What a staged result says about the machine, in the two sentences a
+# resident most needs and neither of which is true of a switch
+# (docs/tasks/0067 §E). Constants rather than inline prose for
+# `ACTIVATION_FIRST_LINES`' reason: this is resident-facing wording, and
+# wording lives where it can be read in one place and changed once.
+STAGED_NOT_LIVE = (
+    "This is not live. The machine you are using is running what it was running "
+    "before, and it goes on running that until you reboot."
+)
+STAGED_NO_WINDOW = (
+    "Nothing will roll this back on its own, because there is no health window: "
+    "nothing about the running machine changed, so there is nothing yet to "
+    "confirm. If it comes up wrong after the reboot, the generation running now "
+    "is still in the boot menu — choosing that entry undoes this."
 )
 
 
@@ -11971,7 +12180,13 @@ def _file_activation_question(build_result_id: str, anchor_id: str) -> str:
             seat=BUILDER_SEAT,
             refs=[anchor_id, build_result_id],
             body="\n".join(
-                [ACTIVATION_QUESTION_BODY, "", ACTIVATION_QUESTION_CAVEAT]
+                [
+                    ACTIVATION_QUESTION_BODY,
+                    "",
+                    ACTIVATION_QUESTION_CAVEAT,
+                    "",
+                    ACTIVATION_SESSION_CAVEAT,
+                ]
             ),
             extra={
                 PROPOSAL_SHA256_FIELD: hashlib.sha256(result_bytes).hexdigest(),
@@ -12547,14 +12762,25 @@ def _write_activation_result(
     return record_id
 
 
-def _write_activation_in_flight(answer_id: str, head_before: str) -> None:
+def _write_activation_in_flight(
+    answer_id: str, head_before: str, *, mode: str = "switch"
+) -> None:
     """The breadcrumb, before the first byte of the checkout moves.
 
     `_write_in_flight`'s contract and its own directory
     (`activation_in_flight_dir`). Written before the mutation, never
     after, so the window it covers is the whole of it.
+
+    `mode` is what the attempt was doing — `switch` or `stage`
+    (docs/tasks/0067 §F). It is in the file rather than derived later
+    because it cannot be derived later: which of the two units ran
+    depends on who was logged in at the time, and nobody is left to
+    ask. A marker with no `mode:` line is read as a switch, which is
+    what every marker written before 0067 was.
     """
-    payload = f"answer: {answer_id}\nhead-before: {head_before}\n".encode("utf-8")
+    payload = (
+        f"answer: {answer_id}\nhead-before: {head_before}\nmode: {mode}\n"
+    ).encode("utf-8")
     try:
         activation_in_flight_path(answer_id).write_bytes(payload)
     except OSError as exc:
@@ -12612,6 +12838,13 @@ def _reconcile_activation_in_flight(records: dict[str, Record]) -> list[str]:
         _question, build = binding
         approved = build.fields.get(BUILD_TOPLEVEL_FIELD, "").strip()
         running = _running_system()
+        try:
+            marker_text = marker.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            marker_text = ""
+        staged_attempt = any(
+            line.strip() == "mode: stage" for line in marker_text.splitlines()
+        )
         detail = [
             "An earlier attempt to activate this began and never wrote an account of "
             "itself — the process was killed, or the machine went down, between "
@@ -12621,6 +12854,31 @@ def _reconcile_activation_in_flight(records: dict[str, Record]) -> list[str]:
             f"What is running now:    {running or '(this machine could not say)'}",
             "",
         ]
+        if staged_attempt:
+            # A staged attempt cannot be settled by that comparison and
+            # must not be described by it (docs/tasks/0067 §F): staging
+            # never moves `/run/current-system`, so "those differ" is
+            # true of a stage that completed perfectly. What nobody
+            # recorded is whether the boot default moved, and this says
+            # exactly that rather than guessing either way.
+            detail.append(
+                "That attempt was staging this for the next boot rather than "
+                "switching, so those two were never going to be the same and the "
+                "machine you are using is unaffected either way. What nobody "
+                "recorded is whether the boot default moved. Look at the boot menu "
+                "at your next reboot, or run this again — staging the same "
+                "generation twice costs a rebuild and changes nothing else."
+            )
+            written.append(
+                _write_activation_result(
+                    cause=answer,
+                    anchor=build,
+                    outcome="interrupted",
+                    activation_outcome="stage-failed",
+                    detail_lines=detail,
+                )
+            )
+            continue
         if approved and running and approved == running:
             detail.append(
                 "Those are the same, so the switch did happen. What did not happen is "
@@ -12659,8 +12917,9 @@ def _running_system() -> str:
 
 
 def _start_unit(unit: str, *, what: str) -> tuple[int, str, str]:
-    """Ask the system manager to run one of the two units the polkit
-    rule permits, and wait for it (docs/tasks/0048-activation.md §H).
+    """Ask the system manager to run one of the three units the polkit
+    rule permits, and wait for it (docs/tasks/0048-activation.md §H,
+    docs/tasks/0067 §G).
 
     **`systemctl start` without `--no-block`, deliberately.** It blocks
     until the unit finishes and exits nonzero if the unit failed, which
@@ -12668,7 +12927,7 @@ def _start_unit(unit: str, *, what: str) -> tuple[int, str, str]:
     polling, and nothing to get out of step with what actually happened.
 
     **The unit takes no arguments and this passes none.** That is the
-    grant: two fixed `ExecStart` lines a resident can read in
+    grant: three fixed `ExecStart` lines a resident can read in
     `/etc/systemd/system`, with nothing reaching them from a session.
     A helper that activated whatever store path it was handed would make
     the request channel the security boundary, and that channel is a
@@ -12866,6 +13125,12 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
     approved = build.fields.get(BUILD_TOPLEVEL_FIELD, "").strip()
     target_rev = build.fields.get(BUILD_TARGET_REV_FIELD, "").strip()
     base_commit = build.fields.get(BUILD_BASE_COMMIT_FIELD, "").strip()
+    # Decided before anything is asked to move, like the paragraph
+    # below and for a sharper version of its reason: what this asks the
+    # machine to do depends on who is logged in *now*, and asking that
+    # after a live switch would be asking a question the switch itself
+    # may have changed the answer to (docs/tasks/0067 §B).
+    mode, mode_detail = _activation_mode()
     # Derived here, before anything is asked to move
     # (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md
     # §D). Every fact it needs is already in hand, and running `git` in
@@ -12873,7 +13138,11 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
     # this on a machine that may be broken in exactly the way the
     # paragraph exists to catch — a suggestion that disappears when it
     # is needed is not a suggestion.
-    check_lines = _health_check_lines(build, records)
+    check_lines = _health_check_lines(
+        build,
+        records,
+        opening=STAGED_CHECK_OPENING if mode == "stage" else HEALTH_CHECK_OPENING,
+    )
     detail: list[str] = []
     commit_sha = ""
 
@@ -12884,6 +13153,7 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
             target_rev=target_rev,
             base_commit=base_commit,
             detail=detail,
+            mode=mode,
         )
         if isinstance(outcome_or_none, tuple):
             return outcome_or_none
@@ -12894,12 +13164,20 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
     # machine to move and never wrote its account", which is the window
     # the reconciliation resolves by comparing the approved closure
     # against `/run/current-system`.
-    _write_activation_in_flight(answer.id, approved)
-    rc, output, fault = _start_unit(activate_unit(), what="switch")
+    # One of two units, chosen by `_activation_mode` and by nothing a
+    # caller can reach: `castle-activate.service` carries `nixos-rebuild
+    # switch` and `castle-stage.service` carries `nixos-rebuild boot`,
+    # each a fixed ExecStart line polkit permits by name
+    # (docs/tasks/0048-activation.md §H, docs/tasks/0067 §G).
+    unit = stage_unit() if mode == "stage" else activate_unit()
+    what = "stage this change for the next boot" if mode == "stage" else "switch"
+    _write_activation_in_flight(answer.id, approved, mode=mode)
+    rc, output, fault = _start_unit(unit, what=what)
     running = _running_system()
+    detail += ["", *mode_detail]
     detail += [
         "",
-        f"The unit this asked for:  {activate_unit()}",
+        f"The unit this asked for:  {unit}",
         f"What you approved:        {approved or '(the build named no store path)'}",
         f"What is running now:      {running or '(this machine could not say)'}",
     ]
@@ -12916,18 +13194,52 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
             "refused-no-privilege",
         )
     if fault or rc != 0:
+        failed = "stage-failed" if mode == "stage" else "switch-failed"
         return (
             _write_activation_result(
                 cause=answer,
                 anchor=build,
                 outcome="timeout" if fault and "within" in fault else "failed",
-                activation_outcome="switch-failed",
+                activation_outcome=failed,
                 detail_lines=detail
-                + ["", "The switch did not succeed:", ""]
+                + [
+                    "",
+                    "The staging did not succeed:"
+                    if mode == "stage"
+                    else "The switch did not succeed:",
+                    "",
+                ]
                 + ([f"    {fault}"] if fault else _log_tail(output)),
                 commit_sha=commit_sha,
             ),
-            "switch-failed",
+            failed,
+        )
+
+    if mode == "stage":
+        # No health question and no window, and the record says so
+        # rather than leaving a resident to notice that nothing ever
+        # asked (docs/tasks/0067 §E). The two facts a switched result
+        # gets from the question it files — what happens next, and what
+        # to check — are carried here in the result itself, because
+        # this is the only record a staged change writes.
+        detail += [
+            "",
+            STAGED_NOT_LIVE,
+            "",
+            STAGED_NO_WINDOW,
+            "",
+            *check_lines,
+        ]
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="completed",
+                activation_outcome="staged",
+                detail_lines=detail,
+                commit_sha=commit_sha,
+            ),
+            "staged",
         )
 
     if approved and running and approved != running:
@@ -12964,7 +13276,13 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
 
 
 def _bump_pin(
-    *, answer: Record, build: Record, target_rev: str, base_commit: str, detail: list[str]
+    *,
+    answer: Record,
+    build: Record,
+    target_rev: str,
+    base_commit: str,
+    detail: list[str],
+    mode: str = "switch",
 ):
     """Write and commit the `flake.lock` the resident approved. Returns
     the commit sha, or a `(result_id, outcome)` pair if it refused.
@@ -13058,7 +13376,7 @@ def _bump_pin(
             "refused-pin-stale",
         )
 
-    _write_activation_in_flight(answer.id, head_now)
+    _write_activation_in_flight(answer.id, head_now, mode=mode)
     message = "\n".join(
         [
             f"Adopt framework revision {target_rev[:12]}",
@@ -13169,7 +13487,9 @@ def _switch_touched_paths(
     return paths, complete
 
 
-def _health_check_lines(build: Record, records: dict[str, Record]) -> list[str]:
+def _health_check_lines(
+    build: Record, records: dict[str, Record], *, opening: str = HEALTH_CHECK_OPENING
+) -> list[str]:
     """The paragraph the health question carries under its first line
     (docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md).
 
@@ -13199,11 +13519,17 @@ def _health_check_lines(build: Record, records: dict[str, Record]) -> list[str]:
     Never empty: the closing sentence is true of every switch and needs
     no derivation, so a machine that can answer nothing else still gets
     the part the motivating incident actually needed.
+
+    `opening` is the one sentence that differs between the two results
+    this paragraph now rides on (docs/tasks/0067 §E) — a switch asks
+    what to check before confirming, a staged change asks what to check
+    after the reboot. Everything below it is identical because it is
+    about the change, not about when the resident meets it.
     """
     target_rev = build.fields.get(BUILD_TARGET_REV_FIELD, "").strip()
     if target_rev:
         return [
-            f"{HEALTH_CHECK_OPENING} It adopted framework revision {target_rev}, "
+            f"{opening} It adopted framework revision {target_rev}, "
             "which is not confined to any one file — it can change anything on this "
             "machine that your configuration takes from the framework.",
             "",
@@ -13211,9 +13537,9 @@ def _health_check_lines(build: Record, records: dict[str, Record]) -> list[str]:
         ]
     paths, complete = _switch_touched_paths(build, records)
     if not paths:
-        return [HEALTH_CHECK_OPENING, "", HEALTH_CHECK_WHY]
+        return [opening, "", HEALTH_CHECK_WHY]
     lines = [
-        f"{HEALTH_CHECK_OPENING} It rewrote these files in your configuration "
+        f"{opening} It rewrote these files in your configuration "
         "repository:",
         "",
     ]
@@ -13512,6 +13838,9 @@ def cmd_activate(args: argparse.Namespace) -> int:
       unbounded, because re-running by hand IS the retry path;
     * `castle activate --sweep` — the automatic one, bounded at one
       attempt per approval, and what the resident's user unit runs;
+      since docs/tasks/0067 it stages rather than switches whenever
+      somebody is logged in, which on a host without lingering is every
+      time it runs at all;
     * `castle activate --close-window` — what the **privileged** timer
       runs at a health window's deadline, and the only path in this
       program that ever runs as root.
@@ -13624,6 +13953,14 @@ def cmd_activate(args: argparse.Namespace) -> int:
         # promise about one generation at a time, and this is what keeps
         # it one.
         #
+        # It gates a staged activation too, which is not an oversight
+        # (docs/tasks/0067 §E). Staging changes nothing about the
+        # running machine, but it does rewrite the boot default, and
+        # moving that underneath a switch nobody has confirmed makes the
+        # resident's own rollback ambiguous: they would be choosing
+        # between generations one of which arrived while the machine was
+        # already unsure of itself.
+        #
         # It is not a lock and it cannot wedge: the window closes on its
         # own at the deadline, whatever the resident does, so this
         # delays a switch by at most one window.
@@ -13652,7 +13989,11 @@ def cmd_activate(args: argparse.Namespace) -> int:
             # switch has just changed the machine this process is
             # running on, a health window is open on it, and spending a
             # second authorization now would stack two unconfirmed
-            # generations with one rollback between them.
+            # generations with one rollback between them. The bound is
+            # kept for a staged one as well: the reason above does not
+            # apply to it, but the next sweep is a minute away, and two
+            # `nixos-rebuild boot` runs back to back would only mean the
+            # second silently superseded the first as the boot default.
             break
         # One routing pass at the end of every sweep, whether this one
         # acted or not — which is where this deliberately differs from
@@ -13668,10 +14009,16 @@ def cmd_activate(args: argparse.Namespace) -> int:
 
 
 # The activation outcomes a hand-run `castle activate` treats as success
-# for its exit code. `switched` and `confirmed` only: a rollback is a
-# correctly-reached conclusion, but a resident who typed this command
-# asked for a switch and did not get one.
-ACTIVATION_SUCCESS_OUTCOMES = ("switched", "confirmed")
+# for its exit code. A rollback is a correctly-reached conclusion, but a
+# resident who typed this command asked for a switch and did not get
+# one.
+#
+# `staged` is a success (docs/tasks/0067 §F): the policy names it, the
+# approval was spent, and the record says which of the two conclusions
+# was reached. The hand path does not override the policy — running
+# this command from a terminal is running it from a session, which is
+# the case that stages.
+ACTIVATION_SUCCESS_OUTCOMES = ("switched", "staged", "confirmed")
 
 
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
@@ -14676,7 +15023,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # window-closing outcomes are deliberately outside this: a
         # rollback the timer performed has no answer behind it at all,
         # which is the whole point of a deadline.
-        if activation_outcome in ("switched", "switch-failed") or (
+        if activation_outcome in (
+            "switched",
+            "switch-failed",
+            "staged",
+            "stage-failed",
+        ) or (
             activation_outcome is not None
             and activation_outcome.startswith("refused-")
         ):
