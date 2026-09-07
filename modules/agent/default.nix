@@ -1380,7 +1380,13 @@ in
       description = "Roll this machine back to its previous generation";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild switch --rollback";
+        # `--no-reexec`: a rollback needs no evaluation at all
+        # (`nix-env --rollback` plus the previous generation's own
+        # switch-to-configuration is the whole operation), and without
+        # it nixos-rebuild-ng re-execs into a build from `/etc/nixos`
+        # before ever reaching the rollback — which fails outright on a
+        # flake-only host with no `/etc/nixos` (docs/tasks/0066).
+        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild switch --rollback --no-reexec";
         Environment = [ "PATH=/run/current-system/sw/bin" ];
       };
     };

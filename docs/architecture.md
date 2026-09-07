@@ -406,8 +406,9 @@ as its own document:
   docs/tasks/0048-activation.md) is a **standing authority** and the
   first one in this project that is a **standing root grant**: it
   declares two privileged systemd units, carrying `nixos-rebuild switch
-  --flake <repo>#<host>` and `nixos-rebuild switch --rollback` and no
-  argument reaching them from anywhere, and a polkit rule permitting one
+  --flake <repo>#<host>` and `nixos-rebuild switch --rollback
+  --no-reexec` and no argument reaching them from anywhere, and a
+  polkit rule permitting one
   named account to start exactly those two. Since
   docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md it
   also declares a third, smaller thing without which the first two do
