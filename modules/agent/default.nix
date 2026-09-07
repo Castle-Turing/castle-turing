@@ -544,15 +544,20 @@ in
           on the review screen. Approving it switches this machine, and
           nothing else does. There is no standing, autonomous or batched
           activation tier and this task deliberately does not add one.
+          Since docs/tasks/0067, approving while somebody is logged in
+          makes the approved generation this machine's next boot instead
+          of switching underneath that session — see
+          `castle.agent.activation.whenSessionActive`.
 
-        **The root grant, and its scope.** Two system units are
-        declared, carrying exactly two commands:
+        **The root grant, and its scope.** Three system units are
+        declared, carrying exactly three commands:
 
             nixos-rebuild switch --flake <your repo>#<this host>
+            nixos-rebuild boot   --flake <your repo>#<this host>
             nixos-rebuild switch --rollback
 
         and a polkit rule lets `castle.agent.activation.user` start
-        those two units and nothing else. No argument reaches them from
+        those three units and nothing else. No argument reaches them from
         your session, so there is nothing for a process running as you
         to forge. What that costs is stated rather than hidden: the
         privileged step rebuilds from your repository rather than
@@ -570,6 +575,12 @@ in
         argument: a good generation rolled back costs you one keypress,
         a bad one left running costs you a trip to the machine with a
         USB stick.
+
+        A staged change opens no such window, and the record it writes
+        says so: nothing about the running machine changed, so there is
+        nothing yet to confirm, and the generation you are running stays
+        in the boot menu as the way back
+        (docs/tasks/0067 §E).
 
         **What a switch cannot fully apply.** A kernel, initrd or
         firmware change is staged into the new generation and takes
@@ -594,8 +605,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        The one account whose session may start the two privileged units
-        `castle.agent.activation.enable` declares
+        The one account whose session may start the three privileged
+        units `castle.agent.activation.enable` declares
         (docs/tasks/0048-activation.md §H). Written into a polkit rule
         that permits `org.freedesktop.systemd1.manage-units` on exactly
         those two unit names, for exactly this user, and nothing else.
@@ -652,6 +663,45 @@ in
         a few lines, this one may be building the whole system after a
         framework bump moved nixpkgs, which is a kernel and a desktop
         from source in the worst case.
+      '';
+    };
+
+    activation.whenSessionActive = lib.mkOption {
+      type = lib.types.enum [ "stage" "switch" ];
+      default = "stage";
+      description = ''
+        What an approved activation does when somebody is logged in to
+        this machine (docs/tasks/0067-an-approved-switch-tears-down-the-
+        session-that-approved-it.md). Wired into
+        `CASTLE_ACTIVATION_WHEN_SESSION_ACTIVE`.
+
+        `"stage"`, the default, makes the approved generation this
+        machine's next boot and leaves the running one alone —
+        `nixos-rebuild boot`, through `castle-stage.service`. `"switch"`
+        applies it to the machine as it is running, through
+        `castle-activate.service`, whoever is logged in.
+
+        The default is not caution for its own sake. Switching a live
+        machine reloads the user manager of every logged-in user,
+        restarts the user units whose definitions changed and restarts
+        their activation unit unconditionally — which is to say it
+        restarts the units a desktop session is made of. Doing that
+        underneath a running session has already broken one, on this
+        project's own machine, and the health question that switch then
+        filed had to travel through the session it had just torn down.
+
+        What you give up by staging is immediacy: an approved change is
+        not live until you reboot. What you get is that nothing which
+        was working stops working while you are using it, and that the
+        generation you are running stays in the boot menu as the way
+        back.
+
+        With nobody logged in this option changes nothing — the switch
+        is applied either way, because there is no session to protect.
+        Note that Castle does not enable lingering, so on a
+        single-user desktop the sweep that spends approvals only runs
+        while a session exists: with the default, that host stages every
+        time.
       '';
     };
 
@@ -822,6 +872,12 @@ in
         CASTLE_ACTIVATION_TIMEOUT = toString cfg.activation.timeoutSeconds;
         CASTLE_ACTIVATION_WINDOW = toString cfg.activation.windowSeconds;
         CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
+        # A fourth, for the same reason and one that bites harder
+        # (docs/tasks/0067 §G): a `castle activate <answer-id>` run by
+        # hand from a terminal inside the session is the exact case this
+        # policy exists for, and without this it would fall back to the
+        # CLI's own default rather than read the host's.
+        CASTLE_ACTIVATION_WHEN_SESSION_ACTIVE = cfg.activation.whenSessionActive;
       };
 
     # ---------------------------------------------------------------
@@ -1316,6 +1372,8 @@ in
         CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
         CASTLE_ACTIVATE_UNIT = "castle-activate.service";
         CASTLE_ROLLBACK_UNIT = "castle-rollback.service";
+        CASTLE_STAGE_UNIT = "castle-stage.service";
+        CASTLE_ACTIVATION_WHEN_SESSION_ACTIVE = cfg.activation.whenSessionActive;
       }
       # The framework checkout is passed here and NOT to the applier,
       # and the asymmetry is deliberate in both directions: the applier
@@ -1372,6 +1430,34 @@ in
         # if that session dies in the same instant the switch lands —
         # which is one of the failure modes the window is for.
         ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block castle-activation-window.timer";
+        Environment = [ "PATH=/run/current-system/sw/bin" ];
+      };
+    };
+
+    # The third unit, and the one an approved activation reaches on a
+    # machine somebody is using (docs/tasks/0067-an-approved-switch-
+    # tears-down-the-session-that-approved-it.md §G).
+    #
+    # `boot` rather than `switch`, and the difference is the whole
+    # task: switch-to-configuration's `boot` action installs the
+    # bootloader entry, syncs the store and exits before it stops,
+    # starts or reloads a single unit — and therefore before it reaches
+    # the pass that reloads every logged-in user's manager. Nothing in
+    # a session is restarted because the program returns before it can
+    # be.
+    #
+    # No `ExecStartPre` and no `ExecStartPost`, unlike its sibling:
+    # this opens no health window, so there is no window context to
+    # snapshot and no timer to arm (§E). What replaces the window is the
+    # boot menu, which needs nothing from this unit.
+    systemd.services.castle-stage = lib.mkIf cfg.activation.enable {
+      description = "Make this machine's configured system configuration its next boot";
+      # No wantedBy, for castle-activate.service's reason verbatim: this
+      # runs when a resident's session starts it through the polkit rule
+      # below, and never because a target pulled it in.
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild boot --flake ${cfg.repo.private}#${config.networking.hostName}";
         Environment = [ "PATH=/run/current-system/sw/bin" ];
       };
     };
@@ -1446,9 +1532,16 @@ in
     };
 
     # The grant itself. `org.freedesktop.systemd1.manage-units` scoped
-    # to two unit names and one user, in polkit's own rule language,
+    # to three unit names and one user, in polkit's own rule language,
     # which is what makes it reviewable as a rule rather than as a
     # program's argument handling.
+    #
+    # The third name (docs/tasks/0067) widens this grant by one command,
+    # and by the weakest of the three: `nixos-rebuild boot` against the
+    # same repository, the same flakeref and the same account as the
+    # switch already granted above, doing what that switch does minus
+    # everything that touches a running unit. A resident who granted
+    # the switch has already granted strictly more.
     #
     # **Read `action.lookup("unit")` and not `action.lookup("verb")`
     # alone.** systemd puts the unit name in the action's `unit`
@@ -1464,8 +1557,9 @@ in
     security.polkit = lib.mkIf cfg.activation.enable {
       enable = true;
       extraConfig = ''
-        // Castle Turing: the activation grant (docs/tasks/0048-activation.md).
-        // Scope: starting exactly two units, for exactly one user.
+        // Castle Turing: the activation grant (docs/tasks/0048-activation.md,
+        // widened by one unit in docs/tasks/0067).
+        // Scope: starting exactly three units, for exactly one user.
         polkit.addRule(function(action, subject) {
           if (action.id != "org.freedesktop.systemd1.manage-units") {
             return polkit.Result.NOT_HANDLED;
@@ -1474,7 +1568,9 @@ in
             return polkit.Result.NOT_HANDLED;
           }
           var unit = action.lookup("unit");
-          if (unit == "castle-activate.service" || unit == "castle-rollback.service") {
+          if (unit == "castle-activate.service" ||
+              unit == "castle-rollback.service" ||
+              unit == "castle-stage.service") {
             return polkit.Result.YES;
           }
           return polkit.Result.NOT_HANDLED;
@@ -1485,7 +1581,8 @@ in
     # The third half of the grant, and the one the first real
     # activation in this project's history died without
     # (docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md).
-    # `nixos-rebuild switch --flake` re-evaluates the resident's flake,
+    # `nixos-rebuild switch --flake` — and `boot --flake`, which
+    # docs/tasks/0067 added beside it — re-evaluates the resident's flake,
     # and nix opens that flake's git repository through libgit2, which
     # refuses a repository owned by somebody other than the process
     # reading it — the CVE-2022-24765 ownership protection, enforced by
@@ -1502,7 +1599,8 @@ in
     # against). `sudo` sets that variable; a systemd system unit has no
     # such variable and no such session.
     #
-    # **Why /etc/gitconfig and not GIT_CONFIG_* on the two units**,
+    # **Why /etc/gitconfig and not GIT_CONFIG_* on the units that
+    # evaluate the flake**,
     # which would look better scoped: libgit2 reads GIT_CONFIG_SYSTEM
     # and GIT_CONFIG_GLOBAL only for a repository opened with
     # GIT_REPOSITORY_OPEN_FROM_ENV, and nix's call site
