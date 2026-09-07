@@ -896,6 +896,17 @@ decides on your behalf."""
 #     Castle to switch" — unlike an apply, where a second option decides
 #     whether anything happens promptly, approving this *is* the switch
 #     starting, so the honest tense is the present one.
+#   * **When it starts, since docs/tasks/0067 made that two answers.**
+#     The word "now" came out of the first paragraph and became a
+#     paragraph of its own, because a switch that would restart what the
+#     resident's session is standing on is staged for the next boot
+#     instead of run under it. 0026 §A's rule — a proposal is decided
+#     under the statement it was offered under, forever, and no later
+#     wording reaches backwards — guards against *narrowing*, against a
+#     resident finding they authorized more than the screen said. This
+#     amendment moves the other way: every question it now covers
+#     authorizes strictly less immediate effect than the old wording
+#     claimed. Saying so is what keeps the screen true.
 #   * What `switch` cannot fully apply. A kernel, initrd or firmware
 #     change is staged into the new generation and takes effect at the
 #     next boot. A resident who reads "switched" as "everything I
@@ -913,15 +924,24 @@ Approving this is you authorizing this exact change, and that
 authorization is kept.
 
 APPROVING SWITCHES THE RUNNING SYSTEM TO THE BUILD DESCRIBED BELOW —
-this machine, now, without asking again. If the change below includes a
-new framework pin, approving also writes and commits it in your
+this machine, without asking again. If the change below includes a new
+framework pin, approving also writes and commits it in your
 configuration repository first. It pushes nothing anywhere.
+
+NOW, OR AT THE NEXT BOOT, AND CASTLE DECIDES WHICH. Where switching
+would restart the things your logged-in session is standing on — your
+home-manager generation, your user manager, dbus, logind, the display
+manager — Castle makes this the generation you boot into instead of
+running it under that session, and tells you it did. Nothing on this
+machine changes until you reboot, and nothing else is activated until
+you do.
 
 A SWITCH DOES NOT APPLY EVERYTHING: a kernel, initrd or firmware change
 is staged into the new generation and takes effect at the next boot.
 
 CASTLE WILL THEN ASK WHETHER THIS MACHINE IS WORKING, AND ROLL BACK ON
-ITS OWN IF NOTHING SAYS SO IN TIME. That is the one thing in this system
+ITS OWN IF NOTHING SAYS SO IN TIME — after the switch, or after the
+reboot that activates a staged one. That is the one thing in this system
 that decides without you, and it is deliberate: a good generation rolled
 back costs you one keypress, a bad one left running costs you a trip to
 the machine.
