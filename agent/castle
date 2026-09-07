@@ -13456,7 +13456,7 @@ def _stage_one(
                 outcome="timeout" if fault and "within" in fault else "failed",
                 activation_outcome="switch-failed",
                 detail_lines=detail
-                + ["", "Staging it for the next boot did not succeed either:", ""]
+                + ["", "Staging it for the next boot did not succeed:", ""]
                 + ([f"    {fault}"] if fault else _log_tail(output)),
                 commit_sha=commit_sha,
             ),

@@ -981,7 +981,12 @@
                     # confirming something it never activated.
                     && stageUnit != null
                     && lib.hasInfix "nixos-rebuild boot --flake ${dummyRepoRoot}#" stageUnit.serviceConfig.ExecStart
-                    && !(lib.hasInfix "switch" stageUnit.serviceConfig.ExecStart)
+                    # Matched against the verb and not the bare word
+                    # "switch": that word can turn up in the store path
+                    # of `nixos-rebuild` itself, and a hash that
+                    # happened to contain it would fail this check for
+                    # a reason nobody could ever find.
+                    && !(lib.hasInfix "nixos-rebuild switch" stageUnit.serviceConfig.ExecStart)
                     && !(stageUnit.serviceConfig ? ExecStartPost)
                     && !(stageUnit ? wantedBy && stageUnit.wantedBy != [ ])
                     && windowTimer != null
