@@ -405,10 +405,19 @@ as its own document:
 - Activation (`castle.agent.activation.enable`,
   docs/tasks/0048-activation.md) is a **standing authority** and the
   first one in this project that is a **standing root grant**: it
-  declares two privileged systemd units, carrying `nixos-rebuild switch
-  --flake <repo>#<host>` and `nixos-rebuild switch --rollback` and no
-  argument reaching them from anywhere, and a polkit rule permitting one
-  named account to start exactly those two. Since
+  declares privileged systemd units, carrying `nixos-rebuild switch
+  --flake <repo>#<host>`, `nixos-rebuild boot --flake <repo>#<host>`
+  and `nixos-rebuild switch --rollback` and no argument reaching them
+  from anywhere, and a polkit rule permitting one named account to
+  start exactly those — plus the timer that opens a health window,
+  which the resident's own session has to arm after a reboot that
+  activated a staged switch (docs/tasks/0067). The `boot` unit is
+  strictly weaker than the `switch` one beside it: it moves the system
+  profile and installs the bootloader and runs no activation script, so
+  it changes nothing that is running. It exists because an approved
+  switch is now classified by what it would churn, and one that would
+  restart the units the resident's logged-in session is standing on is
+  staged for the next boot rather than run under that session. Since
   docs/tasks/0057-the-privileged-switch-cannot-read-the-repository.md it
   also declares a third, smaller thing without which the first two do
   not work: a `safe.directory` entry in the system git config naming

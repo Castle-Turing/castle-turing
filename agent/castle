@@ -13849,40 +13849,55 @@ def _resolve_staged(records: dict[str, Record]) -> list[str]:
             continue
 
         if running and running == staged and boot_id and boot_id != header.get("boot-id", ""):
+            # The timer before the record, so the record can say
+            # truthfully whether the deadline exists. Every other
+            # failure on this path falls toward a rollback; this one
+            # falls the other way — no timer means nothing closes the
+            # window and an unconfirmed generation stays — so it is
+            # stated where the resident reads, not only on stderr.
+            rc, _output, fault = _start_unit(
+                window_timer(), what="open the health window"
+            )
+            armed = not fault and rc == 0
+            detail = [
+                "This is the generation Castle staged for you rather than switching "
+                "to under your session, and this machine has now booted into it.",
+                "",
+                f"What was staged:          {staged}",
+                f"What is running now:      {running}",
+                "",
+            ]
+            if armed:
+                detail.append(
+                    "Castle will ask whether this machine is working. If nothing "
+                    f"says so within {activation_window_seconds()}s, it rolls back "
+                    "to the generation this machine was running before."
+                )
+            else:
+                detail += [
+                    "Castle will ask whether this machine is working — but the "
+                    "countdown behind that question could not be started:",
+                    "",
+                    f"    {fault or f'{window_timer()} failed'}",
+                    "",
+                    "So nothing will roll this back on its own. Confirm it, or roll "
+                    "it back by hand, rather than leaving it to a deadline that is "
+                    "not running.",
+                ]
             result_id = _write_activation_result(
                 cause=answer,
                 anchor=build,
-                outcome="completed",
+                outcome="completed" if armed else "failed",
                 activation_outcome="switched",
-                detail_lines=[
-                    "This is the generation Castle staged for you rather than "
-                    "switching to under your session, and this machine has now "
-                    "booted into it.",
-                    "",
-                    f"What was staged:          {staged}",
-                    f"What is running now:      {running}",
-                    "",
-                    "Castle will ask whether this machine is working. If nothing "
-                    f"says so within {activation_window_seconds()}s, it rolls back "
-                    "to the generation this machine was running before.",
-                ],
+                detail_lines=detail,
             )
             _file_health_question(result_id, check_lines)
-            _rc, _output, fault = _start_unit(
-                window_timer(), what="open the health window"
-            )
-            if fault or _rc != 0:
-                # Said out loud on stderr and, more importantly, in the
-                # record the resident will actually read: without the
-                # timer nothing closes this window, so an unconfirmed
-                # generation stays. That is the opposite of the
-                # direction every other failure here falls in, and a
-                # resident must not have to infer it.
+            if not armed:
                 print(
                     f"castle activate: {result_id} says this machine booted into the "
-                    f"staged generation, but the window timer could not be started "
-                    f"({fault or 'it failed'}). Nothing will roll this back on its "
-                    "own; confirm it or roll it back by hand.",
+                    "staged generation, but the health window's timer could not be "
+                    f"started ({fault or 'it failed'}). Nothing will roll this back "
+                    "on its own.",
                     file=sys.stderr,
                 )
             written.append(result_id)
