@@ -797,6 +797,13 @@ SESSION_UNITS_ENV = "CASTLE_SESSION_UNITS"
 # window in the same breath as creating one (docs/tasks/0067 §D).
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 
+# Overridable, so the harness can simulate a reboot without one. Nothing
+# is granted by it and nothing can be provoked with it: the clause that
+# reads a boot id also requires this machine to be *running* the staged
+# closure, so the worst a fabricated value can do is open a health
+# window on a generation that is genuinely running, slightly early.
+BOOT_ID_ENV = "CASTLE_BOOT_ID"
+
 # The system profile's current generation — what this machine would boot
 # into, as opposed to what it is running. Read and never written.
 SYSTEM_PROFILE_PATH = "/nix/var/nix/profiles/system"
@@ -11445,6 +11452,9 @@ def _boot_id() -> str:
     resolution declines to act, which leaves the change staged and the
     resident told about it — the direction a missing fact should fall.
     """
+    override = os.environ.get(BOOT_ID_ENV, "").strip()
+    if override:
+        return override
     try:
         return pathlib.Path(BOOT_ID_PATH).read_text(encoding="utf-8").strip()
     except OSError:
