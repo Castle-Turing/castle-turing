@@ -176,6 +176,45 @@ in
     };
   };
 
+  # journald's own default (`SyncIntervalSec`, journald.conf(5)) flushes
+  # buffered log entries every five minutes, and only forces an
+  # immediate sync for CRIT/ALERT/EMERG messages. Task 0068: a machine
+  # that degrades and then hangs loses up to that whole interval of
+  # exactly the evidence a post-crash investigation needs, at the
+  # INFO/NOTICE/WARNING severities most of that evidence sits at. This
+  # nixpkgs pin has no dedicated option for the setting — only
+  # `services.journald.extraConfig`'s raw lines — so the tradeoff gets
+  # a real option rather than a hardcoded line, letting a host or
+  # private layer argue for a different cadence without editing this
+  # module.
+  options.castle.journald = {
+    syncInterval = lib.mkOption {
+      type = lib.types.str;
+      default = "30s";
+      description = ''
+        How often journald flushes buffered log entries to disk
+        (`SyncIntervalSec` in journald.conf(5)), independent of the
+        immediate sync journald already does for CRIT/ALERT/EMERG
+        messages. The upstream default is 5 minutes, which is the
+        window task 0068 lost: a machine that degrades and then hangs
+        persists nothing logged in the final interval before the
+        hang, at exactly the severities (INFO/NOTICE/WARNING) most
+        post-crash investigation depends on.
+
+        30 seconds trades an up-to-10x more frequent metadata sync
+        for a 10x-smaller loss window. Each sync is a lightweight
+        fsync of already-written, already-mmap'd journal pages, not a
+        rewrite — this is not comparable in write volume to a
+        database checkpoint — but on an SSD it is still wear this
+        framework did not have on the default policy, so this is a
+        deliberate choice rather than an obviously-free one. A host
+        with a specific reason to prefer the upstream cadence (or a
+        tighter one) can override with `lib.mkDefault` or a plain
+        assignment.
+      '';
+    };
+  };
+
   config = {
     # Both fields default to empty (rather than being left without a
     # default) so a missing private layer fails here, with this message,
@@ -209,6 +248,12 @@ in
       dates = "weekly";
       options = "--delete-older-than 30d";
     };
+
+    # `types.lines`, so this composes with anything a private layer
+    # later adds to the same option rather than overwriting it.
+    services.journald.extraConfig = ''
+      SyncIntervalSec=${config.castle.journald.syncInterval}
+    '';
 
     # Both the admin user and root trust the same key set: nixos-anywhere
     # installs as root, and remote rebuilds may target either account.
