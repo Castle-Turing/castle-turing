@@ -1,0 +1,1512 @@
+#!/usr/bin/env python3
+"""clarify — the clarifying-questions phase's mechanical half
+(docs/tasks/0065-the-clarifying-questions-intake.md; the phase itself is
+written out in docs/clarifying-questions.md).
+
+Stdlib only, one file, no third-party anything — the same reasoning
+agent/README.md gives for `castle`: a check that outlives the harness
+fashionable when it was written has to need nothing installed to run.
+
+What this is NOT: it does not run the phase. A seat runs the phase — it
+reads the intake, samples interpretations, chooses questions, writes the
+requirements document. This tool reads what that seat produced and says
+whether the discipline was actually followed. The judgment stays with
+the seat and the resident; only the mechanical residue is here.
+
+A note on the word "intake". The agent layer already uses it for a seat
+— the surface that turns a resident's words into a `request` record
+(`castle ask`, `castle-modal`). Task 0065's title uses it again for this
+phase. That is one word doing two jobs, so nothing here is called
+"intake": the phase is the *clarifying-questions phase*, its input
+document is the *statement*, its output is the *requirements document*,
+and this tool is `clarify`. See docs/clarifying-questions.md.
+
+Subcommands:
+  check   run the checks over a requirements document and its transcript.
+  probe   build, score, or oracle-demonstrate a seeded probe.
+
+Exit status is 0 when every blocking check passed and 1 otherwise.
+Warnings never fail on their own (see the style lint's comment for why)
+unless --strict is passed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import pathlib
+import re
+import shutil
+import sys
+import tempfile
+
+# ---------------------------------------------------------------------------
+# The closed vocabularies. Each one is closed on purpose: an open set here
+# would let a seat invent a category to file an awkward ambiguity under,
+# which is silent commitment wearing a label.
+# ---------------------------------------------------------------------------
+
+# Orchid's four injected ambiguity types, which is also the taxonomy the
+# probe seeds are labelled with — the same four words on both sides of
+# the harness, so a seed and a tag can be compared without a mapping.
+AMBIGUITY_CATEGORIES = ("lexical", "syntactic", "semantic", "vagueness")
+
+# What an ambiguity is doing right now. `open` means asked-about and
+# still unresolved: carried forward deliberately, which is the whole
+# point of the artifact. `cleared` means a cited answer closed it —
+# only a citation closes one, never a silent choice. `deferred` is the
+# explicit pass, and it is available only below goal level.
+AMBIGUITY_STATES = ("open", "deferred", "cleared")
+
+# "Ask Early, Ask Late, Ask Right"'s three kinds, in the order their
+# measured value decays: goal clarification loses nearly all its value
+# after 10% of execution, input clarification holds through roughly 50%,
+# constraint clarification barely pays at any point. The order is what
+# the question-ordering check enforces; the names are what a clause
+# declares.
+CLAUSE_LEVELS = ("goal", "input", "constraint")
+LEVEL_PRIORITY = {name: index for index, name in enumerate(CLAUSE_LEVELS)}
+
+# A question is either discriminating between sampled interpretations
+# (the normal kind) or the clearinghouse probe — "what have I not asked
+# that matters?" — which by construction discriminates between nothing
+# and is therefore exempt from the budget and the redundancy score.
+QUESTION_TYPES = ("discriminating", "clearinghouse")
+
+STOP_REASONS = ("below-threshold", "budget-exhausted", "no-clarification-needed")
+
+BLOCK_KINDS = ("utterance", "question", "stop")
+
+# Both dashes are accepted in an `Ambiguity:` line. The repo's prose uses
+# an em dash and so do the fixtures; `--` is here so that a line typed on
+# a keyboard that makes em dashes hard does not fail a *form* check for a
+# reason that has nothing to do with the form.
+DASH = r"(?:—|--)"
+
+ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+CLAUSE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+# ---------------------------------------------------------------------------
+# Findings
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Finding:
+    """One thing the checks noticed.
+
+    `blocking` is the only field that decides the exit status. The split
+    is deliberate and follows the 2005 origin report's asymmetric error
+    costs: treating a nocuous ambiguity as innocuous is the dangerous
+    error and is blocked; a wasted question merely spends attention and
+    is warned about. A style lint that blocked would buy the cheap error
+    at the price of the expensive one, because a seat under a blocking
+    style lint stops asking.
+    """
+
+    rule: str
+    where: str
+    message: str
+    blocking: bool = True
+
+    def render(self) -> str:
+        mark = "FAIL" if self.blocking else "warn"
+        return f"  {mark}  [{self.rule}] {self.where}: {self.message}"
+
+
+class Report:
+    def __init__(self) -> None:
+        self.findings: list[Finding] = []
+        self.notes: list[str] = []
+
+    def fail(self, rule: str, where: str, message: str) -> None:
+        self.findings.append(Finding(rule, where, message, blocking=True))
+
+    def warn(self, rule: str, where: str, message: str) -> None:
+        self.findings.append(Finding(rule, where, message, blocking=False))
+
+    def note(self, text: str) -> None:
+        self.notes.append(text)
+
+    @property
+    def blocking(self) -> list[Finding]:
+        return [f for f in self.findings if f.blocking]
+
+    @property
+    def warnings(self) -> list[Finding]:
+        return [f for f in self.findings if not f.blocking]
+
+
+# ---------------------------------------------------------------------------
+# The transcript: the conversation, as plain blocks
+# ---------------------------------------------------------------------------
+
+BLOCK_HEADER_RE = re.compile(r"^##\s+(?P<kind>[a-z]+)(?:\s+(?P<id>\S+))?\s*$")
+FIELD_RE = re.compile(r"^(?P<key>[a-z][a-z-]*):\s*(?P<value>.*)$")
+
+
+@dataclasses.dataclass
+class Block:
+    kind: str
+    id: str | None
+    fields: dict[str, str]
+    body: str
+    line: int
+
+
+def parse_transcript(path: pathlib.Path) -> tuple[list[Block], Report]:
+    """Parse a transcript into blocks.
+
+    The grammar is `## <kind> <id>`, then a contiguous run of
+    `key: value` lines, then a blank line, then prose. Fields must be
+    contiguous from the top of the block so that a sentence in the prose
+    that happens to contain a colon is never mistaken for one — the
+    format is meant to be typed by hand, and a format that silently
+    reinterprets prose is not.
+    """
+    report = Report()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    blocks: list[Block] = []
+    current: Block | None = None
+    in_fields = False
+    body: list[str] = []
+
+    def close() -> None:
+        nonlocal current, body
+        if current is not None:
+            current.body = "\n".join(body).strip()
+            blocks.append(current)
+        current = None
+        body = []
+
+    for number, line in enumerate(lines, start=1):
+        header = BLOCK_HEADER_RE.match(line)
+        if header:
+            close()
+            kind = header.group("kind")
+            ident = header.group("id")
+            if kind not in BLOCK_KINDS:
+                report.fail(
+                    "form",
+                    f"{path.name}:{number}",
+                    f"unknown block kind {kind!r}; expected one of "
+                    + ", ".join(BLOCK_KINDS),
+                )
+                current = None
+                in_fields = False
+                continue
+            if kind == "stop" and ident is not None:
+                report.fail("form", f"{path.name}:{number}", "a stop block takes no id")
+            if kind != "stop" and (ident is None or not ID_RE.match(ident)):
+                report.fail(
+                    "form",
+                    f"{path.name}:{number}",
+                    f"a {kind} block needs an id matching {ID_RE.pattern}",
+                )
+                ident = ident or f"?{number}"
+            current = Block(kind=kind, id=ident, fields={}, body="", line=number)
+            in_fields = True
+            continue
+        if current is None:
+            continue
+        if in_fields:
+            field = FIELD_RE.match(line)
+            if field:
+                current.fields[field.group("key")] = field.group("value").strip()
+                continue
+            if line.strip() == "":
+                in_fields = False
+                continue
+            # A non-field, non-blank line ends the field run too: the
+            # prose has started without a separating blank line.
+            in_fields = False
+        body.append(line)
+
+    close()
+
+    seen: dict[str, int] = {}
+    for block in blocks:
+        if block.id is None:
+            continue
+        if block.id in seen:
+            report.fail(
+                "form",
+                f"{path.name}:{block.line}",
+                f"duplicate block id {block.id!r} (first seen at line {seen[block.id]})",
+            )
+        seen[block.id] = block.line
+
+    return blocks, report
+
+
+# ---------------------------------------------------------------------------
+# The requirements document
+# ---------------------------------------------------------------------------
+
+CLAUSE_HEADER_RE = re.compile(r"^###\s+(?P<title>.+?)\s+\[(?P<key>[^\]]+)\]\s*$")
+DOC_FIELD_RE = re.compile(r"^(?P<key>[A-Z][A-Za-z-]*):\s*(?P<value>.*)$")
+CLAUSE_FIELD_NAMES = ("Level", "Traces", "Ambiguity")
+MARK_RE = re.compile(r"^\[(?:stated\s+(?P<date>\S+)|inferred)\]")
+AMBIGUITY_RE = re.compile(
+    r"^Ambiguity:\s+(?P<category>\S+)\s+certainty=(?P<certainty>[0-9.]+)\s+"
+    r"state=(?P<state>\S+)(?:\s+ref=(?P<ref>\S+))?\s+" + DASH + r"\s+(?P<prose>.+)$"
+)
+
+
+@dataclasses.dataclass
+class Ambiguity:
+    category: str
+    certainty: float
+    state: str
+    ref: str | None
+    prose: str
+    line: int
+
+
+@dataclasses.dataclass
+class Clause:
+    key: str
+    title: str
+    level: str | None
+    mark: str | None  # "stated" or "inferred"
+    stated_date: str | None
+    traces: list[str]
+    ambiguities: list[Ambiguity]
+    prose: str
+    line: int
+
+
+@dataclasses.dataclass
+class RequirementsDoc:
+    path: pathlib.Path
+    header: dict[str, str]
+    clauses: list[Clause]
+
+    def clause(self, key: str) -> Clause | None:
+        for clause in self.clauses:
+            if clause.key == key:
+                return clause
+        return None
+
+
+def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
+    report = Report()
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    header: dict[str, str] = {}
+    clauses: list[Clause] = []
+    current: Clause | None = None
+    prose: list[str] = []
+    in_preamble = True
+
+    def close() -> None:
+        nonlocal current, prose
+        if current is not None:
+            current.prose = "\n".join(prose).strip()
+            clauses.append(current)
+        current = None
+        prose = []
+
+    for number, line in enumerate(lines, start=1):
+        if line.startswith("## ") or line.startswith("### "):
+            in_preamble = False
+        clause_header = CLAUSE_HEADER_RE.match(line)
+        if clause_header:
+            close()
+            current = Clause(
+                key=clause_header.group("key"),
+                title=clause_header.group("title"),
+                level=None,
+                mark=None,
+                stated_date=None,
+                traces=[],
+                ambiguities=[],
+                prose="",
+                line=number,
+            )
+            continue
+        if in_preamble:
+            field = DOC_FIELD_RE.match(line)
+            if field:
+                header[field.group("key")] = field.group("value").strip()
+            continue
+        if current is None:
+            continue
+        if line.startswith("## "):
+            # A new section heading closes the clause it follows.
+            close()
+            continue
+        field = DOC_FIELD_RE.match(line)
+        if field and field.group("key") in CLAUSE_FIELD_NAMES:
+            key = field.group("key")
+            value = field.group("value").strip()
+            if key == "Level":
+                current.level = value
+            elif key == "Traces":
+                current.traces = [t.strip() for t in value.split(",") if t.strip()]
+            else:
+                ambiguity = AMBIGUITY_RE.match(line.strip())
+                if not ambiguity:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number}",
+                        "malformed Ambiguity line; expected "
+                        "'Ambiguity: <category> certainty=<0..1> state=<state> "
+                        "[ref=<id>] — <why it is unresolved>'",
+                    )
+                    continue
+                try:
+                    certainty = float(ambiguity.group("certainty"))
+                except ValueError:  # pragma: no cover - regex already constrains
+                    report.fail(
+                        "form", f"{path.name}:{number}", "certainty is not a number"
+                    )
+                    continue
+                current.ambiguities.append(
+                    Ambiguity(
+                        category=ambiguity.group("category"),
+                        certainty=certainty,
+                        state=ambiguity.group("state"),
+                        ref=ambiguity.group("ref"),
+                        prose=ambiguity.group("prose").strip(),
+                        line=number,
+                    )
+                )
+            continue
+        stripped = line.strip()
+        if stripped and current.mark is None:
+            mark = MARK_RE.match(stripped)
+            if mark:
+                current.mark = "stated" if mark.group("date") else "inferred"
+                current.stated_date = mark.group("date")
+        prose.append(line)
+
+    close()
+
+    seen: dict[str, int] = {}
+    for clause in clauses:
+        if clause.key in seen:
+            report.fail(
+                "form",
+                f"{path.name}:{clause.line}",
+                f"duplicate clause key [{clause.key}] (first seen at line "
+                f"{seen[clause.key]})",
+            )
+        seen[clause.key] = clause.line
+
+    return RequirementsDoc(path=path, header=header, clauses=clauses), report
+
+
+# ---------------------------------------------------------------------------
+# Check: the document's own form
+# ---------------------------------------------------------------------------
+
+
+def check_form(doc: RequirementsDoc, report: Report) -> None:
+    where = doc.path.name
+
+    for required in ("Nocuity-threshold", "Stop-alpha", "Question-budget"):
+        if required not in doc.header:
+            report.fail(
+                "form",
+                where,
+                f"the document declares no {required}: — the phase's knobs are "
+                "per-document-class and a document that does not state them "
+                "was checked against nothing",
+            )
+
+    threshold = _float(doc.header.get("Nocuity-threshold"), report, where, "Nocuity-threshold")
+    _float(doc.header.get("Stop-alpha"), report, where, "Stop-alpha")
+    _int(doc.header.get("Question-budget"), report, where, "Question-budget")
+
+    if threshold is not None and not 0.0 < threshold <= 1.0:
+        report.fail("form", where, "Nocuity-threshold must be in (0, 1]")
+
+    if not doc.clauses:
+        report.fail("form", where, "the document carries no clauses")
+
+    for clause in doc.clauses:
+        at = f"{where}:{clause.line} [{clause.key}]"
+        if not CLAUSE_KEY_RE.match(clause.key):
+            report.fail(
+                "form", at, f"clause key must match {CLAUSE_KEY_RE.pattern}"
+            )
+        if clause.mark is None:
+            report.fail(
+                "form",
+                at,
+                "the clause opens with neither [stated <date>] nor [inferred] — "
+                "an unmarked clause is the system's reading passed off as the "
+                "resident's words",
+            )
+        if clause.mark == "stated" and not DATE_RE.match(clause.stated_date or ""):
+            report.fail(
+                "form", at, "[stated <date>] needs an ISO date, e.g. [stated 2026-09-08]"
+            )
+        if clause.level not in CLAUSE_LEVELS:
+            report.fail(
+                "form",
+                at,
+                f"Level: must be one of {', '.join(CLAUSE_LEVELS)} (got "
+                f"{clause.level!r})",
+            )
+        if not clause.prose.strip():
+            report.fail("form", at, "the clause has no prose")
+        for ambiguity in clause.ambiguities:
+            aat = f"{where}:{ambiguity.line} [{clause.key}]"
+            if ambiguity.category not in AMBIGUITY_CATEGORIES:
+                report.fail(
+                    "form",
+                    aat,
+                    f"ambiguity category must be one of "
+                    f"{', '.join(AMBIGUITY_CATEGORIES)} (got {ambiguity.category!r})",
+                )
+            if ambiguity.state not in AMBIGUITY_STATES:
+                report.fail(
+                    "form",
+                    aat,
+                    f"ambiguity state must be one of "
+                    f"{', '.join(AMBIGUITY_STATES)} (got {ambiguity.state!r})",
+                )
+            if not 0.0 <= ambiguity.certainty <= 1.0:
+                report.fail("form", aat, "certainty must be in [0, 1]")
+            if not ambiguity.prose:
+                report.fail(
+                    "form", aat, "an ambiguity must say what is unresolved"
+                )
+            if ambiguity.state == "cleared" and not ambiguity.ref:
+                report.fail(
+                    "rule-10",
+                    aat,
+                    "a cleared ambiguity must cite the answer that cleared it "
+                    "(ref=<utterance id>); an ambiguity cleared without a "
+                    "citation was resolved by silent choice",
+                )
+            if ambiguity.state != "cleared" and ambiguity.ref:
+                report.fail(
+                    "form", aat, "ref= belongs only on a cleared ambiguity"
+                )
+
+    if "Probe" in doc.header:
+        # Proposal 06's salt discipline, applied to probes: a probe
+        # artifact is labelled as one and can never be read as truth. The
+        # complementary half — a document under docs/state/ may not carry
+        # this header — is checked in check_placement().
+        report.note(
+            f"{where} is a probe artifact (Probe: {doc.header['Probe']}), not "
+            "current truth"
+        )
+
+
+def check_placement(doc: RequirementsDoc, report: Report) -> None:
+    """A probe's requirements document may never sit in docs/state/.
+
+    Proposal 06's third salt discipline is that salt "never masquerades
+    in the journal" — it appears only under a label. The same hazard
+    exists here in a different medium: a probe run produces a document
+    shaped exactly like current truth, and docs/state/ is where current
+    truth lives. Nothing but the header distinguishes them, so the
+    header is checked against the path.
+    """
+    parts = doc.path.resolve().parts
+    in_state = "docs" in parts and "state" in parts[parts.index("docs") :]
+    if in_state and "Probe" in doc.header:
+        report.fail(
+            "salt",
+            doc.path.name,
+            "a probe artifact is under docs/state/ — probe records are "
+            "labelled and never masquerade as current truth (Proposal 06)",
+        )
+    if not in_state and "Probe" not in doc.header:
+        report.warn(
+            "salt",
+            doc.path.name,
+            "a requirements document outside docs/state/ that is not labelled "
+            "Probe: — if this is a probe run, label it",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Check: the question discipline (task 0065's rules 1, 3, 4, 5, 7)
+# ---------------------------------------------------------------------------
+
+
+def check_questions(
+    doc: RequirementsDoc, blocks: list[Block], report: Report
+) -> None:
+    where = doc.path.name
+    questions = [b for b in blocks if b.kind == "question"]
+    utterances = {b.id: b for b in blocks if b.kind == "utterance"}
+    threshold = _float(doc.header.get("Nocuity-threshold"), None, where, "")
+    budget = _int(doc.header.get("Question-budget"), None, where, "")
+
+    # -- Rule 3: every question cites the clause and tag it would resolve.
+    for question in questions:
+        at = f"transcript:{question.line} {question.id}"
+        qtype = question.fields.get("type", "discriminating")
+        if qtype not in QUESTION_TYPES:
+            report.fail(
+                "form", at, f"type: must be one of {', '.join(QUESTION_TYPES)}"
+            )
+        if not question.body.strip():
+            report.fail("form", at, "the question has no prose")
+
+        if qtype == "clearinghouse":
+            # The clearinghouse probe asks what has not been asked. It
+            # cannot cite an ambiguity, because the gap it is aimed at is
+            # by definition not in the document yet.
+            if "clause" in question.fields or "tag" in question.fields:
+                report.warn(
+                    "rule-3",
+                    at,
+                    "a clearinghouse probe cites nothing by construction; the "
+                    "clause:/tag: fields on it are noise",
+                )
+            continue
+
+        clause_key = question.fields.get("clause")
+        tag = question.fields.get("tag")
+        if not clause_key or not tag:
+            report.fail(
+                "rule-3",
+                at,
+                "a question must carry clause: and tag: — a question with no "
+                "citable ambiguity is a defect, not a question",
+            )
+            continue
+        clause = doc.clause(clause_key)
+        if clause is None:
+            report.fail(
+                "rule-3", at, f"cites clause [{clause_key}], which is not in {where}"
+            )
+            continue
+        if not any(a.category == tag for a in clause.ambiguities):
+            report.fail(
+                "rule-3",
+                at,
+                f"cites tag {tag!r} on clause [{clause_key}], which carries no "
+                f"{tag} ambiguity",
+            )
+
+    # -- Rule 5: goal-level ambiguities first.
+    last_priority = -1
+    last_id = None
+    for question in questions:
+        if question.fields.get("type") == "clearinghouse":
+            continue
+        clause = doc.clause(question.fields.get("clause", ""))
+        if clause is None or clause.level not in LEVEL_PRIORITY:
+            continue
+        priority = LEVEL_PRIORITY[clause.level]
+        if priority < last_priority:
+            report.fail(
+                "rule-5",
+                f"transcript:{question.line} {question.id}",
+                f"a {clause.level}-level question follows {last_id}, which was "
+                "lower-level: goal clarification loses nearly all its value "
+                "after the first tenth of execution and constraint "
+                "clarification barely pays at any point, so goal-level "
+                "questions come first",
+            )
+        else:
+            last_priority = priority
+            last_id = question.id
+
+    # -- Rule 1: ask, or explicitly pass, on every nocuous ambiguity.
+    if threshold is not None:
+        asked: set[tuple[str, str]] = {
+            (q.fields.get("clause", ""), q.fields.get("tag", ""))
+            for q in questions
+            if q.fields.get("type") != "clearinghouse"
+        }
+        for clause in doc.clauses:
+            for ambiguity in clause.ambiguities:
+                if ambiguity.state == "cleared":
+                    continue
+                if ambiguity.certainty > threshold:
+                    # Innocuous at this document's tolerance: no
+                    # interpretation is seriously contested.
+                    continue
+                at = f"{where}:{ambiguity.line} [{clause.key}]"
+                if ambiguity.state == "deferred":
+                    if clause.level == "goal":
+                        report.fail(
+                            "rule-5",
+                            at,
+                            "a goal-level ambiguity may not be deferred — "
+                            "goal clarification is the one kind whose value "
+                            "collapses if it is not asked early",
+                        )
+                    continue
+                if (clause.key, ambiguity.category) not in asked:
+                    report.fail(
+                        "rule-1",
+                        at,
+                        f"nocuous ({ambiguity.certainty} <= tau {threshold}) and "
+                        "neither asked about nor explicitly deferred; asking is "
+                        "structural here, not left to whether the model felt "
+                        "like it",
+                    )
+
+    # -- Rule 10: a cleared ambiguity's ref must be an answer to a question
+    #    that cited that same clause and tag.
+    for clause in doc.clauses:
+        for ambiguity in clause.ambiguities:
+            if ambiguity.state != "cleared" or not ambiguity.ref:
+                continue
+            at = f"{where}:{ambiguity.line} [{clause.key}]"
+            utterance = utterances.get(ambiguity.ref)
+            if utterance is None:
+                report.fail(
+                    "rule-10",
+                    at,
+                    f"ref={ambiguity.ref} names no utterance in the transcript",
+                )
+                continue
+            answered = utterance.fields.get("answers")
+            if not answered:
+                report.fail(
+                    "rule-10",
+                    at,
+                    f"ref={ambiguity.ref} is an utterance that answers no "
+                    "question; an ambiguity is cleared by a cited answer, not "
+                    "by a passing remark",
+                )
+                continue
+            question = next((q for q in questions if q.id == answered), None)
+            if question is None:
+                report.fail(
+                    "rule-10", at, f"{ambiguity.ref} answers {answered}, which does not exist"
+                )
+                continue
+            if (
+                question.fields.get("clause") != clause.key
+                or question.fields.get("tag") != ambiguity.category
+            ):
+                report.fail(
+                    "rule-10",
+                    at,
+                    f"{ambiguity.ref} answers {answered}, which cited "
+                    f"[{question.fields.get('clause')}]/"
+                    f"{question.fields.get('tag')} — not this ambiguity",
+                )
+
+    # -- Rule 4: the budget bounds the cheap error.
+    discriminating = [
+        q for q in questions if q.fields.get("type") != "clearinghouse"
+    ]
+    if budget is not None and len(discriminating) > budget:
+        report.fail(
+            "rule-4",
+            where,
+            f"{len(discriminating)} discriminating questions against a declared "
+            f"budget of {budget}; the measured failure is over-asking and "
+            "under-targeting at once, so the budget is a bound rather than a "
+            "target",
+        )
+
+    # -- Rule 7: the clearinghouse probe closes the phase.
+    clearinghouse = [
+        q for q in questions if q.fields.get("type") == "clearinghouse"
+    ]
+    if questions and not clearinghouse:
+        report.fail(
+            "rule-7",
+            where,
+            "the phase asked questions and never asked the clearinghouse probe "
+            "('what have I not asked that matters?') — the forgot-to-specify "
+            "gap is the one thing discriminating questions cannot reach",
+        )
+    if clearinghouse and questions[-1] is not clearinghouse[-1]:
+        report.fail(
+            "rule-7",
+            where,
+            "the clearinghouse probe is not the last question asked; it closes "
+            "the phase, so anything asked after it was outside the discipline",
+        )
+    if len(clearinghouse) > 1:
+        report.warn("rule-7", where, "more than one clearinghouse probe")
+
+    for question in questions:
+        check_question_style(question, report)
+
+    check_stop(doc, blocks, report)
+
+
+# The content-maneuvering question types from the Zaremba-Liaskos RE 2021
+# typology: forced-choice, leading, declarative and negative-balance
+# questions steer the answer, and a steered answer is not the resident's.
+# Every one of these is a WARNING. The detectors are keyword heuristics
+# over prose, and requirements-smell indicators of exactly this shape
+# measure 30-59% precision in the literature — a blocking check at that
+# precision trains a seat to stop asking, which buys the cheap error at
+# the price of the expensive one.
+LEADING_RE = re.compile(
+    r"\b(don'?t you|doesn'?t it|wouldn'?t you|isn'?t it|aren'?t they|right\?|"
+    r"surely|obviously|presumably|i assume|i take it|i'?m guessing)\b",
+    re.IGNORECASE,
+)
+NEGATIVE_BALANCE_RE = re.compile(
+    r"^\s*(?:don'?t|doesn'?t|isn'?t|aren'?t|wouldn'?t|shouldn'?t|can'?t|"
+    r"you don'?t|you wouldn'?t)\b",
+    re.IGNORECASE,
+)
+FORCED_CHOICE_TRIGGER_RE = re.compile(
+    r"\b(either\b.*\bor\b|\bor\b)", re.IGNORECASE
+)
+ESCAPE_RE = re.compile(
+    r"\b(some ?thing else|some other|neither|none of (?:these|those|them)|"
+    r"other than|or another|anything else|any of these)\b",
+    re.IGNORECASE,
+)
+
+
+def check_question_style(question: Block, report: Report) -> None:
+    at = f"transcript:{question.line} {question.id}"
+    body = question.body.strip()
+    if not body:
+        return
+
+    if "?" not in body:
+        report.warn(
+            "rule-7",
+            at,
+            "declarative: the question contains no question mark, so it states "
+            "rather than asks",
+        )
+    if LEADING_RE.search(body):
+        report.warn(
+            "rule-7",
+            at,
+            "leading: the phrasing invites agreement rather than an answer",
+        )
+    for sentence in re.split(r"(?<=[.?!])\s+", body):
+        if NEGATIVE_BALANCE_RE.match(sentence.strip()):
+            report.warn(
+                "rule-7",
+                at,
+                "negative-balance: the question opens on a negation, which "
+                "biases the answer toward the negative",
+            )
+            break
+    if FORCED_CHOICE_TRIGGER_RE.search(body) and not ESCAPE_RE.search(body):
+        report.warn(
+            "rule-7",
+            at,
+            "forced-choice: a closed set of readings is offered with no escape "
+            "for a reading the phase did not sample",
+        )
+
+
+def check_stop(doc: RequirementsDoc, blocks: list[Block], report: Report) -> None:
+    """Stopping is a rule, not a feeling.
+
+    The rule cannot be checked directly — nobody can verify from outside
+    that the expected value of the best remaining question really was
+    what the seat says it was. What can be checked is that the seat wrote
+    the terms down and that the terms actually satisfy the rule it says
+    it stopped under. That is the same standard CLAUDE.md sets for
+    `Model-because:`: a validator can only confirm the reasoning is
+    present and self-consistent, and the human reads whether it is any
+    good.
+    """
+    where = doc.path.name
+    stops = [b for b in blocks if b.kind == "stop"]
+    questions = [b for b in blocks if b.kind == "question"]
+    discriminating = [
+        q for q in questions if q.fields.get("type") != "clearinghouse"
+    ]
+
+    if not stops:
+        report.fail(
+            "rule-4",
+            where,
+            "the transcript has no stop block; the phase ended without stating "
+            "why it stopped asking",
+        )
+        return
+    if len(stops) > 1:
+        report.fail("rule-4", where, "more than one stop block")
+    stop = stops[-1]
+    if blocks[-1] is not stop:
+        report.fail("rule-4", where, "the stop block is not the last block")
+
+    at = f"transcript:{stop.line} stop"
+    reason = stop.fields.get("reason")
+    if reason not in STOP_REASONS:
+        report.fail(
+            "rule-4",
+            at,
+            f"reason: must be one of {', '.join(STOP_REASONS)} (got {reason!r})",
+        )
+        return
+
+    best = _float(stop.fields.get("best-remaining"), report, at, "best-remaining")
+    leading = _float(stop.fields.get("leading-weight"), report, at, "leading-weight")
+    alpha = _float(stop.fields.get("alpha"), report, at, "alpha")
+    declared_alpha = _float(doc.header.get("Stop-alpha"), None, where, "")
+    budget = _int(doc.header.get("Question-budget"), None, where, "")
+
+    if alpha is not None and declared_alpha is not None and alpha != declared_alpha:
+        report.fail(
+            "rule-4",
+            at,
+            f"alpha={alpha} contradicts the document's Stop-alpha: "
+            f"{declared_alpha} — the threshold is declared before the phase "
+            "runs, not chosen after seeing where it landed",
+        )
+    if leading is not None and not 0.0 < leading <= 1.0:
+        report.fail("rule-4", at, "leading-weight must be in (0, 1]")
+
+    if reason == "below-threshold":
+        if best is None or leading is None or alpha is None:
+            report.fail(
+                "rule-4",
+                at,
+                "stopping below threshold has to show its terms: "
+                "best-remaining, leading-weight and alpha",
+            )
+        elif not best < alpha * leading:
+            report.fail(
+                "rule-4",
+                at,
+                f"claims the best remaining question fell below threshold, but "
+                f"{best} is not less than alpha*leading = {alpha * leading:.4f}",
+            )
+    elif reason == "no-clarification-needed":
+        # IG-clarifier's abstention token scores exactly zero, never
+        # negative: not asking is a legitimate move with no penalty, and
+        # it is only legitimate when nothing was worth asking.
+        if best is None or best > 0:
+            report.fail(
+                "rule-4",
+                at,
+                "'no clarification needed' is the zero-value exit; it requires "
+                "best-remaining <= 0",
+            )
+        if discriminating:
+            report.fail(
+                "rule-4",
+                at,
+                f"claims no clarification was needed after asking "
+                f"{len(discriminating)} question(s)",
+            )
+    elif reason == "budget-exhausted":
+        if budget is None or len(discriminating) < budget:
+            report.fail(
+                "rule-4",
+                at,
+                f"claims the budget was exhausted at {len(discriminating)} "
+                f"question(s) against a budget of {budget}",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Check: read-back (Inter2US's faithfulness-and-coverage pair)
+# ---------------------------------------------------------------------------
+
+
+def check_readback(
+    doc: RequirementsDoc, blocks: list[Block], report: Report
+) -> tuple[float, float]:
+    """Faithfulness and coverage over the conversation.
+
+    Faithfulness catches invention: a clause the resident never said and
+    that is not marked as the system's own reading. Coverage catches
+    omission: something the resident said that reached no clause. Both
+    halves matter — a read-back checked only for faithfulness passes a
+    document that quietly drops half the conversation.
+
+    The honest limit, which the source paper states about itself:
+    coverage is not completeness. Requirements can legitimately come from
+    outside the conversation, which is exactly what [inferred] is for,
+    and no count of covered utterances says the document is right.
+    """
+    where = doc.path.name
+    utterances = [b for b in blocks if b.kind == "utterance"]
+    utterance_ids = {b.id for b in utterances}
+
+    # -- Faithfulness.
+    faithful = 0
+    for clause in doc.clauses:
+        at = f"{where}:{clause.line} [{clause.key}]"
+        resolvable = [t for t in clause.traces if t in utterance_ids]
+        for trace in clause.traces:
+            if trace not in utterance_ids:
+                report.fail(
+                    "readback",
+                    at,
+                    f"Traces: {trace}, which is not an utterance in the transcript",
+                )
+        if clause.mark == "inferred":
+            faithful += 1
+            continue
+        if resolvable:
+            faithful += 1
+        else:
+            report.fail(
+                "readback",
+                at,
+                "a [stated] clause with no utterance behind it — either it "
+                "traces to what the resident said, or it is the system's "
+                "reading and says so with [inferred]",
+            )
+
+    # -- Coverage.
+    traced: set[str] = set()
+    for clause in doc.clauses:
+        traced.update(clause.traces)
+
+    substantive = []
+    for utterance in utterances:
+        at = f"transcript:{utterance.line} {utterance.id}"
+        flag = utterance.fields.get("substantive", "yes")
+        if flag not in ("yes", "no"):
+            report.fail("form", at, "substantive: must be yes or no")
+            continue
+        if flag == "no":
+            if not utterance.fields.get("reason"):
+                report.fail(
+                    "readback",
+                    at,
+                    "an utterance marked substantive: no must say why — "
+                    "otherwise the coverage number is whatever the phase "
+                    "decided to count",
+                )
+            continue
+        substantive.append(utterance)
+
+    covered = [u for u in substantive if u.id in traced]
+    for utterance in substantive:
+        if utterance.id not in traced:
+            report.fail(
+                "readback",
+                f"transcript:{utterance.line} {utterance.id}",
+                "no clause traces to this utterance; the resident said "
+                "something the read-back does not reflect",
+            )
+
+    faithfulness = faithful / len(doc.clauses) if doc.clauses else 0.0
+    coverage = len(covered) / len(substantive) if substantive else 0.0
+    report.note(
+        f"faithfulness {faithfulness:.2f} ({faithful}/{len(doc.clauses)} clauses), "
+        f"coverage {coverage:.2f} ({len(covered)}/{len(substantive)} substantive "
+        "utterances). Coverage is not completeness."
+    )
+    return faithfulness, coverage
+
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+
+SEED_HEADER_RE = re.compile(r"^##\s+seed\s+(?P<id>\S+)\s*$")
+DELETE_FENCE_RE = re.compile(r"^```delete\s*$")
+FENCE_END_RE = re.compile(r"^```\s*$")
+
+
+@dataclasses.dataclass
+class Seed:
+    id: str
+    tag: str
+    level: str
+    terms: list[str]
+    span: str
+    prose: str
+
+
+@dataclasses.dataclass
+class ProbeSpec:
+    name: str
+    root: pathlib.Path
+    header: dict[str, str]
+    seeds: list[Seed]
+    source: str
+
+
+def load_probe(root: pathlib.Path) -> ProbeSpec:
+    """Read a probe directory.
+
+    `source.md` is the complete statement; `seed.md` is the seed record.
+    The seed record is never copied into a run directory — that is the
+    isolation the brief asks for, and it is structural rather than
+    promised: what the phase can read is what the builder wrote, and the
+    builder writes only the seeded statement.
+    """
+    source_path = root / "source.md"
+    seed_path = root / "seed.md"
+    if not source_path.is_file() or not seed_path.is_file():
+        raise SystemExit(
+            f"probe {root.name}: expected source.md and seed.md under {root}"
+        )
+
+    header: dict[str, str] = {}
+    seeds: list[Seed] = []
+    current: dict[str, str] | None = None
+    prose: list[str] = []
+    span: list[str] | None = None
+    in_preamble = True
+    in_fields = False
+
+    def close() -> None:
+        nonlocal current, prose, span
+        if current is not None:
+            if span is None:
+                raise SystemExit(
+                    f"probe {root.name}: seed {current.get('__id')} has no "
+                    "```delete fence"
+                )
+            seeds.append(
+                Seed(
+                    id=current["__id"],
+                    tag=current.get("expect-tag", ""),
+                    level=current.get("expect-level", ""),
+                    terms=[
+                        t.strip().lower()
+                        for t in current.get("expect-terms", "").split(",")
+                        if t.strip()
+                    ],
+                    span="\n".join(span),
+                    prose="\n".join(prose).strip(),
+                )
+            )
+        current = None
+        prose = []
+        span = None
+
+    lines = seed_path.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        seed_header = SEED_HEADER_RE.match(line)
+        if seed_header:
+            close()
+            in_preamble = False
+            current = {"__id": seed_header.group("id")}
+            in_fields = True
+            index += 1
+            continue
+        if DELETE_FENCE_RE.match(line) and current is not None:
+            span = []
+            index += 1
+            while index < len(lines) and not FENCE_END_RE.match(lines[index]):
+                span.append(lines[index])
+                index += 1
+            index += 1
+            continue
+        field = FIELD_RE.match(line)
+        if field and current is not None and in_fields:
+            current[field.group("key")] = field.group("value").strip()
+            index += 1
+            continue
+        header_field = DOC_FIELD_RE.match(line)
+        if header_field and in_preamble:
+            header[header_field.group("key")] = header_field.group("value").strip()
+            index += 1
+            continue
+        if current is not None:
+            # Same contiguity rule the transcript parser uses: the field
+            # run ends at the first line that is not one, so a sentence
+            # of prose carrying a colon is never read as a field.
+            if line.strip():
+                in_fields = False
+            prose.append(line)
+        index += 1
+    close()
+
+    for required in ("Floor-coverage", "Ceiling-redundancy", "Registered"):
+        if required not in header:
+            raise SystemExit(
+                f"probe {root.name}: seed.md declares no {required}: — the "
+                "floor and the rate are pre-registered before the first run "
+                "(Proposal 06); a floor chosen after seeing the score is not a "
+                "floor"
+            )
+    if not seeds:
+        raise SystemExit(f"probe {root.name}: seed.md declares no seeds")
+    for seed in seeds:
+        if seed.tag not in AMBIGUITY_CATEGORIES:
+            raise SystemExit(
+                f"probe {root.name}: seed {seed.id} has expect-tag {seed.tag!r}"
+            )
+        if seed.level not in CLAUSE_LEVELS:
+            raise SystemExit(
+                f"probe {root.name}: seed {seed.id} has expect-level {seed.level!r}"
+            )
+        if not seed.terms:
+            raise SystemExit(
+                f"probe {root.name}: seed {seed.id} declares no expect-terms"
+            )
+
+    return ProbeSpec(
+        name=root.name,
+        root=root,
+        header=header,
+        seeds=seeds,
+        source=source_path.read_text(encoding="utf-8"),
+    )
+
+
+def is_subsequence(needle: str, haystack: str) -> bool:
+    """Is `needle` obtainable from `haystack` by deletion alone?"""
+    iterator = iter(haystack)
+    return all(character in iterator for character in needle)
+
+
+def build_probe(spec: ProbeSpec) -> str:
+    """Apply the seed record's deletions to the source statement.
+
+    Deletion-only editing, ClarifyCodeBench's discipline: information is
+    removed, never contradicted. That is the safer injection operator
+    because it cannot accidentally manufacture an *inconsistency* while
+    aiming for an ambiguity — and here it is proved rather than asserted,
+    by checking that the seeded text is a subsequence of the source.
+    """
+    seeded = spec.source
+    for seed in spec.seeds:
+        occurrences = seeded.count(seed.span)
+        if occurrences != 1:
+            raise SystemExit(
+                f"probe {spec.name}: seed {seed.id}'s span occurs {occurrences} "
+                "times in source.md; it must occur exactly once"
+            )
+        seeded = seeded.replace(seed.span, "", 1)
+    if not is_subsequence(seeded, spec.source):
+        raise SystemExit(
+            f"probe {spec.name}: the seeded statement is not a subsequence of "
+            "source.md — the seeding added characters, which makes it an "
+            "edit rather than a deletion"
+        )
+    # Deletions leave ragged blank runs behind; collapsing three or more
+    # newlines to two is whitespace tidying, and whitespace is not
+    # information, so the subsequence proof above is taken before it.
+    return re.sub(r"\n{3,}", "\n\n", seeded).strip() + "\n"
+
+
+def score_probe(
+    spec: ProbeSpec, run: pathlib.Path, report: Report
+) -> tuple[float, float]:
+    """Score a run against the seed record.
+
+    Two numbers, together and never separately: coverage of the seeded
+    ambiguities, and the redundant-question rate. A score that rewarded
+    only asking would build an interrogation; one that only penalised
+    asking would rebuild silent commitment. Both are compared against
+    figures pre-registered in seed.md.
+
+    The matching is literal term matching, not a model judgment: a
+    question hits a seed when it carries that seed's tag and its prose
+    contains one of the seed's registered terms. That is crude, and it is
+    crude on purpose — this runs in CI with no network and no model, and
+    a scorer that needed a model to say whether a question counted would
+    be a scorer nobody could reproduce.
+    """
+    transcript_path = run / "transcript.md"
+    requirements_path = run / "requirements.md"
+    if not transcript_path.is_file() or not requirements_path.is_file():
+        raise SystemExit(
+            f"{run}: expected transcript.md and requirements.md from the run"
+        )
+
+    doc, doc_report = parse_requirements(requirements_path)
+    blocks, transcript_report = parse_transcript(transcript_path)
+    report.findings.extend(doc_report.findings + transcript_report.findings)
+
+    labelled = doc.header.get("Probe")
+    if labelled != spec.name:
+        report.fail(
+            "salt",
+            requirements_path.name,
+            f"a probe run's requirements document must carry 'Probe: "
+            f"{spec.name}' (got {labelled!r}) — probe records are labelled, "
+            "never mistakable for truth",
+        )
+
+    questions = [b for b in blocks if b.kind == "question"]
+    scored = [q for q in questions if q.fields.get("type") != "clearinghouse"]
+
+    hit: dict[str, str] = {}
+    productive = 0
+    for question in scored:
+        body = question.body.lower()
+        tag = question.fields.get("tag", "")
+        found_new = False
+        for seed in spec.seeds:
+            if seed.id in hit or seed.tag != tag:
+                continue
+            if any(term in body for term in seed.terms):
+                hit[seed.id] = question.id
+                found_new = True
+        if found_new:
+            productive += 1
+
+    coverage = len(hit) / len(spec.seeds)
+    redundancy = (len(scored) - productive) / len(scored) if scored else 0.0
+
+    floor = float(spec.header["Floor-coverage"])
+    ceiling = float(spec.header["Ceiling-redundancy"])
+
+    missed = [s.id for s in spec.seeds if s.id not in hit]
+    if coverage < floor:
+        report.fail(
+            "probe",
+            spec.name,
+            f"coverage {coverage:.2f} is below the pre-registered floor "
+            f"{floor:.2f}; seeds missed: {', '.join(missed) or 'none'}",
+        )
+    if redundancy > ceiling:
+        report.fail(
+            "probe",
+            spec.name,
+            f"redundant-question rate {redundancy:.2f} is above the "
+            f"pre-registered ceiling {ceiling:.2f} "
+            f"({len(scored) - productive} of {len(scored)} questions hit no "
+            "unhit seed)",
+        )
+    report.note(
+        f"probe {spec.name}: coverage {coverage:.2f} "
+        f"({len(hit)}/{len(spec.seeds)} seeds, floor {floor:.2f}), redundancy "
+        f"{redundancy:.2f} ({len(scored)} scored questions, ceiling "
+        f"{ceiling:.2f})"
+    )
+    for seed in spec.seeds:
+        state = f"caught by {hit[seed.id]}" if seed.id in hit else "MISSED"
+        report.note(f"  seed {seed.id} ({seed.tag}, {seed.level}): {state}")
+
+    return coverage, redundancy
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
+def _float(
+    value: str | None, report: Report | None, where: str, name: str
+) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        if report is not None:
+            report.fail("form", where, f"{name}: {value!r} is not a number")
+        return None
+
+
+def _int(value: str | None, report: Report | None, where: str, name: str) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        if report is not None:
+            report.fail("form", where, f"{name}: {value!r} is not a whole number")
+        return None
+
+
+def emit(report: Report, strict: bool) -> int:
+    for note in report.notes:
+        print(note)
+    if report.findings:
+        print()
+        for finding in report.findings:
+            print(finding.render())
+    blocking = len(report.blocking)
+    warnings = len(report.warnings)
+    print()
+    print(f"{blocking} blocking, {warnings} warning(s).")
+    if blocking:
+        return 1
+    if strict and warnings:
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    requirements = pathlib.Path(args.requirements)
+    if not requirements.is_file():
+        raise SystemExit(f"{requirements}: no such file")
+
+    doc, report = parse_requirements(requirements)
+
+    transcript_path: pathlib.Path | None = None
+    if args.transcript:
+        transcript_path = pathlib.Path(args.transcript)
+    elif "Transcript" in doc.header:
+        transcript_path = (requirements.parent / doc.header["Transcript"]).resolve()
+
+    only = set(args.only or ())
+    want = lambda name: not only or name in only  # noqa: E731
+
+    if want("form"):
+        check_form(doc, report)
+        check_placement(doc, report)
+
+    if transcript_path is None:
+        if only and only <= {"form"}:
+            return emit(report, args.strict)
+        report.fail(
+            "form",
+            requirements.name,
+            "no transcript: the document declares no Transcript: and none was "
+            "passed with --transcript, so the question discipline and the "
+            "read-back cannot be checked at all",
+        )
+        return emit(report, args.strict)
+    if not transcript_path.is_file():
+        report.fail("form", requirements.name, f"{transcript_path}: no such file")
+        return emit(report, args.strict)
+
+    blocks, transcript_report = parse_transcript(transcript_path)
+    report.findings.extend(transcript_report.findings)
+
+    if want("questions"):
+        check_questions(doc, blocks, report)
+    if want("readback"):
+        check_readback(doc, blocks, report)
+
+    return emit(report, args.strict)
+
+
+def _probe_root(name: str) -> pathlib.Path:
+    here = pathlib.Path(__file__).resolve().parent
+    candidate = pathlib.Path(name)
+    if candidate.is_dir():
+        return candidate
+    root = here / "probes" / name
+    if not root.is_dir():
+        raise SystemExit(f"no probe {name!r} under {here / 'probes'}")
+    return root
+
+
+def cmd_probe_build(args: argparse.Namespace) -> int:
+    spec = load_probe(_probe_root(args.name))
+    out = pathlib.Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    seeded = build_probe(spec)
+    (out / "statement.md").write_text(seeded, encoding="utf-8")
+    (out / "PROBE").write_text(
+        f"probe: {spec.name}\nregistered: {spec.header['Registered']}\n"
+        f"seeds: {len(spec.seeds)}\n\n"
+        "This directory is a probe run. The seed record is deliberately NOT\n"
+        "here: the phase runs against statement.md alone and writes\n"
+        "transcript.md and requirements.md beside it. The requirements\n"
+        f"document must carry 'Probe: {spec.name}' in its header.\n",
+        encoding="utf-8",
+    )
+    print(f"built probe {spec.name} into {out} ({len(spec.seeds)} seeds deleted)")
+    print(f"  {out / 'statement.md'}")
+    return 0
+
+
+def cmd_probe_score(args: argparse.Namespace) -> int:
+    spec = load_probe(_probe_root(args.name))
+    run = pathlib.Path(args.run)
+    report = Report()
+    score_probe(spec, run, report)
+    return emit(report, args.strict)
+
+
+def cmd_probe_oracle(args: argparse.Namespace) -> int:
+    """Demonstrate that every seed is catchable.
+
+    A seeded probe whose seeds nothing could catch measures the seeder,
+    not the phase. The oracle is a transcript and requirements document
+    written against the seeded statement that catch every seed; the
+    demonstration is that scoring it reaches coverage 1.0. It runs in a
+    temporary directory built from the seed record, so the oracle is
+    scored against the same statement a real run would get.
+    """
+    spec = load_probe(_probe_root(args.name))
+    oracle = spec.root / "oracle"
+    if not oracle.is_dir():
+        raise SystemExit(f"probe {spec.name}: no oracle/ directory under {spec.root}")
+
+    report = Report()
+    with tempfile.TemporaryDirectory(prefix="clarify-oracle.") as tmp:
+        run = pathlib.Path(tmp)
+        (run / "statement.md").write_text(build_probe(spec), encoding="utf-8")
+        for name in ("transcript.md", "requirements.md"):
+            source = oracle / name
+            if not source.is_file():
+                raise SystemExit(f"probe {spec.name}: oracle/{name} is missing")
+            shutil.copyfile(source, run / name)
+        coverage, _ = score_probe(spec, run, report)
+        if coverage < 1.0:
+            report.fail(
+                "probe",
+                spec.name,
+                f"the oracle reaches coverage {coverage:.2f}, not 1.00 — a seed "
+                "nothing can catch measures the seeder, not the phase",
+            )
+    return emit(report, args.strict)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="clarify",
+        description=(
+            "Check the clarifying-questions phase's artifacts "
+            "(docs/clarifying-questions.md)."
+        ),
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat warnings as failures (off by default: the style lint's "
+        "indicators are low-precision and blocking on them trains a seat to "
+        "stop asking)",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    check = sub.add_parser(
+        "check", help="check a requirements document against its transcript"
+    )
+    check.add_argument("requirements")
+    check.add_argument(
+        "--transcript",
+        help="the conversation; defaults to the document's Transcript: header",
+    )
+    check.add_argument(
+        "--only",
+        action="append",
+        choices=["form", "questions", "readback"],
+        help="run only these checks (repeatable)",
+    )
+    check.set_defaults(func=cmd_check)
+
+    probe = sub.add_parser("probe", help="seeded-ambiguity probes")
+    probe_sub = probe.add_subparsers(dest="probe_command", required=True)
+
+    build = probe_sub.add_parser(
+        "build", help="write a seeded statement for the phase to run against"
+    )
+    build.add_argument("name")
+    build.add_argument("--out", required=True)
+    build.set_defaults(func=cmd_probe_build)
+
+    score = probe_sub.add_parser("score", help="score a completed probe run")
+    score.add_argument("name")
+    score.add_argument("run")
+    score.set_defaults(func=cmd_probe_score)
+
+    oracle = probe_sub.add_parser(
+        "oracle", help="demonstrate that every seed is catchable"
+    )
+    oracle.add_argument("name")
+    oracle.set_defaults(func=cmd_probe_oracle)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
