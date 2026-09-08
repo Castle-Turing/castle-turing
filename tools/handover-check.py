@@ -155,13 +155,30 @@ class Report:
 # a banned word and is not a claim). Citation spans carry ids.
 
 CODE_SPAN = re.compile(r"`[^`]*`")
+HTML_COMMENT_ONLY = re.compile(r"^\s*<!--.*-->\s*$", re.S)
 CITE_SPAN = re.compile(r"\[[^\]\n]*\](?!\()")
 LINK_SPAN = re.compile(r"\[[^\]\n]*\]\([^)\n]*\)")
 
 
+def mask_code(text):
+    """Blank inline code only, leaving citation spans readable.
+
+    Citations must be parsed from this rather than from the raw text: a
+    clause key or a path written in backticks is prose, and reading
+    `[ex-done]` inside a code span as a citation rejected an honest line
+    for an unrecognized token. And they must not be parsed from mask()
+    either, which blanks the citations themselves.
+    """
+    if text.lstrip().startswith(">"):
+        return " " * len(text)
+    return CODE_SPAN.sub(lambda m: " " * len(m.group(0)), text)
+
+
 def mask(line):
+    # Equal-length, so a position found in one mask means the same
+    # position in the other and in the raw text.
     if line.lstrip().startswith(">"):
-        return ""
+        return " " * len(line)
     masked = CODE_SPAN.sub(lambda m: " " * len(m.group(0)), line)
     masked = LINK_SPAN.sub(lambda m: " " * len(m.group(0)), masked)
     masked = CITE_SPAN.sub(lambda m: " " * len(m.group(0)), masked)
@@ -289,12 +306,16 @@ def find_phrases(masked):
     """Receipt phrases and where they sit, longest first, non-overlapping.
 
     Longest first is what keeps "not merged" from also firing "merged".
+    The word boundaries are what keep "merged" from firing inside
+    "unmerged" — which inverted the check outright: "still open and
+    unmerged [#13]" was rejected for claiming a merge.
     """
     taken = []
     found = []
     for kind, phrase, predicate, complaint in sorted(
             ALL_RECEIPTS, key=lambda r: -len(r[1])):
-        for m in re.finditer(re.escape(phrase), masked, re.I):
+        pattern = r"(?<![\w-])" + re.escape(phrase) + r"(?![\w-])"
+        for m in re.finditer(pattern, masked, re.I):
             if any(m.start() < e and s < m.end() for s, e in taken):
                 continue
             taken.append((m.start(), m.end()))
@@ -302,37 +323,61 @@ def find_phrases(masked):
     return sorted(found)
 
 
-def bind(phrase_pos, kind, groups, resolved_by_group):
-    """The citation group a receipt phrase governs.
+def assign(phrases, groups, resolved_by_group):
+    """Bind each receipt phrase to the citation group it governs.
 
-    Kind-aware and nearest-first: the closest group that actually cites
-    an artifact of this phrase's kind, preferring one that follows the
-    phrase ("merged [#100]") over one that precedes it ("PR #78 merged").
+    A single left-to-right walk, and the ordering rule is the whole of
+    it: phrases accumulate until a group arrives and then bind to it, so
+    "merged, checks green, findings dispositioned [#63 #65]" binds three
+    phrases to one group. A group that arrives with nothing pending is
+    an orphan, and a phrase immediately following an orphan binds
+    backwards to it — that is "[#102], checks green", and it is also
+    "[#13] merged, and [#12] merged over a red gate", which under the
+    earlier rule ("always bind forwards") had its first phrase bind to
+    #12 and let an open pull request be reported as merged. That was the
+    review finding this walk exists for.
 
-    A phrase with no group of its kind anywhere in the item is treated as
-    prose and ignored. That is a deliberate, named gap rather than an
-    oversight. Receipt words are ordinary English — "a queue holding
-    merged briefs", "backlog entries filed via merged PRs" — and a
-    checker that read every one of those as a claim rejected an honest
-    handover while catching nothing. What keeps the gap small is
-    C-GROUND: an item making a claim carries citations, so a *wrong*
-    receipt claim cites the artifact it is wrong about and does bind.
-    What escapes is a receipt asserted about a kind of artifact the item
-    never cites, which is unevidenced prose — real, and the reason this
-    tool is one control among several rather than the whole of one.
+    A phrase whose bound group cites nothing of the phrase's kind is
+    treated as prose and dropped. Receipt words are ordinary English —
+    "a queue holding merged briefs", "backlog entries filed via merged
+    PRs" — and reading every occurrence as a claim rejected honest
+    handovers while catching nothing. What keeps that gap small is
+    C-GROUND: a *wrong* claim carries a citation to the artifact it is
+    wrong about, so it does bind. What escapes is a receipt asserted
+    about a kind of artifact the item never cites, which is unevidenced
+    prose. Named rather than hidden: this is one control among several.
     """
-    candidates = [g for g in groups if resolved_by_group[g[:2]][kind]]
-    after = [g for g in candidates if g[0] >= phrase_pos[1]]
-    if after:
-        return after[0]
-    before = [g for g in candidates if g[1] <= phrase_pos[0]]
-    return before[-1] if before else None
+    tokens = ([("phrase", p[0], p) for p in phrases]
+              + [("group", g[0], g) for g in groups])
+    tokens.sort(key=lambda t: t[1])
+    bindings = []
+    pending = []
+    last_group = None
+    last_group_used = True
+    for kind, _, item in tokens:
+        if kind == "group":
+            if pending:
+                bindings.extend((p, item) for p in pending)
+                pending = []
+                last_group_used = True
+            else:
+                last_group_used = False
+            last_group = item
+        elif last_group is not None and not last_group_used:
+            bindings.append((item, last_group))
+            last_group_used = True
+        else:
+            pending.append(item)
+    if pending and last_group is not None:
+        bindings.extend((p, last_group) for p in pending)
+    return [(phrase, group) for phrase, group in bindings
+            if resolved_by_group[group[:2]][phrase[2]]]
 
 
-def check_receipts(text, masked, line_no, ledger, report):
+def check_receipts(text, code_masked, line_no, ledger, report):
     """A receipt phrase must match the state of the artifacts it governs."""
-    groups = citation_groups(text)
-    phrases = find_phrases(masked)
+    groups = citation_groups(code_masked)
+    phrases = find_phrases(mask(text))
     if not phrases or not groups:
         return
     resolved_by_group = {}
@@ -342,10 +387,8 @@ def check_receipts(text, masked, line_no, ledger, report):
             cites.extend(parse_citations(raw, line_no, Report()))
         resolved_by_group[g[:2]] = resolve(cites, ledger, line_no, Report())
 
-    for start, end, kind, phrase, predicate, complaint in phrases:
-        group = bind((start, end), kind, groups, resolved_by_group)
-        if group is None:
-            continue
+    for (start, end, kind, phrase, predicate, complaint), group in assign(
+            phrases, groups, resolved_by_group):
         for subject in resolved_by_group[group[:2]][kind]:
             if predicate(subject):
                 continue
@@ -370,9 +413,9 @@ def logical_items(lines, start, end):
     """A section's claims, as logical items rather than physical lines.
 
     A bullet that wraps is one claim, and so is its indented `Depends:`
-    continuation. Checking grounding per physical line reported every
-    wrapped line as an uncited claim — which is not a defect in the
-    handover, it is a defect in reading markdown one line at a time.
+    continuation. Checking per physical line reported every wrapped line
+    as an uncited claim, and — worse — split a citation span across a
+    wrap so that C-GROUND saw a citation C-COVER never counted.
     """
     items = []
     current = None
@@ -388,6 +431,19 @@ def logical_items(lines, start, end):
         else:
             current[1].append(raw)
     return [(n, " ".join(l.strip() for l in ls)) for n, ls in items]
+
+
+def body_lines(lines):
+    """Line indices outside fenced code blocks."""
+    out = []
+    fenced = False
+    for i, line in enumerate(lines):
+        if line.startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(i)
+    return out
 
 
 def split_sections(lines, report):
@@ -434,58 +490,87 @@ def main(argv=None):
                        "the title does not state the window bound %s" % bound)
     bounds = split_sections(lines, report)
 
-    # --- per-line: the claim lint and citation resolution -----------------
-    cited_prs = set()
-    in_code_fence = False
-    body = []
+    # --- the claim lint, per physical line --------------------------------
+    keep = set(body_lines(lines))
     for i, line in enumerate(lines, 1):
-        if line.startswith("```"):
-            in_code_fence = not in_code_fence
+        if i - 1 not in keep:
             continue
-        if in_code_fence:
-            continue
-        body.append(i)
-        masked = mask(line)
-        for m in BANNED_RE.finditer(masked):
+        for m in BANNED_RE.finditer(mask(line)):
             report.add("C-CLAIM", i,
                        "completion-assertion vocabulary %r — the handover reports "
                        "receipts and asks for verdicts; it renders none"
                        % m.group(1))
-        citations = parse_citations(line, i, report)
+
+    # --- grounding, receipts and coverage, per logical item ---------------
+    #
+    # Over the whole body, not over a list of named sections. Restricting
+    # these to the five claim-bearing headings left two doors open that
+    # the review walked through: a claim placed before `## Intent`, and
+    # one under `## Acknowledgment` ("every pull request merged with green
+    # checks"), both unchecked. Anything outside a heading is checked as
+    # if it were a claim, because that is what it would be read as.
+    GROUNDLESS_OK = ("Acknowledgment",)
+    section_of = {}
+    for title, (sec_start, sec_end) in bounds.items():
+        for i in range(sec_start, sec_end):
+            section_of[i] = title
+
+    title_line = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
+    cited_prs = set()
+    for i, text in logical_items(lines, 0, len(lines)):
+        first = i - 1
+        if first not in keep or first == title_line:
+            continue
+        if HTML_COMMENT_ONLY.match(text):
+            # Invisible in the rendered document, so it is not a claim
+            # the resident could act on. The reject fixtures under
+            # test/handover/ state their expected violation code this
+            # way, and grounding them as claims made every one of them
+            # report a spurious C-GROUND.
+            continue
+        section = section_of.get(first)
+        code_masked = mask_code(text)
+        citations = parse_citations(code_masked, i, report)
         resolved = resolve(citations, ledger, i, report)
         for pr in resolved["pr"]:
             cited_prs.add(str(pr["number"]))
 
-    # --- per-item: grounding, and receipts against artifact state ---------
-    for section in ("Intent", "Threats and drift", "What changed", "Unverified",
-                    "Verdicts requested"):
-        if section not in bounds:
+        if section == "Acknowledgment":
+            # The closing act asks the resident to write back. It is the
+            # one section that makes no claims, so it may carry neither a
+            # citation nor a receipt phrase — which is also how "every PR
+            # merged, checks green" hidden down here gets caught without
+            # demanding the closing sentence cite something.
+            if citations or find_phrases(mask(text)):
+                report.add("C-STRUCT", i,
+                           "the closing act states a claim; it asks for a "
+                           "written-back acknowledgment and nothing else")
             continue
-        start, end = bounds[section]
-        for line_no, text in logical_items(lines, start + 1, end):
-            citations = parse_citations(text, line_no, Report())
-            if not citations:
-                report.add("C-GROUND", line_no,
-                           "claim in %r carries no citation and no [unverified] "
-                           "marker" % section)
-            elif section == "Unverified" and not any(
-                    k == "unverified" for k, _ in citations):
-                report.add("C-GROUND", line_no,
-                           "a line under 'Unverified' must carry the [unverified] "
-                           "marker")
-            if text.lstrip().startswith(">"):
-                continue
-            check_receipts(text, mask(text), line_no, ledger, report)
+
+        if not citations:
+            report.add("C-GROUND", i,
+                       "claim in %r carries no citation and no [unverified] marker"
+                       % (section or "the handover's body, outside any section"))
+        elif section == "Unverified" and not any(k == "unverified" for k, _ in citations):
+            report.add("C-GROUND", i,
+                       "a line under 'Unverified' must carry the [unverified] marker")
+
+        if not text.lstrip().startswith(">"):
+            check_receipts(text, code_masked, i, ledger, report)
 
     # --- C-DEPENDS --------------------------------------------------------
     if "Verdicts requested" in bounds:
-        start, end = bounds["Verdicts requested"]
-        bullets = [i for i in range(start + 1, end)
-                   if re.match(r"^\s*[-*]\s+\S", lines[i])]
+        sec_start, sec_end = bounds["Verdicts requested"]
+        # Top-level bullets only. An indented sub-bullet listing a
+        # request's evidence is part of that request, and treating it as
+        # a request of its own both demanded a `Depends:` it should not
+        # have and cut short the scan for the real one.
+        bullets = [i for i in range(sec_start + 1, sec_end)
+                   if re.match(r"^[-*]\s+\S", lines[i])]
         for b in bullets:
             depends = None
-            for j in range(b + 1, end):
-                if re.match(r"^\s*[-*]\s+\S", lines[j]):
+            for j in range(b + 1, sec_end):
+                if re.match(r"^[-*]\s+\S", lines[j]):
                     break
                 if re.match(r"^\s*Depends:\s*\S", lines[j]):
                     depends = lines[j]

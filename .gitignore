@@ -15,4 +15,10 @@ test/vm-install/harness-logs/
 # derivation takes agent/ as its src, so a stray .pyc changes a store
 # path for nothing.
 __pycache__/
+# A scratch directory for tools that cannot use $TMPDIR. tools/handover.sh
+# writes its ledger and draft under $TMPDIR by default — deliberately
+# outside the checkout, because a ledger built on a real machine carries
+# journal record ids and those are private layer. An agent session
+# confined to its own worktree cannot write outside it, so it passes
+# --out .scratch/ instead; this keeps that from being committed.
 .scratch/

@@ -295,3 +295,50 @@ human hands.
 **Not renamed.** "Handover" survives implementation as the brief
 proposed it; the collision with "brief" does not occur anywhere in the
 tooling. The name stays the resident's to settle.
+
+### Review findings, and what they changed
+
+`/code-review` at high effort found nine, seven of which it confirmed by
+running mutations through the checker. The headline was that C-STATE —
+the check the whole surface rests on — could be evaded by ordinary
+phrasing the prompt permits, and that is now the fixture
+`rejects/merged-among-other-citations.md`.
+
+- **Receipt phrases bound forwards past the citation beside them.**
+  `[#13] merged, and [#12] merged over a red gate` passed, reporting an
+  open pull request as merged, because a phrase always took the *next*
+  citation group. Replaced with a single left-to-right walk: phrases
+  accumulate until a group arrives, and a group arriving with nothing
+  pending becomes an orphan that the phrase after it binds backwards
+  to. Both readings are now correct, and `[#102], checks green` still
+  works.
+- **Only five sections were checked.** A claim before `## Intent`, or
+  one under `## Acknowledgment`, went unchecked entirely. Grounding and
+  receipts now run over the whole body, and the closing act may carry
+  neither a citation nor a receipt phrase — it asks for a written-back
+  acknowledgment and makes no claims.
+- **`merged` fired inside `unmerged`**, inverting the check: "still open
+  and unmerged" was rejected for claiming a merge. Receipt phrases now
+  carry the word boundaries the banned-vocabulary regex already had.
+- **A clause key in backticks was read as a citation.** Citations are now
+  parsed from a code-masked copy of the text rather than the raw line.
+- **A citation span split across a wrap** satisfied grounding but not
+  coverage, and the one-screenful bound makes long grouped citations the
+  likeliest thing to wrap. Coverage is now accumulated from logical
+  items, not physical lines.
+- **`gh pr list` had a silent limit.** Past it, coverage units vanish and
+  the checker still reports "all cited". It now refuses loudly when the
+  listing comes back at its own limit.
+- **A commit status with no `status` field** fell through to `skipped`,
+  reporting a genuinely pending check as a finished one — the same
+  false-receipt family as the docs-only bug above.
+- **Indented sub-bullets read as verdict requests**, demanding a
+  `Depends:` of a request's own evidence and cutting short the scan for
+  the real one. Only top-level bullets are requests now.
+- A zero-byte stray committed at the repo root was removed.
+
+The golden handover was regenerated after these, which also closed the
+one gap in the output itself the review named: the seven merges whose
+checks were skipped rather than run are now reported as such, where
+before they were invisible in a section that asks what merged without
+the checks the ritual expects.

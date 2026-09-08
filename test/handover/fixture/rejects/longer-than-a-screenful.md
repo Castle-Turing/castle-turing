@@ -20,22 +20,6 @@ is that every reject fixture beside this one is refused for the reason it names 
 - A second change merged over a red gate [#12].
 - An earlier brief was swept to the archive [task 0002].
 
-## Unverified
-
-- Whether the merged changes behave on a real machine is [unverified]; this ledger is invented
-  and describes no host.
-
-## Verdicts requested
-
-- Accept the merge over its red check, or reopen the work [#12]?
-  Depends: whether the next brief is dispatched or the gate is investigated first.
-- Is the open pull request still wanted [#13]?
-  Depends: whether it stays open through the next window or is withdrawn.
-
-## Acknowledgment
-
-Write back with the two verdicts above, or an explicit "nothing needed". An unacknowledged
-handover surfaces in the next one.
 - Padding line 1 that pushes this handover past one screenful [#11].
 - Padding line 2 that pushes this handover past one screenful [#11].
 - Padding line 3 that pushes this handover past one screenful [#11].
@@ -76,3 +60,20 @@ handover surfaces in the next one.
 - Padding line 38 that pushes this handover past one screenful [#11].
 - Padding line 39 that pushes this handover past one screenful [#11].
 - Padding line 40 that pushes this handover past one screenful [#11].
+
+## Unverified
+
+- Whether the merged changes behave on a real machine is [unverified]; this ledger is invented
+  and describes no host.
+
+## Verdicts requested
+
+- Accept the merge over its red check, or reopen the work [#12]?
+  Depends: whether the next brief is dispatched or the gate is investigated first.
+- Is the open pull request still wanted [#13]?
+  Depends: whether it stays open through the next window or is withdrawn.
+
+## Acknowledgment
+
+Write back with the two verdicts above, or an explicit "nothing needed". An unacknowledged
+handover surfaces in the next one.

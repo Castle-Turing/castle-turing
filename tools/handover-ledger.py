@@ -74,6 +74,7 @@ DISPOSITION_MARKER = re.compile(r"^\s{0,3}#{1,6}\s*Disposition", re.M | re.I)
 CLAUSE_TEXT_LIMIT = 1600
 
 CHECK_GREEN = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+CHECK_PENDING = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", ""}
 CHECK_RED = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
 
 
@@ -313,12 +314,20 @@ def classify_checks(rollup):
     runs = []
     for c in rollup:
         name = c.get("name") or c.get("context") or "?"
-        status = c.get("status") or "COMPLETED"
         conclusion = (c.get("conclusion") or c.get("state") or "").upper()
+        # A CheckRun carries `status`; a StatusContext carries only
+        # `state`, so defaulting a missing `status` to COMPLETED read a
+        # genuinely pending commit status as a finished one and dropped
+        # it into "skipped" — a false receipt of the same family as the
+        # docs-only "checks green" bug this file already fixed once.
+        status = c.get("status")
+        if not status:
+            status = "PENDING" if conclusion in CHECK_PENDING else "COMPLETED"
         runs.append({"name": name, "status": status, "conclusion": conclusion})
     if any(r["conclusion"] in CHECK_RED for r in runs):
         state = "red"
-    elif any(r["status"] not in ("COMPLETED", "") or not r["conclusion"] for r in runs):
+    elif any(r["status"] not in ("COMPLETED", "") or r["conclusion"] in CHECK_PENDING
+             for r in runs):
         state = "pending"
     elif not any(r["conclusion"] == "SUCCESS" for r in runs):
         # Runs exist and not one of them did anything. This is the shape
@@ -359,13 +368,25 @@ def read_prs(root, since, until):
     drift shows up). A PR closed unmerged outside the window is neither,
     and is deliberately not carried.
     """
+    limit = 500
     listing = gh_json(
         [
-            "pr", "list", "--state", "all", "--limit", "200",
+            "pr", "list", "--state", "all", "--limit", str(limit),
             "--json", "number,title,state,url,createdAt,mergedAt,closedAt,headRefName,isDraft",
         ],
         cwd=root,
     ) or []
+    if len(listing) >= limit:
+        # Silent truncation here is the worst failure this file has
+        # available: coverage units the handover never had to account
+        # for, and a checker that then reports "all cited". Loud, and a
+        # hard stop, for the same reason tools/codex-review.sh refuses
+        # to be quiet about its own failure modes.
+        raise RuntimeError(
+            "handover-ledger: `gh pr list` returned %d results, its own limit, so "
+            "the listing is truncated and coverage would be silently incomplete. "
+            "Raise the limit in read_prs()." % limit
+        )
     wanted = []
     for pr in listing:
         merged = pr.get("mergedAt")
