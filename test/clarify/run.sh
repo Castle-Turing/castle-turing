@@ -92,21 +92,41 @@ echo "== the probe harness =="
 RUN="$WORKDIR/probe-run"
 expect_pass "probe build" "$CLARIFY" probe build cursor-too-small --out "$RUN"
 
-# Deletion-only editing, proved rather than promised: the seeded
-# statement must be obtainable from the source by removing characters.
-# The builder asserts this internally; this asserts it again from
-# outside, because the builder asserting about itself is a claim.
-python3 - "$PROBE/source.md" "$RUN/statement.md" <<'PY' || fail "seeded statement is not a subsequence of source.md"
+# Deletion-only editing, checked by a second implementation rather than
+# by the builder agreeing with itself. The builder's own subsequence
+# assertion cannot fail — its only operation is removing a span, so the
+# result is a subsequence by construction, and a check that cannot fail
+# is the failure mode this file's header comment is about. What CAN fail
+# is the builder removing something the seed record did not name, or
+# mangling what it left behind: so this re-derives the expected statement
+# here, from source.md and seed.md, and compares byte for byte.
+python3 - "$PROBE/source.md" "$PROBE/seed.md" "$RUN/statement.md" <<'PY' || fail "the built statement is not the source minus exactly the seeded spans"
+import re
 import sys
+
 source = open(sys.argv[1], encoding="utf-8").read()
-seeded = open(sys.argv[2], encoding="utf-8").read()
-# Whitespace runs are tidied after seeding, so compare on non-whitespace.
-source = "".join(source.split())
-seeded = "".join(seeded.split())
-it = iter(source)
-sys.exit(0 if all(c in it for c in seeded) else 1)
+seed = open(sys.argv[2], encoding="utf-8").read()
+built = open(sys.argv[3], encoding="utf-8").read()
+
+spans = re.findall(r"^```delete\n(.*?)^```$", seed, flags=re.S | re.M)
+if not spans:
+    sys.exit("no ```delete spans in the seed record")
+
+expected = source
+for span in spans:
+    lines = span.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # the newline before the closing fence is not content
+    text = "\n".join(lines)
+    if expected.count(text) != 1:
+        sys.exit(f"span occurs {expected.count(text)} times, expected once")
+    expected = expected.replace(text, "", 1)
+expected = re.sub(r"\n{3,}", "\n\n", expected).strip() + "\n"
+
+if expected != built:
+    sys.exit("built statement differs from source-minus-seeds")
 PY
-echo "  ok   the seeded statement is a subsequence of the source (deletion only)"
+echo "  ok   the built statement is the source minus exactly the seeded spans"
 
 # The seed record must not be reachable from the run directory: that is
 # the isolation, and it is structural rather than promised.
@@ -244,6 +264,48 @@ sed -i '/^Nocuity-threshold: /d' "$DIR/requirements.md"
 expect_catch "a document declaring no nocuity threshold" form -- \
     "$CLARIFY" check "$DIR/requirements.md"
 
+# ...and the same defect must not become invisible by narrowing the run.
+# Rules 1 and 4 are computed from those numbers, so a missing one does
+# not weaken them, it switches them off. A check that can be switched off
+# by omitting a header is worse than none, because the run still prints a
+# zero.
+expect_catch "a missing threshold under --only questions" form -- \
+    "$CLARIFY" check --only questions "$DIR/requirements.md"
+
+# Form — a clause heading with no key. Left unreported, its body merges
+# into the clause above and a whole clause vanishes while the document
+# still checks out.
+DIR="$(mutate form-keyless-heading)"
+sed -i 's/^### How the value is picked \[cursor-value-by-sweep\]$/### How the value is picked/' \
+    "$DIR/requirements.md"
+expect_catch "a clause heading with no key" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
+# Form — a clause whose opening assertion is unattributed, picking up a
+# mark from a later line.
+DIR="$(mutate form-late-mark)"
+python3 - "$DIR/requirements.md" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace(
+    "[stated 2026-09-08] The compositor's pointer must be large enough",
+    "The compositor's pointer must be large enough",
+).replace(
+    "does not satisfy this clause even if it computes to the same number.",
+    "does not satisfy this clause.\n[stated 2026-09-08] It is also nice.",
+)
+open(path, "w", encoding="utf-8").write(text)
+PY
+expect_catch "a clause whose opening assertion is unattributed" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
+# Form — an utterance claiming to answer two questions at once.
+DIR="$(mutate form-multi-answer)"
+sed -i 's/^answers: Q1$/answers: Q1, Q2/' "$DIR/transcript.md"
+expect_catch "an utterance answering two questions at once" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
 echo
 echo "== the salt discipline =="
 
@@ -343,14 +405,65 @@ sed 's/^Done means I have looked/Done means somebody looked/' "$PROBE/source.md"
 expect_catch "a seed whose span is not in the source" "occurs 0 times" -- \
     "$CLARIFY" probe build "$BADSEED" --out "$WORKDIR/badseed-run"
 
+# The ground truth must not be rewritable by the seed record's own prose.
+# A seed's fields end at the first line that is not one, blank lines
+# included — otherwise a sentence beginning "expect-tag:" silently
+# changes what the probe is measuring.
+# Kept under the probe's own name so the run's `Probe:` label still
+# matches: this case is about the seed parser, not about the salt rule.
+PROSESEED="$WORKDIR/proseseed/cursor-too-small"
+mkdir -p "$PROSESEED"
+cp "$PROBE/source.md" "$PROSESEED/"
+python3 - "$PROBE/seed.md" "$PROSESEED/seed.md" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+text = text.replace(
+    "Deleting the acceptance criterion leaves",
+    "expect-tag: syntactic\n\nDeleting the acceptance criterion leaves",
+)
+open(sys.argv[2], "w", encoding="utf-8").write(text)
+PY
+"$CLARIFY" probe build "$PROSESEED" --out "$WORKDIR/proseseed-run" >/dev/null
+cp "$PROBE/oracle/transcript.md" "$PROBE/oracle/requirements.md" \
+    "$WORKDIR/proseseed-run/"
+expect_pass "seed prose cannot rewrite the pre-registered ground truth" \
+    "$CLARIFY" probe score "$PROSESEED" "$WORKDIR/proseseed-run"
+
+# A seed deletes one span. A second fence under the same seed would
+# discard the first silently.
+TWOFENCE="$WORKDIR/twofence"
+mkdir -p "$TWOFENCE"
+cp "$PROBE/source.md" "$TWOFENCE/"
+python3 - "$PROBE/seed.md" "$TWOFENCE/seed.md" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+extra = "\n```delete\nThe mouse cursor is too small to find on this laptop's panel.\n```\n"
+head, sep, tail = text.partition("## seed S2")
+open(sys.argv[2], "w", encoding="utf-8").write(head + extra + sep + tail)
+PY
+expect_catch "a seed with two delete fences" "more than one" -- \
+    "$CLARIFY" probe build "$TWOFENCE" --out "$WORKDIR/twofence-run"
+
 echo
 echo "== every requirements document in docs/state/ still checks out =="
 
+# Discovery is by exclusion, not by grepping for a header a broken
+# document would be missing: a requirements document with no
+# `Nocuity-threshold:` is the exact defect check_knobs blocks, and a
+# sweep that found documents *by* that header would skip it and stay
+# green. The two documents named below are the directory's non-
+# requirements documents; adding a third kind of document there is
+# already a deliberate act under that directory's rule 4, and adding it
+# to this list is part of the act.
 found=0
-while IFS= read -r doc; do
+for doc in "$REPO_ROOT"/docs/state/*.md; do
+    [ -e "$doc" ] || continue
+    case "$(basename "$doc")" in
+    README.md | MILESTONE.md) continue ;;
+    esac
     found=$((found + 1))
     expect_pass "docs/state: $(basename "$doc")" "$CLARIFY" check "$doc"
-done < <(grep -rl '^Nocuity-threshold:' "$REPO_ROOT/docs/state" 2>/dev/null || true)
+done
 echo "  ok   $found requirements document(s) under docs/state/"
 
 echo

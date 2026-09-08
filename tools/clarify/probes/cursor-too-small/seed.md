@@ -27,9 +27,11 @@ rather than merely disagreed with.
 competent phase would have had to ask, already answered. The seeds below
 delete answers out of it. **Deletion only, never contradiction** — the
 ClarifyCodeBench discipline, because deletion cannot accidentally
-manufacture an inconsistency while aiming for an ambiguity. `clarify
-probe build` proves the discipline held rather than trusting it: the
-seeded statement must be a subsequence of `source.md`.
+manufacture an inconsistency while aiming for an ambiguity. A seed below
+can express nothing but a span to remove, which is where that guarantee
+comes from; `test/clarify/run.sh` re-derives the seeded statement from
+this file and `source.md` independently and compares it byte for byte to
+what the builder produced.
 
 Both seeds are goal-level on purpose. Goal clarification is the one kind
 whose measured value collapses if it is not asked early, so it is the

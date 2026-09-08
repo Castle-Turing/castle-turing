@@ -89,10 +89,19 @@ Blocks, each opening `## <kind> <id>`, then a contiguous run of
     leading-weight: 0.68
     alpha: 0.25
 
+Field lines are contiguous from the top of a block: the run ends at the
+first line that is not a field, blank lines included, so a sentence of
+prose that happens to carry a colon is never silently read as one.
+
 An utterance may carry `substantive: no` with a `reason:` — that is how
 a closing "thanks, that's it" is excused from the coverage count. The
 reason is required so that the coverage number is not simply whatever
 the phase decided to count.
+
+`answers:` names exactly one question. The phase asks one question per
+turn, so a reply covering two of them is two utterances; the checker
+refuses the comma-separated form by name rather than letting it fail
+later as a missing question id.
 
 A question carries `type: discriminating` (the default) or
 `type: clearinghouse`. The stop block is last and is described under
@@ -102,7 +111,13 @@ rule 4.
 
 Sections of clauses. A clause is `### <title> [<key>]`, then `Level:`,
 then prose opening with `[stated <date>]` or `[inferred]`, then
-`Traces:` and any number of `Ambiguity:` lines.
+`Traces:` and any number of `Ambiguity:` lines. Every `###` heading is a
+clause and every clause carries a key — a keyless one is refused rather
+than absorbed into the clause above it. The mark is read off the
+clause's *opening* line only: a clause that opens with an unattributed
+assertion and picks up a `[stated]` further down is the system's reading
+wearing the resident's words, which is the thing the mark exists to
+stop.
 
     ### The surface the cursor is drawn on [cursor-surface]
 
@@ -261,10 +276,19 @@ distance.
 
 A probe is a complete statement with answers deleted out of it.
 Deletion only — never contradiction — because deleting cannot
-accidentally manufacture an inconsistency while aiming for an ambiguity;
-`clarify probe build` proves the seeding stayed deletion-only by
-requiring the seeded statement to be a subsequence of the source. The
-seed record holds the deletions, the ambiguity category each one
+accidentally manufacture an inconsistency while aiming for an ambiguity.
+That property comes from the format rather than from a check: a seed
+record can express nothing but a span to remove, and the builder's only
+operation is removing one. `clarify probe build` does assert that the
+result is a subsequence of the source, but be clear about what that
+assertion is worth — it cannot fail as the builder is written today, and
+it is there as a guard against a future builder that grows the ability
+to add text. The check that can actually fail lives in
+`test/clarify/run.sh`, which re-derives the seeded statement from the
+source and the seed record by its own implementation and compares byte
+for byte.
+
+The seed record holds the deletions, the ambiguity category each one
 creates, and the terms a question would have to contain to count as
 having found it. It is never copied into the run directory, so the
 isolation is structural rather than promised.

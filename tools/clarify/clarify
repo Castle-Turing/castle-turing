@@ -300,6 +300,7 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
     current: Clause | None = None
     prose: list[str] = []
     in_preamble = True
+    seen_prose = False
 
     def close() -> None:
         nonlocal current, prose
@@ -315,6 +316,7 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
         clause_header = CLAUSE_HEADER_RE.match(line)
         if clause_header:
             close()
+            seen_prose = False
             current = Clause(
                 key=clause_header.group("key"),
                 title=clause_header.group("title"),
@@ -325,6 +327,22 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
                 ambiguities=[],
                 prose="",
                 line=number,
+            )
+            continue
+        if line.startswith("### "):
+            # Every heading at this level is a clause. One without a
+            # `[key]` is not a heading the format has a meaning for, and
+            # left unreported its body would merge into the clause above
+            # it — a whole clause disappearing while the document still
+            # checks out, which is the shape of failure this tool exists
+            # to make impossible.
+            close()
+            report.fail(
+                "form",
+                f"{path.name}:{number}",
+                "a ### heading with no [clause-key]; every heading at this "
+                "level is a clause, and a clause with no key can be cited by "
+                "no question and traced by nothing",
             )
             continue
         if in_preamble:
@@ -376,7 +394,14 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
                 )
             continue
         stripped = line.strip()
-        if stripped and current.mark is None:
+        if stripped and not seen_prose:
+            # The mark is only ever read off the clause's *opening*
+            # assertion. Accepting it anywhere in the body would let a
+            # clause open with an unattributed sentence and pick up its
+            # attribution from a later one — which is the system's
+            # reading wearing the resident's words, exactly what the
+            # mark exists to prevent.
+            seen_prose = True
             mark = MARK_RE.match(stripped)
             if mark:
                 current.mark = "stated" if mark.group("date") else "inferred"
@@ -404,23 +429,34 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
 # ---------------------------------------------------------------------------
 
 
-def check_form(doc: RequirementsDoc, report: Report) -> None:
-    where = doc.path.name
+def check_knobs(doc: RequirementsDoc, report: Report) -> None:
+    """The three thresholds, present and readable.
 
+    Run unconditionally, before and regardless of `--only`. Rules 1 and 4
+    are computed *from* these numbers, so a missing or unreadable one
+    does not weaken those rules — it switches them off, and a check that
+    can be switched off by omitting a header is worse than no check,
+    because the run still prints a zero.
+    """
+    where = doc.path.name
     for required in ("Nocuity-threshold", "Stop-alpha", "Question-budget"):
         if required not in doc.header:
             report.fail(
                 "form",
                 where,
                 f"the document declares no {required}: — the phase's knobs are "
-                "per-document-class and a document that does not state them "
+                "per-document-class, and a document that does not state them "
                 "was checked against nothing",
             )
-
-    threshold = _float(doc.header.get("Nocuity-threshold"), report, where, "Nocuity-threshold")
+    _float(doc.header.get("Nocuity-threshold"), report, where, "Nocuity-threshold")
     _float(doc.header.get("Stop-alpha"), report, where, "Stop-alpha")
     _int(doc.header.get("Question-budget"), report, where, "Question-budget")
 
+
+def check_form(doc: RequirementsDoc, report: Report) -> None:
+    where = doc.path.name
+
+    threshold = _float(doc.header.get("Nocuity-threshold"), None, where, "")
     if threshold is not None and not 0.0 < threshold <= 1.0:
         report.fail("form", where, "Nocuity-threshold must be in (0, 1]")
 
@@ -541,6 +577,30 @@ def check_questions(
     utterances = {b.id: b for b in blocks if b.kind == "utterance"}
     threshold = _float(doc.header.get("Nocuity-threshold"), None, where, "")
     budget = _int(doc.header.get("Question-budget"), None, where, "")
+
+    # -- An utterance answers at most one question. The phase asks one
+    #    question per turn, so `answers: Q1, Q2` is not a shape the
+    #    grammar has a meaning for; it is refused by name rather than
+    #    failing later as "Q1, Q2 does not exist".
+    for utterance in blocks:
+        if utterance.kind != "utterance":
+            continue
+        answered = utterance.fields.get("answers")
+        if answered is None:
+            continue
+        at = f"transcript:{utterance.line} {utterance.id}"
+        if not ID_RE.match(answered):
+            report.fail(
+                "form",
+                at,
+                f"answers: {answered!r} — an utterance answers exactly one "
+                "question, named by its id; split a reply that covers two "
+                "questions into two utterances",
+            )
+        elif not any(q.id == answered for q in questions):
+            report.fail(
+                "form", at, f"answers: {answered}, which is not a question here"
+            )
 
     # -- Rule 3: every question cites the clause and tag it would resolve.
     for question in questions:
@@ -1089,6 +1149,13 @@ def load_probe(root: pathlib.Path) -> ProbeSpec:
             index += 1
             continue
         if DELETE_FENCE_RE.match(line) and current is not None:
+            if span is not None:
+                raise SystemExit(
+                    f"probe {root.name}: seed {current['__id']} has more than "
+                    "one ```delete fence; one seed deletes one span, so a "
+                    "second fence would silently discard the first"
+                )
+            in_fields = False
             span = []
             index += 1
             while index < len(lines) and not FENCE_END_RE.match(lines[index]):
@@ -1107,11 +1174,13 @@ def load_probe(root: pathlib.Path) -> ProbeSpec:
             index += 1
             continue
         if current is not None:
-            # Same contiguity rule the transcript parser uses: the field
-            # run ends at the first line that is not one, so a sentence
-            # of prose carrying a colon is never read as a field.
-            if line.strip():
-                in_fields = False
+            # Same contiguity rule the transcript parser uses, blank
+            # lines included: the field run ends at the first line that
+            # is not a field, so a sentence of prose carrying a colon is
+            # never read as one. Without the blank-line case, a prose
+            # line reading "expect-tag: syntactic" would silently rewrite
+            # the seed record's pre-registered ground truth.
+            in_fields = False
             prose.append(line)
         index += 1
     close()
@@ -1161,8 +1230,18 @@ def build_probe(spec: ProbeSpec) -> str:
     Deletion-only editing, ClarifyCodeBench's discipline: information is
     removed, never contradicted. That is the safer injection operator
     because it cannot accidentally manufacture an *inconsistency* while
-    aiming for an ambiguity — and here it is proved rather than asserted,
-    by checking that the seeded text is a subsequence of the source.
+    aiming for an ambiguity.
+
+    Be precise about where that guarantee comes from, because it is easy
+    to claim more than is true here. It comes from the *format*: a seed
+    can express nothing but a span to remove, and the only operation
+    below is removing one. The subsequence assertion is therefore not a
+    proof — it cannot fail as this function is written. It is a guard
+    left in place against a future builder that grows the ability to add
+    text and quietly turns a deletion probe into an edit probe.
+    test/clarify/run.sh carries the check that can actually fail: it
+    re-derives the seeded statement from source.md and seed.md by its own
+    implementation and compares byte for byte.
     """
     seeded = spec.source
     for seed in spec.seeds:
@@ -1346,6 +1425,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     only = set(args.only or ())
     want = lambda name: not only or name in only  # noqa: E731
 
+    check_knobs(doc, report)
     if want("form"):
         check_form(doc, report)
         check_placement(doc, report)
