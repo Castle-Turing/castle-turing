@@ -68,3 +68,53 @@ by a cited answer, and never resolved by silent choice. The evidence
 behind every one of these rules is in
 `docs/research/inter-task-handoff.md` and
 `docs/research/elicitation-papers.md`; task 0061 compresses it.
+
+## Requirements documents
+
+A second kind of document is admitted to this directory, deliberately
+and under rule 4 above: the output of the clarifying-questions phase.
+One per statement the resident makes, promoted into or superseded by
+the milestone file as the resident decides. The reason it belongs here
+rather than in the records is that it is the definition of work not yet
+done — a thing later work must read as *current*, and must re-read when
+it changes, which is exactly the property that separates this directory
+from `docs/tasks/`. Task 0065 is the brief;
+`docs/clarifying-questions.md` is the mechanism, including the exact
+grammar.
+
+It is the same small structured prose as everything else here, with the
+clause keys and the `[stated <date>]`/`[inferred]` marks already
+described above, plus three additions that carry the unresolved part
+forward instead of losing it:
+
+- `Level:` on each clause — `goal`, `input` or `constraint`. What kind
+  of thing the clause fixes, which decides what may be asked late and
+  what may not be asked at all.
+- `Traces:` on each clause — the utterances behind it. A `[stated]`
+  clause that traces to nothing is either an invention or an
+  `[inferred]` clause that has not admitted it.
+- `Ambiguity:` lines — one per unresolved reading, with the category,
+  the share of sampled interpretations holding the leading reading, and
+  a state of `open`, `deferred` or `cleared`. `cleared` cites the
+  answer that cleared it. Nothing is closed by silent choice.
+
+Three rules bind these documents beyond the four above.
+
+**A requirements document declares its own thresholds** in its header —
+the nocuity threshold, the stopping fraction, the question budget —
+before the phase runs against it. A threshold chosen after seeing where
+the phase landed is not a threshold, and `tools/clarify/clarify`
+refuses a document that declares none.
+
+**A probe artifact may never sit in this directory.** A probe run
+produces a document shaped exactly like one of these, and nothing but
+its `Probe:` header distinguishes the two. The checker enforces the
+separation in both directions: a document here carrying that header
+fails, and a probe run whose document omits it fails. This is Proposal
+06's salt discipline in a second medium.
+
+**Open ambiguities are a feature of a finished document, not a defect
+in it.** A requirements document with nothing open is not necessarily
+better than one with three; it may simply be one whose author decided
+rather than asked. A deletion of an open ambiguity gets the same
+scrutiny rule 2 gives any deletion here, and for the same reason.
