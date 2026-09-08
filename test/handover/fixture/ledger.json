@@ -1,0 +1,4682 @@
+{
+  "backlog": {
+    "a-crash-goes-uninvestigated": {
+      "added_in_window": true,
+      "name": "a-crash-goes-uninvestigated",
+      "path": "docs/backlog/a-crash-goes-uninvestigated.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "a-deferred-proposal-cannot-be-revisited": {
+      "added_in_window": false,
+      "name": "a-deferred-proposal-cannot-be-revisited",
+      "path": "docs/backlog/a-deferred-proposal-cannot-be-revisited.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "a-framework-defect-found-by-a-worker-has-no-outbox": {
+      "added_in_window": false,
+      "name": "a-framework-defect-found-by-a-worker-has-no-outbox",
+      "path": "docs/backlog/a-framework-defect-found-by-a-worker-has-no-outbox.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "a-no-op-switch-looks-like-a-deploy": {
+      "added_in_window": false,
+      "name": "a-no-op-switch-looks-like-a-deploy",
+      "path": "docs/backlog/a-no-op-switch-looks-like-a-deploy.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "a-proposed-diff-does-not-survive-the-journal": {
+      "added_in_window": false,
+      "name": "a-proposed-diff-does-not-survive-the-journal",
+      "path": "docs/backlog/a-proposed-diff-does-not-survive-the-journal.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "activation-is-not-proven-on-a-real-vm": {
+      "added_in_window": true,
+      "name": "activation-is-not-proven-on-a-real-vm",
+      "path": "docs/backlog/activation-is-not-proven-on-a-real-vm.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "advisor-seat-authority-scope": {
+      "added_in_window": false,
+      "name": "advisor-seat-authority-scope",
+      "path": "docs/backlog/advisor-seat-authority-scope.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "agent-suggested-font-pairings": {
+      "added_in_window": false,
+      "name": "agent-suggested-font-pairings",
+      "path": "docs/backlog/agent-suggested-font-pairings.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "ambient-default-channel": {
+      "added_in_window": false,
+      "name": "ambient-default-channel",
+      "path": "docs/backlog/ambient-default-channel.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "an-agent-workload-can-thrash-the-host": {
+      "added_in_window": true,
+      "name": "an-agent-workload-can-thrash-the-host",
+      "path": "docs/backlog/an-agent-workload-can-thrash-the-host.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "an-arrow-key-is-three-dismissals": {
+      "added_in_window": true,
+      "name": "an-arrow-key-is-three-dismissals",
+      "path": "docs/backlog/an-arrow-key-is-three-dismissals.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "answer-amendment-semantics": {
+      "added_in_window": false,
+      "name": "answer-amendment-semantics",
+      "path": "docs/backlog/answer-amendment-semantics.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "apprenticeship-has-no-mechanism": {
+      "added_in_window": false,
+      "name": "apprenticeship-has-no-mechanism",
+      "path": "docs/backlog/apprenticeship-has-no-mechanism.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "approval-channel-has-no-transfer-of-control-strategy": {
+      "added_in_window": false,
+      "name": "approval-channel-has-no-transfer-of-control-strategy",
+      "path": "docs/backlog/approval-channel-has-no-transfer-of-control-strategy.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "authority-taxonomy-prior-art": {
+      "added_in_window": false,
+      "name": "authority-taxonomy-prior-art",
+      "path": "docs/backlog/authority-taxonomy-prior-art.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "base-assumes-a-real-host": {
+      "added_in_window": false,
+      "name": "base-assumes-a-real-host",
+      "path": "docs/backlog/base-assumes-a-real-host.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "bash-redirection-defeats-root-write-deny": {
+      "added_in_window": true,
+      "name": "bash-redirection-defeats-root-write-deny",
+      "path": "docs/backlog/bash-redirection-defeats-root-write-deny.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "boot-fallback-dedup": {
+      "added_in_window": false,
+      "name": "boot-fallback-dedup",
+      "path": "docs/backlog/boot-fallback-dedup.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "briefs-quote-operator-paths-verbatim": {
+      "added_in_window": true,
+      "name": "briefs-quote-operator-paths-verbatim",
+      "path": "docs/backlog/briefs-quote-operator-paths-verbatim.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "chat-mode-implies-a-conversational-turn-contract": {
+      "added_in_window": false,
+      "name": "chat-mode-implies-a-conversational-turn-contract",
+      "path": "docs/backlog/chat-mode-implies-a-conversational-turn-contract.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "ci-flakes-deserve-retries-not-vigilance": {
+      "added_in_window": true,
+      "name": "ci-flakes-deserve-retries-not-vigilance",
+      "path": "docs/backlog/ci-flakes-deserve-retries-not-vigilance.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "citation-only-evidence": {
+      "added_in_window": false,
+      "name": "citation-only-evidence",
+      "path": "docs/backlog/citation-only-evidence.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "code-comments-accrete-the-reasoning-record": {
+      "added_in_window": false,
+      "name": "code-comments-accrete-the-reasoning-record",
+      "path": "docs/backlog/code-comments-accrete-the-reasoning-record.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "competence-measurement-entrustment": {
+      "added_in_window": false,
+      "name": "competence-measurement-entrustment",
+      "path": "docs/backlog/competence-measurement-entrustment.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "confirming-a-switch-suggests-nothing-to-check": {
+      "added_in_window": true,
+      "name": "confirming-a-switch-suggests-nothing-to-check",
+      "path": "docs/backlog/confirming-a-switch-suggests-nothing-to-check.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "cross-model-review-is-paywalled": {
+      "added_in_window": false,
+      "name": "cross-model-review-is-paywalled",
+      "path": "docs/backlog/cross-model-review-is-paywalled.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "declarative-wifi": {
+      "added_in_window": false,
+      "name": "declarative-wifi",
+      "path": "docs/backlog/declarative-wifi.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "delegation-atrophy": {
+      "added_in_window": false,
+      "name": "delegation-atrophy",
+      "path": "docs/backlog/delegation-atrophy.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "disk-encryption": {
+      "added_in_window": false,
+      "name": "disk-encryption",
+      "path": "docs/backlog/disk-encryption.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "eligibility-fold-rescans-per-request": {
+      "added_in_window": false,
+      "name": "eligibility-fold-rescans-per-request",
+      "path": "docs/backlog/eligibility-fold-rescans-per-request.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "email-office": {
+      "added_in_window": false,
+      "name": "email-office",
+      "path": "docs/backlog/email-office.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "env-stripping-defeats-write-guards": {
+      "added_in_window": false,
+      "name": "env-stripping-defeats-write-guards",
+      "path": "docs/backlog/env-stripping-defeats-write-guards.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "explicit-user-modeling-history": {
+      "added_in_window": false,
+      "name": "explicit-user-modeling-history",
+      "path": "docs/backlog/explicit-user-modeling-history.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "extraction-by-repetition-principle": {
+      "added_in_window": false,
+      "name": "extraction-by-repetition-principle",
+      "path": "docs/backlog/extraction-by-repetition-principle.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "finding-dedup-trusts-an-unconfirmed-self-report": {
+      "added_in_window": true,
+      "name": "finding-dedup-trusts-an-unconfirmed-self-report",
+      "path": "docs/backlog/finding-dedup-trusts-an-unconfirmed-self-report.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "force-as-commitment-device": {
+      "added_in_window": false,
+      "name": "force-as-commitment-device",
+      "path": "docs/backlog/force-as-commitment-device.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "headless-recovery": {
+      "added_in_window": false,
+      "name": "headless-recovery",
+      "path": "docs/backlog/headless-recovery.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "initial-password-is-seed-only": {
+      "added_in_window": false,
+      "name": "initial-password-is-seed-only",
+      "path": "docs/backlog/initial-password-is-seed-only.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "installed-system-is-not-discoverable": {
+      "added_in_window": false,
+      "name": "installed-system-is-not-discoverable",
+      "path": "docs/backlog/installed-system-is-not-discoverable.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "iso-build-bootstrap": {
+      "added_in_window": false,
+      "name": "iso-build-bootstrap",
+      "path": "docs/backlog/iso-build-bootstrap.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "legible-history-calibrated-trust": {
+      "added_in_window": false,
+      "name": "legible-history-calibrated-trust",
+      "path": "docs/backlog/legible-history-calibrated-trust.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "machine-worn-authority": {
+      "added_in_window": false,
+      "name": "machine-worn-authority",
+      "path": "docs/backlog/machine-worn-authority.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "measurement-is-designed-for-one-resident": {
+      "added_in_window": false,
+      "name": "measurement-is-designed-for-one-resident",
+      "path": "docs/backlog/measurement-is-designed-for-one-resident.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "mechanism-proposals-are-approvable-but-unapplyable": {
+      "added_in_window": false,
+      "name": "mechanism-proposals-are-approvable-but-unapplyable",
+      "path": "docs/backlog/mechanism-proposals-are-approvable-but-unapplyable.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "mislabelled-answer-strands-a-question": {
+      "added_in_window": false,
+      "name": "mislabelled-answer-strands-a-question",
+      "path": "docs/backlog/mislabelled-answer-strands-a-question.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "mutableusers-false-for-declarative-passwords": {
+      "added_in_window": false,
+      "name": "mutableusers-false-for-declarative-passwords",
+      "path": "docs/backlog/mutableusers-false-for-declarative-passwords.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "no-build-host-but-the-target": {
+      "added_in_window": false,
+      "name": "no-build-host-but-the-target",
+      "path": "docs/backlog/no-build-host-but-the-target.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "no-sweep-tool-for-previewing-foot-appearance-settings-like-padding": {
+      "added_in_window": true,
+      "name": "no-sweep-tool-for-previewing-foot-appearance-settings-like-padding",
+      "path": "docs/backlog/no-sweep-tool-for-previewing-foot-appearance-settings-like-padding.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "no-watchdog-forces-a-panic-on-a-hang": {
+      "added_in_window": false,
+      "name": "no-watchdog-forces-a-panic-on-a-hang",
+      "path": "docs/backlog/no-watchdog-forces-a-panic-on-a-hang.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "nothing-ambient-says-items-are-waiting": {
+      "added_in_window": false,
+      "name": "nothing-ambient-says-items-are-waiting",
+      "path": "docs/backlog/nothing-ambient-says-items-are-waiting.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "office-contract-extracted-by-repetition": {
+      "added_in_window": false,
+      "name": "office-contract-extracted-by-repetition",
+      "path": "docs/backlog/office-contract-extracted-by-repetition.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "one-switch-confirmation-raised-two-notifications": {
+      "added_in_window": true,
+      "name": "one-switch-confirmation-raised-two-notifications",
+      "path": "docs/backlog/one-switch-confirmation-raised-two-notifications.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "proposal-time-cannot-name-a-malformed-patch": {
+      "added_in_window": true,
+      "name": "proposal-time-cannot-name-a-malformed-patch",
+      "path": "docs/backlog/proposal-time-cannot-name-a-malformed-patch.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "reading-is-commissioned-never-curated": {
+      "added_in_window": false,
+      "name": "reading-is-commissioned-never-curated",
+      "path": "docs/backlog/reading-is-commissioned-never-curated.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "record-does-not-resolve-refs": {
+      "added_in_window": false,
+      "name": "record-does-not-resolve-refs",
+      "path": "docs/backlog/record-does-not-resolve-refs.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "record-ids-are-only-second-resolution": {
+      "added_in_window": false,
+      "name": "record-ids-are-only-second-resolution",
+      "path": "docs/backlog/record-ids-are-only-second-resolution.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "rollback-may-die-before-it-rolls-back": {
+      "added_in_window": true,
+      "name": "rollback-may-die-before-it-rolls-back",
+      "path": "docs/backlog/rollback-may-die-before-it-rolls-back.md",
+      "present": false,
+      "removed_in_window": false
+    },
+    "self-maintenance-is-still-manual": {
+      "added_in_window": false,
+      "name": "self-maintenance-is-still-manual",
+      "path": "docs/backlog/self-maintenance-is-still-manual.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "shipping-a-default-typeface": {
+      "added_in_window": false,
+      "name": "shipping-a-default-typeface",
+      "path": "docs/backlog/shipping-a-default-typeface.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "stalled-mount-wedges-a-sweep": {
+      "added_in_window": false,
+      "name": "stalled-mount-wedges-a-sweep",
+      "path": "docs/backlog/stalled-mount-wedges-a-sweep.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "status-surface-internal-vocabulary": {
+      "added_in_window": false,
+      "name": "status-surface-internal-vocabulary",
+      "path": "docs/backlog/status-surface-internal-vocabulary.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "suppressions-leave-no-record": {
+      "added_in_window": false,
+      "name": "suppressions-leave-no-record",
+      "path": "docs/backlog/suppressions-leave-no-record.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-agent-instructions-are-named-for-one-tenant": {
+      "added_in_window": false,
+      "name": "the-agent-instructions-are-named-for-one-tenant",
+      "path": "docs/backlog/the-agent-instructions-are-named-for-one-tenant.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-applier-patches-any-path-in-the-private-repo": {
+      "added_in_window": false,
+      "name": "the-applier-patches-any-path-in-the-private-repo",
+      "path": "docs/backlog/the-applier-patches-any-path-in-the-private-repo.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-check-paragraph-cannot-name-a-stale-surface": {
+      "added_in_window": false,
+      "name": "the-check-paragraph-cannot-name-a-stale-surface",
+      "path": "docs/backlog/the-check-paragraph-cannot-name-a-stale-surface.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-codex-followup-cannot-push-workflow-fixes": {
+      "added_in_window": true,
+      "name": "the-codex-followup-cannot-push-workflow-fixes",
+      "path": "docs/backlog/the-codex-followup-cannot-push-workflow-fixes.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-codex-followup-promised-a-receipt-it-never-posted": {
+      "added_in_window": true,
+      "name": "the-codex-followup-promised-a-receipt-it-never-posted",
+      "path": "docs/backlog/the-codex-followup-promised-a-receipt-it-never-posted.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-contract-names-a-read-the-sandbox-refuses": {
+      "added_in_window": true,
+      "name": "the-contract-names-a-read-the-sandbox-refuses",
+      "path": "docs/backlog/the-contract-names-a-read-the-sandbox-refuses.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-delivery-seat-has-no-record-shim": {
+      "added_in_window": false,
+      "name": "the-delivery-seat-has-no-record-shim",
+      "path": "docs/backlog/the-delivery-seat-has-no-record-shim.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-example-profile-has-no-work-section": {
+      "added_in_window": true,
+      "name": "the-example-profile-has-no-work-section",
+      "path": "docs/backlog/the-example-profile-has-no-work-section.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-host-has-no-working-oom-defense": {
+      "added_in_window": true,
+      "name": "the-host-has-no-working-oom-defense",
+      "path": "docs/backlog/the-host-has-no-working-oom-defense.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-kernel-oom-killer-has-no-swap-headroom": {
+      "added_in_window": true,
+      "name": "the-kernel-oom-killer-has-no-swap-headroom",
+      "path": "docs/backlog/the-kernel-oom-killer-has-no-swap-headroom.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-modal-chord-may-be-the-wrong-default": {
+      "added_in_window": false,
+      "name": "the-modal-chord-may-be-the-wrong-default",
+      "path": "docs/backlog/the-modal-chord-may-be-the-wrong-default.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-modal-could-choose-its-opening-view": {
+      "added_in_window": false,
+      "name": "the-modal-could-choose-its-opening-view",
+      "path": "docs/backlog/the-modal-could-choose-its-opening-view.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-modal-is-only-just-usable-enough-to-test-with": {
+      "added_in_window": true,
+      "name": "the-modal-is-only-just-usable-enough-to-test-with",
+      "path": "docs/backlog/the-modal-is-only-just-usable-enough-to-test-with.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-reminder-banner-cannot-say-you-have-no-password": {
+      "added_in_window": false,
+      "name": "the-reminder-banner-cannot-say-you-have-no-password",
+      "path": "docs/backlog/the-reminder-banner-cannot-say-you-have-no-password.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-repo-has-no-license": {
+      "added_in_window": false,
+      "name": "the-repo-has-no-license",
+      "path": "docs/backlog/the-repo-has-no-license.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-speccing-step-is-an-unnamed-seat": {
+      "added_in_window": false,
+      "name": "the-speccing-step-is-an-unnamed-seat",
+      "path": "docs/backlog/the-speccing-step-is-an-unnamed-seat.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-switch-classifier-over-approximates": {
+      "added_in_window": false,
+      "name": "the-switch-classifier-over-approximates",
+      "path": "docs/backlog/the-switch-classifier-over-approximates.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "the-worker-cannot-write-its-own-deliverables": {
+      "added_in_window": false,
+      "name": "the-worker-cannot-write-its-own-deliverables",
+      "path": "docs/backlog/the-worker-cannot-write-its-own-deliverables.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-worker-cited-a-rule-its-contract-does-not-contain": {
+      "added_in_window": true,
+      "name": "the-worker-cited-a-rule-its-contract-does-not-contain",
+      "path": "docs/backlog/the-worker-cited-a-rule-its-contract-does-not-contain.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "the-workflow-interventions-have-no-outcome-measures": {
+      "added_in_window": false,
+      "name": "the-workflow-interventions-have-no-outcome-measures",
+      "path": "docs/backlog/the-workflow-interventions-have-no-outcome-measures.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "tidying-a-brief-into-done-rots-its-citations": {
+      "added_in_window": true,
+      "name": "tidying-a-brief-into-done-rots-its-citations",
+      "path": "docs/backlog/tidying-a-brief-into-done-rots-its-citations.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "twelve-studies-nobody-has-run": {
+      "added_in_window": false,
+      "name": "twelve-studies-nobody-has-run",
+      "path": "docs/backlog/twelve-studies-nobody-has-run.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "upgrading-the-framework-is-still-a-manual-errand": {
+      "added_in_window": true,
+      "name": "upgrading-the-framework-is-still-a-manual-errand",
+      "path": "docs/backlog/upgrading-the-framework-is-still-a-manual-errand.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "validate-should-notice-a-stray-state-directory": {
+      "added_in_window": false,
+      "name": "validate-should-notice-a-stray-state-directory",
+      "path": "docs/backlog/validate-should-notice-a-stray-state-directory.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "vm-fixture-never-shows-the-boot-menu": {
+      "added_in_window": false,
+      "name": "vm-fixture-never-shows-the-boot-menu",
+      "path": "docs/backlog/vm-fixture-never-shows-the-boot-menu.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "weekly-audit-vigilance": {
+      "added_in_window": false,
+      "name": "weekly-audit-vigilance",
+      "path": "docs/backlog/weekly-audit-vigilance.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "where-do-host-modules-live": {
+      "added_in_window": false,
+      "name": "where-do-host-modules-live",
+      "path": "docs/backlog/where-do-host-modules-live.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "work-leaves-the-os-in-a-boring-format": {
+      "added_in_window": true,
+      "name": "work-leaves-the-os-in-a-boring-format",
+      "path": "docs/backlog/work-leaves-the-os-in-a-boring-format.md",
+      "present": false,
+      "removed_in_window": true
+    },
+    "worker-contract-generality": {
+      "added_in_window": false,
+      "name": "worker-contract-generality",
+      "path": "docs/backlog/worker-contract-generality.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "worker-tenant-working-directory-is-inherited": {
+      "added_in_window": true,
+      "name": "worker-tenant-working-directory-is-inherited",
+      "path": "docs/backlog/worker-tenant-working-directory-is-inherited.md",
+      "present": true,
+      "removed_in_window": false
+    },
+    "workers-do-not-read-the-resident-model": {
+      "added_in_window": false,
+      "name": "workers-do-not-read-the-resident-model",
+      "path": "docs/backlog/workers-do-not-read-the-resident-model.md",
+      "present": true,
+      "removed_in_window": false
+    }
+  },
+  "commits": {
+    "011f3f146d86c1728324b28ad421b0937588bda0": {
+      "date": "2026-09-02T19:21:15-04:00",
+      "sha": "011f3f146d86c1728324b28ad421b0937588bda0",
+      "short": "011f3f1",
+      "subject": "Task 0041: clear per-attempt scratch state before a retry, per code review"
+    },
+    "0270df37d63e8654cafa95c0bc2431ebd3eaecf0": {
+      "date": "2026-09-03T13:22:18Z",
+      "sha": "0270df37d63e8654cafa95c0bc2431ebd3eaecf0",
+      "short": "0270df3",
+      "subject": "Task 0050: drop the repeated operator handle and narrow the guard proposal"
+    },
+    "05251ac9365067800ba0fdd3638300c9dd2e8df4": {
+      "date": "2026-09-02T20:50:40-04:00",
+      "sha": "05251ac9365067800ba0fdd3638300c9dd2e8df4",
+      "short": "05251ac",
+      "subject": "Merge pull request #72 from Castle-Turing/emcee/0040-validate-stray-state-directory"
+    },
+    "056de9ec0a9ecaf37dbd88e75029d7c1bddeade9": {
+      "date": "2026-09-04T00:41:00-04:00",
+      "sha": "056de9ec0a9ecaf37dbd88e75029d7c1bddeade9",
+      "short": "056de9e",
+      "subject": "Task 0048: the builder and activation seats in the CLI"
+    },
+    "06197a1a6adfe815ced2eb347a6c33eb4bfb9b77": {
+      "date": "2026-09-05T10:10:31-04:00",
+      "sha": "06197a1a6adfe815ced2eb347a6c33eb4bfb9b77",
+      "short": "06197a1",
+      "subject": "Review fixes: count the merges, uninvert a causal clause, name things"
+    },
+    "076f90853ae15fc34c628f94ee9e021d2aee6eab": {
+      "date": "2026-09-05T15:16:03-04:00",
+      "sha": "076f90853ae15fc34c628f94ee9e021d2aee6eab",
+      "short": "076f908",
+      "subject": "Review fixes: an unnameable change admits itself, and a notification carries one line"
+    },
+    "07ed99a0462e1f6f9a5d7beafcc80adaf3c7dbfe": {
+      "date": "2026-09-02T16:08:14-04:00",
+      "sha": "07ed99a0462e1f6f9a5d7beafcc80adaf3c7dbfe",
+      "short": "07ed99a",
+      "subject": "Merge pull request #69 from Castle-Turing/task/0038-default-action-key"
+    },
+    "0f165a6883d078322a21612c157974ab50e7a74e": {
+      "date": "2026-09-05T00:16:56-04:00",
+      "sha": "0f165a6883d078322a21612c157974ab50e7a74e",
+      "short": "0f165a6",
+      "subject": "docs/tasks: brief 0054, a proposal is checked before it is offered"
+    },
+    "0fbd1bdb8ea19b0b93118257331a24d0567238da": {
+      "date": "2026-09-03T09:18:39-04:00",
+      "sha": "0fbd1bdb8ea19b0b93118257331a24d0567238da",
+      "short": "0fbd1bd",
+      "subject": "Task 0050: describe the verification grep instead of quoting its pattern"
+    },
+    "1181048eb75b48d9929fb76042cc72f48d0486c2": {
+      "date": "2026-09-04T00:59:40-04:00",
+      "sha": "1181048eb75b48d9929fb76042cc72f48d0486c2",
+      "short": "1181048",
+      "subject": "Task 0048: the privileged unit writes the record; the session announces it"
+    },
+    "12f775d681f2c6a4795c669129ee0096d8a90bea": {
+      "date": "2026-09-05T15:08:14-04:00",
+      "sha": "12f775d681f2c6a4795c669129ee0096d8a90bea",
+      "short": "12f775d",
+      "subject": "The confirmation question suggests what to check"
+    },
+    "14c9420aae1baf7f8d376a615f1c3b29db0ba4af": {
+      "date": "2026-09-03T00:40:59-04:00",
+      "sha": "14c9420aae1baf7f8d376a615f1c3b29db0ba4af",
+      "short": "14c9420",
+      "subject": "Task 0045: fix prompt-wording regression per /code-review"
+    },
+    "17cd6f8309299be43e55d9b2959262b552a5db87": {
+      "date": "2026-09-03T01:27:31-04:00",
+      "sha": "17cd6f8309299be43e55d9b2959262b552a5db87",
+      "short": "17cd6f8",
+      "subject": "Address the code review on the ordering helper"
+    },
+    "1a2e047a370d277b5d3bc9de8867cbddf99aae81": {
+      "date": "2026-09-05T15:43:16-04:00",
+      "sha": "1a2e047a370d277b5d3bc9de8867cbddf99aae81",
+      "short": "1a2e047",
+      "subject": "0060: the sample drops the letterform probe the brief said it drops"
+    },
+    "1b08ee95aee787313dfe0bf315d9030a36c49b9c": {
+      "date": "2026-09-01T12:23:28-04:00",
+      "sha": "1b08ee95aee787313dfe0bf315d9030a36c49b9c",
+      "short": "1b08ee9",
+      "subject": "test/desktop-loop/test.nix: fix the actual desktop-loop-test failure \u2014 a stale Mod4+Shift+a keypress, not the env hypothesis"
+    },
+    "1d1201867ce723072fc16fced41db5c380739154": {
+      "date": "2026-09-05T14:56:45-04:00",
+      "sha": "1d1201867ce723072fc16fced41db5c380739154",
+      "short": "1d12018",
+      "subject": "Hand the tenant its hostname rather than order a read it cannot do"
+    },
+    "1d33cdd937e64cb4fba4d61068395ca17c0de04f": {
+      "date": "2026-09-05T14:26:15-04:00",
+      "sha": "1d33cdd937e64cb4fba4d61068395ca17c0de04f",
+      "short": "1d33cdd",
+      "subject": "Merge pull request #98 from Castle-Turing/castle/finding/no-sweep-tool-for-previewing-foot-appearance-settings-like-padding"
+    },
+    "1e3169f8c97fe0f3edba1ead4a8899d99fdefd79": {
+      "date": "2026-09-03T22:03:10-04:00",
+      "sha": "1e3169f8c97fe0f3edba1ead4a8899d99fdefd79",
+      "short": "1e3169f",
+      "subject": "Merge pull request #82 from Castle-Turing/tasks-done-sweep"
+    },
+    "1fe4da59e32e6e7b760beadf3bb9839e72c99c7e": {
+      "date": "2026-09-02T15:00:55-04:00",
+      "sha": "1fe4da59e32e6e7b760beadf3bb9839e72c99c7e",
+      "short": "1fe4da5",
+      "subject": "Merge pull request #66 from Castle-Turing/emcee/0036-reminder-banner-truthful"
+    },
+    "213054c51b989a61a0c8c82e1c12991b32c46e8d": {
+      "date": "2026-09-05T19:39:43-04:00",
+      "sha": "213054c51b989a61a0c8c82e1c12991b32c46e8d",
+      "short": "213054c",
+      "subject": "Merge pull request #101 from Castle-Turing/emcee/0059-confirming-a-switch-suggests-what-to-check"
+    },
+    "240db2daf7d86b910188cc8269291dc6d4362dec": {
+      "date": "2026-09-04T22:52:14-04:00",
+      "sha": "240db2daf7d86b910188cc8269291dc6d4362dec",
+      "short": "240db2d",
+      "subject": "docs/tasks: sweep nine merged briefs into done/"
+    },
+    "2510a4a99dd1e3baa729cbb2380c7714fdf2ca5d": {
+      "date": "2026-09-02T19:09:35-04:00",
+      "sha": "2510a4a99dd1e3baa729cbb2380c7714fdf2ca5d",
+      "short": "2510a4a",
+      "subject": "Task 0041: retry CI's own recognizable transient failures, once"
+    },
+    "25241b1d17cd2013213b7e714f781136ae27ed69": {
+      "date": "2026-09-03T00:26:47-04:00",
+      "sha": "25241b1d17cd2013213b7e714f781136ae27ed69",
+      "short": "25241b1",
+      "subject": "Spec task 0043: the worker contract's fabricated refusal"
+    },
+    "2736c2cbd1620d2a1fed7a02858d2744ff77e82e": {
+      "date": "2026-09-04T15:10:04Z",
+      "sha": "2736c2cbd1620d2a1fed7a02858d2744ff77e82e",
+      "short": "2736c2c",
+      "subject": "Task 0048: fix the activation lock's UID split, and two smaller review findings"
+    },
+    "29d32202a0bd184631535ec7bcd8aa637a9bcda7": {
+      "date": "2026-09-05T08:12:16-04:00",
+      "sha": "29d32202a0bd184631535ec7bcd8aa637a9bcda7",
+      "short": "29d3220",
+      "subject": "Merge pull request #90 from Castle-Turing/emcee/0053-diffs-are-generated-not-composed"
+    },
+    "29dccb027658344fb8c041a4d24995d27c9d25d2": {
+      "date": "2026-09-02T07:05:45-04:00",
+      "sha": "29dccb027658344fb8c041a4d24995d27c9d25d2",
+      "short": "29dccb0",
+      "subject": "docs/tasks: spec 0035, share the boot-loader fallback between hosts"
+    },
+    "2a17d1213a6fa6cde8abbaa82be636ca48bb09a8": {
+      "date": "2026-09-03T01:03:58Z",
+      "sha": "2a17d1213a6fa6cde8abbaa82be636ca48bb09a8",
+      "short": "2a17d12",
+      "subject": "Backlog: fix scope claims per Codex review on PR #74"
+    },
+    "2ac3ac3531404544ba5baf13d449b4cc3d49253b": {
+      "date": "2026-09-05T09:37:10-04:00",
+      "sha": "2ac3ac3531404544ba5baf13d449b4cc3d49253b",
+      "short": "2ac3ac3",
+      "subject": "Merge pull request #94 from Castle-Turing/emcee/0056-an-environment-fault-is-not-a-malformed-patch"
+    },
+    "3269306b74aca9941f68ad335ac55bdced5556c0": {
+      "date": "2026-09-02T23:41:23-04:00",
+      "sha": "3269306b74aca9941f68ad335ac55bdced5556c0",
+      "short": "3269306",
+      "subject": "docs/tasks: README without extension \u2014 emcee's loader globs *.md as tasks"
+    },
+    "32a412b26b0e29ef7f404d565ac19fc3fd1b0020": {
+      "date": "2026-09-05T01:21:44-04:00",
+      "sha": "32a412b26b0e29ef7f404d565ac19fc3fd1b0020",
+      "short": "32a412b",
+      "subject": "docs: address review findings on the backlog branch"
+    },
+    "35a8083ca6f5664f06147ce9165bb0f9afd356c2": {
+      "date": "2026-09-04T00:46:16-04:00",
+      "sha": "35a8083ca6f5664f06147ce9165bb0f9afd356c2",
+      "short": "35a8083",
+      "subject": "Task 0048: the module, and the first standing root grant"
+    },
+    "3874e1a928ed3641ddfb72271d808cdba422bd9f": {
+      "date": "2026-09-02T20:51:15-04:00",
+      "sha": "3874e1a928ed3641ddfb72271d808cdba422bd9f",
+      "short": "3874e1a",
+      "subject": "Merge pull request #73 from Castle-Turing/emcee/0041-ci-transient-retries"
+    },
+    "3919aaa1bb75b1e847daef1ed442c2741a308af0": {
+      "date": "2026-09-02T20:58:38-04:00",
+      "sha": "3919aaa1bb75b1e847daef1ed442c2741a308af0",
+      "short": "3919aaa",
+      "subject": "Backlog: two gaps the Codex followup automation exposed on PR #73"
+    },
+    "3a41353f69fae4b545922ea626bc1b5c9d578935": {
+      "date": "2026-09-05T13:48:48-04:00",
+      "sha": "3a41353f69fae4b545922ea626bc1b5c9d578935",
+      "short": "3a41353",
+      "subject": "docs/backlog: three entries from the first day of real use"
+    },
+    "4117667d37b8ac93ed81d746525d754192cb1e81": {
+      "date": "2026-09-02T12:05:06Z",
+      "sha": "4117667d37b8ac93ed81d746525d754192cb1e81",
+      "short": "4117667",
+      "subject": "docs/tasks/0037: describe MIT's actual notice-retention obligation"
+    },
+    "45ea844a49e908af33b2f258b3c6dbbc13008d1d": {
+      "date": "2026-09-02T22:14:33Z",
+      "sha": "45ea844a49e908af33b2f258b3c6dbbc13008d1d",
+      "short": "45ea844",
+      "subject": "backlog: strip private-layer details from the scope-rule entry"
+    },
+    "47d5783bd67a3db4bee28f2e90a3eba9262783a3": {
+      "date": "2026-09-03T21:44:52-04:00",
+      "sha": "47d5783bd67a3db4bee28f2e90a3eba9262783a3",
+      "short": "47d5783",
+      "subject": "Route the outbox folds through order_records"
+    },
+    "499b14694495d86cd10cc697895756efcaf57044": {
+      "date": "2026-09-04T01:49:24-04:00",
+      "sha": "499b14694495d86cd10cc697895756efcaf57044",
+      "short": "499b146",
+      "subject": "Gate the scope hop on the cgroup, not on INVOCATION_ID"
+    },
+    "4a71e91c5120378c31c67776882ad0a66a566302": {
+      "date": "2026-09-03T00:07:13-04:00",
+      "sha": "4a71e91c5120378c31c67776882ad0a66a566302",
+      "short": "4a71e91",
+      "subject": "Test 0042: scripted-tenant coverage for the finding outbox"
+    },
+    "4b4573afe188dd4cafbf053bac16e82badfaf310": {
+      "date": "2026-09-02T21:28:48-04:00",
+      "sha": "4b4573afe188dd4cafbf053bac16e82badfaf310",
+      "short": "4b4573a",
+      "subject": "Merge pull request #74 from Castle-Turing/backlog/codex-followup-automation-gaps"
+    },
+    "4d8f725a6a70b61a1ca167dfc046d167a4a109ca": {
+      "date": "2026-09-04T21:05:06-04:00",
+      "sha": "4d8f725a6a70b61a1ca167dfc046d167a4a109ca",
+      "short": "4d8f725",
+      "subject": "Merge pull request #85 from Castle-Turing/emcee/0047-tenant-permission-allowlist"
+    },
+    "4dfd93177ce3c48499cc232d3e62afebd097aabc": {
+      "date": "2026-09-03T23:20:28-04:00",
+      "sha": "4dfd93177ce3c48499cc232d3e62afebd097aabc",
+      "short": "4dfd931",
+      "subject": "Cover the new routing, and the record it leaves behind"
+    },
+    "4e56cde674c52d9ad69349396dda4dd901217995": {
+      "date": "2026-09-04T00:00:29-04:00",
+      "sha": "4e56cde674c52d9ad69349396dda4dd901217995",
+      "short": "4e56cde",
+      "subject": "Grant the worker tenant what its own contract commands"
+    },
+    "4f3bab9fc48f1b35314105fd588c3324c45ac542": {
+      "date": "2026-09-02T07:20:20-04:00",
+      "sha": "4f3bab9fc48f1b35314105fd588c3324c45ac542",
+      "short": "4f3bab9",
+      "subject": "docs/tasks: spec 0036, the reminder banner says what is actually true"
+    },
+    "509bb6568ba0d5236ba60379187b6c10dd21e4f4": {
+      "date": "2026-09-01T11:58:36-04:00",
+      "sha": "509bb6568ba0d5236ba60379187b6c10dd21e4f4",
+      "short": "509bb65",
+      "subject": "Backlog: the work contract stays boring, and CI retries its own flakes"
+    },
+    "52ca690edc9c810b0e04162e27b93446446f0438": {
+      "date": "2026-09-03T03:41:47Z",
+      "sha": "52ca690edc9c810b0e04162e27b93446446f0438",
+      "short": "52ca690",
+      "subject": "docs/vm-test: fix relative link after briefs moved to done/"
+    },
+    "54294b8f85aa73078dcb4c5920d322df70df0630": {
+      "date": "2026-09-01T12:23:45-04:00",
+      "sha": "54294b8f85aa73078dcb4c5920d322df70df0630",
+      "short": "54294b8",
+      "subject": "agent/castle, modules/home: verify and harden the notify-waiter's Wayland environment, and give its one real failure a trace"
+    },
+    "556f7cc9c7270b983c05ef510b0a857239f98085": {
+      "date": "2026-09-05T14:56:19-04:00",
+      "sha": "556f7cc9c7270b983c05ef510b0a857239f98085",
+      "short": "556f7cc",
+      "subject": "Merge pull request #99 from Castle-Turing/tasks-done-sweep-3"
+    },
+    "5586df52833e8290cc9ad3d7e073870775b3901b": {
+      "date": "2026-09-02T19:02:18-04:00",
+      "sha": "5586df52833e8290cc9ad3d7e073870775b3901b",
+      "short": "5586df5",
+      "subject": "Merge pull request #70 from Castle-Turing/backlog/worker-invented-scope-rule"
+    },
+    "56777e4867aeaf2b04ac442e1388ba4b25bd2027": {
+      "date": "2026-09-02T18:23:40-04:00",
+      "sha": "56777e4867aeaf2b04ac442e1388ba4b25bd2027",
+      "short": "56777e4",
+      "subject": "docs/tasks: brief 0039, the worker can write its own deliverables"
+    },
+    "56f6ea152dba0521f078037876e1a6d7b71d29b3": {
+      "date": "2026-09-05T15:28:58-04:00",
+      "sha": "56f6ea152dba0521f078037876e1a6d7b71d29b3",
+      "short": "56f6ea1",
+      "subject": "Add a foot setting sweep tool, generalized past padding"
+    },
+    "57255c7c9f5fca28c73b9aff43832f66b7a22d79": {
+      "date": "2026-09-04T20:38:51-04:00",
+      "sha": "57255c7c9f5fca28c73b9aff43832f66b7a22d79",
+      "short": "57255c7",
+      "subject": "Merge pull request #83 from Castle-Turing/emcee/0044-mechanism-findings-not-proposals"
+    },
+    "574887de3cb5bde812e87ba78832d18d36f31f6e": {
+      "date": "2026-09-05T00:10:24-04:00",
+      "sha": "574887de3cb5bde812e87ba78832d18d36f31f6e",
+      "short": "574887d",
+      "subject": "0053: the verification list names the state-repository case"
+    },
+    "57ec27fe664ecdb30da26945e975d210d602816f": {
+      "date": "2026-09-02T19:37:49-04:00",
+      "sha": "57ec27fe664ecdb30da26945e975d210d602816f",
+      "short": "57ec27f",
+      "subject": "work: clean up the half-allocated scratch pair; document the timeout clamp where readers look"
+    },
+    "5b7204b73f49e6d37209fefd5ce4587b963164b3": {
+      "date": "2026-09-04T00:57:45-04:00",
+      "sha": "5b7204b73f49e6d37209fefd5ce4587b963164b3",
+      "short": "5b7204b",
+      "subject": "Task 0048: bring the brief up to what the implementation settled"
+    },
+    "5d7c916f8e87963ba27cb127c318e31d3e0dc166": {
+      "date": "2026-09-02T23:56:59-04:00",
+      "sha": "5d7c916f8e87963ba27cb127c318e31d3e0dc166",
+      "short": "5d7c916",
+      "subject": "Implement 0042: the worker finding outbox"
+    },
+    "5f0f9c6d5c0d8e5e1b82032265462554dd2fc1d7": {
+      "date": "2026-09-04T23:40:59-04:00",
+      "sha": "5f0f9c6d5c0d8e5e1b82032265462554dd2fc1d7",
+      "short": "5f0f9c6",
+      "subject": "worker tenant: grant the mirror, and declare it inside the sandbox"
+    },
+    "60a9ab2a17fce2a1c839a707f5c7f4f8fc8227f6": {
+      "date": "2026-09-03T01:02:13-04:00",
+      "sha": "60a9ab2a17fce2a1c839a707f5c7f4f8fc8227f6",
+      "short": "60a9ab2",
+      "subject": "Promote the record-ordering backlog entry to task 0046"
+    },
+    "61bfdcebb1a17f1e8298c45c5093c1792d5d1345": {
+      "date": "2026-09-04T21:05:54-04:00",
+      "sha": "61bfdcebb1a17f1e8298c45c5093c1792d5d1345",
+      "short": "61bfdce",
+      "subject": "Merge pull request #87 from Castle-Turing/emcee/0048-activation"
+    },
+    "6319a96d0a405f885fbd3a75a8b39d33203cbd34": {
+      "date": "2026-09-04T22:54:30-04:00",
+      "sha": "6319a96d0a405f885fbd3a75a8b39d33203cbd34",
+      "short": "6319a96",
+      "subject": "Merge pull request #89 from Castle-Turing/tasks-done-sweep-2"
+    },
+    "6519a82b2c12ba571aa86a7c7468055b196e8f69": {
+      "date": "2026-09-03T23:55:17-04:00",
+      "sha": "6519a82b2c12ba571aa86a7c7468055b196e8f69",
+      "short": "6519a82",
+      "subject": "Task 0050: take the hardened handler, not the first draft"
+    },
+    "65da3c09febe350340a63ebdad53a6759a38419a": {
+      "date": "2026-09-04T23:57:26-04:00",
+      "sha": "65da3c09febe350340a63ebdad53a6759a38419a",
+      "short": "65da3c0",
+      "subject": "docs: the diff is generated from a copy, and the harness list says so"
+    },
+    "66298cbd025dd0a40e41f1857b82df3f5077ded1": {
+      "date": "2026-09-03T19:00:59-04:00",
+      "sha": "66298cbd025dd0a40e41f1857b82df3f5077ded1",
+      "short": "66298cb",
+      "subject": "Merge pull request #78 from Castle-Turing/emcee/0045-codex-followup-receipts"
+    },
+    "67e95b932eefe1bf0711df687ee761e4e15306d3": {
+      "date": "2026-09-05T01:11:05-04:00",
+      "sha": "67e95b932eefe1bf0711df687ee761e4e15306d3",
+      "short": "67e95b9",
+      "subject": "Review fixes: three fixtures left behind, and a check that could raise"
+    },
+    "68f71ca6f29e38e4c32919e5d121a8604bdbbc34": {
+      "date": "2026-09-05T08:12:19-04:00",
+      "sha": "68f71ca6f29e38e4c32919e5d121a8604bdbbc34",
+      "short": "68f71ca",
+      "subject": "Merge pull request #91 from Castle-Turing/emcee/0054-a-proposal-is-checked-before-it-is-offered"
+    },
+    "70e7525193c52d4f080939692be69a48756d3bd5": {
+      "date": "2026-09-03T09:07:12-04:00",
+      "sha": "70e7525193c52d4f080939692be69a48756d3bd5",
+      "short": "70e7525",
+      "subject": "Merge pull request #76 from Castle-Turing/emcee/0042-finding-outbox"
+    },
+    "7117ea9f4cac0d315a14a72f03ffb5095393c731": {
+      "date": "2026-09-02T23:48:46-04:00",
+      "sha": "7117ea9f4cac0d315a14a72f03ffb5095393c731",
+      "short": "7117ea9",
+      "subject": "Spec task 0042: the finding outbox"
+    },
+    "722dcab5f625381b12dc4d6e361bbc6a7289e4f8": {
+      "date": "2026-09-04T22:53:59-04:00",
+      "sha": "722dcab5f625381b12dc4d6e361bbc6a7289e4f8",
+      "short": "722dcab",
+      "subject": "Merge pull request #88 from Castle-Turing/model-because"
+    },
+    "745a224382bb94d5db7c44eafbcd76e1b381e581": {
+      "date": "2026-09-05T10:04:28-04:00",
+      "sha": "745a224382bb94d5db7c44eafbcd76e1b381e581",
+      "short": "745a224",
+      "subject": "docs/backlog: upgrading the framework is still a manual errand"
+    },
+    "75816ba136d91c8fba8c06d887c8320e4e7afb11": {
+      "date": "2026-09-02T07:10:48-04:00",
+      "sha": "75816ba136d91c8fba8c06d887c8320e4e7afb11",
+      "short": "75816ba",
+      "subject": "modules/boot.nix: share the boot-loader fallback posture between hosts"
+    },
+    "762a072d677b627fc1883c6bbb1216d197926a92": {
+      "date": "2026-09-03T21:55:52-04:00",
+      "sha": "762a072d677b627fc1883c6bbb1216d197926a92",
+      "short": "762a072",
+      "subject": "Merge pull request #80 from Castle-Turing/scrub-operator-paths"
+    },
+    "7664346ba7cf4fb09611f2089ecddde9da68d6af": {
+      "date": "2026-09-04T03:44:51Z",
+      "sha": "7664346ba7cf4fb09611f2089ecddde9da68d6af",
+      "short": "7664346",
+      "subject": "Stop the mechanism-note promising an outbox record that may not exist"
+    },
+    "773c960a45afffd41217ab396d89471fc1db2c16": {
+      "date": "2026-09-03T09:18:19-04:00",
+      "sha": "773c960a45afffd41217ab396d89471fc1db2c16",
+      "short": "773c960",
+      "subject": "Task 0050: scrub the operator's runs path from the merged 0041 brief"
+    },
+    "79c8a5189a1980288af5bc3a1caffc6679d6c6a5": {
+      "date": "2026-09-04T00:53:26-04:00",
+      "sha": "79c8a5189a1980288af5bc3a1caffc6679d6c6a5",
+      "short": "79c8a51",
+      "subject": "Task 0048: prove the whole cycle with stubs that log their argv"
+    },
+    "7c2703cf018d5231446792cd77a55c958dfea5d9": {
+      "date": "2026-09-05T08:12:26-04:00",
+      "sha": "7c2703cf018d5231446792cd77a55c958dfea5d9",
+      "short": "7c2703c",
+      "subject": "Merge pull request #92 from Castle-Turing/backlog/modal-tui-redesign"
+    },
+    "7efbdbbcfd35bd0dfdd31274a69cf6939e7bb1b7": {
+      "date": "2026-09-05T01:19:37-04:00",
+      "sha": "7efbdbbcfd35bd0dfdd31274a69cf6939e7bb1b7",
+      "short": "7efbdbb",
+      "subject": "Split a malformed patch from a stale one in the applier's refusals"
+    },
+    "85ce17143be55d4a1c56e051b8b117c5871bc490": {
+      "date": "2026-09-04T00:11:43-04:00",
+      "sha": "85ce17143be55d4a1c56e051b8b117c5871bc490",
+      "short": "85ce171",
+      "subject": "Task 0050: take the second-round template"
+    },
+    "877652d038008c14b7a2300fa76a9a44404a3e1a": {
+      "date": "2026-09-03T12:48:00-04:00",
+      "sha": "877652d038008c14b7a2300fa76a9a44404a3e1a",
+      "short": "877652d",
+      "subject": "docs/tasks: keep 0042's brief at top level until its dependents land"
+    },
+    "883a111dc0ace3a83dfef48d7e9c5e8e711c8670": {
+      "date": "2026-09-02T23:39:00Z",
+      "sha": "883a111dc0ace3a83dfef48d7e9c5e8e711c8670",
+      "short": "883a111",
+      "subject": "Task 0041: tie retry signature match to the failure that happened, not the whole log"
+    },
+    "88561a1e977ee40e0d49c109cab09dfbacc5a9ef": {
+      "date": "2026-09-04T00:44:32-04:00",
+      "sha": "88561a1e977ee40e0d49c109cab09dfbacc5a9ef",
+      "short": "88561a1",
+      "subject": "Task 0048: two more boundary statements on the one screen that grants"
+    },
+    "8a42f062e6bd86cfe78a027922e08d90a52a4e91": {
+      "date": "2026-09-05T14:24:02-04:00",
+      "sha": "8a42f062e6bd86cfe78a027922e08d90a52a4e91",
+      "short": "8a42f06",
+      "subject": "Merge pull request #97 from Castle-Turing/backlog/first-dogfood-day-findings"
+    },
+    "8dc12634813b8b3d3b8857513cbab2e95711ff80": {
+      "date": "2026-09-04T23:39:45-04:00",
+      "sha": "8dc12634813b8b3d3b8857513cbab2e95711ff80",
+      "short": "8dc1263",
+      "subject": "castle work: hand the tenant a writable copy and generate the patch"
+    },
+    "8edaf1710eb5cdcee487fcc09fa9c3ea7db17ebd": {
+      "date": "2026-09-05T19:40:15-04:00",
+      "sha": "8edaf1710eb5cdcee487fcc09fa9c3ea7db17ebd",
+      "short": "8edaf17",
+      "subject": "Merge pull request #100 from Castle-Turing/emcee/0058-the-sandbox-allows-the-read-the-contract-names"
+    },
+    "8f571abde7466e2b79edc5e11971fff75e7cdb6e": {
+      "date": "2026-09-06T01:08:03-04:00",
+      "sha": "8f571abde7466e2b79edc5e11971fff75e7cdb6e",
+      "short": "8f571ab",
+      "subject": "0063: oomd watches the user slices, and pdftotext is declared"
+    },
+    "915a5b53eb13adee99c787f5befb980c1df1f3bc": {
+      "date": "2026-09-04T01:33:42-04:00",
+      "sha": "915a5b53eb13adee99c787f5befb980c1df1f3bc",
+      "short": "915a5b5",
+      "subject": "Run the notification waiter in a scope of its own"
+    },
+    "94669c769de04d0ba6eb3f6414d4cde7d32607c0": {
+      "date": "2026-09-03T22:02:52-04:00",
+      "sha": "94669c769de04d0ba6eb3f6414d4cde7d32607c0",
+      "short": "94669c7",
+      "subject": "Merge pull request #81 from Castle-Turing/emcee/0043-worker-contract-revision"
+    },
+    "94e5d151c8debb9424d6e586c8facf327c5a8c2b": {
+      "date": "2026-09-04T23:35:21-04:00",
+      "sha": "94e5d151c8debb9424d6e586c8facf327c5a8c2b",
+      "short": "94e5d15",
+      "subject": "Spec task 0053: a proposed diff is generated, never hand-composed"
+    },
+    "95f756277d076a84540c763df261dac8e299dec8": {
+      "date": "2026-09-03T00:26:47-04:00",
+      "sha": "95f756277d076a84540c763df261dac8e299dec8",
+      "short": "95f7562",
+      "subject": "Implement 0043: quoted refusals, tiered options, the finding lane"
+    },
+    "96101d688a0c55d2a836c2982eb577b5a9acbc6f": {
+      "date": "2026-09-03T00:13:02-04:00",
+      "sha": "96101d688a0c55d2a836c2982eb577b5a9acbc6f",
+      "short": "96101d6",
+      "subject": "Keep an outbox fault from costing a turn its proposal"
+    },
+    "963655a6d41a717c042dca26c3bc0c2d2cf7579e": {
+      "date": "2026-09-03T23:22:54-04:00",
+      "sha": "963655a6d41a717c042dca26c3bc0c2d2cf7579e",
+      "short": "963655a",
+      "subject": "Tidy the comment seams and reflow the architecture paragraphs"
+    },
+    "9a280bbcebe9a4f663e876aa5ccfac3bb53709ed": {
+      "date": "2026-09-02T18:25:48-04:00",
+      "sha": "9a280bbcebe9a4f663e876aa5ccfac3bb53709ed",
+      "short": "9a280bb",
+      "subject": "agent: the worker seat writes its deliverables where its tenant can"
+    },
+    "9cc70fa929d9d53adab689ad745054f0df3e9817": {
+      "date": "2026-09-05T08:53:41-04:00",
+      "sha": "9cc70fa929d9d53adab689ad745054f0df3e9817",
+      "short": "9cc70fa",
+      "subject": "Split an environment fault out of the malformed-patch refusal"
+    },
+    "a250abc829a5198a3c8c28a8c4978e72e88651dc": {
+      "date": "2026-09-02T22:51:53Z",
+      "sha": "a250abc829a5198a3c8c28a8c4978e72e88651dc",
+      "short": "a250abc",
+      "subject": "agent: clamp CASTLE_WORKER_TIMEOUT below the scratch retention window"
+    },
+    "a564f70679d77551bd070b47d6ec010c564712c0": {
+      "date": "2026-09-02T19:41:21-04:00",
+      "sha": "a564f70679d77551bd070b47d6ec010c564712c0",
+      "short": "a564f70",
+      "subject": "workflows: budget the job timeout for a retry; trigger on shared retry-script changes"
+    },
+    "a681c4fafa2886b15ef8767a206861ee3f3773af": {
+      "date": "2026-09-04T21:03:59-04:00",
+      "sha": "a681c4fafa2886b15ef8767a206861ee3f3773af",
+      "short": "a681c4f",
+      "subject": "Merge pull request #84 from Castle-Turing/0050-handle-review-findings"
+    },
+    "a6938b5f7c918685cacb91edb9d108d0368b4556": {
+      "date": "2026-09-03T23:14:36-04:00",
+      "sha": "a6938b5f7c918685cacb91edb9d108d0368b4556",
+      "short": "a6938b5",
+      "subject": "Route a mechanism-targeted diff to the outbox instead of the inbox"
+    },
+    "a6b913caf043cbd7c31e621d698f432f1263e35a": {
+      "date": "2026-09-03T00:55:38-04:00",
+      "sha": "a6b913caf043cbd7c31e621d698f432f1263e35a",
+      "short": "a6b913c",
+      "subject": "Task 0045: drop the redundant gh api call, per second /code-review pass"
+    },
+    "a82ce8d71092637fd54e0d6d4738a1646f5e1220": {
+      "date": "2026-09-03T00:22:28-04:00",
+      "sha": "a82ce8d71092637fd54e0d6d4738a1646f5e1220",
+      "short": "a82ce8d",
+      "subject": "docs/research: land the August research reports as markdown"
+    },
+    "ad9964df1fdb15a2dee6cf35b1c63e3b367b7b88": {
+      "date": "2026-09-05T08:12:23-04:00",
+      "sha": "ad9964df1fdb15a2dee6cf35b1c63e3b367b7b88",
+      "short": "ad9964d",
+      "subject": "Merge pull request #93 from Castle-Turing/emcee/0055-a-malformed-patch-is-not-a-stale-one"
+    },
+    "ae3273c3874b3dba4f15045a84c262f675e31a37": {
+      "date": "2026-09-05T00:10:14-04:00",
+      "sha": "ae3273c3874b3dba4f15045a84c262f675e31a37",
+      "short": "ae3273c",
+      "subject": "Address the review pass on the generation path"
+    },
+    "ae718365b753baad3c49600bdbdd34d165442cdd": {
+      "date": "2026-09-03T00:33:18-04:00",
+      "sha": "ae718365b753baad3c49600bdbdd34d165442cdd",
+      "short": "ae71836",
+      "subject": "Task 0045: shim gh so a silent posting failure fails the job loudly"
+    },
+    "aff82fe1888db67a0c813fbff54427ecc586379d": {
+      "date": "2026-09-05T15:07:30-04:00",
+      "sha": "aff82fe1888db67a0c813fbff54427ecc586379d",
+      "short": "aff82fe",
+      "subject": "docs/tasks: 0059, confirming a switch suggests what to check"
+    },
+    "b3669157888a9a398aa1fc39e5796e64745d4245": {
+      "date": "2026-09-04T00:29:37-04:00",
+      "sha": "b3669157888a9a398aa1fc39e5796e64745d4245",
+      "short": "b366915",
+      "subject": "Spec 0048: castle builds freely, and switches on one approval"
+    },
+    "b515144dbd3472abe1f3eb4de36b5d57e925406f": {
+      "date": "2026-09-02T12:05:36Z",
+      "sha": "b515144dbd3472abe1f3eb4de36b5d57e925406f",
+      "short": "b515144",
+      "subject": "test/vm-install: require actual invocation evidence, not just Result"
+    },
+    "b602b9bb707d003f28685e3ec5c837c4e4e6fa80": {
+      "date": "2026-09-03T21:27:50-04:00",
+      "sha": "b602b9bb707d003f28685e3ec5c837c4e4e6fa80",
+      "short": "b602b9b",
+      "subject": "Merge remote-tracking branch 'origin/main' into emcee/0046-record-ordering-helper"
+    },
+    "b673f318498d8afd38cf2e18ff98d4752420b7f7": {
+      "date": "2026-09-05T12:25:00-04:00",
+      "sha": "b673f318498d8afd38cf2e18ff98d4752420b7f7",
+      "short": "b673f31",
+      "subject": "The initiator is the mechanism's, not the development harness's"
+    },
+    "b8d613805ca0def3b89f1693464cc3d982b4a389": {
+      "date": "2026-09-05T14:57:03-04:00",
+      "sha": "b8d613805ca0def3b89f1693464cc3d982b4a389",
+      "short": "b8d6138",
+      "subject": "Brief 0058: \u00a7C says what the assertions actually grep for"
+    },
+    "b958780f7dd30650e7aa294c72c9ec8159bdca5d": {
+      "date": "2026-09-02T18:11:22-04:00",
+      "sha": "b958780f7dd30650e7aa294c72c9ec8159bdca5d",
+      "short": "b958780",
+      "subject": "File the refusal that cited a rule the contract does not contain"
+    },
+    "bd0be644cdeb82d347a728b2c83cc3d6f260bb9b": {
+      "date": "2026-09-02T15:51:59-04:00",
+      "sha": "bd0be644cdeb82d347a728b2c83cc3d6f260bb9b",
+      "short": "bd0be64",
+      "subject": "agent/castle: the notification action key is 'default', the reserved one"
+    },
+    "be46fbc815729f04bea20d9f9b131e0ec1900da3": {
+      "date": "2026-09-05T12:29:13-04:00",
+      "sha": "be46fbc815729f04bea20d9f9b131e0ec1900da3",
+      "short": "be46fbc",
+      "subject": "Merge pull request #95 from Castle-Turing/backlog/framework-upgrade-initiator"
+    },
+    "bfcb11c3d4ab96924f2d03fd381a8dd96d589566": {
+      "date": "2026-09-04T00:54:56-04:00",
+      "sha": "bfcb11c3d4ab96924f2d03fd381a8dd96d589566",
+      "short": "bfcb11c",
+      "subject": "Task 0048: assert the generated units, and read the grant itself"
+    },
+    "c04ebcd0f4eda08475d9a41d5246aba73725a70c": {
+      "date": "2026-09-02T19:16:09-04:00",
+      "sha": "c04ebcd0f4eda08475d9a41d5246aba73725a70c",
+      "short": "c04ebcd",
+      "subject": "Task 0041: factor the retry loop into a shared script, per code review"
+    },
+    "c18be0281266df05a0a900fb17623546762959f1": {
+      "date": "2026-09-02T16:07:27-04:00",
+      "sha": "c18be0281266df05a0a900fb17623546762959f1",
+      "short": "c18be02",
+      "subject": "Merge pull request #68 from Castle-Turing/backlog/first-dogfood-findings"
+    },
+    "c18ffa32d6823b6a0b34af321a943a5860768e13": {
+      "date": "2026-09-04T00:56:21-04:00",
+      "sha": "c18ffa32d6823b6a0b34af321a943a5860768e13",
+      "short": "c18ffa3",
+      "subject": "Task 0048: the seats in the architecture doc, and two backlog calls"
+    },
+    "c52f99bd89f5eb539d4cd2ca9ceea0d55d4f4cf3": {
+      "date": "2026-09-03T00:47:44-04:00",
+      "sha": "c52f99bd89f5eb539d4cd2ca9ceea0d55d4f4cf3",
+      "short": "c52f99b",
+      "subject": "Task 0045: confirm receipts against the forge, per codex-review.sh"
+    },
+    "c5f55989dbb99180c8b2070a768b44b96f02e839": {
+      "date": "2026-09-03T21:50:53-04:00",
+      "sha": "c5f55989dbb99180c8b2070a768b44b96f02e839",
+      "short": "c5f5598",
+      "subject": "Merge pull request #79 from Castle-Turing/emcee/0046-record-ordering-helper"
+    },
+    "c60df3ce69d6de863034e7142b049a07c7fbf6ff": {
+      "date": "2026-09-03T23:21:55-04:00",
+      "sha": "c60df3ce69d6de863034e7142b049a07c7fbf6ff",
+      "short": "c60df3c",
+      "subject": "Guard against a private diff riding a finding into the public checkout"
+    },
+    "c69fca8e208b8686dd3e95a92c70df876e22a7f9": {
+      "date": "2026-09-05T14:46:05-04:00",
+      "sha": "c69fca8e208b8686dd3e95a92c70df876e22a7f9",
+      "short": "c69fca8",
+      "subject": "docs/tasks: sweep five merged briefs into done/"
+    },
+    "c70cd1170621eed5c4357fdb452773316fb3883f": {
+      "date": "2026-09-04T20:53:33-04:00",
+      "sha": "c70cd1170621eed5c4357fdb452773316fb3883f",
+      "short": "c70cd11",
+      "subject": "Merge pull request #86 from Castle-Turing/emcee/0051-dispatch-waiter-leaves-the-cgroup"
+    },
+    "c768c0a32c1cca6178819245e0f39773dde6df58": {
+      "date": "2026-09-02T20:49:58-04:00",
+      "sha": "c768c0a32c1cca6178819245e0f39773dde6df58",
+      "short": "c768c0a",
+      "subject": "Merge pull request #71 from Castle-Turing/emcee/0039-worker-writable-deliverables"
+    },
+    "c7e653fd66b88608e570c6570fc90827c28f3dad": {
+      "date": "2026-09-05T15:43:14-04:00",
+      "sha": "c7e653fd66b88608e570c6570fc90827c28f3dad",
+      "short": "c7e653f",
+      "subject": "0058: the hostname note names the source that actually answered"
+    },
+    "ca56afef07dd707f960abcdbd4a2a752e136e4fa": {
+      "date": "2026-09-04T20:45:20-04:00",
+      "sha": "ca56afef07dd707f960abcdbd4a2a752e136e4fa",
+      "short": "ca56afe",
+      "subject": "Finish the renumber: the heading said 0050 too"
+    },
+    "ca8206a9a3d4eece01e45eb148b97afbe552dfc0": {
+      "date": "2026-09-03T04:26:08Z",
+      "sha": "ca8206a9a3d4eece01e45eb148b97afbe552dfc0",
+      "short": "ca8206a",
+      "subject": "docs/research: fix README's overgeneralized trust-discipline claim"
+    },
+    "cad7ab33f7cdffe9eb9b1fac4cc08d715486ca40": {
+      "date": "2026-09-04T20:45:47-04:00",
+      "sha": "cad7ab33f7cdffe9eb9b1fac4cc08d715486ca40",
+      "short": "cad7ab3",
+      "subject": "Verify the receipt against the forge, per the Codex review"
+    },
+    "cb4f4aaf6ccdd1092c4ed21bd3664fe01216071d": {
+      "date": "2026-09-02T07:57:54-04:00",
+      "sha": "cb4f4aaf6ccdd1092c4ed21bd3664fe01216071d",
+      "short": "cb4f4aa",
+      "subject": "modules/base: harden the reminder state machine against review findings"
+    },
+    "cdcfe8423e8c238b13b2478e4bb890b3b3920bca": {
+      "date": "2026-09-02T15:00:24-04:00",
+      "sha": "cdcfe8423e8c238b13b2478e4bb890b3b3920bca",
+      "short": "cdcfe84",
+      "subject": "Merge pull request #65 from Castle-Turing/emcee/0035-boot-fallback-dedup"
+    },
+    "cea52374a11ff6deb66241d47ead4c9bd55bd53b": {
+      "date": "2026-09-04T04:33:04Z",
+      "sha": "cea52374a11ff6deb66241d47ead4c9bd55bd53b",
+      "short": "cea5237",
+      "subject": "Record the Bash-redirection gap in the root write-deny as backlog"
+    },
+    "cf7be0cdd65403b5135f980a8a20851cafc815c1": {
+      "date": "2026-09-04T00:58:50-04:00",
+      "sha": "cf7be0cdd65403b5135f980a8a20851cafc815c1",
+      "short": "cf7be0c",
+      "subject": "Task 0048: one unconfirmed generation at a time"
+    },
+    "d0a064f3280784c25b0e3f22426e701749264f02": {
+      "date": "2026-09-05T12:28:15-04:00",
+      "sha": "d0a064f3280784c25b0e3f22426e701749264f02",
+      "short": "d0a064f",
+      "subject": "Merge pull request #96 from Castle-Turing/emcee/0057-the-privileged-switch-cannot-read-the-repository-it-rebuilds"
+    },
+    "d35a1813735142da253121c6d67b0253d31e0e01": {
+      "date": "2026-09-03T09:12:41-04:00",
+      "sha": "d35a1813735142da253121c6d67b0253d31e0e01",
+      "short": "d35a181",
+      "subject": "Merge pull request #77 from Castle-Turing/docs-research"
+    },
+    "d5acf1f1aa01c9eb790a9540e8ccaf20b9adca23": {
+      "date": "2026-09-02T07:59:53-04:00",
+      "sha": "d5acf1f1aa01c9eb790a9540e8ccaf20b9adca23",
+      "short": "d5acf1f",
+      "subject": "Add MIT LICENSE; the repo's legal reality now matches Principle 01"
+    },
+    "d5e850c3684f1faf27c2c2c0774510c897f2619c": {
+      "date": "2026-09-03T05:37:57Z",
+      "sha": "d5e850c3684f1faf27c2c2c0774510c897f2619c",
+      "short": "d5e850c",
+      "subject": "Close the no-bypass guard's subscript and getattr blind spots"
+    },
+    "d7cace6053337aa1a752861d323af43040569d8a": {
+      "date": "2026-09-05T08:53:27-04:00",
+      "sha": "d7cace6053337aa1a752861d323af43040569d8a",
+      "short": "d7cace6",
+      "subject": "Repair the malformed-patch fixture that 0054 and 0055 broke on merge"
+    },
+    "d84523ffe4e85cdc016d5416d276a054b67c4ebf": {
+      "date": "2026-09-03T16:56:20Z",
+      "sha": "d84523ffe4e85cdc016d5416d276a054b67c4ebf",
+      "short": "d84523f",
+      "subject": "Address Codex review: resolve item 8/9 conflict, file dedup gap to backlog"
+    },
+    "d85d9de5c764738020c4693cccfe22f9c8223f54": {
+      "date": "2026-09-05T01:40:25-04:00",
+      "sha": "d85d9de5c764738020c4693cccfe22f9c8223f54",
+      "short": "d85d9de",
+      "subject": "0053: a surviving hand diff is named beside the no-patch notes"
+    },
+    "d8acfb50c804ab2ead2fe75f027e1376192fa803": {
+      "date": "2026-09-02T23:38:42-04:00",
+      "sha": "d8acfb50c804ab2ead2fe75f027e1376192fa803",
+      "short": "d8acfb5",
+      "subject": "docs/tasks: move completed briefs to done/, document the queue convention"
+    },
+    "dad11c6f336bb2e93434913675ea0b870811856a": {
+      "date": "2026-09-03T01:13:57-04:00",
+      "sha": "dad11c6f336bb2e93434913675ea0b870811856a",
+      "short": "dad11c6",
+      "subject": "One shared ordering for journal records, and no way past it"
+    },
+    "dcc7cd833d8e053a6fa4b8395462b82d45862785": {
+      "date": "2026-09-05T19:41:01-04:00",
+      "sha": "dcc7cd833d8e053a6fa4b8395462b82d45862785",
+      "short": "dcc7cd8",
+      "subject": "Merge pull request #102 from Castle-Turing/emcee/0060-a-padding-sweep-tool"
+    },
+    "e0dede4245162beca482adc44501d7b185e31c2e": {
+      "date": "2026-09-02T18:40:48-04:00",
+      "sha": "e0dede4245162beca482adc44501d7b185e31c2e",
+      "short": "e0dede4",
+      "subject": "test, docs: cover the worker's writable deliverables, and say where they live"
+    },
+    "e1449e71e03dcaf009c0e82ed08d900481a97bca": {
+      "date": "2026-09-02T15:01:34-04:00",
+      "sha": "e1449e71e03dcaf009c0e82ed08d900481a97bca",
+      "short": "e1449e7",
+      "subject": "Merge pull request #67 from Castle-Turing/emcee/0037-mit-license"
+    },
+    "e24c26e4fc5afcb27409b555d9827bc5bf9bf129": {
+      "date": "2026-09-03T12:43:44-04:00",
+      "sha": "e24c26e4fc5afcb27409b555d9827bc5bf9bf129",
+      "short": "e24c26e",
+      "subject": "docs/tasks: move merged briefs 0042 and 0049 to done/"
+    },
+    "e2a0e014a368a8b93133f7303d3fa3c8a74b4f5d": {
+      "date": "2026-09-03T09:12:05-04:00",
+      "sha": "e2a0e014a368a8b93133f7303d3fa3c8a74b4f5d",
+      "short": "e2a0e01",
+      "subject": "Merge pull request #75 from Castle-Turing/tasks-done-convention"
+    },
+    "e50e2a76004002d4e2ed2d287119b5671b963ec1": {
+      "date": "2026-09-03T23:13:00-04:00",
+      "sha": "e50e2a76004002d4e2ed2d287119b5671b963ec1",
+      "short": "e50e2a7",
+      "subject": "Spec 0044: mechanism-targeted diffs become findings, not proposals"
+    },
+    "e54229708981a34026c8b438679f2727a6dc0c49": {
+      "date": "2026-09-04T22:37:13-04:00",
+      "sha": "e54229708981a34026c8b438679f2727a6dc0c49",
+      "short": "e542297",
+      "subject": "Delegation: a task file says why it chose its model tier"
+    },
+    "e5e0b08dc7f5680b9476ac6c8844386c9d858462": {
+      "date": "2026-09-04T23:55:30-04:00",
+      "sha": "e5e0b08dc7f5680b9476ac6c8844386c9d858462",
+      "short": "e5e0b08",
+      "subject": "test: a generated patch round-trips, and the composed shape is pinned"
+    },
+    "e6190b30ab6176659a032e157c0d07daf91bf65b": {
+      "date": "2026-09-06T10:15:11-04:00",
+      "sha": "e6190b30ab6176659a032e157c0d07daf91bf65b",
+      "short": "e6190b3",
+      "subject": "0063: review fixes \u2014 the record matches what git can show"
+    },
+    "e6bb00f41a6966b5fbd3365af5266b1b78509459": {
+      "date": "2026-09-03T00:11:53-04:00",
+      "sha": "e6bb00f41a6966b5fbd3365af5266b1b78509459",
+      "short": "e6bb00f",
+      "subject": "Pin 0042's prompt rule, and state the third file in the option contract"
+    },
+    "e73bb0d2f3908b14ecaa4efcf9e1b3f06be73743": {
+      "date": "2026-09-02T18:53:34-04:00",
+      "sha": "e73bb0d2f3908b14ecaa4efcf9e1b3f06be73743",
+      "short": "e73bb0d",
+      "subject": "castle validate/digest: warn on a stray state/journal under the private root"
+    },
+    "e7a7efbe00372c6605ef8427e99b877ec3d078c0": {
+      "date": "2026-09-04T10:37:18-04:00",
+      "sha": "e7a7efbe00372c6605ef8427e99b877ec3d078c0",
+      "short": "e7a7efb",
+      "subject": "Renumber this brief 0050 -> 0052: 0050 was already taken"
+    },
+    "e9d2e20fa3979b7492094c3b33e3453b627954d0": {
+      "date": "2026-09-05T13:57:12-04:00",
+      "sha": "e9d2e20fa3979b7492094c3b33e3453b627954d0",
+      "short": "e9d2e20",
+      "subject": "Review fixes: three entries corrected against the code they describe"
+    },
+    "ea46d680b5582df376ad24d4486b56879f4ca613": {
+      "date": "2026-09-05T10:36:46-04:00",
+      "sha": "ea46d680b5582df376ad24d4486b56879f4ca613",
+      "short": "ea46d68",
+      "subject": "Let the privileged switch read the repository it rebuilds"
+    },
+    "eb6bc5bf1b31b4d752d207e9081f60c986152d5f": {
+      "date": "2026-09-05T14:12:59-04:00",
+      "sha": "eb6bc5bf1b31b4d752d207e9081f60c986152d5f",
+      "short": "eb6bc5b",
+      "subject": "Backlog: No sweep tool for previewing foot appearance settings like padding"
+    },
+    "ec19b6fd442375b74d46336d5c43d7adaf5aea75": {
+      "date": "2026-09-03T22:19:28-04:00",
+      "sha": "ec19b6fd442375b74d46336d5c43d7adaf5aea75",
+      "short": "ec19b6f",
+      "subject": "Task 0050: the review-findings handler that never ran"
+    },
+    "eeaa3552878e3637016991de3ee95f5ecb87b536": {
+      "date": "2026-09-03T00:33:09-04:00",
+      "sha": "eeaa3552878e3637016991de3ee95f5ecb87b536",
+      "short": "eeaa355",
+      "subject": "Task 0045: promote the codex-followup receipt problem to a brief"
+    },
+    "efd5166a4eeb873a2de97fc77b3479ca1b17088a": {
+      "date": "2026-09-02T23:02:20Z",
+      "sha": "efd5166a4eeb873a2de97fc77b3479ca1b17088a",
+      "short": "efd5166",
+      "subject": "agent/castle-worker-claude: don't claim the journal lives under PRIVATE"
+    },
+    "f16764a42d35c6c746fb31154cf69aa21a3822ad": {
+      "date": "2026-09-02T14:58:38-04:00",
+      "sha": "f16764a42d35c6c746fb31154cf69aa21a3822ad",
+      "short": "f16764a",
+      "subject": "Merge pull request #63 from Castle-Turing/task/0034-inbox-modal"
+    },
+    "f3bec1d685416b650102ac7c69ea7fb3dacfd09f": {
+      "date": "2026-09-02T07:47:43-04:00",
+      "sha": "f3bec1d685416b650102ac7c69ea7fb3dacfd09f",
+      "short": "f3bec1d",
+      "subject": "modules/base: give the password reminder a truthful no-password state"
+    },
+    "f404afac15d32508990d51f192be295ffb0b2276": {
+      "date": "2026-09-02T19:26:47-04:00",
+      "sha": "f404afac15d32508990d51f192be295ffb0b2276",
+      "short": "f404afa",
+      "subject": "Task 0041: note the Codex pass in the brief's verification list"
+    },
+    "f565c4e789922d5c3a31d7da2ac301fab4beaa6d": {
+      "date": "2026-09-05T00:42:04-04:00",
+      "sha": "f565c4e789922d5c3a31d7da2ac301fab4beaa6d",
+      "short": "f565c4e",
+      "subject": "A proposal that cannot be applied never becomes a question"
+    },
+    "f78c854708adcef50679f7db3ecd906c47959267": {
+      "date": "2026-09-04T23:44:00-04:00",
+      "sha": "f78c854708adcef50679f7db3ecd906c47959267",
+      "short": "f78c854",
+      "subject": "worker contract: the tenant edits a copy, and never composes a diff"
+    },
+    "f91dab06bc8d7afdbfb8101ed405188c5ebf083c": {
+      "date": "2026-09-03T23:32:49-04:00",
+      "sha": "f91dab06bc8d7afdbfb8101ed405188c5ebf083c",
+      "short": "f91dab0",
+      "subject": "Address the code review: five findings, one of them a real widening"
+    },
+    "fb1187082b0ce2ff4f02a76a2e1b1ddd3f6c1c2b": {
+      "date": "2026-09-02T19:26:26-04:00",
+      "sha": "fb1187082b0ce2ff4f02a76a2e1b1ddd3f6c1c2b",
+      "short": "fb11870",
+      "subject": "Task 0041: document CASTLE_HARNESS_LOG_DIR's destructive contract"
+    },
+    "fc61f1fca9e0b51f6d955e6c64538ab43ffff9a4": {
+      "date": "2026-09-05T01:17:18-04:00",
+      "sha": "fc61f1fca9e0b51f6d955e6c64538ab43ffff9a4",
+      "short": "fc61f1f",
+      "subject": "docs/backlog: two modal entries and the design comps"
+    },
+    "fdcdda9ff20a864a8e99c5ac39bcea714a6840bf": {
+      "date": "2026-09-03T04:22:08Z",
+      "sha": "fdcdda9ff20a864a8e99c5ac39bcea714a6840bf",
+      "short": "fdcdda9",
+      "subject": "Hash a finding's bytes with --no-filters"
+    },
+    "fff3a88918247c08a383225696102e7b6c1bc3da": {
+      "date": "2026-09-04T00:18:37-04:00",
+      "sha": "fff3a88918247c08a383225696102e7b6c1bc3da",
+      "short": "fff3a88",
+      "subject": "Close the gaps a review pass found in the tenant grant"
+    }
+  },
+  "coverage_units": [
+    {
+      "id": "63",
+      "kind": "merged-pr",
+      "label": "Task 0034: one chord, one surface \u2014 the modal becomes an inbox"
+    },
+    {
+      "id": "64",
+      "kind": "merged-pr",
+      "label": "Backlog: three framework findings from the first night of live dispatch"
+    },
+    {
+      "id": "65",
+      "kind": "merged-pr",
+      "label": "0035-boot-fallback-dedup \u2014 Task 0035 \u2014 share the boot-loader fallback between hosts"
+    },
+    {
+      "id": "66",
+      "kind": "merged-pr",
+      "label": "0036-reminder-banner-truthful \u2014 Task 0036 \u2014 the reminder banner says what is actually true"
+    },
+    {
+      "id": "67",
+      "kind": "merged-pr",
+      "label": "0037-mit-license \u2014 Task 0037 \u2014 the repo's license matches Principle 01: MIT"
+    },
+    {
+      "id": "68",
+      "kind": "merged-pr",
+      "label": "Backlog: the work contract stays boring, and CI retries its own flakes"
+    },
+    {
+      "id": "69",
+      "kind": "merged-pr",
+      "label": "Task 0038: the notification's action key is 'default', literally"
+    },
+    {
+      "id": "70",
+      "kind": "merged-pr",
+      "label": "Backlog: the worker cited a rule its contract does not contain"
+    },
+    {
+      "id": "71",
+      "kind": "merged-pr",
+      "label": "0039-worker-writable-deliverables \u2014 Task 0039 \u2014 the worker can write its own deliverables"
+    },
+    {
+      "id": "72",
+      "kind": "merged-pr",
+      "label": "0040-validate-stray-state-directory \u2014 Task 0040 \u2014 validate notices a stray state directory"
+    },
+    {
+      "id": "73",
+      "kind": "merged-pr",
+      "label": "0041-ci-transient-retries \u2014 Task 0041 \u2014 CI retries its own recognizable flakes"
+    },
+    {
+      "id": "74",
+      "kind": "merged-pr",
+      "label": "Backlog: two gaps the Codex followup automation exposed on PR #73"
+    },
+    {
+      "id": "75",
+      "kind": "merged-pr",
+      "label": "docs/tasks: done/ tidy and queue convention"
+    },
+    {
+      "id": "76",
+      "kind": "merged-pr",
+      "label": "0042-finding-outbox \u2014 Task 0042 \u2014 the finding outbox"
+    },
+    {
+      "id": "77",
+      "kind": "merged-pr",
+      "label": "docs/research: land the August research reports"
+    },
+    {
+      "id": "78",
+      "kind": "merged-pr",
+      "label": "0045-codex-followup-receipts \u2014 Task 0045 \u2014 the codex followup proves its receipts"
+    },
+    {
+      "id": "79",
+      "kind": "merged-pr",
+      "label": "0046-record-ordering-helper \u2014 Task 0046 \u2014 one shared ordering helper for journal records"
+    },
+    {
+      "id": "80",
+      "kind": "merged-pr",
+      "label": "Scrub operator paths from the merged 0041 brief"
+    },
+    {
+      "id": "81",
+      "kind": "merged-pr",
+      "label": "0043-worker-contract-revision \u2014 Task 0043 \u2014 worker contract: tiered options, quoted refusals, the finding lane"
+    },
+    {
+      "id": "82",
+      "kind": "merged-pr",
+      "label": "docs/tasks: move merged briefs 0042 and 0049 to done/"
+    },
+    {
+      "id": "83",
+      "kind": "merged-pr",
+      "label": "0044-mechanism-findings-not-proposals \u2014 Task 0044 \u2014 mechanism-targeted diffs become findings, not proposals"
+    },
+    {
+      "id": "84",
+      "kind": "merged-pr",
+      "label": "Task 0052: the review-findings handler that never ran"
+    },
+    {
+      "id": "85",
+      "kind": "merged-pr",
+      "label": "0047-tenant-permission-allowlist \u2014 Task 0047 \u2014 the harness grants what the contract commands"
+    },
+    {
+      "id": "86",
+      "kind": "merged-pr",
+      "label": "0051-dispatch-waiter-leaves-the-cgroup \u2014 Task 0051 \u2014 the notification waiter leaves the dispatch unit's cgroup"
+    },
+    {
+      "id": "87",
+      "kind": "merged-pr",
+      "label": "0048-activation \u2014 Task 0048 \u2014 activation: castle rebuilds the machine"
+    },
+    {
+      "id": "88",
+      "kind": "merged-pr",
+      "label": "Delegation: a task file says why it chose its model tier"
+    },
+    {
+      "id": "89",
+      "kind": "merged-pr",
+      "label": "docs/tasks: sweep nine merged briefs into done/"
+    },
+    {
+      "id": "90",
+      "kind": "merged-pr",
+      "label": "0053-diffs-are-generated-not-composed \u2014 Task 0053 \u2014 a proposed diff is generated, never hand-composed"
+    },
+    {
+      "id": "91",
+      "kind": "merged-pr",
+      "label": "0054-a-proposal-is-checked-before-it-is-offered \u2014 Task 0054 \u2014 a proposal is checked before it is offered"
+    },
+    {
+      "id": "92",
+      "kind": "merged-pr",
+      "label": "docs/backlog: modal TUI redesign entries and design comps"
+    },
+    {
+      "id": "93",
+      "kind": "merged-pr",
+      "label": "0055-a-malformed-patch-is-not-a-stale-one \u2014 Task 0055 \u2014 a malformed patch is not a stale one"
+    },
+    {
+      "id": "94",
+      "kind": "merged-pr",
+      "label": "0056-an-environment-fault-is-not-a-malformed-patch \u2014 Task 0056 \u2014 an environment fault is not a malformed patch"
+    },
+    {
+      "id": "95",
+      "kind": "merged-pr",
+      "label": "docs/backlog: upgrading the framework is still a manual errand"
+    },
+    {
+      "id": "96",
+      "kind": "merged-pr",
+      "label": "0057-the-privileged-switch-cannot-read-the-repository-it-rebuilds \u2014 Task 0057 \u2014 the privileged switch cannot read the repository it rebuilds"
+    },
+    {
+      "id": "97",
+      "kind": "merged-pr",
+      "label": "docs/backlog: three entries from the first day of real use"
+    },
+    {
+      "id": "98",
+      "kind": "merged-pr",
+      "label": "docs/backlog: no sweep tool for previewing foot appearance settings like padding"
+    },
+    {
+      "id": "99",
+      "kind": "merged-pr",
+      "label": "docs/tasks: sweep five merged briefs into done/"
+    },
+    {
+      "id": "100",
+      "kind": "merged-pr",
+      "label": "0058-the-sandbox-allows-the-read-the-contract-names \u2014 Task 0058 \u2014 the sandbox allows the read the contract names"
+    },
+    {
+      "id": "101",
+      "kind": "merged-pr",
+      "label": "0059-confirming-a-switch-suggests-what-to-check \u2014 Task 0059 \u2014 confirming a switch suggests what to check"
+    },
+    {
+      "id": "102",
+      "kind": "merged-pr",
+      "label": "0060-a-padding-sweep-tool \u2014 Task 0060 \u2014 a padding sweep tool"
+    }
+  ],
+  "forge": {
+    "read": true
+  },
+  "generated_from": {
+    "branch": "emcee/0062-the-operator-handover",
+    "head": "fbecad021e302bc58ef587748048f61ca47e84f5"
+  },
+  "journal": {
+    "available": false,
+    "reason": "journal reading was disabled with --no-journal",
+    "records": {}
+  },
+  "prs": {
+    "100": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T18:57:23Z",
+      "draft": false,
+      "file_count": 5,
+      "headRefName": "emcee/0058-the-sandbox-allows-the-read-the-contract-names",
+      "mergeCommit": "8edaf1710eb5cdcee487fcc09fa9c3ea7db17ebd",
+      "merged": true,
+      "mergedAt": "2026-09-05T23:40:16Z",
+      "merged_in_window": true,
+      "number": 100,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0058-the-sandbox-allows-the-read-the-contract-names \u2014 Task 0058 \u2014 the sandbox allows the read the contract names",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/100"
+    },
+    "101": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T19:16:25Z",
+      "draft": false,
+      "file_count": 4,
+      "headRefName": "emcee/0059-confirming-a-switch-suggests-what-to-check",
+      "mergeCommit": "213054c51b989a61a0c8c82e1c12991b32c46e8d",
+      "merged": true,
+      "mergedAt": "2026-09-05T23:39:44Z",
+      "merged_in_window": true,
+      "number": 101,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 1,
+        "state": "undispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0059-confirming-a-switch-suggests-what-to-check \u2014 Task 0059 \u2014 confirming a switch suggests what to check",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/101"
+    },
+    "102": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T19:36:09Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "emcee/0060-a-padding-sweep-tool",
+      "mergeCommit": "dcc7cd833d8e053a6fa4b8395462b82d45862785",
+      "merged": true,
+      "mergedAt": "2026-09-05T23:41:02Z",
+      "merged_in_window": true,
+      "number": 102,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0060-a-padding-sweep-tool \u2014 Task 0060 \u2014 a padding sweep tool",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/102"
+    },
+    "63": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-01T12:34:12Z",
+      "draft": false,
+      "file_count": 18,
+      "headRefName": "task/0034-inbox-modal",
+      "mergeCommit": "f16764a42d35c6c746fb31154cf69aa21a3822ad",
+      "merged": true,
+      "mergedAt": "2026-09-02T18:58:39Z",
+      "merged_in_window": true,
+      "number": 63,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Task 0034: one chord, one surface \u2014 the modal becomes an inbox",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/63"
+    },
+    "64": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-01T12:46:48Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "backlog/first-dogfood-findings",
+      "mergeCommit": "0d28c618e2752b31e4b220b59f1cbf3543aa53b2",
+      "merged": true,
+      "mergedAt": "2026-09-01T13:26:51Z",
+      "merged_in_window": true,
+      "number": 64,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Backlog: three framework findings from the first night of live dispatch",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/64"
+    },
+    "65": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T11:11:30Z",
+      "draft": false,
+      "file_count": 9,
+      "headRefName": "emcee/0035-boot-fallback-dedup",
+      "mergeCommit": "cdcfe8423e8c238b13b2478e4bb890b3b3920bca",
+      "merged": true,
+      "mergedAt": "2026-09-02T19:00:24Z",
+      "merged_in_window": true,
+      "number": 65,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0035-boot-fallback-dedup \u2014 Task 0035 \u2014 share the boot-loader fallback between hosts",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/65"
+    },
+    "66": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T11:58:38Z",
+      "draft": false,
+      "file_count": 9,
+      "headRefName": "emcee/0036-reminder-banner-truthful",
+      "mergeCommit": "1fe4da59e32e6e7b760beadf3bb9839e72c99c7e",
+      "merged": true,
+      "mergedAt": "2026-09-02T19:00:56Z",
+      "merged_in_window": true,
+      "number": 66,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 1,
+        "state": "undispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0036-reminder-banner-truthful \u2014 Task 0036 \u2014 the reminder banner says what is actually true",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/66"
+    },
+    "67": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T12:01:19Z",
+      "draft": false,
+      "file_count": 5,
+      "headRefName": "emcee/0037-mit-license",
+      "mergeCommit": "e1449e71e03dcaf009c0e82ed08d900481a97bca",
+      "merged": true,
+      "mergedAt": "2026-09-02T19:01:35Z",
+      "merged_in_window": true,
+      "number": 67,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0037-mit-license \u2014 Task 0037 \u2014 the repo's license matches Principle 01: MIT",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/67"
+    },
+    "68": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-02T19:36:32Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "backlog/first-dogfood-findings",
+      "mergeCommit": "c18be0281266df05a0a900fb17623546762959f1",
+      "merged": true,
+      "mergedAt": "2026-09-02T20:07:28Z",
+      "merged_in_window": true,
+      "number": 68,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Backlog: the work contract stays boring, and CI retries its own flakes",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/68"
+    },
+    "69": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T19:52:02Z",
+      "draft": false,
+      "file_count": 6,
+      "headRefName": "task/0038-default-action-key",
+      "mergeCommit": "07ed99a0462e1f6f9a5d7beafcc80adaf3c7dbfe",
+      "merged": true,
+      "mergedAt": "2026-09-02T20:08:14Z",
+      "merged_in_window": true,
+      "number": 69,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Task 0038: the notification's action key is 'default', literally",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/69"
+    },
+    "70": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-02T22:11:24Z",
+      "draft": false,
+      "file_count": 1,
+      "headRefName": "backlog/worker-invented-scope-rule",
+      "mergeCommit": "5586df52833e8290cc9ad3d7e073870775b3901b",
+      "merged": true,
+      "mergedAt": "2026-09-02T23:02:19Z",
+      "merged_in_window": true,
+      "number": 70,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Backlog: the worker cited a rule its contract does not contain",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/70"
+    },
+    "71": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T22:41:55Z",
+      "draft": false,
+      "file_count": 9,
+      "headRefName": "emcee/0039-worker-writable-deliverables",
+      "mergeCommit": "c768c0a32c1cca6178819245e0f39773dde6df58",
+      "merged": true,
+      "mergedAt": "2026-09-03T00:49:58Z",
+      "merged_in_window": true,
+      "number": 71,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0039-worker-writable-deliverables \u2014 Task 0039 \u2014 the worker can write its own deliverables",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/71"
+    },
+    "72": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T22:58:23Z",
+      "draft": false,
+      "file_count": 7,
+      "headRefName": "emcee/0040-validate-stray-state-directory",
+      "mergeCommit": "05251ac9365067800ba0fdd3638300c9dd2e8df4",
+      "merged": true,
+      "mergedAt": "2026-09-03T00:50:40Z",
+      "merged_in_window": true,
+      "number": 72,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0040-validate-stray-state-directory \u2014 Task 0040 \u2014 validate notices a stray state directory",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/72"
+    },
+    "73": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-02T23:27:05Z",
+      "draft": false,
+      "file_count": 8,
+      "headRefName": "emcee/0041-ci-transient-retries",
+      "mergeCommit": "3874e1a928ed3641ddfb72271d808cdba422bd9f",
+      "merged": true,
+      "mergedAt": "2026-09-03T00:51:16Z",
+      "merged_in_window": true,
+      "number": 73,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0041-ci-transient-retries \u2014 Task 0041 \u2014 CI retries its own recognizable flakes",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/73"
+    },
+    "74": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-03T00:58:40Z",
+      "draft": false,
+      "file_count": 2,
+      "headRefName": "backlog/codex-followup-automation-gaps",
+      "mergeCommit": "4b4573afe188dd4cafbf053bac16e82badfaf310",
+      "merged": true,
+      "mergedAt": "2026-09-03T01:28:48Z",
+      "merged_in_window": true,
+      "number": 74,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Backlog: two gaps the Codex followup automation exposed on PR #73",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/74"
+    },
+    "75": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-03T03:38:44Z",
+      "draft": false,
+      "file_count": 42,
+      "headRefName": "tasks-done-convention",
+      "mergeCommit": "e2a0e014a368a8b93133f7303d3fa3c8a74b4f5d",
+      "merged": true,
+      "mergedAt": "2026-09-03T13:12:05Z",
+      "merged_in_window": true,
+      "number": 75,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/tasks: done/ tidy and queue convention",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/75"
+    },
+    "76": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-03T04:15:28Z",
+      "draft": false,
+      "file_count": 17,
+      "headRefName": "emcee/0042-finding-outbox",
+      "mergeCommit": "70e7525193c52d4f080939692be69a48756d3bd5",
+      "merged": true,
+      "mergedAt": "2026-09-03T13:07:12Z",
+      "merged_in_window": true,
+      "number": 76,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0042-finding-outbox \u2014 Task 0042 \u2014 the finding outbox",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/76"
+    },
+    "77": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-03T04:22:31Z",
+      "draft": false,
+      "file_count": 13,
+      "headRefName": "docs-research",
+      "mergeCommit": "d35a1813735142da253121c6d67b0253d31e0e01",
+      "merged": true,
+      "mergedAt": "2026-09-03T13:12:42Z",
+      "merged_in_window": true,
+      "number": 77,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/research: land the August research reports",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/77"
+    },
+    "78": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "FAILURE",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "red"
+      },
+      "createdAt": "2026-09-03T04:55:53Z",
+      "draft": false,
+      "file_count": 4,
+      "headRefName": "emcee/0045-codex-followup-receipts",
+      "mergeCommit": "66298cbd025dd0a40e41f1857b82df3f5077ded1",
+      "merged": true,
+      "mergedAt": "2026-09-03T23:00:59Z",
+      "merged_in_window": true,
+      "number": 78,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0045-codex-followup-receipts \u2014 Task 0045 \u2014 the codex followup proves its receipts",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/78"
+    },
+    "79": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-03T05:27:56Z",
+      "draft": false,
+      "file_count": 10,
+      "headRefName": "emcee/0046-record-ordering-helper",
+      "mergeCommit": "c5f55989dbb99180c8b2070a768b44b96f02e839",
+      "merged": true,
+      "mergedAt": "2026-09-04T01:50:54Z",
+      "merged_in_window": true,
+      "number": 79,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0046-record-ordering-helper \u2014 Task 0046 \u2014 one shared ordering helper for journal records",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/79"
+    },
+    "80": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-03T13:18:21Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "scrub-operator-paths",
+      "mergeCommit": "762a072d677b627fc1883c6bbb1216d197926a92",
+      "merged": true,
+      "mergedAt": "2026-09-04T01:55:53Z",
+      "merged_in_window": true,
+      "number": 80,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Scrub operator paths from the merged 0041 brief",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/80"
+    },
+    "81": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-03T16:43:09Z",
+      "draft": false,
+      "file_count": 5,
+      "headRefName": "emcee/0043-worker-contract-revision",
+      "mergeCommit": "94669c769de04d0ba6eb3f6414d4cde7d32607c0",
+      "merged": true,
+      "mergedAt": "2026-09-04T02:02:52Z",
+      "merged_in_window": true,
+      "number": 81,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0043-worker-contract-revision \u2014 Task 0043 \u2014 worker contract: tiered options, quoted refusals, the finding lane",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/81"
+    },
+    "82": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-03T16:45:54Z",
+      "draft": false,
+      "file_count": 1,
+      "headRefName": "tasks-done-sweep",
+      "mergeCommit": "1e3169f8c97fe0f3edba1ead4a8899d99fdefd79",
+      "merged": true,
+      "mergedAt": "2026-09-04T02:03:10Z",
+      "merged_in_window": true,
+      "number": 82,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/tasks: move merged briefs 0042 and 0049 to done/",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/82"
+    },
+    "83": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-04T03:34:38Z",
+      "draft": false,
+      "file_count": 10,
+      "headRefName": "emcee/0044-mechanism-findings-not-proposals",
+      "mergeCommit": "57255c7c9f5fca28c73b9aff43832f66b7a22d79",
+      "merged": true,
+      "mergedAt": "2026-09-05T00:38:51Z",
+      "merged_in_window": true,
+      "number": 83,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0044-mechanism-findings-not-proposals \u2014 Task 0044 \u2014 mechanism-targeted diffs become findings, not proposals",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/83"
+    },
+    "84": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-04T03:51:23Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "0050-handle-review-findings",
+      "mergeCommit": "a681c4fafa2886b15ef8767a206861ee3f3773af",
+      "merged": true,
+      "mergedAt": "2026-09-05T01:03:59Z",
+      "merged_in_window": true,
+      "number": 84,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Task 0052: the review-findings handler that never ran",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/84"
+    },
+    "85": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-04T04:20:04Z",
+      "draft": false,
+      "file_count": 6,
+      "headRefName": "emcee/0047-tenant-permission-allowlist",
+      "mergeCommit": "4d8f725a6a70b61a1ca167dfc046d167a4a109ca",
+      "merged": true,
+      "mergedAt": "2026-09-05T01:05:06Z",
+      "merged_in_window": true,
+      "number": 85,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0047-tenant-permission-allowlist \u2014 Task 0047 \u2014 the harness grants what the contract commands",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/85"
+    },
+    "86": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-04T05:51:02Z",
+      "draft": false,
+      "file_count": 4,
+      "headRefName": "emcee/0051-dispatch-waiter-leaves-the-cgroup",
+      "mergeCommit": "c70cd1170621eed5c4357fdb452773316fb3883f",
+      "merged": true,
+      "mergedAt": "2026-09-05T00:53:34Z",
+      "merged_in_window": true,
+      "number": 86,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0051-dispatch-waiter-leaves-the-cgroup \u2014 Task 0051 \u2014 the notification waiter leaves the dispatch unit's cgroup",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/86"
+    },
+    "87": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SKIPPED",
+            "name": "handle-codex-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-04T14:47:27Z",
+      "draft": false,
+      "file_count": 11,
+      "headRefName": "emcee/0048-activation",
+      "mergeCommit": "61bfdcebb1a17f1e8298c45c5093c1792d5d1345",
+      "merged": true,
+      "mergedAt": "2026-09-05T01:05:54Z",
+      "merged_in_window": true,
+      "number": 87,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0048-activation \u2014 Task 0048 \u2014 activation: castle rebuilds the machine",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/87"
+    },
+    "88": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-05T02:37:16Z",
+      "draft": false,
+      "file_count": 2,
+      "headRefName": "model-because",
+      "mergeCommit": "722dcab5f625381b12dc4d6e361bbc6a7289e4f8",
+      "merged": true,
+      "mergedAt": "2026-09-05T02:53:59Z",
+      "merged_in_window": true,
+      "number": 88,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "Delegation: a task file says why it chose its model tier",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/88"
+    },
+    "89": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-05T02:52:17Z",
+      "draft": false,
+      "file_count": 10,
+      "headRefName": "tasks-done-sweep-2",
+      "mergeCommit": "6319a96d0a405f885fbd3a75a8b39d33203cbd34",
+      "merged": true,
+      "mergedAt": "2026-09-05T02:54:30Z",
+      "merged_in_window": true,
+      "number": 89,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/tasks: sweep nine merged briefs into done/",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/89"
+    },
+    "90": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T04:10:43Z",
+      "draft": false,
+      "file_count": 11,
+      "headRefName": "emcee/0053-diffs-are-generated-not-composed",
+      "mergeCommit": "29d32202a0bd184631535ec7bcd8aa637a9bcda7",
+      "merged": true,
+      "mergedAt": "2026-09-05T12:12:16Z",
+      "merged_in_window": true,
+      "number": 90,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0053-diffs-are-generated-not-composed \u2014 Task 0053 \u2014 a proposed diff is generated, never hand-composed",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/90"
+    },
+    "91": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T05:11:38Z",
+      "draft": false,
+      "file_count": 13,
+      "headRefName": "emcee/0054-a-proposal-is-checked-before-it-is-offered",
+      "mergeCommit": "68f71ca6f29e38e4c32919e5d121a8604bdbbc34",
+      "merged": true,
+      "mergedAt": "2026-09-05T12:12:20Z",
+      "merged_in_window": true,
+      "number": 91,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0054-a-proposal-is-checked-before-it-is-offered \u2014 Task 0054 \u2014 a proposal is checked before it is offered",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/91"
+    },
+    "92": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-05T05:21:56Z",
+      "draft": false,
+      "file_count": 4,
+      "headRefName": "backlog/modal-tui-redesign",
+      "mergeCommit": "7c2703cf018d5231446792cd77a55c958dfea5d9",
+      "merged": true,
+      "mergedAt": "2026-09-05T12:12:26Z",
+      "merged_in_window": true,
+      "number": 92,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 1,
+        "state": "undispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/backlog: modal TUI redesign entries and design comps",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/92"
+    },
+    "93": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T05:22:23Z",
+      "draft": false,
+      "file_count": 6,
+      "headRefName": "emcee/0055-a-malformed-patch-is-not-a-stale-one",
+      "mergeCommit": "ad9964df1fdb15a2dee6cf35b1c63e3b367b7b88",
+      "merged": true,
+      "mergedAt": "2026-09-05T12:12:23Z",
+      "merged_in_window": true,
+      "number": 93,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0055-a-malformed-patch-is-not-a-stale-one \u2014 Task 0055 \u2014 a malformed patch is not a stale one",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/93"
+    },
+    "94": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T12:55:25Z",
+      "draft": false,
+      "file_count": 5,
+      "headRefName": "emcee/0056-an-environment-fault-is-not-a-malformed-patch",
+      "mergeCommit": "2ac3ac3531404544ba5baf13d449b4cc3d49253b",
+      "merged": true,
+      "mergedAt": "2026-09-05T13:37:10Z",
+      "merged_in_window": true,
+      "number": 94,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 1,
+        "state": "undispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0056-an-environment-fault-is-not-a-malformed-patch \u2014 Task 0056 \u2014 an environment fault is not a malformed patch",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/94"
+    },
+    "95": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SKIPPED",
+            "name": "claude",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "skipped"
+      },
+      "createdAt": "2026-09-05T14:10:34Z",
+      "draft": false,
+      "file_count": 1,
+      "headRefName": "backlog/framework-upgrade-initiator",
+      "mergeCommit": "be46fbc815729f04bea20d9f9b131e0ec1900da3",
+      "merged": true,
+      "mergedAt": "2026-09-05T16:29:13Z",
+      "merged_in_window": true,
+      "number": 95,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/backlog: upgrading the framework is still a manual errand",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/95"
+    },
+    "96": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "claude-review",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "flake-check",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "desktop-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "vm-install-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "agent-loop-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "dispatch-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "modal-headless-test",
+            "status": "COMPLETED"
+          },
+          {
+            "conclusion": "SUCCESS",
+            "name": "sway-config-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-09-05T14:37:13Z",
+      "draft": false,
+      "file_count": 5,
+      "headRefName": "emcee/0057-the-privileged-switch-cannot-read-the-repository-it-rebuilds",
+      "mergeCommit": "d0a064f3280784c25b0e3f22426e701749264f02",
+      "merged": true,
+      "mergedAt": "2026-09-05T16:28:15Z",
+      "merged_in_window": true,
+      "number": 96,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 1,
+        "state": "undispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "0057-the-privileged-switch-cannot-read-the-repository-it-rebuilds \u2014 Task 0057 \u2014 the privileged switch cannot read the repository it rebuilds",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/96"
+    },
+    "97": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-05T17:57:14Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "backlog/first-dogfood-day-findings",
+      "mergeCommit": "8a42f062e6bd86cfe78a027922e08d90a52a4e91",
+      "merged": true,
+      "mergedAt": "2026-09-05T18:24:02Z",
+      "merged_in_window": true,
+      "number": 97,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/backlog: three entries from the first day of real use",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/97"
+    },
+    "98": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-05T18:22:15Z",
+      "draft": false,
+      "file_count": 1,
+      "headRefName": "castle/finding/no-sweep-tool-for-previewing-foot-appearance-settings-like-padding",
+      "mergeCommit": "1d33cdd937e64cb4fba4d61068395ca17c0de04f",
+      "merged": true,
+      "mergedAt": "2026-09-05T18:26:16Z",
+      "merged_in_window": true,
+      "number": 98,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/backlog: no sweep tool for previewing foot appearance settings like padding",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/98"
+    },
+    "99": {
+      "checks": {
+        "runs": [],
+        "state": "absent"
+      },
+      "createdAt": "2026-09-05T18:55:10Z",
+      "draft": false,
+      "file_count": 5,
+      "headRefName": "tasks-done-sweep-3",
+      "mergeCommit": "556f7cc9c7270b983c05ef510b0a857239f98085",
+      "merged": true,
+      "mergedAt": "2026-09-05T18:56:19Z",
+      "merged_in_window": true,
+      "number": 99,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "docs/tasks: sweep five merged briefs into done/",
+      "touches_state": false,
+      "url": "https://github.com/Castle-Turing/castle-turing/pull/99"
+    }
+  },
+  "schema": "castle-handover-ledger/1",
+  "state": {
+    "changed_in_window": [],
+    "clauses": {
+      "m2-constraints": {
+        "heading": "Constraints binding this milestone's work",
+        "key": "m2-constraints",
+        "path": "docs/state/MILESTONE.md",
+        "text": "- **Baseline before intervention.** Prerequisite: task-level outcome\n  logging is running before pipeline-changing work lands. Authority:\n  the resident may knowingly waive this. Fallback: the intervention\n  lands anyway and is recorded as an unmeasured bet. Consequence of\n  violation: the interrupted time series and the study-grade exhaust\n  (the backlog's twelve-studies entry) are forfeit for every measure\n  without a pre-period. [inferred from the measurement review;\n  direction endorsed by the resident 2026-09-06]\n- **Receipts are never verdicts.** Prerequisite: no pipeline surface\n  asserts completeness \u2014 evidence with citations only, and\n  completion vocabulary is a lintable defect in generated reporting.\n  Authority: Proposal 06, and the resident's explicit requirement of\n  2026-09-06. Fallback: none \u2014 a surface that cannot comply does not\n  ship. Consequence of violation: the reporting surface becomes the\n  confident fiction the false-success evidence documents, and the\n  resident's verdicts are made on it. [stated 2026-09-06]",
+        "truncated": false
+      },
+      "m2-done": {
+        "heading": "Done looks like",
+        "key": "m2-done",
+        "path": "docs/state/MILESTONE.md",
+        "text": "[stated 2026-09-06] The resident opens the modal with the key chord\nand states the complaint, pointing at the comp. Clarifying questions\nabout exactly what to implement come back through the modal. The\nmilestone lands in this file. The work is decomposed into small,\nwell-defined task briefs. Clarifying questions route to the resident\nautomatically. emcee picks the tasks up. Handovers report where the\nplan stands. The resident approves PRs and, finally, the deployment\n\u2014 and then interacts with a visibly better modal that the system\nbuilt for itself, a surface a conversational interface can later be\ngrafted onto.",
+        "truncated": false
+      },
+      "m2-intent": {
+        "heading": "Intent",
+        "key": "m2-intent",
+        "path": "docs/state/MILESTONE.md",
+        "text": "[stated 2026-09-06] Redesign castle-modal's UX per the design comp\nin `docs/comps/`, delivered *by* the pipeline rather than by hand.\nThe forcing function is the point: the system must be\nself-assembling to meet its goal of adapting automatically to its\nresident, and this slice makes the workflow pieces prove themselves\nend to end.",
+        "truncated": false
+      },
+      "m2-now": {
+        "heading": "Position",
+        "key": "m2-now",
+        "path": "docs/state/MILESTONE.md",
+        "text": "- Current-state layer: landing with task 0061's PR (this file).\n- Operator handover: brief approved [stated 2026-09-06] (task 0062,\n  queued), not built.\n- Clarifying-questions intake: research complete\n  (`docs/research/elicitation-papers.md`); brief drafted (task 0065),\n  awaiting the resident's approval at this PR's review \u2014 [inferred]\n  that merging constitutes it.\n- Decomposition of a milestone into task briefs: not designed.\n  [inferred] the largest unspecced piece of [m2-done].\n- Question routing to the resident: product plumbing exists (the\n  answer chord, task 0022); pipeline wiring not designed.\n- emcee dispatch: operating (sprints through task 0060 and PRs\n  since).\n- Baseline instrumentation ([m2-constraints] first clause): not\n  started. [inferred] must precede the pipeline-changing briefs\n  above.",
+        "truncated": false
+      },
+      "m2-out": {
+        "heading": "Explicitly out",
+        "key": "m2-out",
+        "path": "docs/state/MILESTONE.md",
+        "text": "[stated 2026-09-06] Work prioritization: accepted work simply gets\nimplemented for now (the modal may eventually clarify priority too \u2014\nnot in this milestone). Any change to PR approval: merging stays the\nresident's throughout. [inferred] Unifying the pipeline's handover\nwith the product-side digest and status surfaces \u2014 task 0062 defers\nit explicitly.",
+        "truncated": false
+      }
+    },
+    "documents": [
+      {
+        "clauses": [
+          "m2-constraints",
+          "m2-done",
+          "m2-intent",
+          "m2-now",
+          "m2-out"
+        ],
+        "path": "docs/state/MILESTONE.md"
+      },
+      {
+        "clauses": [],
+        "path": "docs/state/README.md"
+      }
+    ]
+  },
+  "tasks": {
+    "0001": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0001",
+      "location": "archive",
+      "path": "docs/tasks/done/0001-flake-eval-gate.md",
+      "title": "Task 0001 \u2014 Flake evaluation gate (local + CI)"
+    },
+    "0002": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0002",
+      "location": "archive",
+      "path": "docs/tasks/done/0002-private-layer-slot.md",
+      "title": "Task 0002 \u2014 The private-layer slot"
+    },
+    "0003": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0003",
+      "location": "archive",
+      "path": "docs/tasks/done/0003-first-install.md",
+      "title": "Task 0003 \u2014 Backup, then first install of the substrate"
+    },
+    "0004": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0004",
+      "location": "archive",
+      "path": "docs/tasks/done/0004-install-test-harness.md",
+      "title": "Task 0004 \u2014 Automated install-loop test harness (QEMU + CI)"
+    },
+    "0005": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0005",
+      "location": "archive",
+      "path": "docs/tasks/done/0005-dogfooding-desktop.md",
+      "title": "Task 0005 \u2014 The dogfooding desktop"
+    },
+    "0006": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0006",
+      "location": "archive",
+      "path": "docs/tasks/done/0006-installer-image.md",
+      "title": "Task 0006 \u2014 The agentic installer image"
+    },
+    "0007": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0007",
+      "location": "archive",
+      "path": "docs/tasks/done/0007-vm-harness-cleanups.md",
+      "title": "Task 0007 \u2014 VM harness cleanups"
+    },
+    "0008": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0008",
+      "location": "archive",
+      "path": "docs/tasks/done/0008-agent-layer-skeleton.md",
+      "title": "Task 0008 \u2014 The agent-layer skeleton, proved by one real errand"
+    },
+    "0009": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0009",
+      "location": "archive",
+      "path": "docs/tasks/done/0009-ambient-intake.md",
+      "title": "Task 0009 \u2014 The ambient intake: a keybinding, a modal, and a working worker"
+    },
+    "0010": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0010",
+      "location": "archive",
+      "path": "docs/tasks/done/0010-correction-record.md",
+      "title": "Task 0010 \u2014 The correction record: the resident speaks unbidden"
+    },
+    "0011": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0011",
+      "location": "archive",
+      "path": "docs/tasks/done/0011-desktop-loop-harness.md",
+      "title": "Task 0011 \u2014 Run the loop for real, in a VM"
+    },
+    "0012": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0012",
+      "location": "archive",
+      "path": "docs/tasks/done/0012-installer-escape-hatch.md",
+      "title": "Task 0012 \u2014 The installer console must have an escape hatch"
+    },
+    "0013": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0013",
+      "location": "archive",
+      "path": "docs/tasks/done/0013-first-deploy-findings.md",
+      "title": "Task 0013 \u2014 Two bugs the first real deploy found"
+    },
+    "0014": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0014",
+      "location": "archive",
+      "path": "docs/tasks/done/0014-default-wallpaper.md",
+      "title": "Task 0014 \u2014 A default desktop wallpaper"
+    },
+    "0015": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0015",
+      "location": "archive",
+      "path": "docs/tasks/done/0015-filed-not-in-progress.md",
+      "title": "Task 0015 \u2014 An unstarted errand is not \"in progress\""
+    },
+    "0016": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0016",
+      "location": "archive",
+      "path": "docs/tasks/done/0016-installer-network-predicate.md",
+      "title": "0016 \u2014 The installer's network predicate never matched"
+    },
+    "0017": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0017",
+      "location": "archive",
+      "path": "docs/tasks/done/0017-legible-defaults.md",
+      "title": "Task 0017 \u2014 Legible text by default"
+    },
+    "0018": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0018",
+      "location": "archive",
+      "path": "docs/tasks/done/0018-docs-only-ci-skip.md",
+      "title": "Task 0018 \u2014 Don't run the build gate on documentation-only changes"
+    },
+    "0019": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0019",
+      "location": "archive",
+      "path": "docs/tasks/done/0019-sway-initial-workspace-and-modal-chord.md",
+      "title": "0019 \u2014 Two defaults the managed Sway config got wrong"
+    },
+    "0020": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0020",
+      "location": "archive",
+      "path": "docs/tasks/done/0020-laptop-ergonomics.md",
+      "title": "Task 0020 \u2014 Laptop ergonomics for the reference host"
+    },
+    "0021": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0021",
+      "location": "archive",
+      "path": "docs/tasks/done/0021-auto-dispatch.md",
+      "title": "Task 0021 \u2014 Newly filed requests start themselves"
+    },
+    "0022": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0022",
+      "location": "archive",
+      "path": "docs/tasks/done/0022-answer-in-ui.md",
+      "title": "Task 0022 \u2014 Answer questions in the UI"
+    },
+    "0023": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0023",
+      "location": "archive",
+      "path": "docs/tasks/done/0023-resume-cold.md",
+      "title": "Task 0023 \u2014 An answered blocking question resumes the errand, cold"
+    },
+    "0024": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0024",
+      "location": "archive",
+      "path": "docs/tasks/done/0024-config-target.md",
+      "title": "Task 0024 \u2014 The worker names which checkout its diff targets"
+    },
+    "0025": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0025",
+      "location": "archive",
+      "path": "docs/tasks/done/0025-approval.md",
+      "title": "Task 0025 \u2014 The resident approves a proposal"
+    },
+    "0026": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0026",
+      "location": "archive",
+      "path": "docs/tasks/done/0026-apply-validate.md",
+      "title": "Task 0026 \u2014 An approved proposal becomes a validated private change"
+    },
+    "0029": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0029",
+      "location": "archive",
+      "path": "docs/tasks/done/0029-python3-on-dev-hosts.md",
+      "title": "Task 0029 \u2014 Add python3 to the dev host"
+    },
+    "0030": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0030",
+      "location": "archive",
+      "path": "docs/tasks/done/0030-state-outside-the-flake.md",
+      "title": "Task 0030 \u2014 State lives outside the flake"
+    },
+    "0031": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0031",
+      "location": "archive",
+      "path": "docs/tasks/done/0031-secrets-tooling.md",
+      "title": "Task 0031 \u2014 Secrets tooling: sops-nix and the Wi-Fi PSK"
+    },
+    "0032": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0032",
+      "location": "archive",
+      "path": "docs/tasks/done/0032-password-hash.md",
+      "title": "Task 0032 \u2014 The admin password hash: out of the store, into sops"
+    },
+    "0033": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0033",
+      "location": "archive",
+      "path": "docs/tasks/done/0033-byte-exact-proposal.md",
+      "title": "Task 0033 \u2014 A proposed diff survives the journal byte-for-byte"
+    },
+    "0034": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0034",
+      "location": "archive",
+      "path": "docs/tasks/done/0034-inbox-modal.md",
+      "title": "Task 0034 \u2014 One chord, one surface: the modal becomes an inbox"
+    },
+    "0035": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0035",
+      "location": "archive",
+      "path": "docs/tasks/done/0035-boot-fallback-dedup.md",
+      "title": "Task 0035 \u2014 Share the boot-loader fallback between hosts"
+    },
+    "0036": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0036",
+      "location": "archive",
+      "path": "docs/tasks/done/0036-reminder-banner-states.md",
+      "title": "Task 0036 \u2014 The reminder banner says what is actually true"
+    },
+    "0037": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0037",
+      "location": "archive",
+      "path": "docs/tasks/done/0037-mit-license.md",
+      "title": "Task 0037 \u2014 The repo's license matches Principle 01: MIT"
+    },
+    "0038": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0038",
+      "location": "archive",
+      "path": "docs/tasks/done/0038-default-action-key.md",
+      "title": "Task 0038 \u2014 the notification's action key is `default`, literally"
+    },
+    "0039": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0039",
+      "location": "archive",
+      "path": "docs/tasks/done/0039-worker-writable-deliverables.md",
+      "title": "Task 0039 \u2014 the worker can write its own deliverables"
+    },
+    "0040": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0040",
+      "location": "archive",
+      "path": "docs/tasks/done/0040-validate-stray-state-directory.md",
+      "title": "0040 \u2014 `castle validate` should notice a stray state directory"
+    },
+    "0041": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0041",
+      "location": "archive",
+      "path": "docs/tasks/done/0041-ci-transient-retries.md",
+      "title": "Task 0041 \u2014 CI retries its own recognizable flakes"
+    },
+    "0042": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0042",
+      "location": "archive",
+      "path": "docs/tasks/done/0042-finding-outbox.md",
+      "title": "Task 0042 \u2014 the finding outbox"
+    },
+    "0043": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0043",
+      "location": "archive",
+      "path": "docs/tasks/done/0043-worker-contract-revision.md",
+      "title": "Task 0043 \u2014 worker contract: tiered options, quoted refusals, the finding lane"
+    },
+    "0044": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0044",
+      "location": "archive",
+      "path": "docs/tasks/done/0044-mechanism-findings-not-proposals.md",
+      "title": "Task 0044 \u2014 a mechanism-targeted diff becomes a finding, not a proposal"
+    },
+    "0045": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0045",
+      "location": "archive",
+      "path": "docs/tasks/done/0045-codex-followup-receipts.md",
+      "title": "Task 0045 \u2014 the codex followup proves its receipts"
+    },
+    "0046": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0046",
+      "location": "archive",
+      "path": "docs/tasks/done/0046-record-ordering-helper.md",
+      "title": "Task 0046 \u2014 one shared ordering helper for journal records"
+    },
+    "0047": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0047",
+      "location": "archive",
+      "path": "docs/tasks/done/0047-tenant-permission-allowlist.md",
+      "title": "Task 0047 \u2014 the harness grants what the contract commands"
+    },
+    "0048": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0048",
+      "location": "archive",
+      "path": "docs/tasks/done/0048-activation.md",
+      "title": "Task 0048 \u2014 Castle rebuilds the machine it is running on"
+    },
+    "0049": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0049",
+      "location": "archive",
+      "path": "docs/tasks/done/0049-research-library.md",
+      "title": "Task 0049 \u2014 the research library"
+    },
+    "0050": {
+      "added_in_window": true,
+      "archived_in_window": false,
+      "id": "0050",
+      "location": "archive",
+      "path": "docs/tasks/done/0050-scrub-operator-paths.md",
+      "title": "Task 0050 \u2014 scrub operator paths from merged briefs"
+    },
+    "0051": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0051",
+      "location": "archive",
+      "path": "docs/tasks/done/0051-dispatch-waiter-leaves-the-cgroup.md",
+      "title": "Task 0051 \u2014 the notification waiter leaves the dispatch unit's cgroup"
+    },
+    "0052": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0052",
+      "location": "archive",
+      "path": "docs/tasks/done/0052-handle-review-findings.md",
+      "title": "The review-findings handler that never ran"
+    },
+    "0053": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0053",
+      "location": "archive",
+      "path": "docs/tasks/done/0053-diffs-are-generated-not-composed.md",
+      "title": "Task 0053 \u2014 a proposed diff is generated, never hand-composed"
+    },
+    "0054": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0054",
+      "location": "archive",
+      "path": "docs/tasks/done/0054-a-proposal-is-checked-before-it-is-offered.md",
+      "title": "Task 0054 \u2014 a proposal is checked before it is offered"
+    },
+    "0055": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0055",
+      "location": "archive",
+      "path": "docs/tasks/done/0055-a-malformed-patch-is-not-a-stale-one.md",
+      "title": "Task 0055 \u2014 a malformed patch is not a stale one"
+    },
+    "0056": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0056",
+      "location": "archive",
+      "path": "docs/tasks/done/0056-an-environment-fault-is-not-a-malformed-patch.md",
+      "title": "Task 0056 \u2014 an environment fault is not a malformed patch"
+    },
+    "0057": {
+      "added_in_window": true,
+      "archived_in_window": true,
+      "id": "0057",
+      "location": "archive",
+      "path": "docs/tasks/done/0057-the-privileged-switch-cannot-read-the-repository.md",
+      "title": "Task 0057 \u2014 the privileged switch cannot read the repository it rebuilds"
+    },
+    "0058": {
+      "added_in_window": true,
+      "archived_in_window": false,
+      "id": "0058",
+      "location": "queue",
+      "path": "docs/tasks/0058-the-sandbox-allows-the-read-the-contract-names.md",
+      "title": "Task 0058 \u2014 the sandbox allows the read the contract names"
+    },
+    "0059": {
+      "added_in_window": true,
+      "archived_in_window": false,
+      "id": "0059",
+      "location": "queue",
+      "path": "docs/tasks/0059-confirming-a-switch-suggests-what-to-check.md",
+      "title": "Task 0059 \u2014 confirming a switch suggests what to check"
+    },
+    "0060": {
+      "added_in_window": true,
+      "archived_in_window": false,
+      "id": "0060",
+      "location": "archive",
+      "path": "docs/tasks/done/0060-a-foot-setting-sweep-tool.md",
+      "title": "Task 0060 \u2014 a foot setting sweep tool"
+    },
+    "0061": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0061",
+      "location": "archive",
+      "path": "docs/tasks/done/0061-a-current-state-layer-and-the-milestone-document.md",
+      "title": "Task 0061 \u2014 a current-state layer, and the milestone document as its first page"
+    },
+    "0062": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0062",
+      "location": "queue",
+      "path": "docs/tasks/0062-the-operator-handover.md",
+      "title": "Task 0062 \u2014 the operator handover, a generated where-we-are report"
+    },
+    "0063": {
+      "added_in_window": true,
+      "archived_in_window": false,
+      "id": "0063",
+      "location": "archive",
+      "path": "docs/tasks/done/0063-oomd-watches-user-slices.md",
+      "title": "Task 0063 \u2014 systemd-oomd watches the user slices"
+    },
+    "0064": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0064",
+      "location": "archive",
+      "path": "docs/tasks/done/0064-the-abort-test-reads-a-coin-as-a-clock.md",
+      "title": "Task 0064 \u2014 the abort test reads a coin as a clock"
+    },
+    "0065": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0065",
+      "location": "queue",
+      "path": "docs/tasks/0065-the-clarifying-questions-intake.md",
+      "title": "Task 0065 \u2014 the clarifying-questions intake"
+    },
+    "0066": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0066",
+      "location": "archive",
+      "path": "docs/tasks/done/0066-the-rollback-reexecs-before-it-rolls-back.md",
+      "title": "Task 0066 \u2014 the rollback re-execs before it rolls back"
+    },
+    "0067": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0067",
+      "location": "archive",
+      "path": "docs/tasks/done/0067-an-approved-switch-is-classified-and-staged.md",
+      "title": "Task 0067 \u2014 an approved switch is classified by what it would churn, and staged accordingly"
+    },
+    "0068": {
+      "added_in_window": false,
+      "archived_in_window": false,
+      "id": "0068",
+      "location": "queue",
+      "path": "docs/tasks/0068-the-journal-loses-the-minutes-before-a-hang.md",
+      "title": "Task 0068 \u2014 the journal loses the minutes before a hang"
+    }
+  },
+  "window": {
+    "since": "2026-09-01",
+    "until": "2026-09-06"
+  }
+}

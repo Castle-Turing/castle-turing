@@ -15,3 +15,4 @@ test/vm-install/harness-logs/
 # derivation takes agent/ as its src, so a stray .pyc changes a store
 # path for nothing.
 __pycache__/
+.scratch/
