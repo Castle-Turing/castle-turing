@@ -460,6 +460,26 @@
                     is gone).
                   '';
                 }
+                {
+                  # Task 0068: reads the *rendered* journald.conf, not
+                  # just the option value, the same "prove the artifact,
+                  # not the input" pattern the activation-grant and
+                  # secrets assertions above already use — an assertion
+                  # on castle.journald.syncInterval alone would pass
+                  # even if modules/base's extraConfig wiring silently
+                  # broke.
+                  assertion =
+                    lib.hasInfix "SyncIntervalSec=30s"
+                      config.environment.etc."systemd/journald.conf".text;
+                  message = ''
+                    nixosConfigurations.example: /etc/systemd/journald.conf does
+                    not carry SyncIntervalSec=30s. modules/base's
+                    castle.journald.syncInterval default (docs/tasks/0068) is
+                    30 seconds, wired through services.journald.extraConfig —
+                    if this assertion is red, either the default changed or the
+                    wiring into extraConfig broke.
+                  '';
+                }
               ];
             }
           )
