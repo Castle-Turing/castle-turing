@@ -65,6 +65,66 @@ product surface, not a tooling tidy-up. Parked here deliberately, with
 the tension recorded rather than papered over. See scope item 10 of
 `docs/tasks/0017-legible-defaults.md`.
 
+## `handover.sh` — the where-we-are report, and the check that gates it
+
+```
+tools/handover.sh [--since DATE] [--until DATE] [--ledger FILE] [--out DIR]
+```
+
+Reads the ledgers this repo already accumulates — git history, pull
+requests via `gh`, `docs/tasks/` and `done/`, the backlog, the journal if
+the machine has one, and `docs/state/MILESTONE.md` — and emits one
+screenful: the milestone restated, threats and drift *before*
+accomplishments, what changed as receipts with citations, what could not
+be grounded, and the short list of decisions only the resident can make.
+On demand only. Cadence and channel are the resident's to decide once
+this exists to have an opinion about, and `docs/tasks/0062` reserves
+them.
+
+Three files, and the split between them is the design:
+
+- **`handover-ledger.py`** turns git, the forge and the working tree into
+  artifact state as JSON. No model in it. This is what makes the brief's
+  derivation rule — claims come from artifact state, never from an
+  agent's account of its own work — enforceable rather than
+  aspirational.
+- **`handover-prompt.md`** is the format, handed to the agent turn, and
+  doubles as the human-readable spec of that format.
+- **`handover-check.py`** is a pure function of (ledger, handover). It
+  resolves every citation and matches every receipt phrase against the
+  artifact it names, and it **blocks**.
+
+The model sits between two things it cannot influence: it chooses what to
+say and how to group it, never what is true.
+
+### Why the check blocks rather than warns
+
+The generator controls its own output, so a violation is a bug in this
+tool, not a style disagreement with a third party. And the specific thing
+being guarded against — the confident-closure register, "done",
+"complete", "successfully" — is a trained default with a measurable
+signature that model judges talk themselves out of
+(`docs/research/operator-handover.md` §3). An instruction not to use it
+is not a control; a lint is. `docs/state/MILESTONE.md`'s
+`[m2-constraints]` carries the same rule with no fallback: a reporting
+surface that cannot comply does not ship.
+
+### The one hazard worth knowing before you run it
+
+A ledger built on a real machine carries **journal record ids**, which
+are private layer and may never be committed to this repo. `handover.sh`
+therefore writes to a scratch directory under `$TMPDIR` by default,
+outside the checkout, and `handover-ledger.py --no-journal` exists for
+the case that matters — building something that gets committed, like the
+fixture under `test/handover/`. This is scar tissue: the reader's first
+run wrote 308 real record ids and their absolute paths into a fixture.
+
+### Verification
+
+`test/handover/run.sh`, in CI. It runs the checking half only — the
+generating half needs `gh`, the network and a model, and CI has none of
+them. Read that directory's README before adding a fixture.
+
 ## `codex-review.sh` — the second, cross-model opinion
 
 ```

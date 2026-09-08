@@ -199,3 +199,99 @@ human-confirmation half of read-back for field 6).
 draws on them without promoting them). `docs/architecture.md`
 Proposal 06. Emcee's `docs/research/agentic-pr-review.md` (the
 quality-verdict ladder this brief leans on and does not widen).
+
+## As built — where the design moved, and the judgment calls
+
+Written during implementation, per the rule that a brief its work has
+overtaken is worse than none.
+
+**Four pieces, not three, and the fourth is the point.** The plan said
+a generator, a fixture and a claim-checker. What landed splits the
+generator in two: `tools/handover-ledger.py` reads git, the forge and
+the working tree into artifact state as JSON with no model in it, and
+`tools/handover.sh` drives the agent turn between that and
+`tools/handover-check.py`. The derivation rule is only enforceable if
+something with no model in it establishes what is true; a single script
+that both asked a model and judged its answer would be the thing this
+brief exists to refuse. `tools/handover-prompt.md` holds the format and
+doubles as its human-readable spec.
+
+**The checker is a pure function of (ledger, handover).** It reads no
+git, no forge, no tree. This was not in the plan and is what makes the
+golden test possible at all: a frozen ledger keeps checking the same
+way while the repo moves underneath it — briefs sweep into `done/`,
+branches vanish, pull requests collect comments. A checker re-deriving
+truth from the live repo would fail the golden test for reasons having
+nothing to do with the handover under test. `test/handover/run.sh`
+asserts the purity by running the checker from a directory that is not
+a repository.
+
+**A coverage unit is a pull request.** Field 6's coverage half needed a
+definition of "substantive ledger event" and the brief does not fix
+one. Merged-in-window and currently-open pull requests are the units;
+briefs, backlog entries and state patches all ride one, so counting
+them separately would demand the same event be narrated three times and
+fight the one-screenful bound for no gain in what a reader can catch. A
+line may cite a dozen at once, and grouped citation is how coverage and
+one screenful coexist over a forty-merge window.
+
+**The citation grammar and a closed receipt vocabulary.** Both are new
+here. A citation is a bracketed span of `#102`, `commit <sha>`,
+`task 0059`, `backlog: <name>`, `journal <id>`, `state <clause>` or
+`unverified`, and anything else in brackets is an error, because a
+reader cannot distinguish a decorative bracket from a citation at a
+glance. Claims about artifact state use fixed phrases — `merged`,
+`checks green`, `findings dispositioned`, `in the queue` — each checked
+against what it cites. This is what makes "a merged-PR line whose PR is
+open" mechanically detectable rather than a thing a reader must notice.
+
+**Field 5's mechanical check is a `Depends:` line.** The brief requires
+a verdict request to name what changes depending on the answer and says
+the golden test should catch one that does not. That is only checkable
+if the dependency is a field, so each request bullet carries an
+indented `Depends:` continuation and its absence is a violation.
+
+**A named gap in receipt matching.** Receipt phrases are ordinary
+English — "a queue holding merged briefs", "backlog entries filed via
+merged PRs" — and a checker reading every occurrence as a claim
+rejected honest handovers while catching nothing. A phrase now binds to
+the nearest citation group that cites an artifact of its kind, and one
+with no such group anywhere in the item is treated as prose. What
+escapes is a receipt asserted about a kind of artifact the item never
+cites; what does not escape is a *wrong* claim, because the grounding
+rule forces it to cite the artifact it is wrong about. Stated rather
+than hidden: this tool is one control among several, not the whole of
+one.
+
+**Three defects the golden run found that reasoning had not.**
+
+1. The ledger reader's first run wrote 308 real journal record ids and
+   their absolute paths into a committed fixture. A journal is the
+   private layer and CLAUDE.md's first hard rule bans every part of it
+   from this repo. The reader now returns record ids only — never
+   paths, never bodies, never the journal root — `--no-journal` exists
+   for anything that gets committed, and `test/handover/run.sh` asserts
+   the committed fixtures carry neither.
+2. The ledger handed the generator clause keys with no text behind
+   them, and the first draft said outright that it therefore could not
+   restate the milestone — failing field 1, the field the evidence is
+   strongest about. Clause text is now carried.
+3. Seven docs-only merges read as "checks green" when `check.yml`'s
+   `paths-ignore` had skipped every run. That is a false receipt of
+   exactly the kind this surface exists to prevent, so a check set with
+   no `SUCCESS` in it is now `skipped`, distinct from `absent` (no run
+   was ever created), with a receipt phrase of its own.
+
+**The golden test runs the checking half only.** CI has no `gh`, no
+network and no model, so `test/handover/run.sh` checks the frozen
+golden handover against its frozen ledger and asserts that twelve
+reject fixtures are each refused with the violation code they name. The
+generating half ran once, by hand, against the live forge; its output
+is `test/handover/fixture/handover.md`. The falsifier this brief names
+— the resident reading that file cold and finding a claim the checker
+passed that the ledger contradicts — is unchanged and still needs
+human hands.
+
+**Not renamed.** "Handover" survives implementation as the brief
+proposed it; the collision with "brief" does not occur anywhere in the
+tooling. The name stays the resident's to settle.

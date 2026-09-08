@@ -118,6 +118,11 @@ invent synonyms, because a synonym is unchecked prose.
 as is "merged" on one that is open, as is a journal id that does not
 resolve.
 
+These phrases mean the artifact is in that state *now*. Do not use one
+for something that might happen — "or it is closed unmerged next week" is
+a claim about the present as far as the checker is concerned. Phrase a
+hypothetical in your own words instead.
+
 ## Coverage
 
 Every coverage unit in the ledger must be cited somewhere in the
