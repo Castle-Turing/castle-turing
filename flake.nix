@@ -887,6 +887,7 @@
               timerUnit = config.systemd.user.timers.castle-activation or null;
               switchUnit = config.systemd.services.castle-activate or null;
               rollbackUnit = config.systemd.services.castle-rollback or null;
+              stageUnit = config.systemd.services.castle-activate-boot or null;
               windowTimer = config.systemd.timers.castle-activation-window or null;
               windowUnit = config.systemd.services.castle-activation-window or null;
               environment = if unit == null then { } else unit.environment;
@@ -933,6 +934,15 @@
                     && environment.CASTLE_FRAMEWORK_INPUT or null == "castle-turing"
                     && environment.CASTLE_ACTIVATE_UNIT or null == "castle-activate.service"
                     && environment.CASTLE_ROLLBACK_UNIT or null == "castle-rollback.service"
+                    && environment.CASTLE_STAGE_UNIT or null == "castle-activate-boot.service"
+                    && environment.CASTLE_WINDOW_TIMER or null == "castle-activation-window.timer"
+                    # The classification set, comma-joined, with the
+                    # unit that carried the 2026-09-06 incident in it
+                    # (docs/tasks/0067 §B). Checked as rendered text
+                    # rather than as a list, because what agent/castle
+                    # reads is the string.
+                    && lib.hasInfix "home-manager-*.service" (environment.CASTLE_SESSION_UNITS or "")
+                    && lib.hasInfix "systemd-logind.service" (environment.CASTLE_SESSION_UNITS or "")
                     && pathUnit != null
                     && pathUnit.pathConfig.PathChanged == "${dummyStateDir}/journal"
                     && timerUnit != null
@@ -969,6 +979,21 @@
                     # it ever reaches the rollback (docs/tasks/0066).
                     && lib.hasInfix "--no-reexec" rollbackUnit.serviceConfig.ExecStart
                     && !(rollbackUnit ? wantedBy && rollbackUnit.wantedBy != [ ])
+                    # docs/tasks/0067 §C: `boot`, never `switch`, and
+                    # no ExecStartPost — staging must open no window,
+                    # and a line arming the timer here is exactly the
+                    # regression that would roll a machine back for not
+                    # confirming something it never activated.
+                    && stageUnit != null
+                    && lib.hasInfix "nixos-rebuild boot --flake ${dummyRepoRoot}#" stageUnit.serviceConfig.ExecStart
+                    # Matched against the verb and not the bare word
+                    # "switch": that word can turn up in the store path
+                    # of `nixos-rebuild` itself, and a hash that
+                    # happened to contain it would fail this check for
+                    # a reason nobody could ever find.
+                    && !(lib.hasInfix "nixos-rebuild switch" stageUnit.serviceConfig.ExecStart)
+                    && !(stageUnit.serviceConfig ? ExecStartPost)
+                    && !(stageUnit ? wantedBy && stageUnit.wantedBy != [ ])
                     && windowTimer != null
                     && windowTimer.timerConfig.OnActiveSec == "900s"
                     && windowTimer.timerConfig.Unit == "castle-activation-window.service"
@@ -977,14 +1002,18 @@
                     && lib.hasInfix "castle activate --close-window" windowUnit.serviceConfig.ExecStart;
                   message = ''
                     nixosConfigurations.example-activation: the privileged units
-                    are not the two fixed commands this task's authority record
-                    says they are. Expected castle-activate.service running
+                    are not the fixed commands this task's authority record says
+                    they are. Expected castle-activate.service running
                     `nixos-rebuild switch --flake <repo>#<host>` and arming the
-                    window timer, castle-rollback.service running
-                    `nixos-rebuild switch --rollback --no-reexec`, a window timer firing
+                    window timer, castle-activate-boot.service running
+                    `nixos-rebuild boot --flake <repo>#<host>` and arming
+                    nothing, castle-rollback.service running
+                    `nixos-rebuild switch --rollback --no-reexec`, a window
+                    timer firing
                     once after castle.agent.activation.windowSeconds, and none
-                    of the three wanted by any target
-                    (docs/tasks/0048-activation.md §H, §I).
+                    of the four wanted by any target
+                    (docs/tasks/0048-activation.md §H, §I;
+                    docs/tasks/0067 §C).
                   '';
                 }
                 {
@@ -992,25 +1021,35 @@
                     config.security.polkit.enable
                     && lib.hasInfix "org.freedesktop.systemd1.manage-units" rule
                     && lib.hasInfix "subject.user != \"${dummyUser}\"" rule
-                    # The clause that keeps this a grant over two units
-                    # rather than over every unit on the machine.
+                    # The clause that keeps this a grant over four
+                    # units rather than over every unit on the machine.
                     && lib.hasInfix "action.lookup(\"unit\")" rule
                     && lib.hasInfix "castle-activate.service" rule
                     && lib.hasInfix "castle-rollback.service" rule
-                    # And nothing else is named. `castle-activation-window`
-                    # is started by root from inside castle-activate, so
-                    # granting the resident anything over it would be a
-                    # widening with no purpose.
-                    && !(lib.hasInfix "castle-activation-window" rule);
+                    # docs/tasks/0067's two additions, and the second
+                    # reverses what this assertion used to say. It
+                    # required `castle-activation-window` to be absent,
+                    # because 0048 had no way for a resident's session
+                    # to need it; a switch staged before a reboot has to
+                    # open its window after one, and no privileged unit
+                    # is left to do it (§D). The window *service* is
+                    # still not granted — only the timer, whose end is a
+                    # rollback the line above already permits outright.
+                    && lib.hasInfix "castle-activate-boot.service" rule
+                    && lib.hasInfix "castle-activation-window.timer" rule
+                    && !(lib.hasInfix "castle-activation-window.service" rule);
                   message = ''
                     nixosConfigurations.example-activation: the polkit rule is
                     not the grant docs/tasks/0048-activation.md §H describes. It
                     must enable polkit, match the manage-units action, match the
                     configured user exactly, read the unit name out of the
-                    action, and permit exactly castle-activate.service and
-                    castle-rollback.service — a rule that omitted the unit
-                    lookup would grant start/stop/restart over every unit on
-                    this machine and evaluate exactly as cleanly.
+                    action, and permit exactly castle-activate.service,
+                    castle-activate-boot.service, castle-rollback.service and
+                    castle-activation-window.timer — and not the window
+                    *service*, which root starts for itself. A rule that
+                    omitted the unit lookup would grant start/stop/restart over
+                    every unit on this machine and evaluate exactly as cleanly
+                    (docs/tasks/0048-activation.md §H; docs/tasks/0067 §D).
                   '';
                 }
                 {

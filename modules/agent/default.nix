@@ -545,14 +545,28 @@ in
           nothing else does. There is no standing, autonomous or batched
           activation tier and this task deliberately does not add one.
 
-        **The root grant, and its scope.** Two system units are
-        declared, carrying exactly two commands:
+        **When the switch happens is Castle's call, not yours**
+        (docs/tasks/0067). An approved switch is classified by what its
+        activation would restart: one that would touch the units your
+        logged-in session is standing on — see
+        `castle.agent.activation.sessionUnits` — is made this machine's
+        boot default instead of run under that session, and you are told
+        so. Nothing on the machine changes until you reboot, and nothing
+        else is activated until you do.
+
+        **The root grant, and its scope.** Three system units are
+        declared, carrying exactly three commands:
 
             nixos-rebuild switch --flake <your repo>#<this host>
+            nixos-rebuild boot --flake <your repo>#<this host>
             nixos-rebuild switch --rollback
 
         and a polkit rule lets `castle.agent.activation.user` start
-        those two units and nothing else. No argument reaches them from
+        those three, plus the timer that opens a health window — which
+        your own session has to arm after a reboot that activated a
+        staged switch, and which can do nothing the rollback unit beside
+        it does not already permit outright. Nothing else. No argument
+        reaches any of them from
         your session, so there is nothing for a process running as you
         to forge. What that costs is stated rather than hidden: the
         privileged step rebuilds from your repository rather than
@@ -562,8 +576,9 @@ in
         activation records what you approved beside what
         `/run/current-system` says afterwards.
 
-        **The health window.** After a switch, Castle asks whether this
-        machine is working. If nothing says so within
+        **The health window.** After a switch — or after the reboot that
+        activates a staged one — Castle asks whether this machine is
+        working. If nothing says so within
         `castle.agent.activation.windowSeconds`, it rolls back to the
         previous generation on its own. That is the one thing in this
         system that decides without you, and the asymmetry is the
@@ -594,7 +609,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        The one account whose session may start the two privileged units
+        The one account whose session may start the privileged units
         `castle.agent.activation.enable` declares
         (docs/tasks/0048-activation.md §H). Written into a polkit rule
         that permits `org.freedesktop.systemd1.manage-units` on exactly
@@ -652,6 +667,61 @@ in
         a few lines, this one may be building the whole system after a
         framework bump moved nixpkgs, which is a kernel and a desktop
         from source in the worst case.
+      '';
+    };
+
+    activation.sessionUnits = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [
+        # The resident's own home generation, and the unit that
+        # restarted under a live session on 2026-09-06 to relink it
+        # (docs/tasks/0067). A glob rather than an interpolation of
+        # `activation.user`: home-manager escapes the username into the
+        # unit name with its own `escapeSystemdPath`, which this module
+        # would have to reimplement to stay right for unusual names —
+        # and a pattern that also matches another resident's unit errs
+        # toward staging, which is the safe direction.
+        "home-manager-*.service"
+        # The user manager itself. A re-exec of this is what takes a
+        # session's units with it.
+        "user@*.service"
+        # The session bus, under both of the names nixpkgs ships it as.
+        "dbus.service"
+        "dbus-broker.service"
+        # Who owns the session, and who owns the screen.
+        "systemd-logind.service"
+        "display-manager.service"
+        "greetd.service"
+      ];
+      description = ''
+        The units whose restart or reload means an approved switch is
+        staged for the next boot rather than run under the session that
+        approved it (docs/tasks/0067 §B). `fnmatch` patterns matched
+        against unit names, wired into `CASTLE_SESSION_UNITS`.
+
+        Castle compares the unit files of the generation this machine is
+        running against the generation it approved, and stages if
+        anything in the changed set matches one of these. It asks
+        nothing about whether a session actually exists: the same
+        approval must behave the same way whenever the sweep happens to
+        run.
+
+        **The default is stricter than the evidence requires and that is
+        deliberate.** A session has been observed surviving a dbus
+        reload; it has been observed being invalidated by a
+        home-manager restart. Every entry here is on the list because
+        losing it costs a reboot and keeping it wrongly costs a session,
+        and those two are not the same size.
+
+        **An empty list turns this off**, and a host that sets one gets
+        the behaviour docs/tasks/0048 shipped: every approved switch
+        runs under whatever session is there. That is the escape for a
+        resident who watches this stage more than they want it to.
+
+        Castle also stages when it cannot work out what a switch would
+        restart — an unanswerable question about the session is treated
+        as a yes — and the record it writes says which of the two
+        happened.
       '';
     };
 
@@ -822,6 +892,12 @@ in
         CASTLE_ACTIVATION_TIMEOUT = toString cfg.activation.timeoutSeconds;
         CASTLE_ACTIVATION_WINDOW = toString cfg.activation.windowSeconds;
         CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
+        # docs/tasks/0067 §B, and here for exactly the reason above: a
+        # `castle activate <answer-id>` run by hand must classify the
+        # switch the same way the unit would. A hand path that switched
+        # live where the unit would have staged is the one asymmetry
+        # this list must not have.
+        CASTLE_SESSION_UNITS = lib.concatStringsSep "," cfg.activation.sessionUnits;
       };
 
     # ---------------------------------------------------------------
@@ -1316,6 +1392,13 @@ in
         CASTLE_FRAMEWORK_INPUT = cfg.activation.frameworkInput;
         CASTLE_ACTIVATE_UNIT = "castle-activate.service";
         CASTLE_ROLLBACK_UNIT = "castle-rollback.service";
+        # docs/tasks/0067. The classification set, and the two further
+        # things this seat may now name to `systemctl`: the unit that
+        # stages a switch for the next boot, and the timer that opens a
+        # health window after the reboot which activated one.
+        CASTLE_SESSION_UNITS = lib.concatStringsSep "," cfg.activation.sessionUnits;
+        CASTLE_STAGE_UNIT = "castle-activate-boot.service";
+        CASTLE_WINDOW_TIMER = "castle-activation-window.timer";
       }
       # The framework checkout is passed here and NOT to the applier,
       # and the asymmetry is deliberate in both directions: the applier
@@ -1372,6 +1455,29 @@ in
         # if that session dies in the same instant the switch lands —
         # which is one of the failure modes the window is for.
         ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block castle-activation-window.timer";
+        Environment = [ "PATH=/run/current-system/sw/bin" ];
+      };
+    };
+
+    # The third fixed command, and the only privilege docs/tasks/0067
+    # adds. `nixos-rebuild boot` is strictly weaker than the `switch`
+    # the same resident may already ask for: it sets the system profile
+    # and installs the bootloader, and runs no activation script at all,
+    # so a machine that runs this is running exactly what it was running
+    # a second before.
+    #
+    # **No `ExecStartPost`, deliberately.** Staging opens no health
+    # window: there is nothing activated to be healthy or not. The
+    # window is opened after the reboot that activates this, by the
+    # resident's own sweep, and only once that sweep has established
+    # this machine is running the exact closure castle staged
+    # (docs/tasks/0067 §D).
+    systemd.services.castle-activate-boot = lib.mkIf cfg.activation.enable {
+      description = "Make this machine's configured system configuration its boot default";
+      # No wantedBy, for castle-activate.service's reason verbatim.
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild boot --flake ${cfg.repo.private}#${config.networking.hostName}";
         Environment = [ "PATH=/run/current-system/sw/bin" ];
       };
     };
@@ -1452,9 +1558,20 @@ in
     };
 
     # The grant itself. `org.freedesktop.systemd1.manage-units` scoped
-    # to two unit names and one user, in polkit's own rule language,
+    # to four unit names and one user, in polkit's own rule language,
     # which is what makes it reviewable as a rule rather than as a
     # program's argument handling.
+    #
+    # **Two of those four are docs/tasks/0067's, and both widenings are
+    # argued rather than noticed.** `castle-activate-boot.service` is
+    # strictly weaker than the `switch` above it — see that unit's own
+    # comment. `castle-activation-window.timer` reverses 0048's comment
+    # here, which called granting it "a widening with no purpose": the
+    # purpose is that a switch staged before a reboot has to open its
+    # window after one, and no privileged unit is left to start it from
+    # (0067 §D). What arming the window can do is end in a rollback, and
+    # `castle-rollback.service` in this same list already grants that
+    # rollback with no countdown in front of it.
     #
     # **Read `action.lookup("unit")` and not `action.lookup("verb")`
     # alone.** systemd puts the unit name in the action's `unit`
@@ -1480,7 +1597,10 @@ in
             return polkit.Result.NOT_HANDLED;
           }
           var unit = action.lookup("unit");
-          if (unit == "castle-activate.service" || unit == "castle-rollback.service") {
+          if (unit == "castle-activate.service"
+              || unit == "castle-activate-boot.service"
+              || unit == "castle-rollback.service"
+              || unit == "castle-activation-window.timer") {
             return polkit.Result.YES;
           }
           return polkit.Result.NOT_HANDLED;

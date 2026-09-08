@@ -1980,7 +1980,8 @@ narrower statement, and no later change of wording reaches backwards.
 **`seat: activation`** results carry **`activation-outcome`**:
 `switched`, `switch-failed`, `confirmed`, `rolled-back`,
 `rollback-failed`, `refused-pin-stale`, `refused-tree-dirty`,
-`refused-no-privilege`. A pin bump that landed also carries
+`refused-no-privilege`, `staged`, `staging-superseded`. A pin bump that
+landed also carries
 **`activation-commit`**, under `apply-commit`'s exact contract — only
 where exactly one commit was verified to have landed, parented where
 this started.
@@ -1990,6 +1991,21 @@ applier's: `outcome` is an observation about the seat's own run,
 `activation-outcome` is an observation about the machine. A refusal is
 `outcome: completed`, because a conclusion correctly reached is not a
 failure of the run.
+
+**`staged` is the one of those that changed nothing**
+(docs/tasks/0067). An approved switch is classified first, by comparing
+the unit files of the generation this machine is running against the
+generation it approved: where a change would restart or reload something
+the resident's logged-in session is standing on — their home-manager
+generation, their user manager, dbus, logind, the display manager, named
+by `castle.agent.activation.sessionUnits` — the new generation is made
+the boot default and nothing on the machine moves. **A `staged` result
+opens no health window**, because nothing was activated to be healthy or
+not; the window opens after the reboot, from the sweep that recognises
+the machine has come up on the staged closure, and that sweep writes an
+ordinary `switched` result. `staging-superseded` says a staged
+generation stopped being the boot default before any reboot reached it,
+which is what keeps an abandoned staging from blocking the seat forever.
 
 A `switched` result opens a **health window**. It files a second
 question carrying **`confirms-activation: <switched-result-id>`**,

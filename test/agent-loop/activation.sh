@@ -189,6 +189,16 @@ STUB
 cat > "$STUB_BIN/systemctl" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$SYSTEMCTL_ARGV"
+# The staging unit is \`nixos-rebuild boot\`, which moves the system
+# profile before it returns and changes nothing that is running
+# (docs/tasks/0067 §C). The stub does exactly that much, because what
+# castle records about a staging — and what it later recognises the
+# reboot by — is read back out of the profile rather than out of the
+# store path it approved.
+if [ "\${1:-}" = "start" ] && [ "\${2:-}" = "castle-activate-boot.service" ] \
+   && [ -n "\${STUB_STAGE_TARGET:-}" ] && [ "\$STUB_SYSTEMCTL_RC" = "0" ]; then
+  ln -sfn "\$STUB_STAGE_TARGET" "\$STUB_SYSTEM_PROFILE"
+fi
 exit "\$STUB_SYSTEMCTL_RC"
 STUB
 
@@ -659,7 +669,264 @@ assert_mechanism_untouched "the applied-change rebuild"
 assert_no_direct_rebuild "the applied-change rebuild"
 
 # ---------------------------------------------------------------------
-log "15. a worker turn cannot build or switch, whatever its prompt says"
+log "15. a switch is classified by what it would churn (docs/tasks/0067)"
+# ---------------------------------------------------------------------
+# Two fixture generations, each a directory with the unit trees a real
+# system closure carries. Every unit is a symlink into a shared
+# "store", so "unchanged" is expressible at all: castle compares
+# resolved paths, and two generations pointing at the same file is what
+# proves a unit cannot be restarted by the switch.
+UNIT_STORE="$WORKDIR/unit-store"
+mkdir -p "$UNIT_STORE"
+for name in dbus.service home-manager-fixture.service castle-dispatch.service; do
+  printf 'the first version of %s\n' "$name" > "$UNIT_STORE/$name-v1"
+  printf 'the second version of %s\n' "$name" > "$UNIT_STORE/$name-v2"
+  printf 'the third version of %s\n' "$name" > "$UNIT_STORE/$name-v3"
+done
+make_generation() {
+  # $1 = directory; the rest are `<unit>=<version>` pairs.
+  local dir="$1" spec name version
+  shift
+  mkdir -p "$dir/etc/systemd/system" "$dir/etc/systemd/user"
+  for spec in "$@"; do
+    name="${spec%%=*}"
+    version="${spec##*=}"
+    ln -sfn "$UNIT_STORE/$name-$version" "$dir/etc/systemd/system/$name"
+    # A drop-in directory beside every unit, because in a real closure
+    # these are *real directories inside the generation's own store
+    # path* rather than symlinks — so resolving one names the
+    # generation, and a comparison that did would report every unit
+    # carrying a drop-in as changed on every switch. With
+    # `dbus.service` in the default classification set that means
+    # staging everything, forever, and nothing about the failure would
+    # look like a bug. The fixture carries them so the churn-free
+    # scenario below is a real assertion rather than an accident of a
+    # simpler fixture.
+    mkdir -p "$dir/etc/systemd/system/$name.d"
+    ln -sfn "$UNIT_STORE/$name-$version" "$dir/etc/systemd/system/$name.d/overrides.conf"
+  done
+}
+GEN_RUNNING="$WORKDIR/gen-running"
+GEN_QUIET="$WORKDIR/gen-quiet"
+GEN_LOUD="$WORKDIR/gen-loud"
+make_generation "$GEN_RUNNING" \
+  dbus.service=v1 home-manager-fixture.service=v1 castle-dispatch.service=v1
+# Differs only in a unit nothing on this list cares about.
+make_generation "$GEN_QUIET" \
+  dbus.service=v1 home-manager-fixture.service=v1 castle-dispatch.service=v2
+# Differs in the resident's home generation — the unit that carried the
+# 2026-09-06 incident.
+make_generation "$GEN_LOUD" \
+  dbus.service=v1 home-manager-fixture.service=v2 castle-dispatch.service=v2
+# And one more, so the change queued behind the staged one is a change
+# against the generation the machine ends up running rather than a
+# repeat of it.
+GEN_LOUDER="$WORKDIR/gen-louder"
+make_generation "$GEN_LOUDER" \
+  dbus.service=v1 home-manager-fixture.service=v3 castle-dispatch.service=v2
+
+# `_last_store_path` checks the shape of what `nix build` printed, and
+# rightly so — castle now *opens* that path to compare unit trees, not
+# just names it in a record. So a fixture closure cannot come out of the
+# stub, and is written into the build result afterwards instead. The
+# question's `proposal-sha256` is recomputed over the rewritten bytes,
+# exactly as `castle build` computed it over the original: without that
+# the approval would not bind and the sweep would refuse the whole
+# thing for a reason that has nothing to do with what is under test.
+point_build_at() {
+  # $1 = the activation question's id, $2 = the fixture generation
+  python3 - "$JOURNAL" "$1" "$2" <<'POINT'
+import hashlib, pathlib, sys
+journal, question_id, toplevel = sys.argv[1:4]
+d = pathlib.Path(journal)
+question = d / f"{question_id}.md"
+refs = ""
+for line in question.read_text(encoding="utf-8").splitlines():
+    if line.startswith("refs: "):
+        refs = line[len("refs: "):]
+        break
+build = d / f"{refs.split(',')[1].strip()}.md"
+text = build.read_text(encoding="utf-8")
+out = []
+for line in text.splitlines(keepends=True):
+    if line.startswith("build-toplevel: "):
+        line = f"build-toplevel: {toplevel}\n"
+    out.append(line)
+build.write_text("".join(out), encoding="utf-8")
+digest = hashlib.sha256(build.read_bytes()).hexdigest()
+qtext = question.read_text(encoding="utf-8").splitlines(keepends=True)
+question.write_text(
+    "".join(
+        f"proposal-sha256: {digest}\n" if line.startswith("proposal-sha256: ") else line
+        for line in qtext
+    ),
+    encoding="utf-8",
+)
+POINT
+}
+
+STUB_SYSTEM_PROFILE="$WORKDIR/system-profile"
+export STUB_SYSTEM_PROFILE
+ln -sfn "$GEN_RUNNING" "$STUB_SYSTEM_PROFILE"
+export CASTLE_SYSTEM_PROFILE="$STUB_SYSTEM_PROFILE"
+export CASTLE_CURRENT_SYSTEM="$GEN_RUNNING"
+export CASTLE_BOOT_ID="boot-before-the-reboot"
+# The classification set. `castle-dispatch.service` is deliberately NOT
+# on it: a switch that restarts castle's own units under the resident's
+# session is what this system does every day.
+export CASTLE_SESSION_UNITS="home-manager-*.service,dbus.service"
+
+# Scenario 14 left a health window open, and nothing is spent while one
+# is. Confirm it, so what follows is testing the classifier rather than
+# that guard.
+"$CASTLE" answer --decision approve "$(id_of "$HEALTH_Q3")" <<< "fixture confirmation" > /dev/null
+"$CASTLE" activate --sweep > "$WORKDIR/act11.txt" 2>&1 \
+  || fail "closing the third window failed: $(cat "$WORKDIR/act11.txt")"
+[ -n "$(newest_with "activation-outcome: confirmed" result)" ] \
+  || fail "the third window did not close on the confirmation"
+
+log "   ... a change that touches nothing session-load-bearing switches live"
+plant_applied_change "A change that only restarts castle's own units." home/quiet.nix > /dev/null
+"$CASTLE" build > "$WORKDIR/build9.txt" 2>&1 \
+  || fail "the churn-free build failed: $(cat "$WORKDIR/build9.txt")"
+QUIET_Q_ID="$(id_of "$(newest_with "authorizes-activation: true" question)")"
+point_build_at "$QUIET_Q_ID" "$GEN_QUIET"
+printf 'a\n.\n' | "$MODAL" --mode review --question "$QUIET_Q_ID" > "$WORKDIR/approve6.txt" 2>&1 \
+  || fail "approving the churn-free change failed: $(cat "$WORKDIR/approve6.txt")"
+: > "$SYSTEMCTL_ARGV"
+"$CASTLE" activate --sweep > "$WORKDIR/act12.txt" 2>&1 \
+  || fail "the churn-free sweep failed: $(cat "$WORKDIR/act12.txt")"
+QUIET_SWITCH="$(newest_with "activation-outcome: switched" result)"
+QUIET_SWITCH_ID="$(id_of "$QUIET_SWITCH")"
+grep -qx "start castle-activate.service" "$SYSTEMCTL_ARGV" \
+  || fail "a churn-free switch did not run live: $(cat "$SYSTEMCTL_ARGV")"
+grep -q "castle-activate-boot.service" "$SYSTEMCTL_ARGV" \
+  && fail "a churn-free switch was staged instead of run"
+[ -z "$(ls "$CASTLE_STATE_DIR/activation-staged" 2>/dev/null)" ] \
+  || fail "a churn-free switch left a staged marker"
+# And the window it opens is the ordinary one, so the rest of this
+# section starts from a closed window rather than a blocked sweep.
+"$CASTLE" answer --decision approve \
+  "$(id_of "$(newest_with "confirms-activation: $QUIET_SWITCH_ID" question)")" \
+  <<< "fixture confirmation" > /dev/null
+"$CASTLE" activate --sweep > "$WORKDIR/act13.txt" 2>&1 \
+  || fail "closing the churn-free window failed: $(cat "$WORKDIR/act13.txt")"
+
+# ---------------------------------------------------------------------
+log "16. a switch that would restart the session's own units is staged"
+# ---------------------------------------------------------------------
+export STUB_STAGE_TARGET="$GEN_LOUD"
+plant_applied_change "A change carried through home-manager." home/loud.nix > /dev/null
+"$CASTLE" build > "$WORKDIR/build10.txt" 2>&1 \
+  || fail "the session-affecting build failed: $(cat "$WORKDIR/build10.txt")"
+LOUD_Q_ID="$(id_of "$(newest_with "authorizes-activation: true" question)")"
+point_build_at "$LOUD_Q_ID" "$GEN_LOUD"
+printf 'a\n.\n' | "$MODAL" --mode review --question "$LOUD_Q_ID" > "$WORKDIR/approve7.txt" 2>&1 \
+  || fail "approving the session-affecting change failed: $(cat "$WORKDIR/approve7.txt")"
+grep -q "NOW, OR AT THE NEXT BOOT, AND CASTLE DECIDES WHICH" "$WORKDIR/approve7.txt" \
+  || fail "the review screen still promises the switch happens now: $(cat "$WORKDIR/approve7.txt")"
+: > "$SYSTEMCTL_ARGV"
+"$CASTLE" activate --sweep > "$WORKDIR/act14.txt" 2>&1 \
+  || fail "the staging sweep failed: $(cat "$WORKDIR/act14.txt")"
+STAGED="$(newest_with "activation-outcome: staged" result)"
+[ -n "$STAGED" ] || fail "the session-affecting switch was not staged: $(cat "$WORKDIR/act14.txt")"
+STAGED_ID="$(id_of "$STAGED")"
+grep -qx "start castle-activate-boot.service" "$SYSTEMCTL_ARGV" \
+  || fail "staging did not ask for the boot unit: $(cat "$SYSTEMCTL_ARGV")"
+grep -q "castle-activate.service" "$SYSTEMCTL_ARGV" \
+  && fail "a staged switch also ran the live switch unit: $(cat "$SYSTEMCTL_ARGV")"
+# The whole of 0048 §E's rule, asserted where breaking it would be
+# invisible: a window opened at the staging moment would roll this
+# machine back for not confirming something it never activated.
+grep -q "castle-activation-window" "$SYSTEMCTL_ARGV" \
+  && fail "staging opened a health window on a machine that had not moved"
+[ -z "$(newest_with "confirms-activation: $STAGED_ID" question)" ] \
+  || fail "staging filed a health question for a switch that never happened"
+grep -qx "    home-manager-fixture.service" "$STAGED" \
+  || fail "the staged result does not name the unit that made it stage: $(cat "$STAGED")"
+grep -q "Nothing on this machine has changed" "$STAGED" \
+  || fail "the staged result does not say the machine did not move: $(cat "$STAGED")"
+[ -f "$CASTLE_STATE_DIR/activation-staged/$(field_of "$STAGED" refs | cut -d, -f1)" ] \
+  || fail "staging left no marker named for the answer it spent: $(ls "$CASTLE_STATE_DIR/activation-staged")"
+grep -qx "toplevel: $GEN_LOUD" "$CASTLE_STATE_DIR/activation-staged/"* \
+  || fail "the marker does not name what this machine would boot into"
+grep -q "check something this switch did not add" "$CASTLE_STATE_DIR/activation-staged/"* \
+  || fail "the marker did not carry 0059's check paragraph across the reboot"
+assert_no_direct_rebuild "the staged switch"
+assert_mechanism_untouched "the staged switch"
+
+log "   ... and nothing else is activated while it waits for a reboot"
+plant_applied_change "Another change, queued behind the staged one." home/queued.nix > /dev/null
+"$CASTLE" build > "$WORKDIR/build11.txt" 2>&1 \
+  || fail "the queued build failed: $(cat "$WORKDIR/build11.txt")"
+QUEUED_Q_ID="$(id_of "$(newest_with "authorizes-activation: true" question)")"
+point_build_at "$QUEUED_Q_ID" "$GEN_LOUDER"
+printf 'a\n.\n' | "$MODAL" --mode review --question "$QUEUED_Q_ID" > "$WORKDIR/approve8.txt" 2>&1 \
+  || fail "approving the queued change failed: $(cat "$WORKDIR/approve8.txt")"
+: > "$SYSTEMCTL_ARGV"
+"$CASTLE" activate --sweep > "$WORKDIR/act15.txt" 2>&1 \
+  || fail "the blocked sweep failed: $(cat "$WORKDIR/act15.txt")"
+grep -q "a switch is staged for the next boot" "$WORKDIR/act15.txt" \
+  || fail "the blocked sweep did not say why it spent nothing: $(cat "$WORKDIR/act15.txt")"
+[ ! -s "$SYSTEMCTL_ARGV" ] \
+  || fail "a sweep spent an approval on top of a staged switch: $(cat "$SYSTEMCTL_ARGV")"
+
+# ---------------------------------------------------------------------
+log "17. the reboot onto a staged generation is what opens its window"
+# ---------------------------------------------------------------------
+export CASTLE_CURRENT_SYSTEM="$GEN_LOUD"
+export CASTLE_BOOT_ID="boot-after-the-reboot"
+: > "$SYSTEMCTL_ARGV"
+"$CASTLE" activate --sweep > "$WORKDIR/act16.txt" 2>&1 \
+  || fail "the post-reboot sweep failed: $(cat "$WORKDIR/act16.txt")"
+BOOTED_SWITCH="$(newest_with "activation-outcome: switched" result)"
+BOOTED_SWITCH_ID="$(id_of "$BOOTED_SWITCH")"
+[ "$BOOTED_SWITCH_ID" != "$QUIET_SWITCH_ID" ] \
+  || fail "the reboot onto the staged generation was never accounted for: $(cat "$WORKDIR/act16.txt")"
+grep -q "has now booted into it" "$BOOTED_SWITCH" \
+  || fail "the post-reboot result does not say what it is: $(cat "$BOOTED_SWITCH")"
+grep -qx "start castle-activation-window.timer" "$SYSTEMCTL_ARGV" \
+  || fail "the reboot did not open the health window: $(cat "$SYSTEMCTL_ARGV")"
+BOOTED_Q="$(newest_with "confirms-activation: $BOOTED_SWITCH_ID" question)"
+[ -n "$BOOTED_Q" ] || fail "the reboot filed no health question"
+grep -qx "    home/loud.nix" "$BOOTED_Q" \
+  || fail "the health question lost the check paragraph the marker carried: $(cat "$BOOTED_Q")"
+[ -z "$(ls "$CASTLE_STATE_DIR/activation-staged" 2>/dev/null)" ] \
+  || fail "the staged marker survived the reboot it accounts for"
+assert_no_direct_rebuild "the reboot"
+
+# ---------------------------------------------------------------------
+log "18. a staging whose boot default moved out from under it is superseded"
+# ---------------------------------------------------------------------
+# The change queued behind the staged one is still owed a switch, and
+# closing that window unblocks it in the same sweep. It stages too:
+# `home-manager-fixture.service` differs again between the generation
+# this machine is now running and the one that change approved.
+export STUB_STAGE_TARGET="$GEN_LOUDER"
+"$CASTLE" answer --decision approve "$(id_of "$BOOTED_Q")" <<< "fixture confirmation" > /dev/null
+"$CASTLE" activate --sweep > "$WORKDIR/act17.txt" 2>&1 \
+  || fail "closing the post-reboot window failed: $(cat "$WORKDIR/act17.txt")"
+[ -n "$(newest_with "activation-outcome: confirmed" result)" ] \
+  || fail "the post-reboot window did not close on the confirmation"
+[ -n "$(ls "$CASTLE_STATE_DIR/activation-staged" 2>/dev/null)" ] \
+  || fail "the queued change did not stage: $(cat "$WORKDIR/act17.txt")"
+# Something else — a switch by hand, a rollback — moves the boot default.
+ln -sfn "$GEN_RUNNING" "$STUB_SYSTEM_PROFILE"
+: > "$SYSTEMCTL_ARGV"
+"$CASTLE" activate --sweep > "$WORKDIR/act19.txt" 2>&1 \
+  || fail "the superseding sweep failed: $(cat "$WORKDIR/act19.txt")"
+SUPERSEDED="$(newest_with "activation-outcome: staging-superseded" result)"
+[ -n "$SUPERSEDED" ] \
+  || fail "an abandoned staging was not accounted for: $(cat "$WORKDIR/act19.txt")"
+grep -q "will not happen on its own" "$SUPERSEDED" \
+  || fail "the superseded result does not say the change will not happen"
+[ -z "$(ls "$CASTLE_STATE_DIR/activation-staged" 2>/dev/null)" ] \
+  || fail "a superseded staging left its marker behind to wedge the seat"
+grep -q "castle-activate" "$SYSTEMCTL_ARGV" \
+  && fail "settling a superseded staging changed the machine"
+
+# ---------------------------------------------------------------------
+log "19. a worker turn cannot build or switch, whatever its prompt says"
 # ---------------------------------------------------------------------
 CASTLE_WORKER_CLAIM="20260301T000000Z-claim-fixture" "$CASTLE" build > "$WORKDIR/guard1.txt" 2>&1 \
   && fail "a worker turn was allowed to start a build"
@@ -671,7 +938,7 @@ grep -q "refusing to change this machine from inside a worker turn" "$WORKDIR/gu
   || fail "the activation guard said something else: $(cat "$WORKDIR/guard2.txt")"
 
 # ---------------------------------------------------------------------
-log "16. the journal validates, and nothing in it names this machine"
+log "20. the journal validates, and nothing in it names this machine"
 # ---------------------------------------------------------------------
 "$CASTLE" validate || fail "the journal this run produced does not validate"
 if grep -rIl "$HOME" "$JOURNAL" >/dev/null 2>&1; then

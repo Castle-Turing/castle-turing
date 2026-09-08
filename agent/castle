@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import fnmatch
 import hashlib
 import heapq
 import json
@@ -722,6 +723,18 @@ ACTIVATION_OUTCOME_VALUES = (
     "refused-pin-stale",
     "refused-tree-dirty",
     "refused-no-privilege",
+    # The switch would have disturbed the session that approved it, so
+    # the new generation was made this machine's boot default and
+    # nothing on it moved (docs/tasks/0067 §C). No health window is open
+    # on a `staged` result: there is nothing running to be healthy or
+    # not, and the window opens after the reboot that activates it.
+    "staged",
+    # A staged generation stopped being the boot default before any
+    # reboot reached it — something else moved the system profile. The
+    # marker is cleared and this says so, because a staging that
+    # silently evaporated would wedge the seat forever
+    # (docs/tasks/0067 §D, clause 2).
+    "staging-superseded",
 )
 
 # The flake input a private layer pins this framework at.
@@ -744,6 +757,57 @@ ROLLBACK_UNIT_ENV = "CASTLE_ROLLBACK_UNIT"
 DEFAULT_ACTIVATE_UNIT = "castle-activate.service"
 DEFAULT_ROLLBACK_UNIT = "castle-rollback.service"
 
+# The third unit and the one timer docs/tasks/0067 adds to that grant,
+# under the same contract as the two above: fixed commands the module
+# names once, overridable so the harness can point them at a stub.
+#
+# `castle-activate-boot.service` runs `nixos-rebuild boot`, which is
+# strictly weaker than the `switch` the same resident may already ask
+# for: it sets the system profile and installs the bootloader and runs
+# no activation script at all.
+#
+# `castle-activation-window.timer` is a reversal of 0048's own comment,
+# which called granting this "a widening with no purpose" — the purpose
+# is that a switch staged before a reboot has to open its window after
+# one, and there is no unit left to start it from (§D). What arming the
+# window can do is end in a rollback, and `castle-rollback.service`
+# above already grants that rollback with no countdown in front of it.
+STAGE_UNIT_ENV = "CASTLE_STAGE_UNIT"
+DEFAULT_STAGE_UNIT = "castle-activate-boot.service"
+WINDOW_TIMER_ENV = "CASTLE_WINDOW_TIMER"
+DEFAULT_WINDOW_TIMER = "castle-activation-window.timer"
+
+# The unit-name patterns whose churn means a switch is staged rather
+# than run under the live session (docs/tasks/0067 §B). Public mechanism
+# with private configuration: the list comes from
+# `castle.agent.activation.sessionUnits`, and an empty one turns the
+# classification off and restores 0048's behaviour exactly.
+#
+# `fnmatch` patterns rather than names, so `home-manager-*.service`
+# needs no username — the module knows one and could interpolate it, but
+# that would mean reimplementing home-manager's own `escapeSystemdPath`
+# here to stay right for unusual usernames, and a pattern that also
+# matches somebody else's unit errs toward staging, which is the safe
+# direction.
+SESSION_UNITS_ENV = "CASTLE_SESSION_UNITS"
+
+# Where the kernel publishes an identifier for this boot. Read to tell
+# "the machine has rebooted onto what we staged" from "the machine was
+# already running it", which is what keeps a staging from opening a
+# window in the same breath as creating one (docs/tasks/0067 §D).
+BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
+
+# Overridable, so the harness can simulate a reboot without one. Nothing
+# is granted by it and nothing can be provoked with it: the clause that
+# reads a boot id also requires this machine to be *running* the staged
+# closure, so the worst a fabricated value can do is open a health
+# window on a generation that is genuinely running, slightly early.
+BOOT_ID_ENV = "CASTLE_BOOT_ID"
+
+# The system profile's current generation — what this machine would boot
+# into, as opposed to what it is running. Read and never written.
+SYSTEM_PROFILE_PATH = "/nix/var/nix/profiles/system"
+
 # How long the builder's `nix` invocations get, and how long a health
 # confirmation has to arrive. Both wired from modules/agent; both read
 # through the same tolerant parser the applier's timeout uses, so a
@@ -758,6 +822,16 @@ DEFAULT_ACTIVATION_WINDOW_SECONDS = 900
 # about the running machine, read and never written by anything here —
 # the profile is moved by the privileged unit, never by this process.
 CURRENT_SYSTEM_PATH = "/run/current-system"
+
+# Both of the above are overridable, under `ACTIVATE_UNIT_ENV`'s
+# contract and for the same reason: the harness has to point them at
+# fixture closures to exercise the classifier at all
+# (docs/tasks/0067 §B). **Nothing is granted by either.** They decide
+# what a record says and which of two units this seat asks for; the
+# units themselves take no arguments and polkit scopes the grant by unit
+# name, so a path this process was handed cannot widen anything.
+CURRENT_SYSTEM_ENV = "CASTLE_CURRENT_SYSTEM"
+SYSTEM_PROFILE_ENV = "CASTLE_SYSTEM_PROFILE"
 
 # The identity on a pin-bump commit. The seat, never a person, and an
 # address RFC 2606 reserves — `APPLY_COMMIT_NAME`'s reasoning verbatim,
@@ -11348,6 +11422,45 @@ def rollback_unit() -> str:
     return os.environ.get(ROLLBACK_UNIT_ENV, "").strip() or DEFAULT_ROLLBACK_UNIT
 
 
+def stage_unit() -> str:
+    return os.environ.get(STAGE_UNIT_ENV, "").strip() or DEFAULT_STAGE_UNIT
+
+
+def window_timer() -> str:
+    return os.environ.get(WINDOW_TIMER_ENV, "").strip() or DEFAULT_WINDOW_TIMER
+
+
+def session_units() -> list[str]:
+    """The unit-name patterns a switch may not churn under a live
+    session (docs/tasks/0067 §B).
+
+    Comma-separated, because a unit name cannot contain a comma and a
+    newline in a systemd `Environment=` is a fight nobody needs. An
+    unset or empty variable is not a missing configuration to warn
+    about: it is the documented way to turn the classification off, and
+    a host that does gets 0048's behaviour unchanged.
+    """
+    raw = os.environ.get(SESSION_UNITS_ENV, "")
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _boot_id() -> str:
+    """This boot's identifier, or "".
+
+    Empty is handled by every caller rather than raised: a machine whose
+    kernel does not publish this is a machine where the staging
+    resolution declines to act, which leaves the change staged and the
+    resident told about it — the direction a missing fact should fall.
+    """
+    override = os.environ.get(BOOT_ID_ENV, "").strip()
+    if override:
+        return override
+    try:
+        return pathlib.Path(BOOT_ID_PATH).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def activation_lock_path() -> pathlib.Path:
     """One builder-or-activation at a time, machine-wide — including the
     root-run health-window closer, which is why this is under
@@ -11400,6 +11513,123 @@ def activation_in_flight_dir() -> pathlib.Path:
 
 def activation_in_flight_path(answer_id: str) -> pathlib.Path:
     return activation_in_flight_dir() / answer_id
+
+
+def activation_staged_dir() -> pathlib.Path:
+    """Where a staged switch leaves the one file that says so
+    (docs/tasks/0067 §C).
+
+    `activation_in_flight_dir()`'s sibling, in the same place and for
+    the same cross-privilege reason — and separate from it for the same
+    reason those two are separate: `_reconcile_activation_in_flight`
+    walks that directory and writes a *failed* account for anything it
+    finds, which is a false statement about a switch that was staged on
+    purpose.
+
+    **Under `state_dir()` and never under `/run`**, which is the one
+    thing about its location that is load-bearing: what this marker has
+    to survive is a reboot.
+    """
+    d = state_dir() / "activation-staged"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _write_staged_marker(
+    *,
+    answer_id: str,
+    result_id: str,
+    build_id: str,
+    toplevel: str,
+    check_lines: list[str],
+) -> bool:
+    """Record what was staged, so the reboot that activates it can be
+    recognised (docs/tasks/0067 §C, §D).
+
+    `Key: value` header, blank line, body — this repo's own task-file
+    shape rather than JSON, so a resident who finds one can read it.
+
+    The body is 0059's check paragraph, **derived at staging time and
+    carried across the reboot**. That is 0059 §D's reasoning extended:
+    it is computed while the repository is readable and the machine is
+    known good, because deriving it after the reboot would mean deriving
+    it on a machine that may be broken in exactly the way the paragraph
+    exists to catch.
+    """
+    payload = "\n".join(
+        [
+            f"answer: {answer_id}",
+            f"result: {result_id}",
+            f"build: {build_id}",
+            f"toplevel: {toplevel}",
+            f"boot-id: {_boot_id()}",
+            "",
+            *check_lines,
+            "",
+        ]
+    )
+    path = activation_staged_dir() / answer_id
+    try:
+        path.write_text(payload, encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"castle activate: this machine's boot default is now the generation you "
+            f"approved ({result_id}), but the marker that would recognise the reboot "
+            f"could not be written ({exc}). Nothing will ask whether it is working "
+            "after you reboot, and nothing will roll it back on its own.",
+            file=sys.stderr,
+        )
+        return False
+    _chown_to_journal_owner(path)
+    return True
+
+
+def _read_staged_markers() -> list[tuple[pathlib.Path, dict[str, str], list[str]]]:
+    """Every staged marker, oldest name first, as
+    `(path, header, check_lines)`.
+
+    A marker whose header cannot be parsed is returned with an empty
+    header rather than skipped, so the caller removes it instead of
+    tripping over it on every sweep for the rest of the machine's life.
+    """
+    try:
+        paths = sorted(activation_staged_dir().iterdir())
+    except OSError:
+        return []
+    out = []
+    for path in paths:
+        header: dict[str, str] = {}
+        body: list[str] = []
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            out.append((path, header, body))
+            continue
+        in_header = True
+        for line in lines:
+            if in_header:
+                if not line.strip():
+                    in_header = False
+                    continue
+                key, sep, value = line.partition(":")
+                if not sep:
+                    in_header = False
+                    body.append(line)
+                    continue
+                header[key.strip()] = value.strip()
+            else:
+                body.append(line)
+        while body and not body[-1].strip():
+            body.pop()
+        out.append((path, header, body))
+    return out
+
+
+def _drop_staged_marker(path: pathlib.Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 def _chown_to_journal_owner(path: pathlib.Path) -> None:
@@ -11506,6 +11736,15 @@ ACTIVATION_FIRST_LINES = {
         "Castle could not ask this machine to switch, because the privileged step it "
         "needs is not available to it."
     ),
+    "staged": (
+        "Castle did not switch this machine now: the change would have disturbed the "
+        "session you approved it from. It takes effect the next time this machine "
+        "boots."
+    ),
+    "staging-superseded": (
+        "A change Castle had staged for the next boot is no longer what this machine "
+        "would boot into, so it will not happen on its own."
+    ),
 }
 
 # The one sentence an activation question's body opens with.
@@ -11531,7 +11770,10 @@ ACTIVATION_QUESTION_CAVEAT = (
     "Switching applies most of a configuration to the machine as it is running. A "
     "change to the kernel, the initrd, or firmware is staged into the new "
     "generation and takes effect at the next boot instead — so a switch that "
-    "succeeds does not mean every part of this is live."
+    "succeeds does not mean every part of this is live. And where the switch itself "
+    "would disturb the session you are approving from, Castle stages the whole of "
+    "it for the next boot rather than running it now, and says so "
+    "(docs/tasks/0067)."
 )
 
 HEALTH_QUESTION_BODY = (
@@ -12652,8 +12894,170 @@ def _running_system() -> str:
     Read and never written. The system profile is moved by the
     privileged unit; nothing in this process may touch it.
     """
+    path = os.environ.get(CURRENT_SYSTEM_ENV, "").strip() or CURRENT_SYSTEM_PATH
     try:
-        return os.path.realpath(CURRENT_SYSTEM_PATH)
+        return os.path.realpath(path)
+    except OSError:
+        return ""
+
+
+# The two directories in a system closure that carry unit files. Both
+# are symlinks to store paths, and every entry inside them is a symlink
+# into the store (or, for a generated unit, a regular file; for a
+# drop-in, a `<unit>.d` directory).
+UNIT_TREES = ("etc/systemd/system", "etc/systemd/user")
+
+
+def _resolve_unit_entry(entry: pathlib.Path) -> str:
+    """What one entry in a generation's unit directory resolves to, in a
+    form that says nothing about *which* generation it came from.
+
+    That last clause is the whole of this function and it is not
+    obvious. A plain unit entry is a symlink into a per-unit store path
+    (`/nix/store/…-unit-dbus-broker.service/dbus-broker.service`), so
+    resolving it gives a value two generations can share. A drop-in
+    directory (`dbus-broker.service.d`) and a `.wants` directory are
+    **real directories inside the generation's own `system-units` store
+    path**, so resolving *those* gives a value that changes whenever any
+    unit in the generation changes — and every unit carrying a drop-in
+    would then look changed on every switch, which for a default naming
+    `dbus.service` means staging everything forever.
+
+    So a directory is resolved one level down instead: its children are
+    symlinks (absolute for a drop-in, relative-to-a-sibling for a
+    `.wants` entry), and both kinds resolve out into per-unit store
+    paths.
+
+    An entry that cannot be read is reported by name and not by path,
+    for the same reason: a value carrying the generation's own path
+    would compare unequal to itself.
+    """
+    if entry.is_dir() and not entry.is_symlink():
+        try:
+            children = sorted(entry.iterdir(), key=lambda child: child.name)
+        except OSError:
+            return f"(unreadable directory: {entry.name})"
+        return "\n".join(
+            f"{child.name} -> {os.path.realpath(child)}" for child in children
+        )
+    try:
+        return os.path.realpath(entry)
+    except OSError:
+        return f"(unreadable: {entry.name})"
+
+
+def _unit_map(toplevel: str) -> dict[str, str] | None:
+    """Every unit name a generation carries, against what that name
+    resolves to — or None if the generation's unit trees cannot be read
+    at all (docs/tasks/0067 §B).
+
+    A `<unit>.d` drop-in directory is folded onto `<unit>`: either of
+    the two differing is the unit differing, and keeping them apart
+    would report a drop-in as a unit name nothing matches. What such an
+    entry resolves to is `_resolve_unit_entry`'s problem, and reading
+    that function is the only way to see why this one is not a two-line
+    `realpath` comparison.
+
+    Both trees are read into one map. A name carried in system scope and
+    in user scope at once is a name this treats as one unit, which
+    over-reports rather than under-reports — the direction §B chooses
+    everywhere.
+    """
+    if not toplevel:
+        return None
+    mapping: dict[str, str] = {}
+    read_something = False
+    for tree in UNIT_TREES:
+        directory = pathlib.Path(toplevel) / tree
+        try:
+            entries = sorted(directory.iterdir(), key=lambda e: e.name)
+        except OSError:
+            continue
+        read_something = True
+        for entry in entries:
+            name = entry.name[:-2] if entry.name.endswith(".d") else entry.name
+            target = _resolve_unit_entry(entry)
+            previous = mapping.get(name)
+            mapping[name] = target if previous is None else f"{previous}\n{target}"
+    return mapping if read_something else None
+
+
+def _changed_units(running: str, approved: str) -> tuple[set[str], str]:
+    """The unit names whose files differ between the generation this
+    machine is running and the one it approved, or `(set(), why)` if the
+    comparison could not be made.
+
+    **Store-path equality is exact in the direction that matters.** Two
+    equal realpaths are byte-identical trees, so a unit this calls
+    unchanged cannot be restarted by the switch. The converse
+    over-approximates — `switch-to-configuration` parses the unit and
+    honours `X-RestartIfChanged=false` and its neighbours, so a
+    differing path does not prove a restart. That asymmetry is the
+    design: every uncertainty lands on the staging side, which is the
+    side that cannot break a live session.
+
+    **Why this and not `switch-to-configuration dry-activate`**, which
+    is the oracle the direction named and which this deliberately does
+    not use (docs/tasks/0067 §A.1). In this flake's pin, that program's
+    system dry run exits before the loop that spawns the per-user
+    switch, so it never reports user-unit churn at all — half of the
+    question this function exists to answer. Reaching it would also mean
+    a third privileged unit and a widening of 0048 §H's polkit rule to
+    run a read-only query. Two store paths answer the same question with
+    no privilege and no program's prose to parse.
+    """
+    have = _unit_map(running)
+    want = _unit_map(approved)
+    if have is None or want is None:
+        unreadable = []
+        if have is None:
+            unreadable.append(f"the generation it is running ({running or 'unknown'})")
+        if want is None:
+            unreadable.append(f"the generation you approved ({approved or 'unknown'})")
+        return set(), (
+            "Castle could not read the unit files of "
+            + " or ".join(unreadable)
+            + ", so it could not work out what this switch would restart."
+        )
+    return {name for name in set(have) | set(want) if have.get(name) != want.get(name)}, ""
+
+
+def _session_churn(approved: str) -> tuple[list[str], str]:
+    """`(units, why_unknown)` — the session-load-bearing units an
+    approved switch would change, and why the question could not be
+    answered (docs/tasks/0067 §B).
+
+    Either being non-empty means stage. An unanswerable question is
+    treated as a yes for the reason `_changed_units` gives: unknown
+    churn is churn, and the cost of being wrong that way is one reboot.
+
+    No patterns configured is not an unanswerable question — it is the
+    documented way to turn this off, and it returns `([], "")`, which is
+    a live switch.
+    """
+    patterns = session_units()
+    if not patterns:
+        return [], ""
+    changed, why = _changed_units(_running_system(), approved)
+    if why:
+        return [], why
+    return sorted(
+        name
+        for name in changed
+        if any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+    ), ""
+
+
+def _booted_profile() -> str:
+    """The generation this machine would boot into, or "".
+
+    `_running_system()`'s sibling and deliberately a different fact:
+    after a staged switch the two differ, and that difference is the
+    whole of what "staged" means.
+    """
+    path = os.environ.get(SYSTEM_PROFILE_ENV, "").strip() or SYSTEM_PROFILE_PATH
+    try:
+        return os.path.realpath(path)
     except OSError:
         return ""
 
@@ -12889,6 +13293,25 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
             return outcome_or_none
         commit_sha = outcome_or_none
 
+    # Classification, and the branch this task exists for
+    # (docs/tasks/0067 §C). A pure read of two store paths, run after
+    # the pin bump — the staged generation is built from the flakeref,
+    # so the repository has to carry the lock the resident approved
+    # before the boot default is set — and before anything is asked to
+    # move.
+    matched, why_unknown = _session_churn(approved)
+    if matched or why_unknown:
+        return _stage_one(
+            answer=answer,
+            build=build,
+            approved=approved,
+            matched=matched,
+            why_unknown=why_unknown,
+            detail=detail,
+            commit_sha=commit_sha,
+            check_lines=check_lines,
+        )
+
     # A second breadcrumb, now covering the switch rather than the
     # commit: what it records is "an attempt got as far as asking this
     # machine to move and never wrote its account", which is the window
@@ -12961,6 +13384,127 @@ def _activate_one(answer: Record, records: dict[str, Record]) -> tuple[str, str]
     )
     _file_health_question(result_id, check_lines)
     return result_id, "switched"
+
+
+def _stage_one(
+    *,
+    answer: Record,
+    build: Record,
+    approved: str,
+    matched: list[str],
+    why_unknown: str,
+    detail: list[str],
+    commit_sha: str,
+    check_lines: list[str],
+) -> tuple[str, str]:
+    """Make the approved generation this machine's boot default and
+    change nothing that is running (docs/tasks/0067 §C).
+
+    **No health window opens here, and that is not an omission.** There
+    is nothing activated to be healthy or not: the machine is running
+    exactly what it was running a second ago. The window opens after the
+    reboot that activates this, from `_resolve_staged`, which is what
+    keeps 0048 §E's rule — a window is never wanted by a target, and
+    never opens for something this machine did not do.
+    """
+    if matched:
+        why = [
+            "This change would have restarted or reloaded units the session you "
+            "approved it from is standing on:",
+            "",
+            *[f"    {name}" for name in matched],
+            "",
+            "So Castle did not run it under that session. What it did instead is "
+            "make this generation the one this machine boots into.",
+        ]
+    else:
+        why = [
+            "Castle could not establish what this switch would restart, so it did "
+            "not run it under the session you approved it from:",
+            "",
+            f"    {why_unknown}",
+            "",
+            "An unanswered question about the session is treated as a yes. What "
+            "Castle did instead is make this generation the one this machine boots "
+            "into.",
+        ]
+
+    _write_activation_in_flight(answer.id, approved)
+    rc, output, fault = _start_unit(stage_unit(), what="stage")
+    detail = detail + ["", *why, "", f"The unit this asked for:  {stage_unit()}"]
+    if fault and "PATH" in fault:
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="failed",
+                activation_outcome="refused-no-privilege",
+                detail_lines=detail + ["", fault],
+                commit_sha=commit_sha,
+            ),
+            "refused-no-privilege",
+        )
+    if fault or rc != 0:
+        # `switch-failed` rather than a value of its own: the closed
+        # vocabulary's job is to say what happened to the machine, and
+        # what happened to this machine is that it did not move. The
+        # detail says which of the two things was attempted.
+        return (
+            _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="timeout" if fault and "within" in fault else "failed",
+                activation_outcome="switch-failed",
+                detail_lines=detail
+                + ["", "Staging it for the next boot did not succeed:", ""]
+                + ([f"    {fault}"] if fault else _log_tail(output)),
+                commit_sha=commit_sha,
+            ),
+            "switch-failed",
+        )
+
+    booted = _booted_profile()
+    detail += [
+        f"What you approved:        {approved or '(the build named no store path)'}",
+        f"What it will boot into:   {booted or '(this machine could not say)'}",
+        f"What is running now:      {_running_system() or '(this machine could not say)'}",
+        "",
+        "Nothing on this machine has changed. Reboot when it suits you; Castle will "
+        "ask whether the new generation is working once you are logged back in, and "
+        "will roll back if nothing says so. Until then it activates nothing else.",
+        "",
+        "If you would rather not reboot into it, the previous generation is still on "
+        "the boot menu, and the next build will offer this again.",
+    ]
+    result_id = _write_activation_result(
+        cause=answer,
+        anchor=build,
+        outcome="completed",
+        activation_outcome="staged",
+        detail_lines=detail,
+        commit_sha=commit_sha,
+    )
+    # The return is deliberately not acted on: the record is already
+    # durable and the machine's boot default has already moved, so
+    # there is nothing left to refuse. What a failed marker costs is
+    # said on stderr by the writer — no reboot will be recognised and
+    # no further approval will be blocked — and it is a write to the
+    # same directory the journal lives in, so a journal that was
+    # writable a moment ago and this failing is not a case with a
+    # better answer than saying so.
+    _write_staged_marker(
+        answer_id=answer.id,
+        result_id=result_id,
+        build_id=build.id,
+        # What the profile now points at, not what was approved: the
+        # privileged unit rebuilds from the flakeref rather than
+        # activating a store path handed to it (0048 §H), so the boot
+        # default is the authority on what the reboot will land on, and
+        # the reboot is recognised by comparing against exactly that.
+        toplevel=booted or approved,
+        check_lines=check_lines,
+    )
+    return result_id, "staged"
 
 
 def _bump_pin(
@@ -13293,6 +13837,142 @@ def _file_health_question(activation_result_id: str, check_lines: list[str]) -> 
     return question_id
 
 
+def _resolve_staged(records: dict[str, Record]) -> list[str]:
+    """Settle every staged switch whose fate this sweep can establish
+    (docs/tasks/0067 §D).
+
+    Exactly one of three things is true of each marker, and the third
+    one is the common one:
+
+    1. **This boot is the staged activation.** The generation this
+       machine is running is the one that was staged, and the boot id is
+       not the one staging happened under. Castle writes an ordinary
+       `switched` result, files the health question carrying the check
+       paragraph the marker has been holding since before the reboot,
+       and starts the window timer. Everything downstream — the review
+       surface, the closer, the digest — is 0048's, unchanged.
+    2. **The staged generation is no longer the boot default.**
+       Something else moved the system profile, so the staged switch
+       will not happen on its own. Castle says so and drops the marker,
+       which is what stops an abandoned staging from wedging this seat
+       for the rest of the machine's life.
+    3. **Neither.** It has not been rebooted yet. Nothing is written.
+
+    **0048 §E's rule is kept verbatim and this is where to check that.**
+    The window timer still has no `wantedBy`; what starts it is this
+    function, from the resident's own session, and only once it has
+    positively established that the machine is running the exact closure
+    castle staged. A boot into any other generation — including the
+    previous one, chosen at the boot menu — satisfies clause 1 on
+    neither side and opens nothing.
+
+    **Why the boot-id clause is load-bearing rather than belt-and-braces.**
+    Without it, a staging whose approved generation happened to equal
+    the running one would satisfy the first half of clause 1 in the same
+    breath as being created, and open a window on a machine that had not
+    moved.
+    """
+    written: list[str] = []
+    running = _running_system()
+    booted = _booted_profile()
+    boot_id = _boot_id()
+    for path, header, check_lines in _read_staged_markers():
+        answer = records.get(header.get("answer", ""))
+        build = records.get(header.get("build", ""))
+        staged = header.get("toplevel", "").strip()
+        if answer is None or answer.type != "answer" or build is None or not staged:
+            # A marker naming nothing this journal knows about, or
+            # naming no generation. `_reconcile_activation_in_flight`'s
+            # posture: removed rather than reconciled, because there is
+            # no record to hang an account off and leaving it would
+            # block every future sweep on a file nobody can explain.
+            _drop_staged_marker(path)
+            continue
+
+        if running and running == staged and boot_id and boot_id != header.get("boot-id", ""):
+            # The timer before the record, so the record can say
+            # truthfully whether the deadline exists. Every other
+            # failure on this path falls toward a rollback; this one
+            # falls the other way — no timer means nothing closes the
+            # window and an unconfirmed generation stays — so it is
+            # stated where the resident reads, not only on stderr.
+            rc, _output, fault = _start_unit(
+                window_timer(), what="open the health window"
+            )
+            armed = not fault and rc == 0
+            detail = [
+                "This is the generation Castle staged for you rather than switching "
+                "to under your session, and this machine has now booted into it.",
+                "",
+                f"What was staged:          {staged}",
+                f"What is running now:      {running}",
+                "",
+            ]
+            if armed:
+                detail.append(
+                    "Castle will ask whether this machine is working. If nothing "
+                    f"says so within {activation_window_seconds()}s, it rolls back "
+                    "to the generation this machine was running before."
+                )
+            else:
+                detail += [
+                    "Castle will ask whether this machine is working — but the "
+                    "countdown behind that question could not be started:",
+                    "",
+                    f"    {fault or f'{window_timer()} failed'}",
+                    "",
+                    "So nothing will roll this back on its own. Confirm it, or roll "
+                    "it back by hand, rather than leaving it to a deadline that is "
+                    "not running.",
+                ]
+            result_id = _write_activation_result(
+                cause=answer,
+                anchor=build,
+                outcome="completed" if armed else "failed",
+                activation_outcome="switched",
+                detail_lines=detail,
+            )
+            _file_health_question(result_id, check_lines)
+            if not armed:
+                print(
+                    f"castle activate: {result_id} says this machine booted into the "
+                    "staged generation, but the health window's timer could not be "
+                    f"started ({fault or 'it failed'}). Nothing will roll this back "
+                    "on its own.",
+                    file=sys.stderr,
+                )
+            written.append(result_id)
+            _drop_staged_marker(path)
+            continue
+
+        if booted and booted != staged:
+            written.append(
+                _write_activation_result(
+                    cause=answer,
+                    anchor=build,
+                    outcome="completed",
+                    activation_outcome="staging-superseded",
+                    detail_lines=[
+                        "Castle had staged this change for the next boot. Something "
+                        "has moved this machine's boot default since — a switch run "
+                        "by hand, or a rollback — so the staged generation is not "
+                        "what this machine would come up on any more.",
+                        "",
+                        f"What was staged:          {staged}",
+                        f"What it will boot into:   {booted}",
+                        "",
+                        "Nothing was undone and nothing is broken: the change simply "
+                        "will not happen on its own. Castle is no longer waiting for "
+                        "a reboot, and the next build will offer this again.",
+                    ],
+                )
+            )
+            _drop_staged_marker(path)
+            continue
+
+    return written
+
+
 def _open_windows(records: dict[str, Record]) -> list[Record]:
     """Every `switched` result whose health window is still open, oldest
     first.
@@ -13604,6 +14284,18 @@ def cmd_activate(args: argparse.Namespace) -> int:
             return 0 if activation_outcome in ACTIVATION_SUCCESS_OUTCOMES else 1
 
         acted = 0
+        # Staged switches before anything else on this path
+        # (docs/tasks/0067 §D). A reboot onto a staged generation is the
+        # one event nothing else in this fold can see, and until it is
+        # accounted for the window it opens does not exist — so a sweep
+        # that looked at windows first would look at the wrong set.
+        resolved = _resolve_staged(records)
+        if resolved:
+            records = load_all(journal_dir())
+            for rid in resolved:
+                print(f"activate: {rid} settles a switch that was staged")
+                acted += 1
+
         # Windows first, approvals second. A resident who rejected a
         # health question wants that machine back now, and making them
         # wait behind somebody else's build would be the wrong order on
@@ -13633,6 +14325,30 @@ def cmd_activate(args: argparse.Namespace) -> int:
                 "activate: a switch is still waiting to be confirmed "
                 f"({still_open[0].id}); nothing further will be activated until "
                 "that window closes"
+            )
+            return route_journal() if acted or reconciled else 0
+
+        # **Nothing is spent while a switch is staged either**, and for
+        # the window guard's arithmetic rather than a second reason: a
+        # live switch landing on top of a staged boot default leaves two
+        # generations with one rollback between them.
+        #
+        # Unlike the window above, this does not clear itself on a
+        # timer, so its escapes are named rather than assumed. The
+        # resident reboots and `_resolve_staged` clause 1 fires;
+        # something else moves the boot default and clause 2 fires; or
+        # `castle activate <answer-id>` is run by hand, which is outside
+        # this fold and is what 0048 already documents as the retry
+        # path.
+        pending_staged = [
+            header.get("result", path.name)
+            for path, header, _check in _read_staged_markers()
+        ]
+        if pending_staged:
+            print(
+                "activate: a switch is staged for the next boot "
+                f"({pending_staged[0]}); nothing further will be activated until "
+                "this machine reboots into it"
             )
             return route_journal() if acted or reconciled else 0
 
@@ -13668,10 +14384,15 @@ def cmd_activate(args: argparse.Namespace) -> int:
 
 
 # The activation outcomes a hand-run `castle activate` treats as success
-# for its exit code. `switched` and `confirmed` only: a rollback is a
-# correctly-reached conclusion, but a resident who typed this command
-# asked for a switch and did not get one.
-ACTIVATION_SUCCESS_OUTCOMES = ("switched", "confirmed")
+# for its exit code. A rollback is a correctly-reached conclusion, but a
+# resident who typed this command asked for a switch and did not get
+# one.
+#
+# `staged` is on this side (docs/tasks/0067 §C) because that resident
+# *is* getting the switch they asked for — the machine is set to boot
+# into it, and a nonzero exit from the one path that did exactly the
+# right thing would train them to ignore the exit code.
+ACTIVATION_SUCCESS_OUTCOMES = ("switched", "confirmed", "staged")
 
 
 def _collect_downstream(records: dict[str, Record], root_id: str) -> list[Record]:
@@ -14676,7 +15397,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         # window-closing outcomes are deliberately outside this: a
         # rollback the timer performed has no answer behind it at all,
         # which is the whole point of a deadline.
-        if activation_outcome in ("switched", "switch-failed") or (
+        if activation_outcome in ("switched", "switch-failed", "staged") or (
             activation_outcome is not None
             and activation_outcome.startswith("refused-")
         ):
