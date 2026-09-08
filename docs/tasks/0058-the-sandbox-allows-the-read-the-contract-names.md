@@ -1,5 +1,6 @@
 Title: Task 0058 — the sandbox allows the read the contract names
 Model: deep
+Milestone: none — hygiene
 Model-because: the file being edited defines the worker tenant's
 permission surface, and the two available fixes differ in what they
 grant — one widens the sandbox (and must carry its paired write-deny,
