@@ -1339,7 +1339,7 @@ log "an environment fault reading the patch is not a malformed patch"
 
 log "  -- no git on the applier's PATH: the sweep aborts rather than burning every approval"
 # Two eligible approvals, and they touch different files on purpose: the
-# second must still apply cleanly after the first one has, or this
+# spared one must still apply cleanly after the spent one has, or this
 # scenario could not tell "the abort protected it" from "the abort cost
 # it".
 read -r REQ_NG1 R_NG1 Q_NG1 A_NG1 <<<"$(new_approval APPLYABLE-MODIFY-nogit)"
@@ -1360,23 +1360,46 @@ grep -q 'Aborting the sweep' "$WORKDIR/nogit-sweep.err" \
   || fail "a sweep that could not read a patch did not abort: $(cat "$WORKDIR/nogit-sweep.err")"
 [ "$(journal_file_count)" = "$((FILES_BEFORE + 1))" ] \
   || fail "the aborted sweep wrote more than the one record it accounts for"
-[ "$(count_apply_results_for "$A_NG2")" = "0" ] \
-  || fail "one broken machine spent the second authorization as well, which is what the abort exists to prevent"
-AP_NG1="$(newest_apply_result_for "$A_NG1")"
-grep -q '^outcome: failed$' "$AP_NG1" \
-  || fail "a machine that could not read the patch did not record a failed run: $(field_of "$AP_NG1" outcome)"
-grep -q '^apply-outcome:' "$AP_NG1" \
-  && fail "a broken machine claimed something about the change: $(field_of "$AP_NG1" apply-outcome)"
-grep -q '^apply-commit:' "$AP_NG1" \
-  && fail "an attempt that made no commit stamped one anyway: $(field_of "$AP_NG1" apply-commit)"
-grep -q 'could not establish which files the change touches' "$AP_NG1" \
-  || fail "the record does not say what could not be established: $(cat "$AP_NG1")"
-grep -q "not on this session" "$AP_NG1" \
-  || fail "the record does not name the missing git: $(cat "$AP_NG1")"
+# WHICH approval the abort spent is not this test's to assume. The two
+# chains share no refs edge, so when both answers land inside the same
+# second, order_records' whole-id tie-break decides — arbitrary by its
+# own declaration (task 0046), a random suffix in fact. An earlier
+# version asserted the FIRST-created approval specifically, reading
+# that coin as a clock, and failed on CI whenever it landed the other
+# way — the 0046 hazard's fifth documented catch, this time in the
+# suite, twenty-odd lines above a sleep whose comment explains the
+# same fact about apply records (task 0064; the suite convention this
+# bought is test/agent-loop/README.md). The abort's contract is
+# "exactly one authorization spent, whichever it was", and these
+# assertions now say exactly that.
+NG1_FILE="resident.nix"
+NG2_FILE="hosts/example/new-nogitb.nix"
+N_NG1="$(count_apply_results_for "$A_NG1")"
+N_NG2="$(count_apply_results_for "$A_NG2")"
+[ "$((N_NG1 + N_NG2))" = "1" ] \
+  || fail "one broken machine spent $((N_NG1 + N_NG2)) authorizations, not exactly the one the abort accounts for"
+if [ "$N_NG1" = "1" ]; then
+  A_SPENT="$A_NG1" SPENT_FILE="$NG1_FILE"
+  A_SPARED="$A_NG2" SPARED_FILE="$NG2_FILE"
+else
+  A_SPENT="$A_NG2" SPENT_FILE="$NG2_FILE"
+  A_SPARED="$A_NG1" SPARED_FILE="$NG1_FILE"
+fi
+AP_SPENT="$(newest_apply_result_for "$A_SPENT")"
+grep -q '^outcome: failed$' "$AP_SPENT" \
+  || fail "a machine that could not read the patch did not record a failed run: $(field_of "$AP_SPENT" outcome)"
+grep -q '^apply-outcome:' "$AP_SPENT" \
+  && fail "a broken machine claimed something about the change: $(field_of "$AP_SPENT" apply-outcome)"
+grep -q '^apply-commit:' "$AP_SPENT" \
+  && fail "an attempt that made no commit stamped one anyway: $(field_of "$AP_SPENT" apply-commit)"
+grep -q 'could not establish which files the change touches' "$AP_SPENT" \
+  || fail "the record does not say what could not be established: $(cat "$AP_SPENT")"
+grep -q "not on this session" "$AP_SPENT" \
+  || fail "the record does not name the missing git: $(cat "$AP_SPENT")"
 # The defect this task removes, asserted at the sentence: a machine
 # fault must never send the resident back to ask for the change again.
-grep -q 'Ask for the change again' "$AP_NG1" \
-  && fail "a machine fault prescribed re-asking for the change, which would fail the same way: $(cat "$AP_NG1")"
+grep -q 'Ask for the change again' "$AP_SPENT" \
+  && fail "a machine fault prescribed re-asking for the change, which would fail the same way: $(cat "$AP_SPENT")"
 assert_private_untouched "after the no-git sweep"
 assert_mechanism_untouched "after the no-git sweep"
 "$CASTLE" validate >/dev/null || fail "the journal does not validate after the no-git sweep"
@@ -1386,13 +1409,13 @@ log "  -- and the abort cost a delay, not an authorization: both changes still l
 # gives: two apply records for one approval written inside the same
 # second sort by their random suffix.
 sleep 1
-"$CASTLE" apply "$A_NG1" >/dev/null \
+"$CASTLE" apply "$A_SPENT" >/dev/null \
   || fail "the hand retry on a repaired machine failed"
-assert_private_changed_exactly "the hand retry after the no-git abort" "$A_NG1" resident.nix
+assert_private_changed_exactly "the hand retry after the no-git abort" "$A_SPENT" "$SPENT_FILE"
 "$CASTLE" apply --sweep >/dev/null \
   || fail "the sweep did not resume once git was reachable again"
-assert_private_changed_exactly "the authorization the abort protected" "$A_NG2" \
-  hosts/example/new-nogitb.nix
+assert_private_changed_exactly "the authorization the abort protected" "$A_SPARED" \
+  "$SPARED_FILE"
 assert_mechanism_untouched "after the no-git recovery"
 
 log "  -- git on PATH and unrunnable: the same shape, reached the other way"
