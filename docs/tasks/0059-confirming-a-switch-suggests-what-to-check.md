@@ -1,5 +1,6 @@
 Title: Task 0059 — confirming a switch suggests what to check
 Model: deep
+Milestone: none — hygiene
 Model-because: the deliverable is resident-facing text on the one
 surface whose failure mode is training a reflex yes, and its breadth is
 the whole point — a sentence that reads well and points at the wrong
