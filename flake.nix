@@ -973,6 +973,11 @@
                     && !(switchUnit ? wantedBy && switchUnit.wantedBy != [ ])
                     && rollbackUnit != null
                     && lib.hasInfix "nixos-rebuild switch --rollback" rollbackUnit.serviceConfig.ExecStart
+                    # --no-reexec: a rollback that re-execs into a build
+                    # from /etc/nixos fails outright with no
+                    # /etc/nixos/flake.nix on a flake-only host, before
+                    # it ever reaches the rollback (docs/tasks/0066).
+                    && lib.hasInfix "--no-reexec" rollbackUnit.serviceConfig.ExecStart
                     && !(rollbackUnit ? wantedBy && rollbackUnit.wantedBy != [ ])
                     # docs/tasks/0067 §C: `boot`, never `switch`, and
                     # no ExecStartPost — staging must open no window,
@@ -1003,7 +1008,8 @@
                     window timer, castle-activate-boot.service running
                     `nixos-rebuild boot --flake <repo>#<host>` and arming
                     nothing, castle-rollback.service running
-                    `nixos-rebuild switch --rollback`, a window timer firing
+                    `nixos-rebuild switch --rollback --no-reexec`, a window
+                    timer firing
                     once after castle.agent.activation.windowSeconds, and none
                     of the four wanted by any target
                     (docs/tasks/0048-activation.md §H, §I;

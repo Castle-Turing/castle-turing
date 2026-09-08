@@ -407,11 +407,11 @@ as its own document:
   first one in this project that is a **standing root grant**: it
   declares privileged systemd units, carrying `nixos-rebuild switch
   --flake <repo>#<host>`, `nixos-rebuild boot --flake <repo>#<host>`
-  and `nixos-rebuild switch --rollback` and no argument reaching them
-  from anywhere, and a polkit rule permitting one named account to
-  start exactly those — plus the timer that opens a health window,
-  which the resident's own session has to arm after a reboot that
-  activated a staged switch (docs/tasks/0067). The `boot` unit is
+  and `nixos-rebuild switch --rollback --no-reexec` and no argument
+  reaching them from anywhere, and a polkit rule permitting one named
+  account to start exactly those — plus the timer that opens a health
+  window, which the resident's own session has to arm after a reboot
+  that activated a staged switch (docs/tasks/0067). The `boot` unit is
   strictly weaker than the `switch` one beside it: it moves the system
   profile and installs the bootloader and runs no activation script, so
   it changes nothing that is running. It exists because an approved

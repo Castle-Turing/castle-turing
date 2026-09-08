@@ -29,3 +29,15 @@ treat its claims as unverified recall unless corroborated elsewhere.
 Read whatever trust section a given report has before quoting anything
 onward; several load-bearing numbers across these reports are
 explicitly flagged as unverified recall.
+
+The six reviews of 2026-09-05/06 — `inter-task-handoff.md`,
+`operator-handover.md`, `document-inspection.md`,
+`multi-agent-primer.md`, `measurement-methodology.md`,
+`elicitation-papers.md` — share one apparatus: per-claim [V]/[R]
+markers defined in each header, provenance notes on the constraints
+each report was produced under, judgment-calls sections preserved
+verbatim, and dated addenda where later first-hand reading of
+resident-supplied primaries confirmed, corrected, or *downgraded*
+specific claims. An addendum never rewrites the original text; the
+original stands as the record of what was claimed on what evidence,
+and the addendum is the correction layer.

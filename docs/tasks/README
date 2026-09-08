@@ -15,8 +15,19 @@ branch that implements it. That convention is unchanged and lives in
   names the tier the task runs on and `Model-because:` says why that
   tier rather than the adjacent one — both required, see CLAUDE.md's
   Delegation section. `Requires:` names prerequisite tasks and needs a
-  `Requires-because:` beside it, which the harness enforces. A task file is a *prompt*, not the
-  brief itself — it names the authoritative sources (usually a
+  `Requires-because:` beside it, which the harness enforces.
+  `Milestone:` names the `docs/state/MILESTONE.md` clause key the
+  task serves, or the explicit value `none — hygiene` — so a task
+  serving nothing must say so rather than imply it. The clause-key
+  semantics are `docs/state/README.md`'s rule 3 (the authority;
+  this sentence is a pointer, not a second definition). One parsing
+  fact that cost a review finding: keep every harness-read key
+  (`Title:`, `Model:`, `Requires:`, `Milestone:`) *above* any header
+  value that wraps onto a continuation line — the queue's parser
+  stops reading headers at the first wrapped line, so a key below
+  one silently does not exist.
+
+  A task file is a *prompt*, not the brief itself — it names the authoritative sources (usually a
   `docs/backlog/` entry) and instructs the implementer to author the
   numbered brief here on its own branch, deleting any promoted backlog
   entry in the same commit.
