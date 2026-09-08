@@ -43,6 +43,7 @@ USAGE
 """
 
 import argparse
+import datetime
 import json
 import pathlib
 import re
@@ -160,6 +161,26 @@ CITE_SPAN = re.compile(r"\[[^\]\n]*\](?!\()")
 LINK_SPAN = re.compile(r"\[[^\]\n]*\]\([^)\n]*\)")
 
 
+LINK_URL = re.compile(r"(?<=\])\([^)\n]*\)")
+ANY_BRACKET = re.compile(r"\[[^\]\n]*\]")
+
+
+def blank(match):
+    return " " * len(match.group(0))
+
+
+def citation_tokens(inner):
+    """Split a bracket span's contents into candidate citation tokens."""
+    return [t.strip() for t in re.split(
+        r"[,;]|\s{2,}|\s(?=[#]|commit\s|task\s|backlog:|journal\s|state\s)", inner)
+        if t.strip()]
+
+
+def is_citation_span(inner):
+    tokens = citation_tokens(inner)
+    return bool(tokens) and all(CITATION_TOKEN.match(t) for t in tokens)
+
+
 def mask_code(text):
     """Blank inline code only, leaving citation spans readable.
 
@@ -171,18 +192,33 @@ def mask_code(text):
     """
     if text.lstrip().startswith(">"):
         return " " * len(text)
-    return CODE_SPAN.sub(lambda m: " " * len(m.group(0)), text)
+    return CODE_SPAN.sub(blank, text)
 
 
 def mask(line):
-    # Equal-length, so a position found in one mask means the same
-    # position in the other and in the raw text.
+    """What the claim lint and the receipt matcher read.
+
+    Blockquotes vanish — the format reserves them for the resident's own
+    words, and a verdict is theirs to render in whatever register they
+    like. Inline code vanishes, because a clause key or the path
+    `docs/tasks/done/` is not a claim. A link's URL vanishes; its *text*
+    does not, which is the fix for a real evasion — blanking whole
+    `[text](url)` spans let `[is complete and was delivered
+    successfully](https://…)` through the banned-vocabulary lint while
+    rendering it in full to the reader. And a bracket span vanishes only
+    if it actually parses as a citation, so ordinary bracketed prose
+    stays visible to both checks.
+
+    Every substitution is equal-length, so a position found here means
+    the same position in mask_code() and in the raw text.
+    """
     if line.lstrip().startswith(">"):
         return " " * len(line)
-    masked = CODE_SPAN.sub(lambda m: " " * len(m.group(0)), line)
-    masked = LINK_SPAN.sub(lambda m: " " * len(m.group(0)), masked)
-    masked = CITE_SPAN.sub(lambda m: " " * len(m.group(0)), masked)
-    return masked
+    masked = CODE_SPAN.sub(blank, line)
+    masked = LINK_URL.sub(blank, masked)
+    return ANY_BRACKET.sub(
+        lambda m: blank(m) if is_citation_span(m.group(0)[1:-1].strip()) else m.group(0),
+        masked)
 
 
 def parse_citations(line, line_no, report):
@@ -200,11 +236,7 @@ def parse_citations(line, line_no, report):
         if not inner:
             report.add("C-CITE", line_no, "empty citation span `[]`")
             continue
-        for raw in re.split(r"[,;]|\s{2,}|\s(?=[#]|commit\s|task\s|backlog:|journal\s|state\s)",
-                            inner):
-            tok = raw.strip()
-            if not tok:
-                continue
+        for tok in citation_tokens(inner):
             m = CITATION_TOKEN.match(tok)
             if not m:
                 report.add("C-CITE", line_no,
@@ -288,7 +320,8 @@ def citation_groups(text):
         spans.append((m.start(), m.end(), m.group(0)))
     groups = []
     for start, end, raw in spans:
-        if groups and re.fullmatch(r"[\s,;:.]*", text[groups[-1][1]:start]):
+        if groups and re.fullmatch(r"[\s,;:.]*(?:and|plus|&)?[\s,;:.]*",
+                                   text[groups[-1][1]:start], re.I):
             groups[-1] = (groups[-1][0], end, groups[-1][2] + [raw])
         else:
             groups.append((start, end, [raw]))
@@ -326,52 +359,72 @@ def find_phrases(masked):
 def assign(phrases, groups, resolved_by_group):
     """Bind each receipt phrase to the citation group it governs.
 
-    A single left-to-right walk, and the ordering rule is the whole of
-    it: phrases accumulate until a group arrives and then bind to it, so
-    "merged, checks green, findings dispositioned [#63 #65]" binds three
-    phrases to one group. A group that arrives with nothing pending is
-    an orphan, and a phrase immediately following an orphan binds
-    backwards to it — that is "[#102], checks green", and it is also
-    "[#13] merged, and [#12] merged over a red gate", which under the
-    earlier rule ("always bind forwards") had its first phrase bind to
-    #12 and let an open pull request be reported as merged. That was the
-    review finding this walk exists for.
+    A single left-to-right walk, kind-aware at every step. Phrases
+    accumulate until a group arrives that cites an artifact of their
+    kind, so "sit in the queue [task 0058] though their PRs merged
+    [#100 #101]" sends the brief phrase to the briefs and the merge
+    phrase to the pull requests. A group arriving with nothing pending
+    for it is an orphan, and a phrase that follows an orphan of its kind
+    binds backwards to it — that is "[#102], checks green", and it is
+    also "[#13] merged, and [#12] merged over a red gate", which under a
+    forwards-only rule reported an open pull request as merged.
 
-    A phrase whose bound group cites nothing of the phrase's kind is
-    treated as prose and dropped. Receipt words are ordinary English —
-    "a queue holding merged briefs", "backlog entries filed via merged
-    PRs" — and reading every occurrence as a claim rejected honest
+    Returns the bindings and the groups nothing ever governed. The
+    caller refuses the latter: a line that makes receipt claims and
+    cites a pull request under none of them is how the same evasion
+    keeps coming back in a new position, most recently as a trailing
+    "[#11], and [#13]" where every phrase bound to #11.
+
+    A phrase that finds no group of its kind anywhere is dropped as
+    prose. Receipt words are ordinary English — "a queue holding merged
+    briefs" — and reading every occurrence as a claim rejected honest
     handovers while catching nothing. What keeps that gap small is
-    C-GROUND: a *wrong* claim carries a citation to the artifact it is
-    wrong about, so it does bind. What escapes is a receipt asserted
-    about a kind of artifact the item never cites, which is unevidenced
-    prose. Named rather than hidden: this is one control among several.
+    C-GROUND: a *wrong* claim cites the artifact it is wrong about, so
+    it binds. What escapes is a receipt about a kind of artifact the
+    item never cites, which is unevidenced prose. Named, not hidden.
     """
+    def cites(group, kind):
+        return bool(resolved_by_group[group[:2]][kind])
+
     tokens = ([("phrase", p[0], p) for p in phrases]
               + [("group", g[0], g) for g in groups])
     tokens.sort(key=lambda t: t[1])
+
     bindings = []
     pending = []
-    last_group = None
-    last_group_used = True
-    for kind, _, item in tokens:
-        if kind == "group":
-            if pending:
-                bindings.extend((p, item) for p in pending)
-                pending = []
-                last_group_used = True
-            else:
-                last_group_used = False
-            last_group = item
-        elif last_group is not None and not last_group_used:
-            bindings.append((item, last_group))
-            last_group_used = True
+    orphans = []
+    governed = set()
+    for token_kind, _, item in tokens:
+        if token_kind == "group":
+            still, bound = [], False
+            for phrase in pending:
+                if cites(item, phrase[2]):
+                    bindings.append((phrase, item))
+                    governed.add(item[:2])
+                    bound = True
+                else:
+                    still.append(phrase)
+            pending = still
+            if not bound:
+                orphans.append(item)
         else:
-            pending.append(item)
-    if pending and last_group is not None:
-        bindings.extend((p, last_group) for p in pending)
-    return [(phrase, group) for phrase, group in bindings
-            if resolved_by_group[group[:2]][phrase[2]]]
+            hit = next((g for g in reversed(orphans) if cites(g, item[2])), None)
+            if hit is not None:
+                bindings.append((item, hit))
+                governed.add(hit[:2])
+                orphans.remove(hit)
+            else:
+                pending.append(item)
+    for phrase in pending:
+        hit = next((g for g in reversed(groups) if cites(g, phrase[2])), None)
+        if hit is not None:
+            bindings.append((phrase, hit))
+            governed.add(hit[:2])
+
+    ungoverned = [g for g in groups
+                  if g[:2] not in governed
+                  and any(resolved_by_group[g[:2]][k] for k in ("pr", "task", "backlog"))]
+    return bindings, ungoverned
 
 
 def check_receipts(text, code_masked, line_no, ledger, report):
@@ -387,8 +440,13 @@ def check_receipts(text, code_masked, line_no, ledger, report):
             cites.extend(parse_citations(raw, line_no, Report()))
         resolved_by_group[g[:2]] = resolve(cites, ledger, line_no, Report())
 
-    for (start, end, kind, phrase, predicate, complaint), group in assign(
-            phrases, groups, resolved_by_group):
+    bindings, ungoverned = assign(phrases, groups, resolved_by_group)
+    for group in ungoverned:
+        report.add("C-STATE", line_no,
+                   "this line makes receipt claims, but %s is cited under none of "
+                   "them — say what is claimed about it, or cite it on a line that "
+                   "claims nothing" % " ".join(group[2]))
+    for (start, end, kind, phrase, predicate, complaint), group in bindings:
         for subject in resolved_by_group[group[:2]][kind]:
             if predicate(subject):
                 continue
@@ -433,19 +491,6 @@ def logical_items(lines, start, end):
     return [(n, " ".join(l.strip() for l in ls)) for n, ls in items]
 
 
-def body_lines(lines):
-    """Line indices outside fenced code blocks."""
-    out = []
-    fenced = False
-    for i, line in enumerate(lines):
-        if line.startswith("```"):
-            fenced = not fenced
-            continue
-        if not fenced:
-            out.append(i)
-    return out
-
-
 def split_sections(lines, report):
     """Map heading -> (start, end) line indices; report structural faults."""
     seen = []
@@ -484,17 +529,38 @@ def main(argv=None):
 
     # --- C-STRUCT ---------------------------------------------------------
     title = next((l for l in lines if l.startswith("# ")), "")
-    for bound in (ledger["window"]["since"], ledger["window"]["until"]):
+    since = ledger["window"]["since"]
+    # The ledger's `until` is exclusive. Requiring it verbatim in the
+    # title enforced an overstatement: a window ending 2026-09-06
+    # exclusive covers through the 5th, and the title said "to
+    # 2026-09-06" — a day the report says nothing about. The last day it
+    # actually covers is what the reader needs.
+    last = (datetime.date.fromisoformat(ledger["window"]["until"])
+            - datetime.timedelta(days=1)).isoformat()
+    for bound in (since, last):
         if bound not in title:
             report.add("C-STRUCT", 1,
-                       "the title does not state the window bound %s" % bound)
+                       "the title does not state the window bound %s (the window is "
+                       "%s through %s inclusive)" % (bound, since, last))
+    if ledger["window"]["until"] in title and ledger["window"]["until"] != last:
+        report.add("C-STRUCT", 1,
+                   "the title states %s, the window's exclusive upper bound — a day "
+                   "the handover covers nothing of. Say %s."
+                   % (ledger["window"]["until"], last))
     bounds = split_sections(lines, report)
 
     # --- the claim lint, per physical line --------------------------------
-    keep = set(body_lines(lines))
+    # No exemption for fenced blocks. They were skipped by both this
+    # lint and the grounding scan, and a fence *renders* — unlike an HTML
+    # comment, whose exemption is justified by being invisible. A
+    # handover has no use for one, so a fence is a structural error and
+    # its contents are checked like any other prose.
     for i, line in enumerate(lines, 1):
-        if i - 1 not in keep:
-            continue
+        if line.startswith("```"):
+            report.add("C-STRUCT", i,
+                       "a fenced block in a handover: the format has no use for one, "
+                       "and a fence that exempted its contents from these checks "
+                       "would render to the reader unchecked")
         for m in BANNED_RE.finditer(mask(line)):
             report.add("C-CLAIM", i,
                        "completion-assertion vocabulary %r — the handover reports "
@@ -519,7 +585,7 @@ def main(argv=None):
     cited_prs = set()
     for i, text in logical_items(lines, 0, len(lines)):
         first = i - 1
-        if first not in keep or first == title_line:
+        if first == title_line:
             continue
         if HTML_COMMENT_ONLY.match(text):
             # Invisible in the rendered document, so it is not a claim

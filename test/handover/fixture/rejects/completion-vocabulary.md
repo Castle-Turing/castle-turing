@@ -1,5 +1,5 @@
 <!-- expect: C-CLAIM — the confident-closure register the brief bans outright -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 

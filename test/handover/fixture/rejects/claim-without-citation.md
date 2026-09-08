@@ -1,5 +1,5 @@
 <!-- expect: C-GROUND — a claim carrying neither a citation nor an [unverified] marker -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 

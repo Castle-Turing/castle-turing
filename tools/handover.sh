@@ -61,9 +61,13 @@
 #                    machine carries journal record ids, which are private
 #                    layer and may never be committed here (CLAUDE.md's
 #                    first hard rule).
-#   --keep           keep a rejected draft's directory and say where it is.
-#                    On by default for failures; this also keeps it on
-#                    success.
+#   --keep           keep the scratch directory on success too. A rejected
+#                    draft is always kept, so you can read what it got
+#                    wrong; a passing one is removed unless you ask for
+#                    it, because that directory holds the ledger and a
+#                    ledger built on a real machine carries journal
+#                    record ids. A directory you passed with --out is
+#                    yours and is never removed.
 #   --model NAME     passed to `claude --model`.
 #
 # CADENCE AND CHANNEL ARE NOT DECIDED HERE. On demand only, on purpose —
@@ -147,10 +151,23 @@ if [ -z "$LEDGER" ]; then
   fi
 fi
 
+OURS=0
 if [ -z "$OUT_DIR" ]; then
   OUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/castle-handover.XXXXXX")"
+  OURS=1
 fi
 mkdir -p "$OUT_DIR"
+
+# An agent that creates an artifact owns its lifecycle. Every run used to
+# leave a castle-handover.XXXXXX directory behind holding the prompt and
+# the ledger — and on a real machine that ledger carries journal record
+# ids, which are private layer. A directory passed with --out belongs to
+# the caller and is never touched.
+cleanup() {
+  if [ "$OURS" -eq 1 ] && [ "$KEEP" -eq 0 ]; then
+    rm -rf "$OUT_DIR"
+  fi
+}
 
 # --- the ledger --------------------------------------------------------
 
@@ -185,11 +202,13 @@ claude "${CLAUDE_ARGS[@]}" <"$PROMPT_FILE" >"$DRAFT" 2>"$TRANSCRIPT" || AGENT_EX
 if [ "$AGENT_EXIT" -ne 0 ]; then
   echo "handover: the agent turn exited $AGENT_EXIT. Nothing was generated. Its stderr:" >&2
   cat "$TRANSCRIPT" >&2
+  echo "handover: kept for diagnosis: $OUT_DIR" >&2
   exit 1
 fi
 
 if [ ! -s "$DRAFT" ]; then
   echo "handover: the agent turn exited 0 and wrote nothing. Treating that as a failure rather than reporting an empty handover — an empty report is indistinguishable from a quiet week and this surface may not be ambiguous about that." >&2
+  echo "handover: kept for diagnosis: $OUT_DIR" >&2
   exit 1
 fi
 
@@ -224,11 +243,11 @@ fi
 
 echo "" >&2
 cat "$DRAFT"
+echo "" >&2
 
-if [ "$KEEP" -eq 1 ]; then
-  echo "" >&2
-  echo "handover: kept at $DRAFT (ledger: $LEDGER)." >&2
+if [ "$OURS" -eq 1 ] && [ "$KEEP" -eq 0 ]; then
+  cleanup
+  echo "handover: scratch directory removed. Pass --keep to hold on to the ledger and the draft." >&2
 else
-  echo "" >&2
-  echo "handover: draft at $DRAFT, ledger at $LEDGER." >&2
+  echo "handover: kept at $DRAFT (ledger: $LEDGER)." >&2
 fi

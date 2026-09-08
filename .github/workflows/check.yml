@@ -118,8 +118,8 @@ jobs:
       # The operator handover's claim-checker
       # (docs/tasks/0062-the-operator-handover.md): the golden handover
       # for the real week of 2026-09-01..05 against its frozen ledger,
-      # and twelve reject fixtures each asserting the violation code it
-      # exists to provoke — a merged-PR line whose PR is open, a
+      # and reject fixtures each asserting the violation code they
+      # exist to provoke — a merged-PR line whose PR is open, a
       # green-checks line whose checks failed, a journal id that
       # resolves to nothing, completion vocabulary anywhere. In this job
       # for record-order.sh's reason and more so: `handover-check.py` is

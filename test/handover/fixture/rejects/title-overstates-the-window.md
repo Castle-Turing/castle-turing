@@ -1,10 +1,10 @@
-<!-- expect: C-CITE — a state clause key that does not exist -->
-# Handover — 2026-03-01 to 2026-03-07
+<!-- expect: C-STRUCT — a title naming the window's exclusive upper bound, a day it covers nothing of -->
+# Handover — 2026-03-01 to 2026-03-08
 
 ## Intent
 
 The example milestone teaches the checker its own rules [state ex-intent], and its criterion
-is that every reject fixture beside this one is refused for the reason it names [state ex-nonexistent].
+is that every reject fixture beside this one is refused for the reason it names [state ex-done].
 
 ## Threats and drift
 

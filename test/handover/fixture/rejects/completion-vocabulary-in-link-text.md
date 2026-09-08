@@ -1,10 +1,10 @@
-<!-- expect: C-CITE — a state clause key that does not exist -->
+<!-- expect: C-CLAIM — the banned register hidden in markdown link text, which renders in full -->
 # Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 
 The example milestone teaches the checker its own rules [state ex-intent], and its criterion
-is that every reject fixture beside this one is refused for the reason it names [state ex-nonexistent].
+is that every reject fixture beside this one is refused for the reason it names [state ex-done].
 
 ## Threats and drift
 
@@ -17,7 +17,7 @@ is that every reject fixture beside this one is refused for the reason it names 
 
 - An example change merged, checks green, findings dispositioned [#11] [commit aaaaaaa],
   recorded at [journal 20260302T090000Z-example-a1b2c3].
-- A second change merged over a red gate [#12].
+- A second change [is complete and was delivered successfully](https://example.invalid/x) [#12].
 - An earlier brief was swept to the archive [task 0002].
 
 ## Unverified

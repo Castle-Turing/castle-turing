@@ -32,10 +32,12 @@ and claims nothing you do not.
 ## The shape
 
 Exactly these six sections, at `##`, spelled and ordered exactly like
-this, under an `# Handover — <since> to <until>` title carrying both
-window bounds from the ledger verbatim.
+this, under a title naming the window. The ledger's `until` is
+**exclusive**, so the title states the last day the window actually
+covers — one day before it. A window of `since 2026-09-01, until
+2026-09-08` is titled "2026-09-01 to 2026-09-07".
 
-    # Handover — <since> to <until>
+    # Handover — <since> to <last day covered>
 
     ## Intent
     ## Threats and drift
@@ -139,5 +141,6 @@ speed and does not reliably raise their error detection. In the largest
 study it lowered it. When you have more to say than fits, cite it and
 stop; do not append.
 
-Output the markdown handover and nothing else — no preamble, no code
-fence around the whole document, no closing remark about what you did.
+Output the markdown handover and nothing else — no preamble, no closing
+remark about what you did, and no fenced code block anywhere, around the
+document or inside it. A fence is a structural error here.

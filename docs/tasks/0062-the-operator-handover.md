@@ -284,8 +284,8 @@ one.
 
 **The golden test runs the checking half only.** CI has no `gh`, no
 network and no model, so `test/handover/run.sh` checks the frozen
-golden handover against its frozen ledger and asserts that twelve
-reject fixtures are each refused with the violation code they name. The
+golden handover against its frozen ledger and asserts that every
+reject fixture is refused with the violation code it names. The
 generating half ran once, by hand, against the live forge; its output
 is `test/handover/fixture/handover.md`. The falsifier this brief names
 — the resident reading that file cold and finding a claim the checker
@@ -342,3 +342,54 @@ one gap in the output itself the review named: the seven merges whose
 checks were skipped rather than run are now reported as such, where
 before they were invisible in a section that asks what merged without
 the checks the ritual expects.
+
+### A second review pass, and the shape the same defect kept taking
+
+The fixes above changed the binding rule the first pass had faulted, so
+the branch was reviewed again. Seven more findings, three of them fresh
+evasions of the blocking check — and two of those were the *same* defect
+in a new position, which is the useful thing this round taught.
+
+- **A trailing citation escaped every phrase.** `Work merged, checks
+  green: [#11], and [#13]` passed with an open pull request reported as
+  merged: both phrases bound forwards to `#11` and `#13` was governed by
+  nothing. Two changes close the family rather than the instance.
+  Citation groups now absorb a conjunction, so `[#11], and [#13]` is one
+  group and both are checked; and a line that makes receipt claims while
+  citing a pull request under none of them is now itself a violation.
+  Say what is claimed about it, or cite it on a line that claims
+  nothing.
+- **Binding is kind-aware at every step.** Pending phrases now wait for
+  a group that cites their kind rather than binding to the first group
+  and being dropped, which is what let the previous walk mis-route "sit
+  in the queue … though their PRs merged … is filed" across three
+  groups and pass only by accident.
+- **The claim lint was blind to link text.** Whole `[text](url)` spans
+  were masked, so `[is complete and was delivered successfully](…)`
+  rendered the banned register to the reader unchecked. Only a link's
+  URL is masked now, and a bracket span is masked only if it actually
+  parses as a citation.
+- **A fenced block exempted visible prose** from both the lint and the
+  grounding scan. The exemption for HTML comments is justified by their
+  being invisible; a fence is not. A fence is now a structural error and
+  its contents are checked like any other prose.
+- **The title overstated the window by a day.** The ledger's `until` is
+  exclusive, and the checker required it verbatim — enforcing "to
+  2026-09-06" on a report covering through the 5th. It now requires the
+  last day actually covered and refuses the exclusive bound.
+- **`--keep` was a no-op and no run ever cleaned up.** Every invocation
+  left a scratch directory holding the prompt and the ledger, and on a
+  real machine that ledger carries journal record ids. A directory the
+  tool created is now removed on success unless `--keep` is passed, kept
+  on every failure, and a directory passed with `--out` is never
+  touched.
+- Three zero-byte strays, committed at the repo root by the commit whose
+  own message reported removing one.
+
+Two behaviours worth stating because they look like defects and are not.
+An unattributed blockquote is refused: quoted resident words are exempt
+from the claim lint, which is exactly why they must carry a citation
+saying whose words they are. And a receipt phrase about a kind of
+artifact the line never cites is still dropped as prose — the named gap
+above, unchanged, and the reason this is one control rather than the
+whole of one.

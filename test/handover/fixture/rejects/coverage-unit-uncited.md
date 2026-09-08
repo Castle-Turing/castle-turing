@@ -1,5 +1,5 @@
 <!-- expect: C-COVER — a pull request the ledger holds and the handover never mentions -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 

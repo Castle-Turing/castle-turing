@@ -1,5 +1,5 @@
 <!-- expect: C-STATE — a merged claim that binds forwards past the PR it sits beside -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 

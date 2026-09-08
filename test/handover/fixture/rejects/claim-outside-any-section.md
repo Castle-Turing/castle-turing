@@ -1,5 +1,5 @@
 <!-- expect: C-GROUND — an uncited claim placed before the first heading -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 Every merge this window went in clean and needs no attention.
 

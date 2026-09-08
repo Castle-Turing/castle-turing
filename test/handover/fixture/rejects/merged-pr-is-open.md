@@ -1,5 +1,5 @@
 <!-- expect: C-STATE — a merged-PR line whose PR is open -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 

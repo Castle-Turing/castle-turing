@@ -1,5 +1,5 @@
 <!-- expect: C-CITE — a pull request number that is not in the ledger at all -->
-# Handover — 2026-03-01 to 2026-03-08
+# Handover — 2026-03-01 to 2026-03-07
 
 ## Intent
 
