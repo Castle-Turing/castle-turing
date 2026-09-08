@@ -327,6 +327,77 @@ reasoning seat; that is precisely what this paragraph exists to stop a
 later agent from "completing" it into
 (`docs/tasks/0048-activation.md`).
 
+**Delivery** (a reasoning seat — the third, after worker and router,
+rather than the sixth piece of plumbing). The seat that turns a
+numbered brief into a pull request nobody has merged. It reads a
+brief from a configured checkout's `docs/tasks/` and writes three
+things: a branch and a pull request on that checkout's repository,
+and journal records — a `claim` the instant it takes a brief, for the
+observability reason a worker's claim exists rather than for mutual
+exclusion; a `result` carrying `outcome` and **which tenant and model
+implemented the brief**; and a `question` whenever it blocks on a
+judgment only the resident can supply. That last one is load-bearing:
+**a park is not a private state of the harness.** A tenant that stops
+because its brief is ambiguous has opened a question like any other
+seat — the router decides when and how it reaches a human, and the
+answer resumes the errand through the machinery task 0023 built for
+the worker, one answer producing exactly one resumption, chained by
+the `claim` that names it. A harness whose parks, retries, model
+routing and budget aborts live only in its own logs holds a seat the
+weekly audit cannot read, which is the whole reason this paragraph
+exists. The guard sentence every plumbing seat above carries — do not
+give it a policy — points the wrong way here. This seat *is*
+judgment: it sizes an implementer to the brief, judges whether a
+failing check is the task's fault or the environment's, and decides
+retries. What it needs is a ceiling on its authority rather than a
+floor under its discretion. **The delivery seat never merges, never
+approves, never closes a review finding silently, and never
+deploys.** It opens a pull request and stops; a reviewer's finding is
+answered on the record — fixed with the commit named, or declined
+with the reasoning stated — never resolved by silence, because a
+disagreement between two reviewers that the resident cannot see costs
+exactly the thing the second reviewer was for. The resident's
+judgment is spent once, at the merge: the outbox's sentence,
+unamended, holding one seat further down the same pipeline. The
+result names its implementer for that same reason — this document's
+occupancy section says the unmerged two-reviewer ensemble is the one
+place an ensemble earns its cost, "because the disagreement is the
+signal", and a change implemented and reviewed by the same vendor has
+quietly lost its second opinion while still looking like it has one.
+Which tenant and which model wrote the change is therefore recorded
+at the moment it is known, not reconstructed later from a commit
+trailer or guessed from prose style.
+
+Three things this seat's definition deliberately does not model.
+**The substrate is the tenant's business.** Inside the seat the
+harness is free, exactly as inside the worker's: the current tenant
+runs more than one coding harness behind an adapter interface of its
+own, and none of that appears here or may be written into a seat
+contract. A resident changes which harness implements their briefs,
+which models it routes to, and whose subscription pays for them, by
+configuration — never by amending this architecture. That is
+Principle 01 applied to the seat that builds this project: the
+contract above is public mechanism, and the harness behind it is
+private configuration. **The record shim is the integrator's.** The
+tenant never learns this project's record format; it emits its own
+events, and a castle-side translator turns them into the records
+above. The dependency runs downward on purpose — a harness that
+depends on nothing above it stays usable by anyone, and whoever
+integrates it pays for the integration — so this document fixes the
+records and leaves the translator as tooling that does not yet exist
+(`docs/backlog/the-delivery-seat-has-no-record-shim.md`). **And the
+arrow into this seat is still unnamed:** a filed backlog entry
+becomes a numbered brief today by the resident's hand or an ad-hoc
+session's, and naming that seat is its own work rather than a side
+effect of this one
+(`docs/backlog/the-speccing-step-is-an-unnamed-seat.md`). The name,
+last: `seat: delivery` is a new value in an existing category — a
+reasoning seat, as worker and router already are — and deliberately
+not `builder`, which belongs to the seat that compiles, because a
+seat is what reads and writes and "which seat compiled something"
+must not have the same answer as "which seat opened a pull request in
+my name".
+
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers
 "right now" and forgets; an observation becomes durable only by being
@@ -453,6 +524,22 @@ as its own document:
   `docs/backlog/authority-taxonomy-prior-art.md`. What is settled now:
   it is off unless a resident turns it on in their own private layer,
   and every turn it starts leaves a claim record and a result behind.
+- The delivery seat (task 0069) is a **standing authority** too, and
+  the first one in this architecture that reaches a *remote*: pushing
+  a branch and opening a pull request on the repository of a checkout
+  it is configured with. It leaves the push bullet above unamended —
+  that one is about the repository holding `state/`, whose commits
+  stay local-only until the credential question it names is answered,
+  and configuring a delivery tenant grants no reach into it. Which
+  taxonomy category this grant belongs in is deferred to the
+  authority-taxonomy task exactly as the bullets above defer theirs.
+  What is settled now: the seat is off unless a resident configures
+  it; what it produces is a pull request nobody has merged, so
+  nothing it does changes a running system and nothing it does needs
+  a per-change authorization, for the reason the outbox's paragraph
+  gives; and every branch it pushes traces to a `claim` record naming
+  the brief it took, so "what pushed this, and on whose brief" is
+  answerable from the journal rather than from a remote's reflog.
 
 ## Seat occupancy
 
