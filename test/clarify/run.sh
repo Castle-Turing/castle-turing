@@ -57,6 +57,9 @@ expect_pass() {
 # expect_catch <what> <rule> -- <command...>
 # The command must exit non-zero AND the output must name the rule, so a
 # mutation caught by the wrong check is a failure rather than a pass.
+# The brackets are load-bearing: an unanchored substring match makes
+# `rule-1` match a `rule-10` finding and `form` match "malformed", which
+# would defeat the entire point of asserting on the rule at all.
 expect_catch() {
     local what="$1" rule="$2"
     shift 3 # what, rule, --
@@ -65,11 +68,29 @@ expect_catch() {
         echo "$OUT" >&2
         fail "$what: expected a non-zero exit, got 0 — the defect was not caught"
     fi
-    if ! grep -qF "$rule" <<<"$OUT"; then
+    if ! grep -qF "[$rule]" <<<"$OUT"; then
         echo "$OUT" >&2
         fail "$what: caught, but not by [$rule]"
     fi
     echo "  ok   $what (caught by $rule)"
+}
+
+# expect_die <what> <substring> -- <command...>
+# For the loader's own refusals, which are SystemExit messages rather
+# than findings and so carry no rule bracket.
+expect_die() {
+    local what="$1" needle="$2"
+    shift 3 # what, needle, --
+    run "$@"
+    if [ "$STATUS" -eq 0 ]; then
+        echo "$OUT" >&2
+        fail "$what: expected a non-zero exit, got 0"
+    fi
+    if ! grep -qF "$needle" <<<"$OUT"; then
+        echo "$OUT" >&2
+        fail "$what: refused, but not for '$needle'"
+    fi
+    echo "  ok   $what (refused: $needle)"
 }
 
 # Lay down a fresh copy of the worked example and apply one mutation to
@@ -306,6 +327,59 @@ sed -i 's/^answers: Q1$/answers: Q1, Q2/' "$DIR/transcript.md"
 expect_catch "an utterance answering two questions at once" form -- \
     "$CLARIFY" check "$DIR/requirements.md"
 
+# Form — prose opening a sentence with a reserved field name. `Level:`
+# and `Traces:` are read as fields wherever they appear, so a second one
+# overwrites the first and vanishes out of the prose, leaving a clause
+# whose declared level is not the level anyone wrote — with rule 5
+# computed from it.
+DIR="$(mutate form-reserved-in-prose)"
+python3 - "$DIR/requirements.md" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace(
+    "on the real hardware. A size derived by arithmetic",
+    "on the real hardware.\nLevel: constraint work is out of scope here.\n"
+    "A size derived by arithmetic",
+)
+open(path, "w", encoding="utf-8").write(text)
+PY
+expect_catch "prose opening with a reserved field name" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
+# Rule 5 — the goal-deferral ban is on the level, not on the number.
+# Certainty is written by the phase about itself and is explicitly not
+# checked for honesty, so a ban that only applied below the nocuity
+# threshold could be lifted by writing a high certainty.
+DIR="$(mutate rule5-deferred-goal-high-certainty)"
+python3 - "$DIR/requirements.md" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace("Level: constraint", "Level: goal")
+text = text.replace("certainty=0.50 state=deferred", "certainty=0.99 state=deferred")
+open(path, "w", encoding="utf-8").write(text)
+PY
+expect_catch "a goal-level ambiguity deferred behind a high certainty" rule-5 -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
+# Form — a nocuity threshold in range syntactically but empty in effect.
+# `Nocuity-threshold: 0` makes nothing nocuous and rule 1 vacuous, so
+# the range check lives beside the presence check and outside --only.
+DIR="$(mutate form-threshold-zero)"
+sed -i 's/^Nocuity-threshold: 0.7$/Nocuity-threshold: 0/' "$DIR/requirements.md"
+expect_catch "a nocuity threshold of zero" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+expect_catch "...and still under --only questions" form -- \
+    "$CLARIFY" check --only questions "$DIR/requirements.md"
+
+# Rule 4 — an alpha large enough to make the stop arithmetic vacuous.
+DIR="$(mutate rule4-alpha-out-of-range)"
+sed -i 's/^Stop-alpha: 0.25$/Stop-alpha: 100/' "$DIR/requirements.md"
+sed -i 's/^alpha: 0.25$/alpha: 100/' "$DIR/transcript.md"
+expect_catch "an alpha that makes every stop satisfy itself" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
 echo
 echo "== the salt discipline =="
 
@@ -392,7 +466,7 @@ BADPROBE="$WORKDIR/badprobe"
 mkdir -p "$BADPROBE"
 cp "$PROBE/source.md" "$BADPROBE/"
 sed '/^Floor-coverage: /d' "$PROBE/seed.md" >"$BADPROBE/seed.md"
-expect_catch "a probe with no pre-registered floor" Floor-coverage -- \
+expect_die "a probe with no pre-registered floor" Floor-coverage -- \
     "$CLARIFY" probe build "$BADPROBE" --out "$WORKDIR/badprobe-run"
 
 # A seed whose span is not in the source is a broken seed, not a silent
@@ -402,7 +476,7 @@ mkdir -p "$BADSEED"
 cp "$PROBE/seed.md" "$BADSEED/"
 sed 's/^Done means I have looked/Done means somebody looked/' "$PROBE/source.md" \
     >"$BADSEED/source.md"
-expect_catch "a seed whose span is not in the source" "occurs 0 times" -- \
+expect_die "a seed whose span is not in the source" "occurs 0 times" -- \
     "$CLARIFY" probe build "$BADSEED" --out "$WORKDIR/badseed-run"
 
 # The ground truth must not be rewritable by the seed record's own prose.
@@ -441,7 +515,7 @@ extra = "\n```delete\nThe mouse cursor is too small to find on this laptop's pan
 head, sep, tail = text.partition("## seed S2")
 open(sys.argv[2], "w", encoding="utf-8").write(head + extra + sep + tail)
 PY
-expect_catch "a seed with two delete fences" "more than one" -- \
+expect_die "a seed with two delete fences" "more than one" -- \
     "$CLARIFY" probe build "$TWOFENCE" --out "$WORKDIR/twofence-run"
 
 echo

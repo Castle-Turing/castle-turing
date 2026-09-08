@@ -301,6 +301,7 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
     prose: list[str] = []
     in_preamble = True
     seen_prose = False
+    seen_fields: set[str] = set()
 
     def close() -> None:
         nonlocal current, prose
@@ -317,6 +318,7 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
         if clause_header:
             close()
             seen_prose = False
+            seen_fields = set()
             current = Clause(
                 key=clause_header.group("key"),
                 title=clause_header.group("title"),
@@ -360,6 +362,22 @@ def parse_requirements(path: pathlib.Path) -> tuple[RequirementsDoc, Report]:
         if field and field.group("key") in CLAUSE_FIELD_NAMES:
             key = field.group("key")
             value = field.group("value").strip()
+            # `Level` and `Traces` are reserved: a line beginning with
+            # either is always read as that field, wherever it sits in the
+            # clause, so prose must not open a sentence with one. A second
+            # occurrence would silently overwrite the first and disappear
+            # out of the prose — a clause whose declared level is not the
+            # level anyone wrote, with rule 5 computed from it.
+            if key in ("Level", "Traces"):
+                if key in seen_fields:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number} [{current.key}]",
+                        f"a second {key}: line in one clause; the name is "
+                        "reserved and a line starting with it is always read "
+                        "as the field, so this overwrote the first silently",
+                    )
+                seen_fields.add(key)
             if key == "Level":
                 current.level = value
             elif key == "Traces":
@@ -448,17 +466,28 @@ def check_knobs(doc: RequirementsDoc, report: Report) -> None:
                 "per-document-class, and a document that does not state them "
                 "was checked against nothing",
             )
-    _float(doc.header.get("Nocuity-threshold"), report, where, "Nocuity-threshold")
-    _float(doc.header.get("Stop-alpha"), report, where, "Stop-alpha")
-    _int(doc.header.get("Question-budget"), report, where, "Question-budget")
+    # The ranges belong here rather than in check_form for the same
+    # reason the presence checks do: a knob outside its range does not
+    # weaken the rule computed from it, it empties the rule out.
+    # `Nocuity-threshold: 0` makes nothing nocuous and rule 1 vacuous;
+    # `Stop-alpha: 100` makes every stop satisfy its own arithmetic.
+    # Neither is a rule this tool may leave to whether `--only` was
+    # passed.
+    threshold = _float(
+        doc.header.get("Nocuity-threshold"), report, where, "Nocuity-threshold"
+    )
+    alpha = _float(doc.header.get("Stop-alpha"), report, where, "Stop-alpha")
+    budget = _int(doc.header.get("Question-budget"), report, where, "Question-budget")
+    if threshold is not None and not 0.0 < threshold <= 1.0:
+        report.fail("form", where, "Nocuity-threshold must be in (0, 1]")
+    if alpha is not None and not 0.0 < alpha <= 1.0:
+        report.fail("form", where, "Stop-alpha must be in (0, 1]")
+    if budget is not None and budget < 0:
+        report.fail("form", where, "Question-budget must not be negative")
 
 
 def check_form(doc: RequirementsDoc, report: Report) -> None:
     where = doc.path.name
-
-    threshold = _float(doc.header.get("Nocuity-threshold"), None, where, "")
-    if threshold is not None and not 0.0 < threshold <= 1.0:
-        report.fail("form", where, "Nocuity-threshold must be in (0, 1]")
 
     if not doc.clauses:
         report.fail("form", where, "the document carries no clauses")
@@ -674,6 +703,23 @@ def check_questions(
             last_priority = priority
             last_id = question.id
 
+    # -- Rule 5: no goal-level ambiguity is ever deferred. Checked
+    #    unconditionally, outside the nocuity filter and without needing
+    #    the threshold: certainty is a number the phase writes about
+    #    itself and is explicitly not checked for honesty, so a ban that
+    #    only applied below the threshold could be lifted by writing a
+    #    high number. The ban is on the level, not on the number.
+    for clause in doc.clauses:
+        for ambiguity in clause.ambiguities:
+            if ambiguity.state == "deferred" and clause.level == "goal":
+                report.fail(
+                    "rule-5",
+                    f"{where}:{ambiguity.line} [{clause.key}]",
+                    "a goal-level ambiguity may not be deferred — goal "
+                    "clarification is the one kind whose value collapses if it "
+                    "is not asked early, whatever certainty is claimed for it",
+                )
+
     # -- Rule 1: ask, or explicitly pass, on every nocuous ambiguity.
     if threshold is not None:
         asked: set[tuple[str, str]] = {
@@ -683,27 +729,16 @@ def check_questions(
         }
         for clause in doc.clauses:
             for ambiguity in clause.ambiguities:
-                if ambiguity.state == "cleared":
+                if ambiguity.state in ("cleared", "deferred"):
                     continue
                 if ambiguity.certainty > threshold:
                     # Innocuous at this document's tolerance: no
                     # interpretation is seriously contested.
                     continue
-                at = f"{where}:{ambiguity.line} [{clause.key}]"
-                if ambiguity.state == "deferred":
-                    if clause.level == "goal":
-                        report.fail(
-                            "rule-5",
-                            at,
-                            "a goal-level ambiguity may not be deferred — "
-                            "goal clarification is the one kind whose value "
-                            "collapses if it is not asked early",
-                        )
-                    continue
                 if (clause.key, ambiguity.category) not in asked:
                     report.fail(
                         "rule-1",
-                        at,
+                        f"{where}:{ambiguity.line} [{clause.key}]",
                         f"nocuous ({ambiguity.certainty} <= tau {threshold}) and "
                         "neither asked about nor explicitly deferred; asking is "
                         "structural here, not left to whether the model felt "
@@ -917,8 +952,20 @@ def check_stop(doc: RequirementsDoc, blocks: list[Block], report: Report) -> Non
             f"{declared_alpha} — the threshold is declared before the phase "
             "runs, not chosen after seeing where it landed",
         )
+    # All three terms are weights on one scale, and the rule is only
+    # meaningful while they stay on it: an unbounded best-remaining or
+    # alpha satisfies `best < alpha * leading` for any stop at all.
     if leading is not None and not 0.0 < leading <= 1.0:
         report.fail("rule-4", at, "leading-weight must be in (0, 1]")
+    if alpha is not None and not 0.0 < alpha <= 1.0:
+        report.fail("rule-4", at, "alpha must be in (0, 1]")
+    if best is not None and best > 1.0:
+        report.fail(
+            "rule-4",
+            at,
+            "best-remaining must be at most 1: it is a weight on the same "
+            "scale as leading-weight, not a free number",
+        )
 
     if reason == "below-threshold":
         if best is None or leading is None or alpha is None:

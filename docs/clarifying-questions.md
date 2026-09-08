@@ -119,6 +119,12 @@ assertion and picks up a `[stated]` further down is the system's reading
 wearing the resident's words, which is the thing the mark exists to
 stop.
 
+`Level:`, `Traces:` and `Ambiguity:` are reserved names: a line
+beginning with one is read as that field wherever it sits in the clause,
+so prose must not open a sentence with one. A second `Level:` or
+`Traces:` in a clause is refused rather than allowed to overwrite the
+first and disappear out of the prose.
+
     ### The surface the cursor is drawn on [cursor-surface]
 
     Level: goal
@@ -167,8 +173,15 @@ The document header declares its own knobs before the phase runs:
 These are the phase's private configuration in Principle 01's sense: the
 mechanism is public and identical everywhere, and a deployment that
 wants a stricter threshold for authority-touching work sets a different
-number without touching any of it. A document that declares none of them
-was checked against nothing, so the checker refuses it.
+number without touching any of it.
+
+Both the presence of these three and their ranges are checked before
+anything else and cannot be narrowed away with `--only`. The reason is
+that a knob out of range does not *weaken* the rule computed from it, it
+empties the rule out: `Nocuity-threshold: 0` makes nothing nocuous and
+rule 1 vacuous, and a `Stop-alpha` above 1 makes every stop satisfy its
+own arithmetic. A check that can be switched off by editing a header is
+worse than no check, because the run still prints a zero.
 
 ## The seven rules
 
@@ -218,7 +231,11 @@ self-consistency; a human reads whether the reasoning is any good.
 **5. Goal-level ambiguities first.** Constraint-level ones may be
 deferred into the document's tags. *Checked:* a question about a
 lower-level clause may not precede one about a higher-level clause, and
-a goal-level ambiguity may never be `deferred`. *Not checked:* whether
+a goal-level ambiguity may never be `deferred` — the ban is on the
+level, not on the certainty, so it holds however confident the phase
+claims to be. That distinction matters because certainty is a number the
+phase writes about itself, and a ban that applied only below the
+threshold could be lifted by writing a high one. *Not checked:* whether
 a clause's declared level is the right level.
 
 **6. The two errors are not the same size, and both are bounded.**
