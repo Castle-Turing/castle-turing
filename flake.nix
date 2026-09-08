@@ -963,6 +963,11 @@
                     && !(switchUnit ? wantedBy && switchUnit.wantedBy != [ ])
                     && rollbackUnit != null
                     && lib.hasInfix "nixos-rebuild switch --rollback" rollbackUnit.serviceConfig.ExecStart
+                    # --no-reexec: a rollback that re-execs into a build
+                    # from /etc/nixos fails outright with no
+                    # /etc/nixos/flake.nix on a flake-only host, before
+                    # it ever reaches the rollback (docs/tasks/0066).
+                    && lib.hasInfix "--no-reexec" rollbackUnit.serviceConfig.ExecStart
                     && !(rollbackUnit ? wantedBy && rollbackUnit.wantedBy != [ ])
                     && windowTimer != null
                     && windowTimer.timerConfig.OnActiveSec == "900s"
@@ -976,7 +981,7 @@
                     says they are. Expected castle-activate.service running
                     `nixos-rebuild switch --flake <repo>#<host>` and arming the
                     window timer, castle-rollback.service running
-                    `nixos-rebuild switch --rollback`, a window timer firing
+                    `nixos-rebuild switch --rollback --no-reexec`, a window timer firing
                     once after castle.agent.activation.windowSeconds, and none
                     of the three wanted by any target
                     (docs/tasks/0048-activation.md §H, §I).
