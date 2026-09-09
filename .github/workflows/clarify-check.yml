@@ -1,0 +1,46 @@
+name: clarify-check
+
+# The clarifying-questions phase's checks, checked (task 0065).
+#
+# Its own workflow rather than a job in check.yml, for one reason:
+# check.yml carries `paths-ignore: docs/**` on purpose
+# (docs/tasks/done/0018-docs-only-ci-skip.md — a prose-only PR should not
+# pay for a four-minute flake evaluation). But a requirements document
+# under docs/state/ IS prose by that filter's reckoning, and it is
+# exactly the artifact this check exists to validate. Folding this in as
+# a job there would mean the one gate on those documents never fires on
+# the PRs that change them.
+#
+# So this is an allowlist workflow, the same shape vm-install-test.yml
+# uses, naming the paths that can affect the result. Paths are duplicated
+# between the two triggers rather than shared via a YAML anchor: GitHub
+# Actions does not expand anchors in workflow files.
+on:
+  pull_request:
+    paths:
+      - "tools/clarify/**"
+      - "test/clarify/**"
+      - "docs/state/**"
+      - ".github/workflows/clarify-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/clarify/**"
+      - "test/clarify/**"
+      - "docs/state/**"
+      - ".github/workflows/clarify-check.yml"
+  # Same escape hatch every other workflow here carries: a branch that
+  # isn't on a PR yet can still get a real run via `gh workflow run`.
+  workflow_dispatch: {}
+
+jobs:
+  clarify-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nix, deliberately, for the same reason agent-loop-test gives:
+      # tools/clarify/clarify is a single stdlib Python script and
+      # test/clarify/run.sh is plain bash, so the stock runner's own
+      # toolchain is the whole dependency list.
+      - run: test/clarify/run.sh

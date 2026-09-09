@@ -70,10 +70,17 @@ it explicitly.
   claim-checker land with task 0062's PR, on demand only. [inferred]
   the report's name, its cadence and its channel stay open — that
   brief reserves all three to the resident.
-- Clarifying-questions intake: research complete
-  (`docs/research/elicitation-papers.md`); brief drafted (task 0065),
-  awaiting the resident's approval at this PR's review — [inferred]
-  that merging constitutes it.
+- Clarifying-questions phase: the artifact and the discipline are
+  built (task 0065) — the requirements-document form is specified in
+  this directory's README, the phase is written out in
+  `docs/clarifying-questions.md`, and `tools/clarify/clarify` checks a
+  phase run against it with one seeded probe shipped. It works over
+  plain files only: not wired to the modal, and no requirements
+  document has been produced from a real statement yet. The falsifier
+  is unrun — one real intake end to end, whose questions the resident
+  either recognises or experiences as an interrogation. "Intake" is
+  deliberately no longer the name: it was already the agent layer's
+  word for the seat that files a `request` record.
 - Decomposition of a milestone into task briefs: not designed.
   [inferred] the largest unspecced piece of [m2-done].
 - Question routing to the resident: product plumbing exists (the

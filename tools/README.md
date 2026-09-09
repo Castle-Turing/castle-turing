@@ -197,3 +197,51 @@ CLI that a deployed system runs. This script never touches a journal,
 never runs as a seat, and has no reason to exist on a resident's actual
 machine after this repo stops changing — it's tooling for people (and
 agent sessions) editing the repo itself, which is what `tools/` is for.
+
+## `clarify/` — check a clarifying-questions phase run
+
+```
+tools/clarify/clarify check docs/state/<requirements>.md
+tools/clarify/clarify probe build cursor-too-small --out /tmp/run
+tools/clarify/clarify probe score cursor-too-small /tmp/run
+tools/clarify/clarify probe oracle cursor-too-small
+```
+
+The mechanical half of the phase specced in task 0065 and written out in
+`docs/clarifying-questions.md`. It does not *run* the phase — a seat does
+that, and the judgment stays there. It reads what the seat produced (a
+requirements document and the conversation behind it) and says whether
+the discipline was followed: every question cites the ambiguity it would
+resolve, every nocuous ambiguity is asked about or explicitly passed
+over, the phase stopped under a rule whose terms it stated and whose
+arithmetic holds, every clause traces to something the resident said or
+admits to being inferred, and every substantive thing the resident said
+reached some clause.
+
+Read `docs/clarifying-questions.md` before the script; the script's
+comments say what each check does, and the document says why it is a
+check at all and — for the two rules that could not be made mechanical
+— what it deliberately does not check.
+
+`probes/` holds seeded probes: a complete statement, plus a seed record
+that deletes answers out of it. `test/clarify/run.sh` runs the whole
+thing in CI, and is mostly its negative half — twenty-odd mutations of
+the worked example, each asserted to be caught by the rule that owns it.
+
+### Why this isn't in `agent/`, and the boundary it sits on
+
+Same test as `codex-review.sh` above: this never touches a journal and
+never runs as a seat. Today the phase produces a document in
+`docs/state/` — a file in this repo — and the sessions running it are
+sessions editing this repo, which is what `tools/` is for. Putting it in
+`agent/` would also install a half-built, unwired phase onto deployed
+machines and drag a Nix rebuild behind every edit to a lint.
+
+But the honest version is that this sits on the same unresolved boundary
+`font-sweep.sh` does, and closer to the edge. The clarifying-questions
+phase is *destined* for the product: the milestone it serves ends with a
+resident opening the modal, stating a complaint, and being asked good
+questions. When that wiring lands, the checks belong wherever the phase
+does. Parked here deliberately, with the tension recorded rather than
+papered over — the same call, and the same reasoning, as the sweep
+scripts.
