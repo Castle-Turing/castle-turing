@@ -141,3 +141,33 @@ Judgment calls a reviewer should check:
   bullets** and did already carry five. Left alone deliberately: it
   is a pre-existing defect in a binding document, and correcting it
   is not this brief's scope.
+
+## The cross-vendor round
+
+Codex reviewed the opened pull request; three findings, each
+dispositioned on the pull request, two of them changing the amendment
+and one changing it because the amendment contradicted this file's own
+implementation record.
+
+- **The resumption sentence over-claimed.** The amendment said an
+  answered delivery question "resumes the errand through the machinery
+  task 0023 built for the worker" — but that machinery reads `request`
+  records and re-invokes the worker's tenant; as written it can neither
+  see a delivery question's answer nor resume a delivery tenant. The
+  sentence now binds the *bound* (one answer, one resumption, chained
+  by the claim) as the commitment, states plainly that extending the
+  mechanism to a delivery tenant is part of the unbuilt shim, and that
+  until then an answered delivery question resumes nothing
+  automatically. Specifying the delivery trigger and request
+  representation now, rather than with the shim, remains open and is
+  flagged for the resident in the dispositions.
+- **The result record carries the provider too**, a deviation from
+  this brief's "tenant and model": distinct model names can belong to
+  one vendor and a name-to-vendor mapping drifts, while the vendor is
+  the fact the independence invariant actually turns on. Recording it
+  at implementation time is the brief's own rationale ("a recorded
+  fact, not a thing to reconstruct") applied one step further.
+- **The two backlog citations were paths**, which this file's own
+  implementation record forbids (`docs/state/README.md` rule 1:
+  history is a name). Both now name the records; a promoted backlog
+  entry no longer leaves the binding document holding a rotted link.

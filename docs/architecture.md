@@ -334,15 +334,24 @@ brief from a configured checkout's `docs/tasks/` and writes three
 things: a branch and a pull request on that checkout's repository,
 and journal records — a `claim` the instant it takes a brief, for the
 observability reason a worker's claim exists rather than for mutual
-exclusion; a `result` carrying `outcome` and **which tenant and model
-implemented the brief**; and a `question` whenever it blocks on a
+exclusion; a `result` carrying `outcome` and **which tenant, which
+model, and which provider implemented the brief** — the provider
+named at implementation time because a model name does not carry its
+vendor stably across renamings and re-hostings, and the vendor is the
+fact the independence invariant below actually turns on; and a `question` whenever it blocks on a
 judgment only the resident can supply. That last one is load-bearing:
 **a park is not a private state of the harness.** A tenant that stops
 because its brief is ambiguous has opened a question like any other
 seat — the router decides when and how it reaches a human, and the
-answer resumes the errand through the machinery task 0023 built for
-the worker, one answer producing exactly one resumption, chained by
-the `claim` that names it. A harness whose parks, retries, model
+answer must resume the errand under the bound task 0023 established
+for the worker: one answer producing exactly one resumption, chained
+by the `claim` that names it. The bound is the commitment; the
+machinery is not yet the mechanism, because what task 0023 built
+reads `request` records and re-invokes the worker's tenant, and
+extending it to re-invoke a delivery tenant is part of the unbuilt
+shim named below — until that exists, an answered delivery question
+resumes nothing automatically, and saying otherwise here would be
+the false receipt this document exists to prevent. A harness whose parks, retries, model
 routing and budget aborts live only in its own logs holds a seat the
 weekly audit cannot read, which is the whole reason this paragraph
 exists. The guard sentence every plumbing seat above carries — do not
@@ -364,9 +373,10 @@ occupancy section says the unmerged two-reviewer ensemble is the one
 place an ensemble earns its cost, "because the disagreement is the
 signal", and a change implemented and reviewed by the same vendor has
 quietly lost its second opinion while still looking like it has one.
-Which tenant and which model wrote the change is therefore recorded
-at the moment it is known, not reconstructed later from a commit
-trailer or guessed from prose style.
+Which tenant, which model, and which provider wrote the change is
+therefore recorded at the moment it is known, not reconstructed later
+from a commit trailer, a provider mapping that has since changed, or
+a guess from prose style.
 
 Three things this seat's definition deliberately does not model.
 **The substrate is the tenant's business.** Inside the seat the
@@ -385,12 +395,12 @@ above. The dependency runs downward on purpose — a harness that
 depends on nothing above it stays usable by anyone, and whoever
 integrates it pays for the integration — so this document fixes the
 records and leaves the translator as tooling that does not yet exist
-(`docs/backlog/the-delivery-seat-has-no-record-shim.md`). **And the
+(the backlog entry "the-delivery-seat-has-no-record-shim"). **And the
 arrow into this seat is still unnamed:** a filed backlog entry
 becomes a numbered brief today by the resident's hand or an ad-hoc
 session's, and naming that seat is its own work rather than a side
-effect of this one
-(`docs/backlog/the-speccing-step-is-an-unnamed-seat.md`). The name,
+effect of this one (the backlog entry
+"the-speccing-step-is-an-unnamed-seat"). The name,
 last: `seat: delivery` is a new value in an existing category — a
 reasoning seat, as worker and router already are — and deliberately
 not `builder`, which belongs to the seat that compiles, because a
