@@ -33,6 +33,16 @@ decisions.
   not in an issue tracker — see that directory's README. Speccing an
   entry promotes it to a numbered brief and deletes the backlog file in
   the same commit.
+- **An incident ships its detector.** A backlog entry filed from a
+  regression, outage, or silent failure answers, in its own section,
+  how it would have been caught sooner; the brief that fixes it either
+  lands that detector as an automated check or states why none is
+  mechanically possible. Blank is not an answer — the same
+  non-emptiness rule that binds a decision's falsifier (Proposal 06)
+  and a task's `Model-because:`. A silent failure looks like a quiet
+  day; only a check outlives the memory of the incident. (Adopted
+  2026-09-08, from the review-pipeline regression that was found by
+  the resident rather than by anything automated.)
 - Implementation work is specced as numbered briefs in `docs/tasks/`
   (`0001-`, `0002-`, …). A brief is committed on the branch that implements
   it, never separately — spec and implementation merge and get audited
