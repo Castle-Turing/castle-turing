@@ -548,6 +548,18 @@ def main(argv=None):
                    "the handover covers nothing of. Say %s."
                    % (ledger["window"]["until"], last))
     bounds = split_sections(lines, report)
+    # A heading with nothing under it is not a field. The structural
+    # check used to accept the six headings bare — a handover could
+    # delete the entire Intent body, or the closing act, and pass, even
+    # though field 1's milestone restatement and field 6's written-back
+    # request are the substance the headings exist to hold.
+    for sec_title, (sec_start, sec_end) in bounds.items():
+        if sec_title in SECTIONS and not any(
+                lines[i].strip() for i in range(sec_start + 1, sec_end)):
+            report.add("C-STRUCT", sec_start + 1,
+                       "section %r is a bare heading with no content — the six "
+                       "fields are mandatory in substance, not only in name"
+                       % sec_title)
 
     # --- the claim lint, per physical line --------------------------------
     # No exemption for fenced blocks. They were skipped by both this
@@ -583,6 +595,7 @@ def main(argv=None):
 
     title_line = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
     cited_prs = set()
+    intent_cites_state = False
     for i, text in logical_items(lines, 0, len(lines)):
         first = i - 1
         if first == title_line:
@@ -600,6 +613,8 @@ def main(argv=None):
         resolved = resolve(citations, ledger, i, report)
         for pr in resolved["pr"]:
             cited_prs.add(str(pr["number"]))
+        if section == "Intent" and any(k == "state" for k, _ in citations):
+            intent_cites_state = True
 
         if section == "Acknowledgment":
             # The closing act asks the resident to write back. It is the
@@ -623,6 +638,16 @@ def main(argv=None):
 
         if not text.lstrip().startswith(">"):
             check_receipts(text, code_masked, i, ledger, report)
+
+    # Field 1 restates the milestone from the state layer, and clause
+    # keys are how a restatement is checkable at all — an Intent that
+    # cites no state clause is restating intent from memory, which is
+    # the 34%-match failure the field exists to close.
+    if "Intent" in bounds and not intent_cites_state:
+        report.add("C-STRUCT", bounds["Intent"][0] + 1,
+                   "the Intent section must cite at least one state clause "
+                   "([state <key>]) — a milestone restated without one is "
+                   "restated from memory, not from docs/state/")
 
     # --- C-DEPENDS --------------------------------------------------------
     if "Verdicts requested" in bounds:

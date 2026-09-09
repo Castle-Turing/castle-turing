@@ -393,3 +393,38 @@ saying whose words they are. And a receipt phrase about a kind of
 artifact the line never cites is still dropped as prose — the named gap
 above, unchanged, and the reason this is one control rather than the
 whole of one.
+
+### The cross-vendor round, on the pull request
+
+Codex reviewed the opened pull request and found four things. Three
+changed the tools; each is dispositioned on the pull request itself.
+
+- **A dispositioned review state now means every round was answered.**
+  The ledger reduced review state to two counts — any gate comment, any
+  disposition — so a second review round posted after the first
+  disposition still read as answered, and the handler workflow
+  explicitly supports serialized multi-round reviews on one pull
+  request. A pull request is now `dispositioned` only when every gate
+  comment has a disposition posted strictly after it, with missing
+  timestamps failing closed to `undispositioned`.
+- **A bare heading is no longer a field.** Deleting the entire Intent
+  body, or the closing act, passed the structural check. Every
+  mandatory section must now carry content, and Intent specifically
+  must cite at least one state clause — a milestone restated without
+  one is restated from memory, which is the 34%-match failure field 1
+  exists to close. Two new reject fixtures hold both.
+- **The default window was eight days.** Seven days back with an
+  exclusive bound of tomorrow covers eight calendar days; the
+  documented "last seven" is now six days back through today, mirrored
+  in `handover.sh` and `handover-ledger.py` both.
+
+The fourth finding — that free prose carrying a resolving citation is
+not verified against the ledger's fields, so an invented sentence about
+a real pull request passes — is the checker's boundary, not a bug with
+a mechanical fix: checking arbitrary English against artifact state
+needs a model, which the pure-function design refuses, and the
+alternative is restricting claim lines to the closed receipt
+vocabulary, a format decision that trades away readable prose. It is
+referred to the resident on the pull request, and it is exactly the
+territory the brief's falsifier already assigns to the resident's cold
+read.

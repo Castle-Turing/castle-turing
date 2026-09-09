@@ -120,7 +120,10 @@ done
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-if [ -z "$SINCE" ]; then SINCE="$(date -u -d '7 days ago' +%Y-%m-%d)"; fi
+# Six days back through today inclusive is the documented seven days;
+# the exclusive upper bound is tomorrow. Seven back was eight days, and
+# handover-ledger.py mirrors this default — change both or neither.
+if [ -z "$SINCE" ]; then SINCE="$(date -u -d '6 days ago' +%Y-%m-%d)"; fi
 if [ -z "$UNTIL" ]; then UNTIL="$(date -u -d 'tomorrow' +%Y-%m-%d)"; fi
 
 # --- preflight ---------------------------------------------------------

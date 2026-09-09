@@ -347,17 +347,35 @@ def classify_checks(rollup):
 
 
 def classify_reviews(comments, reviews):
-    bodies = [c.get("body") or "" for c in (comments or [])]
-    bodies += [r.get("body") or "" for r in (reviews or [])]
-    gate = sum(1 for b in bodies if any(m.search(b) for m in REVIEW_MARKERS))
-    disp = sum(1 for b in bodies if DISPOSITION_MARKER.search(b))
-    if gate == 0:
+    """Every review round answered, not merely some disposition somewhere.
+
+    Reducing this to two counts — any gate comment, any disposition —
+    let a second review round posted *after* the first disposition read
+    as answered when nothing had answered it, and the ledger then
+    permitted a false "findings dispositioned" receipt. The handler
+    workflow explicitly serializes multiple gate comments on one PR, so
+    the multi-round case is supported, not hypothetical. A PR is
+    dispositioned only when every gate comment has a disposition posted
+    strictly after it. Timestamps fail closed: a gate whose timestamp is
+    missing counts as unanswered, and a disposition whose timestamp is
+    missing answers nothing — the checker then rejects the claim rather
+    than passing it unverified.
+    """
+    events = [((c.get("createdAt") or ""), (c.get("body") or ""))
+              for c in (comments or [])]
+    events += [((r.get("submittedAt") or r.get("createdAt") or ""),
+                (r.get("body") or ""))
+               for r in (reviews or [])]
+    gates = [t for t, b in events if any(m.search(b) for m in REVIEW_MARKERS)]
+    disps = [t for t, b in events if DISPOSITION_MARKER.search(b)]
+    if not gates:
         state = "no-review"
-    elif disp > 0:
+    elif all(g and any(d and d > g for d in disps) for g in gates):
         state = "dispositioned"
     else:
         state = "undispositioned"
-    return {"state": state, "review_comments": gate, "disposition_comments": disp}
+    return {"state": state, "review_comments": len(gates),
+            "disposition_comments": len(disps)}
 
 
 def read_prs(root, since, until):
@@ -524,7 +542,11 @@ def coverage_units(prs):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     today = datetime.date.today()
-    ap.add_argument("--since", default=str(today - datetime.timedelta(days=7)))
+    # Six days back through today inclusive is seven days. Seven back
+    # with an exclusive bound of tomorrow was eight — the documented
+    # "last seven days" covered an extra day, and the mirrored default
+    # in tools/handover.sh did the same.
+    ap.add_argument("--since", default=str(today - datetime.timedelta(days=6)))
     ap.add_argument("--until", default=str(today + datetime.timedelta(days=1)),
                     help="exclusive upper bound (default: tomorrow)")
     ap.add_argument("--repo-root", default=None)
