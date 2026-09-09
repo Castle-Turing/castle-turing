@@ -64,7 +64,9 @@ Chromium 140, from the Mediatron flake):
   one place, where agent judgment can eventually sit.
 
 Rules the session concluded are load-bearing, recorded here so the
-spec starts from them:
+spec starts from them — and which must land in the brief or
+`docs/state/` when this entry is promoted, rather than vanish with
+the file:
 
 - **The frontend is a pure view.** Every action the UI offers exists
   first as a backend verb, and frontend state is never authoritative.
@@ -78,13 +80,21 @@ spec starts from them:
   not retrofitted: Principle 01's secrets consequence at the
   application layer.
 - **Activations that leave the web world are backend verbs or a
-  registered scheme, never raw `file://` links** — the browser
-  renders a `file://` target instead of resolving it.
+  registered scheme, never raw `file://` links** — from an http(s)
+  app origin the browser blocks the navigation outright, and from a
+  rendered `file://` document (the session's case) it displays the
+  target itself; in neither path does anything resolve it.
 - **"qutebrowser-friendly" is written down, not assumed**: semantic
   clickable elements so hints work, no capturing of normal-mode
   keys, honors `prefers-color-scheme`, reload-safe.
 
-**Open questions.** Window identity: every window of the shared
+**Open questions.** The display-authority boundary: backends that
+spawn windows and speak sway IPC are the agent driving the display
+one layer above pixels. `docs/vision.md` grants exactly that — the
+window manager is the agent's hands — but the line between driving
+the window manager (granted) and operating an application's
+frontend (excluded by this proposal) is not stated anywhere and the
+spec must draw it. Window identity: every window of the shared
 instance carries app_id `org.qutebrowser.qutebrowser`, and sway
 rules plus the agent's window management need per-app identity — a
 title-tag convention is the leading candidate, undecided. Crash
