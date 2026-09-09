@@ -349,10 +349,12 @@ for the worker: one answer producing exactly one resumption, chained
 by the `claim` that names it. The bound is the commitment; the
 machinery is not yet the mechanism, because what task 0023 built
 reads `request` records and re-invokes the worker's tenant, and
-extending it to re-invoke a delivery tenant is part of the unbuilt
-shim named below — until that exists, an answered delivery question
-resumes nothing automatically, and saying otherwise here would be
-the false receipt this document exists to prevent. A harness whose
+re-invoking a delivery tenant is its own unbuilt mechanism — captured
+as the backlog entry "an-answered-delivery-question-resumes-nothing",
+a sibling of the record shim named below — until it exists, an
+answered delivery question resumes nothing automatically, and saying
+otherwise here would be the false receipt this document exists to
+prevent. A harness whose
 parks, retries, model routing and budget aborts live only in its own
 logs holds a seat the weekly audit cannot read, which is the whole
 reason this paragraph exists. The guard sentence every plumbing seat above carries — do not
