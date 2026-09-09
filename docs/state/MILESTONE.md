@@ -86,7 +86,11 @@ it explicitly.
 - Question routing to the resident: product plumbing exists (the
   answer chord, task 0022); pipeline wiring not designed.
 - emcee dispatch: operating (sprints through task 0060 and PRs
-  since).
+  since). The seat it occupies is named as of task 0069 —
+  **delivery**, in `docs/architecture.md` — but the records that
+  seat owes the journal do not exist yet: the shim translating the
+  tenant's own events into `claim`, `result` and `question`
+  records is backlog, not built.
 - Baseline instrumentation ([m2-constraints] first clause): not
   started. [inferred] must precede the pipeline-changing briefs
   above.
