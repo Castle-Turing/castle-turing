@@ -93,6 +93,12 @@ Field lines are contiguous from the top of a block: the run ends at the
 first line that is not a field, blank lines included, so a sentence of
 prose that happens to carry a colon is never silently read as one.
 
+Every utterance declares `speaker:`, and only `speaker: resident`
+utterances can ground a `[stated]` clause or count toward coverage.
+Unattributed or system-authored text scoring as the resident's words
+would defeat both marks at once: faithfulness would credit invention,
+and coverage would count text the resident never produced.
+
 An utterance may carry `substantive: no` with a `reason:` — that is how
 a closing "thanks, that's it" is excused from the coverage count. The
 reason is required so that the coverage number is not simply whatever

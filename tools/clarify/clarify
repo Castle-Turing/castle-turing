@@ -1035,11 +1035,31 @@ def check_readback(
     utterances = [b for b in blocks if b.kind == "utterance"]
     utterance_ids = {b.id for b in utterances}
 
+    # Who said it matters as much as that it was said. A [stated] clause
+    # asserts the *resident's* words are behind it, so an utterance only
+    # grounds one when it declares `speaker: resident` — an unattributed
+    # utterance, or a system-authored one, would otherwise let the
+    # system's own text score faithfulness 1.00 while wearing the
+    # resident's mark, which is exactly what the mark exists to stop.
+    resident_ids: set[str] = set()
+    for utterance in utterances:
+        at = f"transcript:{utterance.line} {utterance.id}"
+        speaker = utterance.fields.get("speaker")
+        if not speaker:
+            report.fail(
+                "form",
+                at,
+                "an utterance must declare speaker: — unattributed text "
+                "could ground a [stated] clause as if the resident said it",
+            )
+        elif speaker == "resident":
+            resident_ids.add(utterance.id)
+
     # -- Faithfulness.
     faithful = 0
     for clause in doc.clauses:
         at = f"{where}:{clause.line} [{clause.key}]"
-        resolvable = [t for t in clause.traces if t in utterance_ids]
+        resolvable = [t for t in clause.traces if t in resident_ids]
         for trace in clause.traces:
             if trace not in utterance_ids:
                 report.fail(
@@ -1056,9 +1076,10 @@ def check_readback(
             report.fail(
                 "readback",
                 at,
-                "a [stated] clause with no utterance behind it — either it "
-                "traces to what the resident said, or it is the system's "
-                "reading and says so with [inferred]",
+                "a [stated] clause with no resident utterance behind it — "
+                "either it traces to what the resident said "
+                "(speaker: resident), or it is the system's reading and "
+                "says so with [inferred]",
             )
 
     # -- Coverage.
@@ -1068,6 +1089,11 @@ def check_readback(
 
     substantive = []
     for utterance in utterances:
+        if utterance.id not in resident_ids:
+            # Coverage catches omission of what the *resident* said; a
+            # system-authored utterance is neither omittable in that
+            # sense nor allowed to pad the score's denominator.
+            continue
         at = f"transcript:{utterance.line} {utterance.id}"
         flag = utterance.fields.get("substantive", "yes")
         if flag not in ("yes", "no"):
@@ -1240,6 +1266,23 @@ def load_probe(root: pathlib.Path) -> ProbeSpec:
                 "(Proposal 06); a floor chosen after seeing the score is not a "
                 "floor"
             )
+    for name in ("Floor-coverage", "Ceiling-redundancy"):
+        try:
+            value = float(header[name])
+        except ValueError:
+            raise SystemExit(
+                f"probe {root.name}: {name}: {header[name]!r} is not a number"
+            )
+        # Both metrics live in [0, 1], and the comparison catches NaN and
+        # the infinities too. A floor below zero or a ceiling above one
+        # is a bound nothing can ever miss — a pre-registration that
+        # pre-registers nothing.
+        if not 0.0 <= value <= 1.0:
+            raise SystemExit(
+                f"probe {root.name}: {name}: {header[name]} is outside "
+                "[0, 1] — coverage and redundancy are rates, and a bound "
+                "outside the unit interval can never fail a run"
+            )
     if not seeds:
         raise SystemExit(f"probe {root.name}: seed.md declares no seeds")
     for seed in seeds:
@@ -1329,11 +1372,30 @@ def score_probe(
     a scorer that needed a model to say whether a question counted would
     be a scorer nobody could reproduce.
     """
+    statement_path = run / "statement.md"
     transcript_path = run / "transcript.md"
     requirements_path = run / "requirements.md"
     if not transcript_path.is_file() or not requirements_path.is_file():
         raise SystemExit(
             f"{run}: expected transcript.md and requirements.md from the run"
+        )
+    # The statement the run answered must be the statement the seed
+    # record builds. Without this, a run directory whose statement.md
+    # was deleted or replaced with the full source still scored — the
+    # phase could have read the deleted answers and reported a perfect
+    # catch, divorcing the score from the registered experiment.
+    if not statement_path.is_file():
+        raise SystemExit(
+            f"{run}: no statement.md — a probe run is scored against the "
+            "seeded statement it was given, and a run without one is not "
+            "the registered experiment"
+        )
+    if statement_path.read_text(encoding="utf-8") != build_probe(spec):
+        raise SystemExit(
+            f"{run}: statement.md is not the statement built from the seed "
+            "record — the run being scored is not the experiment that was "
+            "registered. Rebuild with `clarify probe build` and rerun the "
+            "phase; do not edit the seeded statement"
         )
 
     doc, doc_report = parse_requirements(requirements_path)

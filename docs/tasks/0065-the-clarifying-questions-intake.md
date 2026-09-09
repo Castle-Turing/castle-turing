@@ -204,3 +204,31 @@ end. No requirements document exists from a real statement — the only
 one in the tree is the probe's oracle, labelled as such. Everything
 green here says the discipline is checkable, not that following it
 produces the right questions.
+
+### The cross-vendor round, on the pull request
+
+Codex reviewed the opened pull request and found four ways the checks
+could be satisfied without the thing they check for. All four changed
+the tools; each is dispositioned on the pull request.
+
+- **A probe run is scored against the statement it was registered
+  with.** `probe score` required only the transcript and the
+  requirements document, so a run whose `statement.md` was deleted — or
+  replaced with the unseeded source, deleted answers visible — still
+  scored. The scorer now requires `statement.md` and compares it byte
+  for byte with what the seed record builds.
+- **Only the resident's words are the resident's words.** No check read
+  `speaker:`, so an unattributed or system-authored utterance grounded
+  a `[stated]` clause and padded the coverage denominator. An utterance
+  must now declare a speaker, only `speaker: resident` utterances
+  ground `[stated]` or count toward coverage, and the phase document
+  states the rule.
+- **Pre-registered bounds must be able to fail.** A floor of -1 or a
+  ceiling above 1 parsed cleanly and could never reject a run — a
+  pre-registration that pre-registers nothing. Both bounds are now
+  required to sit in [0, 1], refused at load.
+- **The docs/state sweep is recursive**, because the workflow triggers
+  on `docs/state/**` and a document in a subdirectory would have fired
+  the gate and then been validated by nothing. The two exclusions are
+  exact top-level paths; anything nested is a new kind of document and
+  gets named deliberately or fails loudly.

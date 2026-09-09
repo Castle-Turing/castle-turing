@@ -101,6 +101,11 @@ mutate() {
     local dir="$WORKDIR/$name"
     mkdir -p "$dir"
     cp "$PROBE/oracle/requirements.md" "$PROBE/oracle/transcript.md" "$dir/"
+    # The seeded statement rides along whenever it exists, because a
+    # probe run without one — or with one that differs from what the
+    # seed record builds — is refused as not being the registered
+    # experiment. Check-only cases ignore it.
+    [ -f "$RUN/statement.md" ] && cp "$RUN/statement.md" "$dir/"
     echo "$dir"
 }
 
@@ -435,6 +440,50 @@ PY
 expect_catch "a run that asked a question worth nothing" probe -- \
     "$CLARIFY" probe score cursor-too-small "$DIR"
 
+# The statement scored must be the statement registered. A run whose
+# statement.md was replaced with the full source would let the phase
+# read the deleted answers and report a perfect catch; one with no
+# statement at all is no experiment. Both are refused before scoring.
+DIR="$(mutate probe-statement-replaced)"
+cp "$PROBE/source.md" "$DIR/statement.md"
+expect_die "a probe run whose statement is the unseeded source" \
+    "not the experiment" -- \
+    "$CLARIFY" probe score cursor-too-small "$DIR"
+
+DIR="$(mutate probe-statement-missing)"
+rm "$DIR/statement.md"
+expect_die "a probe run with no statement at all" "no statement.md" -- \
+    "$CLARIFY" probe score cursor-too-small "$DIR"
+
+echo
+echo "== only the resident's words are the resident's words =="
+
+# Rewriting every speaker to system leaves the same text in place, but
+# a [stated] clause may no longer claim it: system-authored utterances
+# ground nothing and count toward no coverage.
+DIR="$(mutate speaker-system)"
+sed -i 's/^speaker: resident$/speaker: system/' "$DIR/transcript.md"
+expect_catch "a stated clause tracing only system-authored text" readback -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
+# And an utterance that declares no speaker at all is a form error, not
+# a silent pass into the resident's column.
+DIR="$(mutate speaker-missing)"
+sed -i '0,/^speaker: resident$/{/^speaker: resident$/d}' "$DIR/transcript.md"
+expect_catch "an utterance with no speaker" form -- \
+    "$CLARIFY" check "$DIR/requirements.md"
+
+# Pre-registered bounds outside the unit interval can never fail a run:
+# a floor of -1 is missable by nothing, a ceiling above 1 exceedable by
+# nothing. Refused at load, before any scoring.
+BADBOUNDS="$WORKDIR/badbounds"
+mkdir -p "$BADBOUNDS"
+cp "$PROBE/source.md" "$BADBOUNDS/"
+sed 's/^Floor-coverage: .*/Floor-coverage: -1/' "$PROBE/seed.md" \
+    >"$BADBOUNDS/seed.md"
+expect_die "a pre-registered floor below zero" "outside" -- \
+    "$CLARIFY" probe build "$BADBOUNDS" --out "$WORKDIR/badbounds-run"
+
 echo
 echo "== the style lint warns and never blocks =="
 
@@ -529,15 +578,20 @@ echo "== every requirements document in docs/state/ still checks out =="
 # requirements documents; adding a third kind of document there is
 # already a deliberate act under that directory's rule 4, and adding it
 # to this list is part of the act.
+# Recursive, because the clarify-check workflow triggers on
+# docs/state/** — a document in a subdirectory would fire the gate and
+# then be skipped by a top-level-only glob, arriving validated by
+# nothing. The two exclusions are exact top-level paths: a README.md
+# nested deeper is *not* excused, it is a new kind of document under
+# that directory's rule 4 and gets named here as part of the act.
 found=0
-for doc in "$REPO_ROOT"/docs/state/*.md; do
-    [ -e "$doc" ] || continue
-    case "$(basename "$doc")" in
-    README.md | MILESTONE.md) continue ;;
+while IFS= read -r doc; do
+    case "${doc#"$REPO_ROOT"/}" in
+    docs/state/README.md | docs/state/MILESTONE.md) continue ;;
     esac
     found=$((found + 1))
-    expect_pass "docs/state: $(basename "$doc")" "$CLARIFY" check "$doc"
-done
+    expect_pass "docs/state: ${doc#"$REPO_ROOT"/docs/state/}" "$CLARIFY" check "$doc"
+done < <(find "$REPO_ROOT/docs/state" -name '*.md' -type f | sort)
 echo "  ok   $found requirements document(s) under docs/state/"
 
 echo
