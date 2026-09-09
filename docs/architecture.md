@@ -338,8 +338,9 @@ exclusion; a `result` carrying `outcome` and **which tenant, which
 model, and which provider implemented the brief** — the provider
 named at implementation time because a model name does not carry its
 vendor stably across renamings and re-hostings, and the vendor is the
-fact the independence invariant below actually turns on; and a `question` whenever it blocks on a
-judgment only the resident can supply. That last one is load-bearing:
+fact the independence invariant below actually turns on; and a
+`question` whenever it blocks on a judgment only the resident can
+supply. That last one is load-bearing:
 **a park is not a private state of the harness.** A tenant that stops
 because its brief is ambiguous has opened a question like any other
 seat — the router decides when and how it reaches a human, and the
@@ -351,10 +352,10 @@ reads `request` records and re-invokes the worker's tenant, and
 extending it to re-invoke a delivery tenant is part of the unbuilt
 shim named below — until that exists, an answered delivery question
 resumes nothing automatically, and saying otherwise here would be
-the false receipt this document exists to prevent. A harness whose parks, retries, model
-routing and budget aborts live only in its own logs holds a seat the
-weekly audit cannot read, which is the whole reason this paragraph
-exists. The guard sentence every plumbing seat above carries — do not
+the false receipt this document exists to prevent. A harness whose
+parks, retries, model routing and budget aborts live only in its own
+logs holds a seat the weekly audit cannot read, which is the whole
+reason this paragraph exists. The guard sentence every plumbing seat above carries — do not
 give it a policy — points the wrong way here. This seat *is*
 judgment: it sizes an implementer to the brief, judges whether a
 failing check is the task's fault or the environment's, and decides
