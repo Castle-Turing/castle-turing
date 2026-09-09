@@ -1,0 +1,198 @@
+{
+  "backlog": {
+    "an-example-entry-was-filed": {
+      "added_in_window": true,
+      "name": "an-example-entry-was-filed",
+      "path": "docs/backlog/an-example-entry-was-filed.md",
+      "present": true,
+      "removed_in_window": false
+    }
+  },
+  "commits": {
+    "aaaaaaa1111111111111111111111111111111a1": {
+      "date": "2026-03-02T09:00:00Z",
+      "sha": "aaaaaaa1111111111111111111111111111111a1",
+      "short": "aaaaaaa",
+      "subject": "An example commit"
+    }
+  },
+  "coverage_units": [
+    {
+      "id": "11",
+      "kind": "merged-pr",
+      "label": "An example merge, checked and answered"
+    },
+    {
+      "id": "12",
+      "kind": "merged-pr",
+      "label": "An example merge over a red check"
+    },
+    {
+      "id": "13",
+      "kind": "open-pr",
+      "label": "An example pull request, still open"
+    }
+  ],
+  "forge": {
+    "read": true
+  },
+  "generated_from": {
+    "branch": "example/synthetic",
+    "head": "aaaaaaa1111111111111111111111111111111a1"
+  },
+  "journal": {
+    "available": true,
+    "records": {
+      "20260302T090000Z-example-a1b2c3": {
+        "date": "2026-03-02",
+        "id": "20260302T090000Z-example-a1b2c3"
+      }
+    }
+  },
+  "prs": {
+    "11": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "SUCCESS",
+            "name": "example-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "green"
+      },
+      "createdAt": "2026-03-02T09:00:00Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "example/branch-11",
+      "mergeCommit": "aaaaaaa1111111111111111111111111111111a1",
+      "merged": true,
+      "mergedAt": "2026-03-02T10:00:00Z",
+      "merged_in_window": true,
+      "number": 11,
+      "review": {
+        "disposition_comments": 1,
+        "review_comments": 1,
+        "state": "dispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "An example merge, checked and answered",
+      "touches_state": false,
+      "url": "https://example.invalid/pr/11"
+    },
+    "12": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "FAILURE",
+            "name": "example-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "red"
+      },
+      "createdAt": "2026-03-02T09:00:00Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "example/branch-12",
+      "mergeCommit": "aaaaaaa1111111111111111111111111111111a1",
+      "merged": true,
+      "mergedAt": "2026-03-03T10:00:00Z",
+      "merged_in_window": true,
+      "number": 12,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 1,
+        "state": "undispositioned"
+      },
+      "state": "MERGED",
+      "state_files": [],
+      "title": "An example merge over a red check",
+      "touches_state": false,
+      "url": "https://example.invalid/pr/12"
+    },
+    "13": {
+      "checks": {
+        "runs": [
+          {
+            "conclusion": "",
+            "name": "example-check",
+            "status": "COMPLETED"
+          }
+        ],
+        "state": "pending"
+      },
+      "createdAt": "2026-03-02T09:00:00Z",
+      "draft": false,
+      "file_count": 3,
+      "headRefName": "example/branch-13",
+      "mergeCommit": null,
+      "merged": false,
+      "mergedAt": null,
+      "merged_in_window": false,
+      "number": 13,
+      "review": {
+        "disposition_comments": 0,
+        "review_comments": 0,
+        "state": "no-review"
+      },
+      "state": "OPEN",
+      "state_files": [],
+      "title": "An example pull request, still open",
+      "touches_state": false,
+      "url": "https://example.invalid/pr/13"
+    }
+  },
+  "schema": "castle-handover-ledger/1",
+  "state": {
+    "changed_in_window": [],
+    "clauses": {
+      "ex-done": {
+        "heading": "Done looks like",
+        "key": "ex-done",
+        "path": "docs/state/MILESTONE.md",
+        "text": "Every reject fixture is refused for the reason it names.",
+        "truncated": false
+      },
+      "ex-intent": {
+        "heading": "Intent",
+        "key": "ex-intent",
+        "path": "docs/state/MILESTONE.md",
+        "text": "The example milestone teaches the checker its own rules.",
+        "truncated": false
+      }
+    },
+    "documents": [
+      {
+        "clauses": [
+          "ex-done",
+          "ex-intent"
+        ],
+        "path": "docs/state/MILESTONE.md"
+      }
+    ]
+  },
+  "tasks": {
+    "0001": {
+      "added_in_window": true,
+      "archived_in_window": false,
+      "id": "0001",
+      "location": "queue",
+      "path": "docs/tasks/0001-example-queued.md",
+      "title": "Example brief, in the queue"
+    },
+    "0002": {
+      "added_in_window": false,
+      "archived_in_window": true,
+      "id": "0002",
+      "location": "archive",
+      "path": "docs/tasks/done/0002-example-archived.md",
+      "title": "Example brief, swept to the archive"
+    }
+  },
+  "window": {
+    "since": "2026-03-01",
+    "until": "2026-03-08"
+  }
+}
