@@ -66,8 +66,10 @@ it explicitly.
 ### Position [m2-now] — patched per PR
 
 - Current-state layer: landing with task 0061's PR (this file).
-- Operator handover: brief approved [stated 2026-09-06] (task 0062,
-  queued), not built.
+- Operator handover: the generator, the ledger reader and the
+  claim-checker land with task 0062's PR, on demand only. [inferred]
+  the report's name, its cadence and its channel stay open — that
+  brief reserves all three to the resident.
 - Clarifying-questions intake: research complete
   (`docs/research/elicitation-papers.md`); brief drafted (task 0065),
   awaiting the resident's approval at this PR's review — [inferred]

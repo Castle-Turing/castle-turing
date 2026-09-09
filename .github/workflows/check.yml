@@ -115,6 +115,18 @@ jobs:
       # for the same reason as the two above, and cheaper than either —
       # the helpers are pure, so it touches no journal at all.
       - run: test/agent-loop/record-order.sh
+      # The operator handover's claim-checker
+      # (docs/tasks/0062-the-operator-handover.md): the golden handover
+      # for the real week of 2026-09-01..05 against its frozen ledger,
+      # and reject fixtures each asserting the violation code they
+      # exist to provoke — a merged-PR line whose PR is open, a
+      # green-checks line whose checks failed, a journal id that
+      # resolves to nothing, completion vocabulary anywhere. In this job
+      # for record-order.sh's reason and more so: `handover-check.py` is
+      # a pure function of (ledger, handover), so this touches no
+      # journal, no git, no network and no model at all. The generating
+      # half needs `gh` and a model and is deliberately not run here.
+      - run: test/handover/run.sh
 
   # Automatic dispatch (docs/tasks/0021-auto-dispatch.md): the sweep a
   # systemd path unit and timer trigger on a real host, driven directly
