@@ -25,14 +25,26 @@ The fix space, for whoever specs this:
 
 - Extend or accompany the handler so a connector review triggers a
   dispositions round — a workflow on `pull_request_review` filtered
-  to the connector's login, applying the same judge → fix → single
-  dispositions comment contract, with the concurrency and permission
+  to the connector's login, with the concurrency and permission
   scar-tissue rules from the chevaline template carried over intact.
+  The dispositions contract differs from the gate's, because the
+  findings arrive differently: gate findings share one issue comment,
+  so one dispositions comment is the whole receipt; connector
+  findings are inline review threads, so the receipt is per-thread —
+  reply in each thread with its disposition and resolve it, leaving
+  any "needs the resident" thread unresolved after its reply so the
+  open ask stays visible, with an aggregate dispositions comment as
+  the summary (the resident's rule, stated 2026-09-08; losing
+  per-thread receipts is the cost task 0052 already names for the
+  gate's single-comment shape, and carrying that cost onto a surface
+  that does not impose it would be a regression).
 - Or retire the connector on this repository and have sprint launches
   post the chevaline gate instead, as dovetail and emcee do — one
   review round, one handler, one convention across the ecosystem, at
   the cost of losing the connector's inline-comment placement.
 
 Interim practice until either lands: after a castle sprint, a session
-agent dispositions the connector reviews by hand — done for #112–#114
-on the day this was filed.
+agent dispositions the connector reviews by hand under the same
+per-thread contract — done for #112–#114 on the day this was filed
+(threads replied and resolved, the one needs-the-resident thread
+left open).
