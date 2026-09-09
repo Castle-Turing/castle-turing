@@ -28,12 +28,20 @@ exists to get built:
   Periodically, a synthetic marker comment on a designated canary PR,
   with a pre-registered SLA for the dispositions comment appearing
   and a logged pass/fail — Proposal 06's salt discipline applied to
-  the pipeline itself. The canary is also how the sweeper proves it
-  can still fail, which is the only honest answer to "who watches
-  the watcher".
+  the pipeline itself. And the salt must include its known-bad half,
+  exactly as Proposal 06's does: a healthy pipeline answers every
+  ordinary canary before the SLA, so that canary exercises only the
+  pass path, and the sweeper's own overdue-predicate and alert path
+  could rot in silence behind a wall of passes. At a pre-registered
+  rate, a canary is planted that the handler will not answer — one
+  constructed to be ignored — and the assertion inverts: the sweeper
+  must raise, and the alert must land where the operator reads. A
+  canary that can only pass proves only the pass path; the
+  known-bad one is how the sweeper proves it can still fail, which
+  is the only honest answer to "who watches the watcher".
 - **Reporting lands in the handover's threats-and-drift field**
-  (task 0062), which was built precisely so this class of news
-  arrives before accomplishments.
+  (task 0062), built precisely so this class of news arrives before
+  accomplishments.
 
 A discipline to hold when speccing: checks accrete, and every check
 has maintenance cost and its own silent-failure mode. The answer is a
