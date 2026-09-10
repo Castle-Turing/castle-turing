@@ -88,6 +88,91 @@ the file:
   clickable elements so hints work, no capturing of normal-mode
   keys, honors `prefers-color-scheme`, reload-safe.
 
+**Where the design discussion took it (amended 2026-09-09).** A
+resident–agent design discussion the same day extended the proposal
+well past the window shell. Decisions are the resident's; proposals
+are marked as such and bind nothing until a spec ratifies them.
+
+- *The platform is the real work.* The chromeless browser is the
+  easy, already-derisked part. The substantial system is the backend
+  that lets agents dynamically create and serve web applications
+  with mediated filesystem access (resident). Nothing in that
+  mechanism is castle-specific: it must not depend on Castle Turing,
+  and the castle is its first tenant (resident) — Principle 01 with
+  the private layer arriving entirely through deployment
+  configuration.
+- *Mediatron takes the role, and the name* (resident's decision). A
+  document is one medium among the media it serves; the existing
+  renderer stays as the first medium, and the growth is a deliberate
+  re-founding of Mediatron's vision in its own repo, not an
+  amendment. `mediatron serve <dir>` is the intended agentic verb.
+  This resolves the naming question below differently than posed: no
+  separate shell name — renderer, viewport, server, and kit are
+  named components of Mediatron re-founded.
+- *Apps are data, not processes* (proposed in discussion; the spec's
+  first fork to ratify). One declared, audited backend owns ports,
+  auth, and all filesystem access, exposing capability-scoped verbs;
+  an agent "creates an app" by authoring frontend artifacts plus a
+  manifest naming the verbs and scopes it needs. Creating an app is
+  writing files — reviewable, rollbackable — and no dynamically
+  created privileged process ever exists.
+- *Serving and granting are different axes.* The resident's file
+  browser counterexample: its assets are kilobytes, its data scope
+  is the home directory, so the served directory cannot double as
+  the grant. Manifests *request* scopes; grants are a separate act
+  recorded in resident-side configuration, never self-asserted by
+  the manifest's author. Enforcement needs real path containment
+  (openat2/RESOLVE_BENEATH semantics, not string prefixes). The OS
+  uid is the ceiling; grants only narrow within it.
+- *The resident authenticates zero times* (resident's requirement).
+  Auth is provenance, not login: per-app token carried once in the
+  launch URL (the Jupyter pattern), exchanged for a SameSite cookie
+  so reload-safety survives, custom-header requirement on
+  state-changing verbs, Host validation, loopback binding. The
+  agent's path is a unix socket with kernel peer credentials — no
+  tokens at all. Noted at amendment time: the engine (Chromium 140
+  via QtWebEngine) predates Chromium 142's Local Network Access
+  protections, so server-side defenses stand alone today and remain
+  primary after any engine upgrade.
+- *The verb schema is the application; every surface is a derived
+  view* (discussion). GUI, TUI, CLI — and the agent's own tool
+  interface — are renderings of one schema. The resident endorsed
+  the reverse implication: derived CLIs (the AWS CLI / kubectl
+  precedent) make CLI consistency structural too.
+- *A Castle UI Kit replaces raw HTML as what agents author*
+  (resident's proposal): a small, highly opinionated component
+  vocabulary, so house style and reload-safety are properties of
+  the kit's runtime rather than findings of a checker. A missing
+  widget is a kit change with review, never an inline exception.
+  The kit renders to multiple targets — web via the viewport, TUI
+  via a bought engine (resident) — and TUI renderability is the
+  abstraction-level test: a component that cannot render in the
+  terminal is specified too low.
+- *Derive a default* (proposed in discussion; resident confirmed).
+  The platform derives a working default surface from a verb schema
+  alone — the Django-admin/Swagger precedent — so no app starts from
+  a blank page and agent design effort is spent only above the
+  floor.
+- *The agent experience is verbs, all non-interactive*: schema
+  discovery, scaffold, fixture-posed serving (the pure-view
+  invariant makes every UI state a committed, reproducible pose),
+  `inspect` returning the kit tree as text (perception in the
+  authoring grammar), executable contract checks, logs. This
+  generalizes castle-modal's every-flow-drivable-non-interactively
+  invariant and matches the published ACI lessons; a research round
+  on ACIs for GUI-building specifically is a candidate, since the
+  literature covers only repo-editing.
+- *Founding order, from walking the castle-modal story*: the first
+  Mediatron slice is serve + token handoff + a generic unix-socket
+  bridge + window identity — no filesystem verbs until an app
+  demands them. Castle-side, the modal's operations decouple onto a
+  socket so TUI and GUI become two clients of one verb layer. And
+  the convention itself must land before the pipeline is handed a
+  GUI task: today a competent worker could build a bespoke local
+  server without violating anything on `main`, and this entry
+  merging is what makes that the improvise path rather than an
+  open option.
+
 **Open questions.** The display-authority boundary: backends that
 spawn windows and speak sway IPC are the agent driving the display
 one layer above pixels. `docs/vision.md` grants exactly that — the
