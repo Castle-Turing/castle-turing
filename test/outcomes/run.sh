@@ -216,6 +216,57 @@ brief 0004-the-fourth-thing deep
 accept "a new row appended with its outcome still pending"
 rm -f "$SANDBOX/docs/tasks/0004-the-fourth-thing.md"
 
+# --- derive, where a wrong cell would be permanent -----------------------
+#
+# `check` is the gate, but `derive` is what writes most cells, and every
+# cell it writes is written once. These are the three ways it could put a
+# confident wrong number into one.
+
+log "derive"
+
+brief 0005-the-fifth-thing deep
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t add -A
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t commit -qm "queue the fifth"
+
+derived="$(python3 "$OUTCOMES" --repo-root "$SANDBOX" derive \
+  --env e1 --main refs/remotes/origin/main 2>/dev/null)"
+if printf '%s' "$derived" | grep -q '^1	0005-the-fifth-thing	1	[0-9-]*	-	-	'; then
+  pass "work that has not reached the trunk is not called merged"
+else
+  fail "unlanded work was dated and marked merged: $derived"
+fi
+
+if python3 "$OUTCOMES" --repo-root "$SANDBOX" derive --provenance live \
+     >/dev/null 2>&1; then
+  fail "a live row was derived with no environment key"
+else
+  pass "a live row with no environment key is refused, since env is immutable"
+fi
+
+JOURNAL="$WORKDIR/journal.jsonl"
+brief 0006-the-sixth-thing deep
+cat > "$JOURNAL" <<'JSON'
+{"type": "usage", "task": "0005-the-fifth-thing", "cost_usd": 1.0, "turns": 4}
+{"type": "usage", "task": "0005-the-fifth-thing", "cost_usd": 2.5, "turns": 6}
+{"type": "usage", "task": "0006-the-sixth-thing", "cost_usd": null, "turns": 3}
+JSON
+derived="$(python3 "$OUTCOMES" --repo-root "$SANDBOX" derive --env e1 \
+  --harness-journal "$JOURNAL" --main refs/remotes/origin/main 2>/dev/null)"
+fifth="$(printf '%s\n' "$derived" | grep '0005-the-fifth-thing' || true)"
+sixth="$(printf '%s\n' "$derived" | grep '0006-the-sixth-thing' || true)"
+if printf '%s' "$fifth" | grep -qE '	(1\.00|2\.50|3\.50)	'; then
+  fail "two attempts' costs were written to one attempt's row: $fifth"
+else
+  pass "a task attempted twice leaves cost unrecorded rather than ambiguous"
+fi
+if printf '%s' "$sixth" | grep -q '	0\.00	'; then
+  fail "a usage event with no cost was recorded as costing nothing"
+else
+  pass "a missing cost stays missing rather than becoming zero"
+fi
+rm -f "$SANDBOX/docs/tasks/0006-the-sixth-thing.md"
+rm -f "$SANDBOX/docs/tasks/0005-the-fifth-thing.md"
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
   log "all checks passed"

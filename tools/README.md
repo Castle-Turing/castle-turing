@@ -235,8 +235,12 @@ improved.
 
 ### Why this isn't in `agent/`
 
-Same test as `codex-review.sh` and `clarify/`: it never touches a
-journal and never runs as a seat. It measures the pipeline that builds
+Same test as `codex-review.sh` and `clarify/`: it never touches the
+journal — the agent layer's record stream, which is the word's meaning
+everywhere else in this repository — and never runs as a seat. The
+harness journal `derive --harness-journal` reads is a different thing
+wearing the same word: emcee's own event log, outside this checkout,
+and only numbers are taken from it. It measures the pipeline that builds
 this repository, from inside this repository, which is what `tools/` is
 for. Unlike those two it does not sit on the sweep scripts' unresolved
 boundary — a resident who is not developing this framework has no tasks

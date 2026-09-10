@@ -99,8 +99,9 @@ it explicitly.
   honestly be said from them, and `tools/outcomes/outcomes check`
   gates every pull request that touches a brief or the log — a task
   that lands unlogged fails CI. The pre-period is uneven and the brief
-  says exactly where: landing dates and pull requests reach back to
-  2026-08-14 for all 68 prior briefs, per-task spend for 24 of them,
+  says exactly where: landing dates reach back to 2026-08-14 for all
+  68 prior briefs, pull-request numbers for 65 of them, per-task
+  spend for 23,
   and the verdict columns (redirects and their miscorrection rate)
   have no pre-period at all — their series starts here. [inferred]
   the clause is satisfied for the measures with a pre-period and

@@ -66,16 +66,16 @@ checker, and no existing row is ever rewritten into the new shape.
 | # | Column | Kind | Meaning |
 |---|--------|------|---------|
 | 1 | `schema` | — | `1` for every row defined here. |
-| 2 | `task` | key | The brief's file stem, e.g. `0069-the-delivery-seat`. The stem rather than the number, because this repository's history contains two briefs numbered `0003`. |
+| 2 | `task` | key | The brief's file stem, e.g. `0069-the-delivery-seat`. The stem rather than the number, because this repository's history contains two briefs numbered `0003`. A brief renamed after its row was written still resolves, by number, where that number names one brief — the cell is immutable and the row cannot be deleted, so the alternative is a log that deadlocks on a rename. |
 | 3 | `attempt` | key | 1-based. A second attempt at the same task is a second row, never an edit to the first. |
 | 4 | `queued` | receipt | The date (UTC, `YYYY-MM-DD`) a file with this number first appeared under `docs/tasks/`. |
-| 5 | `landed` | receipt | The date the attempt's work merged to the trunk. |
+| 5 | `landed` | receipt | The date the attempt's work merged to the trunk. Work that has not reached the trunk has not landed, whatever branch it sits on. |
 | 6 | `outcome` | receipt | `merged`, `abandoned` or `superseded` once the attempt is terminal; `-` until then. Delivery only — see the receipt/verdict split below. |
 | 7 | `tier` | receipt | The brief's `Model:` header: `deep`, `standard`, `cheap`, or `human`. The routing *decision*. |
 | 8 | `model` | receipt | The model that actually ran, as the harness recorded it. The routing *outcome*. |
 | 9 | `milestone` | receipt | The brief's `Milestone:` header as a bare clause key, or `none-hygiene`. Never inferred: a brief with no header is `-`. |
 | 10 | `pr` | receipt | The pull-request number, bare. |
-| 11 | `cost_usd` | receipt | What the attempt spent, to the cent, from the harness's own usage ledger. |
+| 11 | `cost_usd` | receipt | What *this attempt* spent, to the cent, from the harness's own usage ledger. Left `-` where the ledger cannot say — a task attempted more than once, or an event carrying no figure. A recorded `0.00` claims the attempt was free. |
 | 12 | `turns` | receipt | Model turns in the attempt, from the same ledger. |
 | 13 | `questions` | receipt | Clarifying questions this attempt routed to the resident. |
 | 14 | `question_wait_h` | receipt | Hours the attempt was blocked waiting for those answers, to one decimal, summed. |

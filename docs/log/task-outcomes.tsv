@@ -65,6 +65,6 @@ schema	task	attempt	queued	landed	outcome	tier	model	milestone	pr	cost_usd	turns
 1	0065-the-clarifying-questions-intake	1	2026-09-06	2026-09-09	merged	deep	claude-opus-5	m2-done	113	17.30	101	-	-	-	-	-	-	-	-	-	-	backfilled	-
 1	0066-the-rollback-reexecs-before-it-rolls-back	1	2026-09-06	2026-09-07	merged	standard	claude-sonnet-5	-	106	1.63	51	-	-	-	-	-	-	-	-	-	-	backfilled	-
 1	0067-an-approved-switch-is-classified-and-staged	1	2026-09-06	2026-09-07	merged	deep	-	-	107	-	-	-	-	-	-	-	-	-	-	-	-	backfilled	-
-1	0068-the-journal-loses-the-minutes-before-a-hang	1	2026-09-06	2026-09-08	merged	standard	claude-sonnet-5	-	108	3.05	74	-	-	-	-	-	-	-	-	-	-	backfilled	-
+1	0068-the-journal-loses-the-minutes-before-a-hang	1	2026-09-06	2026-09-08	merged	standard	claude-sonnet-5	-	108	-	-	-	-	-	-	-	-	-	-	-	-	backfilled	-
 1	0069-the-delivery-seat	1	2026-09-08	2026-09-09	merged	deep	claude-opus-5	m2-done	114	1.75	22	-	-	-	-	-	-	-	-	-	-	backfilled	-
 1	0070-the-task-outcome-log	1	2026-09-10	-	-	deep	claude-opus-5	m2-constraints	-	-	-	0	0.0	-	-	-	-	-	-	-	e1	live	the first live row; the 68 rows above it are the backfill this task landed with

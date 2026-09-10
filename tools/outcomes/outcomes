@@ -302,16 +302,34 @@ def briefs(repo_root):
     return found
 
 
+def resolve(task, have, by_number):
+    """The brief a row's `task` cell names, allowing for a renamed slug.
+
+    A row's `task` is immutable and a row is never deleted, so a brief
+    renamed after its row was written — 0067's brief and branch already
+    disagree about a slug — would otherwise deadlock the log: coverage
+    would demand a row that append-only forbids writing. The rename is
+    resolved by number, but only where the number identifies exactly one
+    brief. Two briefs share the number 0003 in this repository's
+    history, and guessing which of them a stale stem meant is precisely
+    the kind of invention the log exists to keep out.
+    """
+    if task in have:
+        return task
+    stems = by_number.get(task[:4], [])
+    if len(stems) == 1:
+        return stems[0]
+    return None
+
+
 def check_coverage(rows, repo_root, path, problems):
     """The detector: a brief that landed without a row fails the next PR."""
-    logged = {as_record(r)["task"] for r in rows}
     have = briefs(repo_root)
-    for stem in sorted(have):
-        if stem not in logged:
-            problems.append(
-                f"{have[stem]}: brief has no row in {path}; "
-                "append one in this pull request — see docs/measurement.md"
-            )
+    by_number = {}
+    for stem in have:
+        by_number.setdefault(stem[:4], []).append(stem)
+
+    covered = set()
     for row in rows:
         rec = as_record(row)
         if rec["probe"] != UNRECORDED:
@@ -322,14 +340,43 @@ def check_coverage(rows, repo_root, path, problems):
                     f"{rec['task']}; salt never masquerades as a real record"
                 )
             continue
-        if rec["task"] not in have:
+        stem = resolve(rec["task"], have, by_number)
+        if stem is None:
             problems.append(
                 f"{path}:{row['_line']}: task {rec['task']} matches no brief under "
                 "docs/tasks/ or docs/tasks/done/"
             )
+        else:
+            covered.add(stem)
+
+    for stem in sorted(have):
+        if stem not in covered:
+            problems.append(
+                f"{have[stem]}: brief has no row in {path}; "
+                "append one in this pull request — see docs/measurement.md"
+            )
 
 
 def git_show(repo_root, ref, relpath):
+    """The file's content at `ref`, or None if the file is not there yet.
+
+    The two failures are told apart on purpose. A ref that does not
+    resolve is an error: a typo in `--base`, or a CI checkout with no
+    trunk fetched, would otherwise skip the append-only comparison
+    entirely and report `ok` — a silently absent guard on the one thing
+    this whole design exists to guard. Use --no-base to skip it on
+    purpose.
+    """
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if resolved.returncode != 0:
+        raise Fail(
+            f"{ref} does not resolve to a commit, so the log's history "
+            "cannot be checked; pass --base with a reachable revision, or "
+            "--no-base to skip the comparison deliberately"
+        )
     proc = subprocess.run(
         ["git", "show", f"{ref}:{relpath}"],
         cwd=repo_root, capture_output=True, text=True,
@@ -447,9 +494,9 @@ def merges_by_task(repo_root, main):
 
     A branch called `emcee/0067-…` is the strongest signal available for
     when a task's *work* landed, and it survives the brief being renamed
-    on the way (0067's branch and its brief disagree about the slug) and
-    the number being reused for a second attempt. Earliest merge wins:
-    that is the first landing, which is what a time series wants.
+    on the way (0067's branch and its brief disagree about the slug).
+    Earliest merge wins: that is the first landing, which is what a time
+    series wants.
     """
     out = run_git(repo_root, "log", "--merges", "--format=%ad%x09%s",
                   "--date=short", main)
@@ -460,6 +507,27 @@ def merges_by_task(repo_root, main):
         if m:
             found[m.group("num")] = (date, m.group("pr"))
     return found  # git log is newest-first, so the last write is the earliest
+
+
+def task_landing(repo_root, stem, have, by_num_brief, merges, main):
+    """When this task's work landed, and on which pull request.
+
+    The branch-name answer is preferred, but only where the number
+    identifies one brief. This repository has two briefs numbered 0003,
+    and a branch named after that number cannot say which of them it
+    carried — writing one task's landing date into the other's row is
+    exactly the kind of confident wrong number the log must not hold.
+    """
+    num = stem[:4]
+    if len(by_num_brief.get(num, [])) == 1 and num in merges:
+        return merges[num]
+    path = have.get(stem)
+    if path is None:
+        return (None, None)
+    commit, _ = brief_added(repo_root, path)
+    if not commit:
+        return (None, None)
+    return landing(repo_root, commit, main)
 
 
 ADD_PR_RE = re.compile(r"^Merge pull request #(\d+) ")
@@ -473,7 +541,19 @@ def landing(repo_root, commit, main):
     brief queued as a prompt reaches the trunk on whatever pull request
     queued it, which may not be the one that did the work — so the
     caller prefers the branch-name answer and only falls back here.
+
+    Work that has not reached the trunk has not landed, and this says so
+    rather than dating the landing to the commit's own day. Without the
+    ancestry test, running this on the branch that is *doing* the work
+    marks the work merged — into `outcome` and `landed`, which are
+    written once and never corrected.
     """
+    reachable = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, main],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if reachable.returncode != 0:
+        return (None, None)
     out = run_git(repo_root, "rev-list", "--ancestry-path", "--merges",
                   f"{commit}..{main}").strip()
     if not out:
@@ -529,8 +609,24 @@ def harness_facts(paths):
 
     Numbers only. The journal is the operator's, lives outside this
     repository, and nothing textual from it is ever copied in.
+
+    Two rules keep this from writing a number that means something other
+    than it says, both into cells that are written once and never
+    corrected:
+
+    *A missing figure stays missing.* A `usage` event with no cost, or a
+    null one, contributes nothing rather than `0.00` — a recorded zero
+    claims the attempt was free.
+
+    *An ambiguous figure stays missing too.* Several `usage` events for
+    one task means the task was attempted more than once, and this
+    derivation writes a single row per task. Summing would put the cost
+    of several attempts in a column that means "this attempt", and
+    picking one would be arbitrary, so the cell is left unrecorded and
+    the task is named on stderr for whoever wants to split the attempts
+    by hand.
     """
-    facts = {}
+    seen = {}
     for p in paths:
         f = pathlib.Path(p)
         if not f.is_file():
@@ -544,14 +640,37 @@ def harness_facts(paths):
             task = ev.get("task") or ev.get("step")
             if not task:
                 continue
-            slot = facts.setdefault(task, {})
+            slot = seen.setdefault(task, {"usage": [], "model": None, "pr": None})
             if ev.get("type") == "usage":
-                slot["cost_usd"] = f"{float(ev.get('cost_usd', 0)):.2f}"
-                slot["turns"] = str(ev.get("turns", ""))
+                slot["usage"].append(ev)
             elif ev.get("type") == "step_started" and ev.get("model"):
                 slot["model"] = str(ev["model"])
             elif ev.get("type") == "pr" and ev.get("url"):
                 slot["pr"] = str(ev["url"]).rstrip("/").rsplit("/", 1)[-1]
+
+    facts = {}
+    ambiguous = []
+    for task, slot in seen.items():
+        out = {}
+        if slot["model"]:
+            out["model"] = slot["model"]
+        if slot["pr"]:
+            out["pr"] = slot["pr"]
+        if len(slot["usage"]) == 1:
+            ev = slot["usage"][0]
+            cost = ev.get("cost_usd")
+            if isinstance(cost, (int, float)):
+                out["cost_usd"] = f"{float(cost):.2f}"
+            turns = ev.get("turns")
+            if isinstance(turns, int):
+                out["turns"] = str(turns)
+        elif len(slot["usage"]) > 1:
+            ambiguous.append(task)
+        facts[task] = out
+    if ambiguous:
+        print("note: cost and turns left unrecorded for "
+              f"{len(ambiguous)} task(s) attempted more than once: "
+              + ", ".join(sorted(ambiguous)), file=sys.stderr)
     return facts
 
 
@@ -564,7 +683,10 @@ def cmd_derive(args):
     log_path = args.log or str(pathlib.Path(repo_root) / "docs/log/task-outcomes.tsv")
     have = briefs(repo_root)
     facts = harness_facts(args.harness_journal)
-    by_number = merges_by_task(repo_root, args.main)
+    merges = merges_by_task(repo_root, args.main)
+    by_num_brief = {}
+    for stem in have:
+        by_num_brief.setdefault(stem[:4], []).append(stem)
     _, existing_rows = read_log(log_path)
     known = {as_record(r)["task"] for r in existing_rows}
 
@@ -572,15 +694,14 @@ def cmd_derive(args):
     for stem, path in sorted(have.items()):
         if stem in known:
             continue
-        commit, queued = brief_added(repo_root, path)
+        _, queued = brief_added(repo_root, path)
         row = blank_row()
         row["schema"] = SCHEMA
         row["task"] = stem
         row["attempt"] = "1"
         row["queued"] = queued or UNRECORDED
-        landed, pr = by_number.get(stem[:4], (None, None))
-        if landed is None and commit:
-            landed, pr = landing(repo_root, commit, args.main)
+        landed, pr = task_landing(repo_root, stem, have, by_num_brief,
+                                  merges, args.main)
         if landed:
             row["landed"] = landed
             row["pr"] = pr or UNRECORDED
@@ -605,11 +726,16 @@ def cmd_derive(args):
             for name in ("cost_usd", "turns", "pr"):
                 if rec[name] == UNRECORDED and f.get(name):
                     rec[name] = f[name]
-            if rec["outcome"] == UNRECORDED and rec["task"] in have:
-                landed, pr = by_number.get(rec["task"][:4], (None, None))
+            if rec["outcome"] == UNRECORDED:
+                landed, pr = task_landing(repo_root, rec["task"], have,
+                                          by_num_brief, merges, args.main)
                 if landed:
-                    rec["landed"] = landed
                     rec["outcome"] = "merged"
+                    # Every one of these is write-once. A cell already
+                    # carrying a value was written by someone who knew
+                    # something this derivation does not.
+                    if rec["landed"] == UNRECORDED:
+                        rec["landed"] = landed
                     if rec["pr"] == UNRECORDED and pr:
                         rec["pr"] = pr
             out.append("\t".join(rec[c] for c in COLUMNS))
@@ -659,6 +785,13 @@ def main(argv=None):
     d.set_defaults(func=cmd_derive)
 
     args = ap.parse_args(argv)
+    if getattr(args, "provenance", None) == "live" and args.env == UNRECORDED:
+        # `env` is immutable, so a live row written without one can never
+        # gain it. That is the single irreversible way to break the
+        # pooling requirement docs/measurement.md claims is met by
+        # construction, so it is refused rather than warned about.
+        ap.error("--env is required for a live row; see the environment "
+                 "table in docs/measurement.md")
     try:
         return args.func(args)
     except Fail as e:

@@ -102,6 +102,14 @@ rewritten pending one. A pre-period nobody can quietly improve is the
 entire product here; without this check the file is a well-formatted
 opinion.
 
+**A renamed brief does not deadlock the log.** A row's `task` is
+immutable and a row is never deleted, so a brief renamed after its row
+was written would otherwise be uncoverable: the checker would demand a
+row that the append-only rule forbids writing. Coverage therefore
+resolves a stale stem by number — but only where that number names
+exactly one brief, because two briefs here are numbered `0003` and
+guessing between them is the invention this design exists to keep out.
+
 **Coverage is the detector.** Every brief under `docs/tasks/` or
 `docs/tasks/done/` must have a row, checked on every pull request that
 touches either. This is the answer to the convention's "an incident
@@ -158,10 +166,13 @@ artifact state can honestly supply:
   conventions, so this is thin: seven briefs carry `Milestone:` and
   thirteen carry `Model:`; the rest are `-`.
 - `cost_usd`, `turns` and `model`, from the harness's usage ledger for
-  the seventeen runs it has kept since 2026-08-31 — twenty-four rows get
-  a real cost and twenty-two a real model. Only numbers are taken from
-  that ledger; it lives outside this repository and nothing textual in
-  it is ever copied in.
+  the seventeen runs it has kept since 2026-08-31 — twenty-three rows
+  get a real cost and twenty-two a real model. Only numbers are taken
+  from that ledger; it lives outside this repository and nothing
+  textual in it is ever copied in. One task, `0068`, was attempted
+  twice, so its cost is left unrecorded: the column means "this
+  attempt", summing would make it mean something else, and choosing one
+  of the two would be arbitrary.
 
 Everything else is `-`. In particular **every verdict cell in the
 backfill is unrecorded**, and this is the single most important honesty
@@ -182,8 +193,8 @@ This matters more than the row count, and it is the part a later reader
 will otherwise have to rediscover:
 
 - **Landing latency, landing rate, per-task spend and routing tier have
-  a real pre-period** back to 2026-08-14 (68 landing dates, 65 pull-request numbers, 24 costs, 13
-  routing tiers). An interrupted time series on the first two is
+  a real pre-period** back to 2026-08-14 — 68 landing dates, 65
+  pull-request numbers, 23 costs, 13 routing tiers. An interrupted time series on the first two is
   available now; on spend and tier it is available for the second half
   of the pre-period only.
 - **Off-milestone spend share does not.** The `Milestone:` header is
@@ -255,6 +266,39 @@ Needs a human, and is not built here:
   with the harness journal's path. Having the delivery seat write its
   own rows is the natural successor and belongs with the record shim
   that seat already owes the journal (task 0069).
+
+## Four rules that came out of review, and are not optional
+
+`/code-review` found four ways this could write a confident wrong number
+into a cell that is written once and never corrected. The fixes are
+small; the reasoning is not, and it belongs here rather than only in the
+code.
+
+**Unlanded work is not merged.** Deriving on the branch that is *doing*
+the work found no merge carrying its brief and dated the landing to the
+commit's own day. `landing()` now tests ancestry first. The failure mode
+is the worst shape available: a plausible date, in a write-once cell,
+produced by the tool on the exact branch where it is most likely to be
+run.
+
+**A missing figure stays missing, and so does an ambiguous one.** A
+`usage` event with no cost became `0.00`, which claims the attempt was
+free, and several events for one task were collapsed to the last one.
+Only an unambiguous single figure is recorded now; `0068` is the task
+this costs, and it is named above.
+
+**A number that names two briefs names neither.** The landing lookup
+keyed on the four-digit prefix while the log keys on the stem — which is
+the whole reason the log keys on the stem. It now falls back for a
+number shared by two briefs rather than writing one task's landing into
+the other's row.
+
+**An unresolvable `--base` is an error.** It previously skipped the
+append-only comparison and reported `ok`, which is a silently absent
+guard on the one thing this design exists to guard. `--no-base` remains
+for skipping it on purpose.
+
+Each of the four has a test beside it in `test/outcomes/run.sh`.
 
 ## Judgment calls made where the brief or the backlog entry was silent
 
