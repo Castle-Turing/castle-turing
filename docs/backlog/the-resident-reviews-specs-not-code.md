@@ -30,10 +30,12 @@ work already in flight.
   hold ("a brief nobody reviewed is not a brief"), now with the
   resident's explicit weight behind it.
 - *A defense relied on completely must watch itself.* On the same
-  day this was stated, the review gate was found silently broken —
-  five pull requests went unreviewed overnight because a parser
-  failure looked exactly like "no findings today," and the previous
-  handler automation had never once worked. If automated review is
+  day this was stated, the review gate was found silently broken (the
+  incident is filed with its own detector as
+  [[the-review-gate-fails-silently]]): reviews went unposted because
+  a parser failure looked exactly like "no findings today," echoing
+  the earlier finding that a predecessor handler had never once
+  worked and nothing said so. If automated review is
   the sole code-level defense, review-pipeline self-monitoring is
   not hygiene but a precondition: gate-ran-at-all checks,
   disposition-completeness sweeps (already in backlog), and a filled
@@ -43,24 +45,32 @@ work already in flight.
   or authority envelope that planned to read the resident's merge as
   a correctness label should not: by the resident's own account it
   is an interest-weighted drift check, and the external evidence
-  agrees that merge outcomes are poor quality labels generally.
+  agrees that merge outcomes are poor quality labels generally
+  (`docs/research/automated-approval.md`, MSR 2026 arXiv:2605.22534:
+  of hand-coded agentic-PR rejections only ~36% reflect genuine
+  failure, a third are workflow artifacts, a third show no rationale).
   Quality labels come instead from operational outcomes (reverts,
   incident-shaped failures, check regressions — timely, and
   involving no resident attention) and from acceptance verdicts
   ([[passing-tests-are-not-acceptance]]). Because the journals are
   append-only, expert human labeling remains a costable *research*
-  option appliable retroactively without slowing velocity — but
+  option applicable retroactively without slowing velocity — but
   live authority envelopes need timely signals, so they key on
   operational outcomes, never on labels that arrive in batches.
+  *This bullet is settled doctrine, not deferred work: on promotion,
+  the retirement of resident approval as a quality label and the
+  operational-outcome substitute land in `docs/state/`, not vanish
+  with the file — the carry-forward the gui-surfaces entry owes its
+  own rules.*
 
 **What the drift check becomes.** Explicitly a sample, and
 scheduled. A nominally-universal review that is actually a skim is
 the same silent decay the completion-vocabulary ban exists to
 prevent, one level up — and the backlog already documents how
 unscheduled vigilance rots ([[weekly-audit-vigilance]],
-[[delegation-atrophy]]). An honest design says: the resident deep-
-reads a declared sample of merged work on a cadence, reads every
-spec, and reads no code out of obligation.
+[[delegation-atrophy]]). An honest design says: the resident
+deep-reads a declared sample of merged work on a cadence, reads
+every spec, and reads no code out of obligation.
 
 **How this would have been caught sooner.** Not an incident — a
 standing mismatch between convention and practice, surfaced by the

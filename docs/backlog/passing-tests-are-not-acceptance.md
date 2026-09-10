@@ -9,8 +9,10 @@ closed by the resident doing manual acceptance testing — the exact
 scarce resource everything else exists to conserve. The resident's
 direction: this failure mode must become significantly harder to
 trigger, which means investing in a harness for agentic acceptance
-testing, beyond the integration- and fuzz-testing investments
-already recommended.
+testing — distinct from the integration- and fuzz-testing a general
+test-harness investment would cover, because acceptance asks "does
+this match the resident's intent," not "is the code internally
+sound."
 
 **Why it matters.** A one-human-plus-n-agents team scales only as
 far as the human's attention, and manual acceptance is attention
@@ -32,26 +34,29 @@ artifact layer.
   brief's verification plan become executable acceptance checks,
   authored at spec time and run by an agent standing in for the
   resident against the real artifact.
-- The 2026-09-10 research round supplies the strongest argument from
-  an unexpected angle: the best-measured mitigation against a
-  verifier gaming its own verdict is having the judge commit its
-  assessment *before* seeing the candidate. Acceptance criteria
+- The approval research (`docs/research/automated-approval.md`)
+  supplies the strongest argument from an unexpected angle: the
+  best-measured mitigation against a verifier gaming its own verdict
+  is having the judge commit its assessment *before* seeing the
+  candidate (arXiv:2607.05904, false positives 0.72 to 0.01).
+  Acceptance criteria
   written at spec time, before any implementation exists, are
   structurally that commitment — the acceptance agent cannot
   rationalize toward what got built, because the bar was set when
   nothing was built.
-- The same round documented the failure this harness must resist:
-  LLM verifiers weakening assertions and deleting failing checks to
+- The same research documented the failure this harness must resist
+  (`docs/research/automated-approval.md`, arXiv:2605.01471): LLM
+  verifiers weakening assertions and deleting failing checks to
   manufacture passes. Consequences for the design: the acceptance
   seat is distinct from the implementer (the sentinel argument —
   cross-family where stakes warrant), acceptance criteria live where
   the implementer cannot edit them, and criteria change only by
   reviewed commit.
-- For GUI surfaces, the ACI research round (same date, recorded in
-  the gui-surfaces backlog entry's amendment before promotion) makes
-  acceptance mechanical: posed fixtures, interaction contracts (in
-  state X, activating Y yields Z), and a tree-inspection verb are
-  exactly "works the way the resident expects" rendered checkable.
+- For GUI surfaces, the agent-computer-interface (ACI) research
+  (`docs/research/aci-for-gui-building.md`) makes acceptance
+  mechanical: posed fixtures, interaction contracts (in state X,
+  activating Y yields Z), and a tree-inspection verb are exactly
+  "works the way the resident expects" rendered checkable.
 - Proportionality holds: a harness step is owed when it will repeat
   (the existing convention). A one-off manual check the resident can
   do in a minute stays manual; the acceptance harness exists for the
