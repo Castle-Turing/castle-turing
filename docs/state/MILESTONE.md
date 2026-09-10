@@ -89,10 +89,13 @@ it explicitly.
   answer chord, task 0022); pipeline wiring not designed.
 - emcee dispatch: operating (sprints through task 0060 and PRs
   since). The seat it occupies is named as of task 0069 —
-  **delivery**, in `docs/architecture.md` — but the records that
-  seat owes the journal do not exist yet: the shim translating the
-  tenant's own events into `claim`, `result` and `question`
-  records is backlog, not built.
+  **delivery**, in `docs/architecture.md` — and the shim translating
+  the tenant's own events into `claim`, `result` and `question`
+  records is specced as of task 0071: its castle-side contract and
+  reconciliation policy, not its code. The tenant's exact hook and
+  event schema were not reachable from that task's worktree, so the
+  translation itself — and the schema it pins against — is a
+  separate implementation task, not yet built.
 - Baseline instrumentation ([m2-constraints] first clause): running
   as of task 0070. `docs/log/task-outcomes.tsv` carries one row per
   task attempt, `docs/measurement.md` defines the columns and what may
