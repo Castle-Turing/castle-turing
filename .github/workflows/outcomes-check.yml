@@ -1,0 +1,75 @@
+name: outcomes-check
+
+# The task-outcome log's checker, checked (task 0070).
+#
+# Its own workflow rather than a job in check.yml, for the reason
+# clarify-check.yml gives next door: check.yml carries
+# `paths-ignore: docs/**` on purpose, and everything this gate exists to
+# guard — the log, the briefs it must cover, the document that defines
+# it — is under docs/. Folding this in there would mean the one gate on
+# those files never fires on the pull requests that change them.
+#
+# Paths are duplicated between the two triggers rather than shared via a
+# YAML anchor: GitHub Actions does not expand anchors in workflow files.
+on:
+  pull_request:
+    paths:
+      - "docs/log/**"
+      - "docs/tasks/**"
+      - "docs/measurement.md"
+      - "tools/outcomes/**"
+      - "test/outcomes/**"
+      - ".github/workflows/outcomes-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/log/**"
+      - "docs/tasks/**"
+      - "docs/measurement.md"
+      - "tools/outcomes/**"
+      - "test/outcomes/**"
+      - ".github/workflows/outcomes-check.yml"
+  # Same escape hatch every other workflow here carries: a branch that
+  # isn't on a PR yet can still get a real run via `gh workflow run`.
+  workflow_dispatch: {}
+
+jobs:
+  outcomes-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The append-only comparison needs main's history, and the
+          # default shallow checkout has none of it.
+          fetch-depth: 0
+      # No Nix, deliberately, for the same reason clarify-check gives:
+      # tools/outcomes/outcomes is a single stdlib Python script and
+      # test/outcomes/run.sh is plain bash, so the stock runner's own
+      # toolchain is the whole dependency list.
+      - run: test/outcomes/run.sh
+      # The half run.sh cannot do on its own: hold the committed log
+      # against the trunk. This is the gate that matters — a rewritten
+      # baseline is the one failure that would otherwise look exactly
+      # like a clean diff. `origin/main` and never a local ref, per
+      # CLAUDE.md.
+      - name: the log's history is unaltered
+        run: |
+          git fetch --no-tags --quiet origin main
+          # The merge base, not origin/main itself. `git diff
+          # origin/main...HEAD` is the three-dot form CLAUDE.md asks for
+          # and it means exactly this: what this branch changed, not what
+          # main gained underneath it. Comparing against the tip instead
+          # would fail any branch cut before another log row landed, by
+          # reading rows it never had as rows it deleted.
+          #
+          # On a push to main there is no branch, so the previous trunk
+          # commit is the base — which is what catches a stale branch
+          # that dropped a row and merged anyway.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            base="$(git rev-parse HEAD^)"
+          else
+            base="$(git merge-base origin/main HEAD)"
+          fi
+          echo "holding the log against $base"
+          tools/outcomes/outcomes check --base "$base"

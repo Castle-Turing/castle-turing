@@ -1,0 +1,670 @@
+#!/usr/bin/env python3
+"""tools/outcomes/outcomes — the task-outcome log's mechanism (task 0070).
+
+WHAT THIS IS FOR (read before touching it)
+
+`docs/measurement.md` is the authority; this script is its teeth. The
+short version of why it exists: interrupted time series is the only
+credible causal design available to a project with one resident, and it
+is worthless without pre-intervention data
+(`docs/research/measurement-methodology.md`, design implication 9). So
+`docs/log/task-outcomes.tsv` starts before the pipeline-changing work
+lands, and something has to keep it honest afterwards.
+
+THE SPLIT, AND WHY IT MATTERS
+
+Two subcommands, deliberately unequal:
+
+  `derive`  reads git and — when pointed at one — a harness journal, and
+            writes rows. It needs a repository and a history.
+  `check`   is a pure function of (log, working tree). No network, no
+            forge, no model, no clock. It is what CI runs.
+
+That is the same split `tools/handover-ledger.py` and
+`tools/handover-check.py` make, for the same reason: a check that
+re-derived truth from the live world would fail for reasons that have
+nothing to do with the thing it is checking. Here it buys something
+more specific — `check` can run on any clone, forever, including one
+made after the forge this repo lives on has stopped existing.
+
+WHAT `check` GUARDS
+
+The log's value is entirely in nobody being able to quietly improve its
+past. Every rule below exists to make a rewrite loud:
+
+  * Rows are append-only. A row present in the base revision is present
+    here, and its immutable cells are byte-identical.
+  * Pending cells are write-once: `-` (not recorded) may become a value
+    exactly once, and a value never becomes something else. `note` is
+    the single exception, because a note is the only cell that could
+    ever need redacting.
+  * Every brief in `docs/tasks/` has a row. This is the detector: a task
+    that lands without being logged fails the very next pull request,
+    which is the only moment the row is still cheap to write.
+  * A verdict cell carries a citation. Receipts are machine-derived;
+    verdicts are the resident's, and a verdict with no reference to
+    where the resident said it is the system grading its own judgment
+    (`docs/architecture.md`, Proposal 06).
+  * A probe row says it is a probe. Salt never masquerades as a real
+    record — same proposal.
+  * `note` is lint against the one hard rule this repository has: no
+    personal data, ever.
+
+Stdlib only, like `agent/castle` and `tools/clarify/clarify`, and for
+the same reason: this has to keep working on someone else's machine in
+ten years with nothing installed but a python3 binary.
+
+USAGE
+
+    tools/outcomes/outcomes check [--log FILE] [--repo-root DIR]
+                                  [--base REF] [--no-base]
+    tools/outcomes/outcomes derive [--log FILE] [--repo-root DIR]
+                                   [--harness-journal FILE]... [--env KEY]
+                                   [--fill] [-o FILE]
+
+`check` exits non-zero having printed every problem it found. `--base`
+takes the revision the log's history is held against: `origin/main` by
+default, and in CI the *merge base* with it, so a branch cut before
+another row landed is not accused of deleting that row. `derive` prints candidate rows for briefs with no
+row; `--fill` instead rewrites the log with pending cells filled from
+artifact state, for a human to read as a diff.
+"""
+
+import argparse
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+SCHEMA = "1"
+
+# The columns, in order. Changing this list is a schema version bump:
+# add the new version's definition to docs/measurement.md, teach this
+# script both, and never rewrite existing rows to the new shape.
+COLUMNS = [
+    "schema",
+    "task",
+    "attempt",
+    "queued",
+    "landed",
+    "outcome",
+    "tier",
+    "model",
+    "milestone",
+    "pr",
+    "cost_usd",
+    "turns",
+    "questions",
+    "question_wait_h",
+    "redirects",
+    "redirects_wrong",
+    "reworks",
+    "findings",
+    "findings_fixed",
+    "verdict_ref",
+    "probe",
+    "env",
+    "provenance",
+    "note",
+]
+
+# Cells fixed when the row is appended. A change to one of these is a
+# rewrite of history, which is the thing the log exists to prevent.
+IMMUTABLE = {"schema", "task", "attempt", "queued", "tier", "model",
+             "milestone", "probe", "env", "provenance"}
+
+# Cells that may go from `-` to a value exactly once, as the attempt's
+# outcome matures: the pull request opens, the review lands, the
+# resident says something.
+PENDING = {"landed", "outcome", "pr", "cost_usd", "turns", "questions",
+           "question_wait_h", "redirects", "redirects_wrong", "reworks",
+           "findings", "findings_fixed", "verdict_ref"}
+
+# The one amendable cell. See the header.
+AMENDABLE = {"note"}
+
+# Cells the resident authors. Nothing in this repository may infer one.
+VERDICT = {"redirects", "redirects_wrong"}
+
+UNRECORDED = "-"
+
+# No in-flight value here on purpose: `outcome` is a pending cell and a
+# pending cell is written once, so an `open` that later became `merged`
+# would be exactly the rewrite this log exists to forbid. `-` carries
+# "has not reached a terminal state", and a `-` on a task that plainly
+# landed is a visible defect rather than a silent one.
+OUTCOMES = {"merged", "abandoned", "superseded"}
+TIERS = {"deep", "standard", "cheap", "human"}
+PROVENANCE = {"live", "backfilled"}
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TASK_RE = re.compile(r"^\d{4}-[a-z0-9]+(-[a-z0-9]+)*$")
+KEY_RE = re.compile(r"^[a-z0-9]+([._/-][a-z0-9]+)*$")
+INT_RE = re.compile(r"^\d+$")
+MONEY_RE = re.compile(r"^\d+\.\d{2}$")
+HOURS_RE = re.compile(r"^\d+\.\d$")
+
+NOTE_MAX = 200
+# Crude, deliberate, and cheap: the two shapes personal data has taken
+# in this repository's near misses. Not a substitute for reading the
+# diff — a floor under it.
+NOTE_BANNED = ("@", "/home/")
+
+
+class Fail(Exception):
+    pass
+
+
+def read_log(path):
+    """Parse a task-outcome log into (header, [dict]). Structural only."""
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    if not text.endswith("\n"):
+        raise Fail(f"{path}: no trailing newline")
+    lines = text.split("\n")[:-1]
+    if not lines:
+        raise Fail(f"{path}: empty")
+    header = lines[0].split("\t")
+    rows = []
+    for n, line in enumerate(lines[1:], start=2):
+        cells = line.split("\t")
+        rows.append({"_line": n, "_cells": cells})
+    return header, rows
+
+
+def as_record(row):
+    return dict(zip(COLUMNS, row["_cells"]))
+
+
+def key(rec):
+    return (rec["task"], rec["attempt"])
+
+
+# --- check ---------------------------------------------------------------
+
+
+def check_shape(header, rows, path, problems):
+    if header != COLUMNS:
+        problems.append(
+            f"{path}:1: header is not schema {SCHEMA}'s columns; "
+            f"expected {len(COLUMNS)} names in the order docs/measurement.md gives"
+        )
+        return False
+    ok = True
+    for row in rows:
+        cells = row["_cells"]
+        if len(cells) != len(COLUMNS):
+            problems.append(
+                f"{path}:{row['_line']}: {len(cells)} cells, expected {len(COLUMNS)}"
+            )
+            ok = False
+            continue
+        for name, cell in zip(COLUMNS, cells):
+            if cell == "":
+                problems.append(
+                    f"{path}:{row['_line']}: {name} is empty; "
+                    f"not recorded is `{UNRECORDED}`, never blank"
+                )
+                ok = False
+            elif cell != cell.strip():
+                problems.append(f"{path}:{row['_line']}: {name} has edge whitespace")
+                ok = False
+    return ok
+
+
+def check_values(rows, path, problems):
+    def bad(row, msg):
+        problems.append(f"{path}:{row['_line']}: {msg}")
+
+    def num(rec, name, pattern):
+        v = rec[name]
+        return v == UNRECORDED or bool(pattern.match(v))
+
+    seen = {}
+    for row in rows:
+        rec = as_record(row)
+        if rec["schema"] != SCHEMA:
+            bad(row, f"schema {rec['schema']!r} is not {SCHEMA!r}")
+        if not TASK_RE.match(rec["task"]):
+            bad(row, f"task {rec['task']!r} is not NNNN-slug")
+        if not INT_RE.match(rec["attempt"]) or rec["attempt"] == "0":
+            bad(row, f"attempt {rec['attempt']!r} is not a positive integer")
+        k = key(rec)
+        if k in seen:
+            bad(row, f"{k[0]} attempt {k[1]} already has a row at line {seen[k]}")
+        seen[k] = row["_line"]
+        for name in ("queued", "landed"):
+            if rec[name] != UNRECORDED and not DATE_RE.match(rec[name]):
+                bad(row, f"{name} {rec[name]!r} is not YYYY-MM-DD")
+        if UNRECORDED not in (rec["queued"], rec["landed"]):
+            if rec["landed"] < rec["queued"]:
+                bad(row, f"landed {rec['landed']} precedes queued {rec['queued']}")
+        if rec["outcome"] != UNRECORDED and rec["outcome"] not in OUTCOMES:
+            bad(row, f"outcome {rec['outcome']!r} is not one of {sorted(OUTCOMES)}")
+        if rec["outcome"] == "merged" and rec["landed"] == UNRECORDED:
+            bad(row, "outcome is merged with no landed date")
+        if rec["tier"] != UNRECORDED and rec["tier"] not in TIERS:
+            bad(row, f"tier {rec['tier']!r} is not one of {sorted(TIERS)}")
+        if rec["provenance"] not in PROVENANCE:
+            bad(row, f"provenance {rec['provenance']!r} is not one of {sorted(PROVENANCE)}")
+        for name in ("pr", "turns", "questions", "findings", "findings_fixed",
+                     "redirects", "redirects_wrong"):
+            if not num(rec, name, INT_RE):
+                bad(row, f"{name} {rec[name]!r} is not an integer")
+        if not num(rec, "cost_usd", MONEY_RE):
+            bad(row, f"cost_usd {rec['cost_usd']!r} is not a 2-decimal amount")
+        if not num(rec, "question_wait_h", HOURS_RE):
+            bad(row, f"question_wait_h {rec['question_wait_h']!r} is not a 1-decimal count of hours")
+        for name in ("model", "milestone", "env", "probe", "verdict_ref", "reworks"):
+            if rec[name] != UNRECORDED and not KEY_RE.match(rec[name].replace(",", "-")):
+                bad(row, f"{name} {rec[name]!r} is not a bare key")
+        # The pairing rule. A detection rate reported without its
+        # conditional miscorrection rate is uninterpretable
+        # (docs/research/measurement-methodology.md, design implication 1),
+        # so the log will not hold one without the other.
+        if rec["redirects"] != UNRECORDED and rec["redirects_wrong"] == UNRECORDED:
+            bad(row, "redirects recorded without redirects_wrong; "
+                     "a detection rate is never logged alone")
+        if rec["redirects_wrong"] != UNRECORDED and rec["redirects"] == UNRECORDED:
+            bad(row, "redirects_wrong recorded without redirects")
+        if UNRECORDED not in (rec["redirects"], rec["redirects_wrong"]):
+            if int(rec["redirects_wrong"]) > int(rec["redirects"]):
+                bad(row, "redirects_wrong exceeds redirects")
+        # Proposal 06: only verdicts settle, and a verdict is something
+        # the resident said somewhere findable.
+        for name in sorted(VERDICT):
+            if rec[name] not in (UNRECORDED, "0") and rec["verdict_ref"] == UNRECORDED:
+                bad(row, f"{name} is a verdict and carries no verdict_ref")
+        if UNRECORDED not in (rec["findings"], rec["findings_fixed"]):
+            if int(rec["findings_fixed"]) > int(rec["findings"]):
+                bad(row, "findings_fixed exceeds findings")
+        note = rec["note"]
+        if note != UNRECORDED:
+            if len(note) > NOTE_MAX:
+                bad(row, f"note is {len(note)} characters, over the {NOTE_MAX} cap")
+            for banned in NOTE_BANNED:
+                if banned in note:
+                    bad(row, f"note contains {banned!r}; "
+                             "the log carries no personal data, ever")
+            if not note.isprintable():
+                bad(row, "note has non-printable characters")
+
+
+def briefs(repo_root):
+    """Every numbered brief, by stem, wherever it currently sits."""
+    root = pathlib.Path(repo_root) / "docs" / "tasks"
+    found = {}
+    for d in (root, root / "done"):
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("[0-9][0-9][0-9][0-9]-*.md")):
+            found[f.stem] = f
+    return found
+
+
+def check_coverage(rows, repo_root, path, problems):
+    """The detector: a brief that landed without a row fails the next PR."""
+    logged = {as_record(r)["task"] for r in rows}
+    have = briefs(repo_root)
+    for stem in sorted(have):
+        if stem not in logged:
+            problems.append(
+                f"{have[stem]}: brief has no row in {path}; "
+                "append one in this pull request — see docs/measurement.md"
+            )
+    for row in rows:
+        rec = as_record(row)
+        if rec["probe"] != UNRECORDED:
+            # A probe row names a synthetic task on purpose, and says so.
+            if rec["task"] in have:
+                problems.append(
+                    f"{path}:{row['_line']}: probe row names the real brief "
+                    f"{rec['task']}; salt never masquerades as a real record"
+                )
+            continue
+        if rec["task"] not in have:
+            problems.append(
+                f"{path}:{row['_line']}: task {rec['task']} matches no brief under "
+                "docs/tasks/ or docs/tasks/done/"
+            )
+
+
+def git_show(repo_root, ref, relpath):
+    proc = subprocess.run(
+        ["git", "show", f"{ref}:{relpath}"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def check_append_only(rows, repo_root, log_path, base, problems):
+    """Compare against the base revision. This is the load-bearing check."""
+    try:
+        rel = str(pathlib.Path(log_path).resolve().relative_to(
+            pathlib.Path(repo_root).resolve()))
+    except ValueError:
+        print(f"note: {log_path} is outside {repo_root}; "
+              "skipping the append-only comparison", file=sys.stderr)
+        return
+    text = git_show(repo_root, base, rel)
+    if text is None:
+        print(f"note: {rel} does not exist at {base}; "
+              "treating every row as new", file=sys.stderr)
+        return
+    base_lines = text.split("\n")[:-1]
+    if not base_lines:
+        return
+    base_rows = {}
+    for line in base_lines[1:]:
+        cells = line.split("\t")
+        if len(cells) != len(COLUMNS):
+            continue
+        rec = dict(zip(COLUMNS, cells))
+        base_rows[key(rec)] = rec
+    here = {}
+    for row in rows:
+        rec = as_record(row)
+        here[key(rec)] = (row["_line"], rec)
+    for k, was in sorted(base_rows.items()):
+        if k not in here:
+            problems.append(
+                f"{rel}: the row for {k[0]} attempt {k[1]} is present at {base} "
+                "and gone here; rows are never deleted"
+            )
+            continue
+        line, now = here[k]
+        for name in COLUMNS:
+            if name in AMENDABLE:
+                continue
+            if was[name] == now[name]:
+                continue
+            if name in IMMUTABLE:
+                problems.append(
+                    f"{rel}:{line}: {name} was {was[name]!r} at {base} and is "
+                    f"{now[name]!r} here; that cell is fixed when the row is written"
+                )
+            elif was[name] != UNRECORDED:
+                problems.append(
+                    f"{rel}:{line}: {name} was already recorded as {was[name]!r} at "
+                    f"{base}; a pending cell is written once"
+                )
+
+
+def cmd_check(args):
+    repo_root = args.repo_root
+    log_path = args.log or str(pathlib.Path(repo_root) / "docs/log/task-outcomes.tsv")
+    problems = []
+    header, rows = read_log(log_path)
+    if not check_shape(header, rows, log_path, problems):
+        report(problems)
+        return 1
+    check_values(rows, log_path, problems)
+    check_coverage(rows, repo_root, log_path, problems)
+    if not args.no_base:
+        check_append_only(rows, repo_root, log_path, args.base, problems)
+    if problems:
+        report(problems)
+        return 1
+    print(f"ok: {len(rows)} rows, {len(briefs(repo_root))} briefs, "
+          f"schema {SCHEMA}")
+    return 0
+
+
+def report(problems):
+    for p in problems:
+        print(p, file=sys.stderr)
+    print(f"\n{len(problems)} problem(s). docs/measurement.md is the authority "
+          "on every rule above.", file=sys.stderr)
+
+
+# --- derive --------------------------------------------------------------
+
+
+def run_git(repo_root, *args):
+    proc = subprocess.run(["git", *args], cwd=repo_root,
+                          capture_output=True, text=True, check=True)
+    return proc.stdout
+
+
+def brief_added(repo_root, path):
+    """The date a file with this number first appeared, following renames."""
+    out = run_git(repo_root, "log", "--diff-filter=A", "--follow",
+                  "--format=%H %ad", "--date=short", "--", str(path)).strip()
+    if not out:
+        return None, None
+    commit, date = out.splitlines()[-1].split(" ", 1)
+    return commit, date
+
+
+PR_RE = re.compile(
+    r"^Merge pull request #(?P<pr>\d+) from [^/]+/(?:[^/\s]+/)?(?P<num>\d{4})-")
+
+
+def merges_by_task(repo_root, main):
+    """Task number -> (date, pr) for every merge whose branch names it.
+
+    A branch called `emcee/0067-…` is the strongest signal available for
+    when a task's *work* landed, and it survives the brief being renamed
+    on the way (0067's branch and its brief disagree about the slug) and
+    the number being reused for a second attempt. Earliest merge wins:
+    that is the first landing, which is what a time series wants.
+    """
+    out = run_git(repo_root, "log", "--merges", "--format=%ad%x09%s",
+                  "--date=short", main)
+    found = {}
+    for line in out.splitlines():
+        date, _, subject = line.partition("\t")
+        m = PR_RE.match(subject)
+        if m:
+            found[m.group("num")] = (date, m.group("pr"))
+    return found  # git log is newest-first, so the last write is the earliest
+
+
+ADD_PR_RE = re.compile(r"^Merge pull request #(\d+) ")
+
+
+def landing(repo_root, commit, main):
+    """When the commit that introduced a brief reached the trunk.
+
+    The fallback, for the era before branches were named after task
+    numbers. It answers a weaker question than `merges_by_task` — a
+    brief queued as a prompt reaches the trunk on whatever pull request
+    queued it, which may not be the one that did the work — so the
+    caller prefers the branch-name answer and only falls back here.
+    """
+    out = run_git(repo_root, "rev-list", "--ancestry-path", "--merges",
+                  f"{commit}..{main}").strip()
+    if not out:
+        # Landed straight on the trunk, as this repository's earliest work did.
+        date = run_git(repo_root, "log", "-1", "--format=%ad", "--date=short",
+                       commit).strip()
+        return date, UNRECORDED
+    merge = out.splitlines()[-1]
+    date = run_git(repo_root, "log", "-1", "--format=%ad", "--date=short",
+                   merge).strip()
+    subject = run_git(repo_root, "log", "-1", "--format=%s", merge).strip()
+    m = ADD_PR_RE.match(subject)
+    return date, (m.group(1) if m else UNRECORDED)
+
+
+HEADER_RE = re.compile(r"^([A-Za-z-]+):\s*(.*)$")
+
+
+def brief_headers(path):
+    """The `Key: value` header block, stopping where the parser stops."""
+    headers = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            break
+        m = HEADER_RE.match(line)
+        if not m:
+            break
+        headers[m.group(1).lower()] = m.group(2).strip()
+    return headers
+
+
+def normalise_milestone(value):
+    """The `Milestone:` header as a bare key.
+
+    Two shapes reach here: a clause key from docs/state/MILESTONE.md,
+    written bare or in brackets, and the explicit opt-out `none —
+    hygiene`. Anything else is left unrecorded rather than guessed at —
+    a milestone the log invents is worse than one it admits to not
+    knowing, because off-milestone share is computed from this column.
+    """
+    v = value.strip().strip("[]").lower()
+    if not v:
+        return UNRECORDED
+    if v.startswith("none"):
+        return "none-hygiene"
+    if KEY_RE.match(v):
+        return v
+    return UNRECORDED
+
+
+def harness_facts(paths):
+    """Per-task cost, turns and model from a harness journal, if given.
+
+    Numbers only. The journal is the operator's, lives outside this
+    repository, and nothing textual from it is ever copied in.
+    """
+    facts = {}
+    for p in paths:
+        f = pathlib.Path(p)
+        if not f.is_file():
+            print(f"note: no harness journal at {p}", file=sys.stderr)
+            continue
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            task = ev.get("task") or ev.get("step")
+            if not task:
+                continue
+            slot = facts.setdefault(task, {})
+            if ev.get("type") == "usage":
+                slot["cost_usd"] = f"{float(ev.get('cost_usd', 0)):.2f}"
+                slot["turns"] = str(ev.get("turns", ""))
+            elif ev.get("type") == "step_started" and ev.get("model"):
+                slot["model"] = str(ev["model"])
+            elif ev.get("type") == "pr" and ev.get("url"):
+                slot["pr"] = str(ev["url"]).rstrip("/").rsplit("/", 1)[-1]
+    return facts
+
+
+def blank_row():
+    return {c: UNRECORDED for c in COLUMNS}
+
+
+def cmd_derive(args):
+    repo_root = args.repo_root
+    log_path = args.log or str(pathlib.Path(repo_root) / "docs/log/task-outcomes.tsv")
+    have = briefs(repo_root)
+    facts = harness_facts(args.harness_journal)
+    by_number = merges_by_task(repo_root, args.main)
+    _, existing_rows = read_log(log_path)
+    known = {as_record(r)["task"] for r in existing_rows}
+
+    new = []
+    for stem, path in sorted(have.items()):
+        if stem in known:
+            continue
+        commit, queued = brief_added(repo_root, path)
+        row = blank_row()
+        row["schema"] = SCHEMA
+        row["task"] = stem
+        row["attempt"] = "1"
+        row["queued"] = queued or UNRECORDED
+        landed, pr = by_number.get(stem[:4], (None, None))
+        if landed is None and commit:
+            landed, pr = landing(repo_root, commit, args.main)
+        if landed:
+            row["landed"] = landed
+            row["pr"] = pr or UNRECORDED
+            row["outcome"] = "merged"
+        headers = brief_headers(path)
+        tier = headers.get("model", UNRECORDED).lower()
+        row["tier"] = tier if tier in TIERS else UNRECORDED
+        row["milestone"] = normalise_milestone(headers.get("milestone", ""))
+        f = facts.get(stem, {})
+        for name in ("cost_usd", "turns", "model", "pr"):
+            if f.get(name):
+                row[name] = f[name]
+        row["env"] = args.env
+        row["provenance"] = args.provenance
+        new.append(row)
+
+    if args.fill:
+        out = [ "\t".join(COLUMNS) ]
+        for r in existing_rows:
+            rec = as_record(r)
+            f = facts.get(rec["task"], {})
+            for name in ("cost_usd", "turns", "pr"):
+                if rec[name] == UNRECORDED and f.get(name):
+                    rec[name] = f[name]
+            if rec["outcome"] == UNRECORDED and rec["task"] in have:
+                landed, pr = by_number.get(rec["task"][:4], (None, None))
+                if landed:
+                    rec["landed"] = landed
+                    rec["outcome"] = "merged"
+                    if rec["pr"] == UNRECORDED and pr:
+                        rec["pr"] = pr
+            out.append("\t".join(rec[c] for c in COLUMNS))
+        for row in new:
+            out.append("\t".join(row[c] for c in COLUMNS))
+        text = "\n".join(out) + "\n"
+        target = args.output or log_path
+        pathlib.Path(target).write_text(text, encoding="utf-8")
+        print(f"wrote {target}: {len(existing_rows)} rows kept, {len(new)} appended",
+              file=sys.stderr)
+        return 0
+
+    for row in new:
+        print("\t".join(row[c] for c in COLUMNS))
+    if not new:
+        print("every brief already has a row", file=sys.stderr)
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--repo-root", default=".",
+                    help="repository to read (default: the current directory)")
+    ap.add_argument("--log", help="the log file (default: docs/log/task-outcomes.tsv)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("check", help="verify the log; no network, no model")
+    c.add_argument("--base", default="origin/main",
+                   help="revision to hold the log's history against "
+                        "(default: origin/main; CI passes the merge base "
+                        "with it, never a local branch)")
+    c.add_argument("--no-base", action="store_true",
+                   help="skip the append-only comparison (a fresh clone with no remote)")
+    c.set_defaults(func=cmd_check)
+
+    d = sub.add_parser("derive", help="write rows from artifact state")
+    d.add_argument("--harness-journal", action="append", default=[],
+                   help="a harness journal to take cost and turns from; repeatable")
+    d.add_argument("--env", default=UNRECORDED,
+                   help="the environment key for new rows (docs/measurement.md)")
+    d.add_argument("--provenance", default="live", choices=sorted(PROVENANCE))
+    d.add_argument("--main", default="origin/main",
+                   help="the trunk to measure landing against")
+    d.add_argument("--fill", action="store_true",
+                   help="rewrite the log, filling pending cells")
+    d.add_argument("-o", "--output", help="write somewhere other than the log")
+    d.set_defaults(func=cmd_derive)
+
+    args = ap.parse_args(argv)
+    try:
+        return args.func(args)
+    except Fail as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

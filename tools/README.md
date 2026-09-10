@@ -198,6 +198,59 @@ never runs as a seat, and has no reason to exist on a resident's actual
 machine after this repo stops changing — it's tooling for people (and
 agent sessions) editing the repo itself, which is what `tools/` is for.
 
+## `outcomes/` — the task-outcome log's mechanism
+
+```
+tools/outcomes/outcomes check [--base REF] [--no-base]
+tools/outcomes/outcomes derive [--harness-journal FILE]... [--env KEY] [--fill]
+```
+
+The instrument specced in task 0070 and defined in
+`docs/measurement.md`. `docs/log/task-outcomes.tsv` carries one row per
+task attempt, and this is what keeps it honest.
+
+Two subcommands, deliberately unequal. `derive` reads git and — when
+pointed at one — a harness journal, and writes rows; it needs a
+repository, a history, and paths outside the checkout. `check` is a
+pure function of (log, working tree): no network, no forge, no model,
+no clock. It is what CI runs, and it still runs on a clone made after
+the forge this repository lives on has stopped existing. That is the
+same split `handover-ledger.py` and `handover-check.py` make, for the
+reason task 0062 gives.
+
+What `check` guards, in one list: rows are append-only against the
+trunk, immutable cells never change, a pending cell goes from `-` to a
+value exactly once, every brief under `docs/tasks/` has a row, a
+verdict column carries a citation to where the resident said it, a
+redirect count never appears without its miscorrection rate beside it,
+salt never wears a real brief's name, and a note never carries an
+address or a home path.
+
+The coverage rule is the detector, in the sense the "an incident ships
+its detector" convention means: a task that lands unlogged fails the
+very next pull request, which is the only moment the row is still cheap
+to write. Everything else in the design is downstream of one property —
+a pre-intervention baseline is worth nothing if its past can be quietly
+improved.
+
+### Why this isn't in `agent/`
+
+Same test as `codex-review.sh` and `clarify/`: it never touches a
+journal and never runs as a seat. It measures the pipeline that builds
+this repository, from inside this repository, which is what `tools/` is
+for. Unlike those two it does not sit on the sweep scripts' unresolved
+boundary — a resident who is not developing this framework has no tasks
+to log.
+
+### Verification
+
+`test/outcomes/run.sh`, in CI via `.github/workflows/outcomes-check.yml`.
+It runs `check` over the real log, then builds a synthetic repository
+and mutates it once per rule — twenty-odd rejects, each asserted to be
+caught by the rule that owns it, plus the three transitions that must
+still be *allowed*. Plain bash, stdlib python3, no Nix, no network,
+zero models.
+
 ## `clarify/` — check a clarifying-questions phase run
 
 ```
