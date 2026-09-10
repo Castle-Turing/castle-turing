@@ -40,13 +40,27 @@ during the 2026-09-10 design discussion.
   must name the yield it buys, or its cost is invisible and
   permanent.
 
+**What we already know.** The enforcement pattern this needs is not
+new — the project runs it twice already (Proposal 06's falsifier,
+the task header's `Model-because:`), and both are enforced by people
+reading the diff rather than by a validator, because a required
+free-text field with nothing reading it produces ritual compliance.
+The adoption gates a convention passes through already exist and are
+already the resident's (principle docs, CLAUDE.md, `docs/state/`).
+The metric substrate a falsifier would name is partly built: the
+task-outcome baseline ([[the-workflow-interventions-have-no-outcome-measures]],
+if unpromoted) and emcee's ledger. What is missing is only the rule
+tying the two together at a convention's birth, and a sweep to read
+conventions against their own stated metric — the sibling of the
+corpus sweep.
+
 **The mechanism.** Extend the non-emptiness rule this project
 already enforces in two places — Proposal 06 makes a decision name
 its falsifier, and a task header makes `Model-because:` name why the
-tier is right, both unfasifiable-if-blank by design. Add one step to
-the birth of a convention: **at adoption, a convention states the
+tier is right, each a defect when left blank by design. Add one step
+to the birth of a convention: **at adoption, a convention states the
 signal that would show it is working and the signal that would show
-it should be retired, and that signal names a metric the outcome
+it should be retired, and each signal names a metric the outcome
 baseline already collects or can** (`docs/log/`-style task-outcome
 data; emcee's ledger for cost). This does three things at once:
 
