@@ -71,6 +71,35 @@ compiles to no executable check must say so explicitly and name the
 manual step that stands in — blank is not an answer, per the same
 rule that binds this section.
 
+**A worked specimen — task 0070 (2026-09-14).** The task that built
+the outcome-log baseline passed every test, committed its backfill,
+and armed a coverage gate: "logging is running" was true in the
+implementer's honest reading. The resident's reading was *rows get
+written as work happens and a redirect is loggable* — and neither
+was wired: `derive` was manual (the brief said so plainly), and the
+verdict columns had no invocation path a resident who will not
+hand-edit a TSV would use. Merging would have armed the gate against
+a pipeline that fed it nothing, breaking every later task PR. The
+resident caught it by reading the PR; nothing mechanical did. This is
+the failure this entry predicts, and it produced two follow-ups: task
+0072 wires the reachability (rows on every PR, an agent-invoked
+redirect logger), and the detector below.
+
+**The reachability corollary.** The 0070 miss has a mechanical shape
+distinct from its semantic cause, and the shape is catchable without
+the resident: *functionality added with no invocation path, behind a
+gate nothing feeds.* Acceptance criteria must therefore assert
+**reachability**, not only correctness — a feature is accepted when
+it is exercised in its real invocation path, never when it merely
+exists and unit-passes. Task 0072 ships the mechanical detector (a
+lint for orphan tool entrypoints and armed gates with no feeder);
+this entry owns the semantic half, which only an acceptance check
+authored from the resident's done-looks-like can carry. The division
+matters: the lint would not have understood that "logging is running"
+meant "rows get written," but a reachability-asserting acceptance
+criterion, written at spec time, would have demanded a demonstration
+that a row appears when a task lands — and failed when none did.
+
 **Constraint at promotion time.** This is pipeline-changing work;
 [m2-constraints]'s baseline-before-intervention clause applies to
 any brief promoted from this entry.
