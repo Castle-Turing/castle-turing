@@ -51,9 +51,17 @@ cite) rides its own branch and PR #131, unmerged as this is written.
 The incident-ships-its-detector obligation is carried by 0074, not
 here; if that work is ever abandoned rather than merged, the
 obligation reverts to open and this brief's 0074 citations need
-re-pointing. Merge order between the two does not otherwise matter —
-this fix does not depend on the detector to function, only the
-falsifier's *visibility* does.
+re-pointing. On ordering, said precisely rather than waved off: the
+incident-ships-its-detector obligation is discharged only when both
+halves are merged and deployed, and until 0074 deploys a recurrence
+is again invisible. Merging this fix ahead of the detector is
+therefore a deliberate risk ordering — prevention before detection,
+because the one-line fix lowers the probability of the very event
+the detector exists to observe, and holding it hostage to a
+substantial implementation leaves the machine exposed longer. That
+ordering is the resident's call at merge time; this PR does not
+claim the obligation is discharged, it names 0074 as where it
+lives.
 
 ## The change
 
