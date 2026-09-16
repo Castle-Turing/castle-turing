@@ -978,8 +978,12 @@ def cmd_derive(args):
 # mechanical check and mistakes it for the semantic one.
 
 PR_REF_RE = re.compile(
-    r"^(?:https?://[^\s]*?/pull/)?(?P<pr>\d+)"
-    r"(?:[#/]|-)(?:issue)?(?P<what>comment|pullrequestreview|review)-?(?P<id>\d+)$",
+    # The URL a resident would paste, and the form the log stores. Both,
+    # because the stored form is what an agent replaying its own step
+    # copies back out of the cell, and a replay that could not parse
+    # what the tool itself wrote would be idempotent in theory only.
+    r"^(?:https?://[^\s]*?/pull/|pr[-/])?(?P<pr>\d+)"
+    r"[#/-](?:issue)?(?P<what>comment|pullrequestreview|review)-?(?P<id>\d+)$",
     re.IGNORECASE,
 )
 RECORD_REF_RE = re.compile(r"^(?:record-)?(?P<id>\d{8}T\d{6}Z-[a-z]+-[0-9a-f]+)$")
