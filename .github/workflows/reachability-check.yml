@@ -1,0 +1,54 @@
+name: reachability-check
+
+# The detector for task 0072's incident, run on every pull request that
+# could create it.
+#
+# Feeder: tools/reachability-check.py reads the working tree and nothing
+# else, so what feeds this gate is the repository itself. There is no
+# artifact to produce and none to go missing.
+#
+# The incident: task 0070 shipped a tool, its tests and a required gate,
+# all green, while nothing in the repository ever called the half of the
+# tool that writes rows. An orphan entrypoint and an unfed gate are the
+# two mechanical shapes of that, and this fails on either.
+#
+# Not folded into check.yml for the same reason outcomes-check.yml and
+# clarify-check.yml are not: check.yml carries `paths-ignore: docs/**`,
+# and a runbook step under docs/ is one of the things that counts as a
+# caller here — so the one gate that reads them would never fire on the
+# pull requests that change them.
+#
+# Paths are duplicated between the two triggers rather than shared via a
+# YAML anchor: GitHub Actions does not expand anchors in workflow files.
+on:
+  pull_request:
+    paths:
+      - "tools/**"
+      - "docs/**"
+      - "agent/**"
+      - "scripts/**"
+      - "test/reachability/**"
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/**"
+      - "docs/**"
+      - "agent/**"
+      - "scripts/**"
+      - "test/reachability/**"
+      - ".github/workflows/**"
+  workflow_dispatch: {}
+
+jobs:
+  reachability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nix: the lint is one stdlib Python script and its test is
+      # plain bash, so the stock runner's toolchain is the whole
+      # dependency list.
+      - run: test/reachability/run.sh
+      - name: nothing in this tree is unreachable
+        run: tools/reachability-check.py --repo-root .

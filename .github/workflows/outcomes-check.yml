@@ -2,6 +2,13 @@ name: outcomes-check
 
 # The task-outcome log's checker, checked (task 0070).
 #
+# Feeder: tools/outcomes/outcomes derive writes the receipt cells and is
+# run by .github/workflows/outcomes-row.yml on every task pull request;
+# tools/outcomes/outcomes redirect writes the verdict cells and is run by
+# the agent that received the redirect, per docs/log/README.md. A gate
+# whose feeder cannot be named is one nobody has checked is fed — which is
+# exactly what this gate was between task 0070 and task 0072.
+#
 # Its own workflow rather than a job in check.yml, for the reason
 # clarify-check.yml gives next door: check.yml carries
 # `paths-ignore: docs/**` on purpose, and everything this gate exists to

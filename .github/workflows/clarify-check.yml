@@ -2,6 +2,12 @@ name: clarify-check
 
 # The clarifying-questions phase's checks, checked (task 0065).
 #
+# Feeder: the requirements documents under docs/state/ are written by the
+# clarifying-questions phase itself, which docs/clarifying-questions.md
+# sets out step by step — including the tools/clarify/clarify probe and
+# scoring commands this gate then checks the output of. The phase is run by
+# a session following that document; nothing automates it yet.
+#
 # Its own workflow rather than a job in check.yml, for one reason:
 # check.yml carries `paths-ignore: docs/**` on purpose
 # (docs/tasks/done/0018-docs-only-ci-skip.md — a prose-only PR should not

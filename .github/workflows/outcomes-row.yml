@@ -1,0 +1,135 @@
+name: outcomes-row
+
+# The feeder for the coverage gate (task 0072).
+#
+# `outcomes-check.yml` fails any pull request whose brief has no row in
+# docs/log/task-outcomes.tsv. Task 0070 armed that gate and wired nothing
+# to write the rows, so every subsequent task pull request would have
+# failed CI for a reason nobody had a hand for. This is the hand: on a
+# pull request that adds a brief, derive the row and commit it to the
+# branch, so the row is present because the flow put it there.
+#
+# Feeder: tools/outcomes/outcomes derive — receipts only, from git; the
+# verdict columns are fed by tools/outcomes/outcomes redirect, which no
+# workflow may run because a verdict needs a resident citation.
+#
+# WHY A WORKFLOW AND NOT THE DELIVERY SEAT
+#
+# Task 0069 named the seat that opens these pull requests; the seat is a
+# harness that lives in another repository, and nothing here opens a pull
+# request, so there is nothing local to wire `derive` into at PR-open
+# time. docs/backlog/the-outcome-row-is-written-by-ci-not-the-seat.md
+# carries the debt. This is an interim that works, not the design.
+#
+# WHY A BOT WRITING ROWS IS SAFE
+#
+#   * `derive` writes receipts only. It cannot touch a verdict cell — the
+#     verdict path is `redirect`, which demands a citation the resident
+#     authored. Automation is not grading itself here.
+#   * It cannot damage the past. outcomes-check.yml holds the log
+#     append-only against the merge base, so the worst a misbehaving run
+#     can do is fail its own gate on the branch.
+#   * It terminates. The push retriggers this workflow; the second run
+#     finds every brief already has a row, changes nothing, pushes
+#     nothing.
+on:
+  pull_request:
+    paths:
+      - "docs/tasks/**"
+
+permissions:
+  contents: write
+
+jobs:
+  append:
+    # Same-repository branches only. A fork's branch cannot be pushed to
+    # with this token, and a run that pretended otherwise would fail
+    # halfway with the row half-written.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The row's `queued` and `landed` cells are read out of history,
+          # and the default shallow checkout has none of it.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+          # REVIEW_BOT_TOKEN does here exactly what it does for the
+          # review-findings handler: a push made with the default
+          # workflow token starts no checks, so without it the row lands
+          # under a green tick belonging to the previous commit. The run
+          # says which one it used rather than leaving that to be
+          # guessed.
+          token: ${{ secrets.REVIEW_BOT_TOKEN || github.token }}
+
+      - name: is a row missing
+        id: needed
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin main
+          # Dry run first, so a pull request with nothing to append costs
+          # nothing and — the point — does not demand configuration it
+          # does not need. --env is only required to *write* a live row.
+          # `--env placeholder` because a *live* row needs a real key and
+          # this run writes nothing; the dry run only prints candidates.
+          # Its exit status is not swallowed: a `derive` that failed here
+          # would otherwise print nothing and be read as "no rows
+          # missing", which is the silent-skip failure this task exists
+          # to stop recurring.
+          rows="$(tools/outcomes/outcomes derive --env placeholder \
+                    --main origin/main)"
+          if [ -n "$rows" ]; then
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+            echo "briefs with no row:"
+            echo "$rows" | cut -f2
+          else
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+            echo "every brief already has a row"
+          fi
+
+      - name: derive the row and commit it to this branch
+        if: steps.needed.outputs.missing == 'true'
+        env:
+          OUTCOMES_ENV: ${{ vars.OUTCOMES_ENV }}
+          # Through the environment rather than interpolated into the
+          # script: `${{ secrets.X }}` in a `run:` body puts the secret
+          # in the command line, and the only thing needed here is
+          # whether it is set.
+          BOT_TOKEN: ${{ secrets.REVIEW_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `env` is immutable, so a row written under the wrong
+          # environment key can never be corrected — which is why this
+          # refuses rather than guessing a default. Loudly, naming the
+          # fix: a silent skip here is the failure this whole task exists
+          # to stop recurring.
+          if [ -z "${OUTCOMES_ENV:-}" ]; then
+            echo "::error::A brief on this pull request has no row in" \
+                 "docs/log/task-outcomes.tsv, and the repository variable" \
+                 "OUTCOMES_ENV is not set, so the row cannot be written:" \
+                 "the env column is immutable and guessing it is permanent." \
+                 "Set OUTCOMES_ENV to an environment key from" \
+                 "docs/measurement.md (e1 today), or append the row by hand" \
+                 "with: tools/outcomes/outcomes derive --fill --env e1" \
+                 "--provenance live --main origin/main"
+            exit 1
+          fi
+          tools/outcomes/outcomes derive --fill --env "$OUTCOMES_ENV" \
+            --provenance live --main origin/main
+          if git diff --quiet -- docs/log/task-outcomes.tsv; then
+            echo "derive changed nothing after all; leaving the branch alone"
+            exit 0
+          fi
+          git config user.name "outcomes-row"
+          git config user.email "outcomes-row@users.noreply.github.com"
+          git add docs/log/task-outcomes.tsv
+          git commit \
+            -m "Log the outcome row for this task" \
+            -m "Appended by .github/workflows/outcomes-row.yml so the coverage gate in outcomes-check.yml has something to gate. Receipts only, derived from git; the verdict columns are untouched and stay the resident's."
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          if [ -z "${BOT_TOKEN:-}" ]; then
+            echo "::warning::Pushed with the default workflow token, which" \
+                 "starts no checks. The tick on this pull request belongs to" \
+                 "the previous commit until something else pushes. Set the" \
+                 "REVIEW_BOT_TOKEN secret to fix this permanently."
+          fi

@@ -31,8 +31,16 @@ them:
   2. **Armed gate with no named feeder.** A workflow that runs one of
      those tools is a gate on some artifact; it must say, in a `Feeder:`
      line in its header comment, what produces that artifact — and the
-     thing it names must exist. A gate whose feeder cannot be named is
+     path it names must exist. A gate whose feeder cannot be named is
      one nobody has checked is fed.
+
+     The check stops at the path. Whether the *subcommand* a feeder line
+     names is real is already rule 1's job — every subcommand needs a
+     caller — and going further here would mean deciding whether the
+     word after a tool path is a subcommand or the next word of an
+     English sentence, which is a guess. The declaration is the point:
+     a gate whose author could not name a feeder has told you something
+     before any path is resolved.
 
 WHAT THIS IS NOT
 
