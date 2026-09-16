@@ -56,13 +56,28 @@ A subcommand that matures a task's row verdict cells:
 
     outcomes redirect <task> --ref <citation> [--wrong <n>]
 
-It sets `redirects` (incrementing, pending→value per 0070's rules),
-requires `--ref` (a PR comment number, review URL fragment, or journal
-record id), and writes `redirects_wrong` beside it (default 0, since a
-redirect is presumed correct until reassessed). It refuses to write a
-verdict without a citation, and refuses to overwrite a recorded value
-with a different one — the same write-once discipline the checker
-enforces.
+It counts **distinct cited redirect events**: every invocation requires
+`--ref` (a PR comment number, review URL fragment, or journal record
+id), and `redirects` is the number of distinct citations recorded for
+the task. A `--ref` already recorded is an idempotent replay — exit
+zero, change nothing — while a new `--ref` increments the count. The
+write-once discipline the checker enforces holds **per citation**, not
+on the aggregate: the count moves only because a new citation was
+added, never because a cell was edited, so a second redirect maturing
+`redirects` from 1 to 2 is not an overwrite and a bare edit of the
+number with no citation behind it is.
+
+`redirects_wrong` stays **pending until the resident reassesses** —
+never defaulted. The measure this column feeds is defined over
+redirects *later judged* wrong
+(`the-workflow-interventions-have-no-outcome-measures.md`, methodology
+postscript), and writing 0 at redirect time would record the absence
+of a judgment as a judgment of correctness, biasing the conditional
+miscorrection rate downward — the same silence-reads-as-a-decision
+defect this project keeps paying for. It matures pending→value only
+when an invocation transcribes an explicit resident reassessment, with
+its own `--ref` to where the resident made it, under the same
+per-citation rules as `redirects`.
 
 **The integrity rule this brief exists to get right.** The receipt/
 verdict split (`docs/measurement.md`, Proposal 06) says no automation
@@ -70,11 +85,18 @@ may author a verdict. This command does not author one: it **transcribes**
 a verdict the resident stated, and `--ref` is the proof of authorship —
 it must point at where the resident actually made the judgment. An agent
 running this command is the resident's hand, not a second opinion. The
-command must make fabrication detectable, not merely discouraged: a
-`--ref` that resolves to nothing is a defect a check can catch, and the
-brief states how (does the ref resolve to a real comment/record?). An
-agent may transcribe; it may never originate. Say this in the command's
-help text, not only here.
+command must make fabrication detectable, not merely discouraged, and
+resolution alone is not detection: a `--ref` pointing at a real comment
+the *agent* wrote would pass an existence check while carrying no
+resident judgment at all. The resolver therefore verifies two things
+mechanically — the ref resolves to a real comment/record, **and** its
+author is the configured resident identity (the GitHub login for PR
+refs, the journal's author field for record ids). What no resolver can
+verify is that the cited text actually states the claimed verdict;
+that semantic residue belongs to the weekly audit's sampled reads, and
+the command's help text states the boundary so nobody mistakes the
+mechanical check for it. An agent may transcribe; it may never
+originate. Say all of this in the command's help text, not only here.
 
 ### 3. The detector, so this class does not recur
 
@@ -117,15 +139,18 @@ where the resident sent work back.
   and passes once wiring lands — the detector demonstrably detects.
 - A task PR opened through the wired flow carries its row with no human
   step; a PR that removes the row fails CI.
-- `outcomes redirect` matures a row, refuses a missing/​unresolvable
-  `--ref`, and refuses to rewrite a recorded verdict. `outcomes check`
-  passes on the result.
+- `outcomes redirect` matures a row; refuses a missing, unresolvable,
+  or non-resident-authored `--ref`; replays an already-recorded
+  citation as a no-op; increments on a second, distinct citation; and
+  refuses any change to a cell that no new citation licenses.
+  `outcomes check` passes on the result.
 - **Inaugural datum:** the command's first real use logs task 0070's
   redirect — `outcomes redirect 0070-the-task-outcome-log --ref <the PR
-  #120 redirect comment>` — maturing that row to `redirects=1,
-  redirects_wrong=0`. The first verdict in the log is the redirect that
-  created this task. That row, green under `outcomes check`, is this
-  task's acceptance test.
+  #120 redirect comment>` — maturing that row to `redirects=1` with
+  `redirects_wrong` still pending, because no reassessment of that
+  redirect has happened and pending is the truthful value. The first
+  verdict in the log is the redirect that created this task. That row,
+  green under `outcomes check`, is this task's acceptance test.
 
 ## Approval and sequencing
 
