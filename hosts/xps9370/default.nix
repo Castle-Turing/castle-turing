@@ -26,23 +26,30 @@
   hardware.enableRedistributableFirmware = true;
 
   # Bar every NVMe controller in this machine from autonomous power
-  # states costing more than 5500 µs of entry+exit latency. On this
-  # chassis's single drive (the PC401 — disko.nix gives it the one
-  # M.2 slot) that bars PS4 (6000 µs, 7 mW), the state implicated in
-  # the 2026-09-16 write-path dropout, and keeps PS3 (2000 µs, 70 mW)
-  # as the idle floor — about 60 mW over full APST, against the watts
-  # that 0 (APST off) would cost. The parameter is module-global, not
-  # per-device: a second drive would inherit the bar.
+  # states whose EXIT latency exceeds 2000 µs. On this chassis's
+  # single drive (the PC401 — disko.nix gives it the one M.2 slot)
+  # that bars PS4 (exit latency 5000 µs, 7 mW), the state implicated
+  # in the 2026-09-16 write-path dropout, and keeps PS3 (exit latency
+  # 1000 µs, 70 mW) as the idle floor. Module-global, not per-device:
+  # a second drive would inherit the bar.
+  #
+  # The gate is exit latency ALONE, not entry+exit total: the kernel's
+  # nvme_configure_apst() skips a state when
+  # `exit_latency_us > ctrl->ps_max_latency_us`, and only uses the
+  # entry+exit sum afterward, for the transition-time calc — verified
+  # by reading drivers/nvme/host/core.c at v6.18, the running kernel,
+  # not the total-latency reasoning most online write-ups repeat. So
+  # the threshold sits between PS3's exit (1000) and PS4's exit
+  # (5000); 2000 leaves margin either side. An earlier 5500 here was a
+  # silent no-op (5000 ≤ 5500 still admits PS4), caught by the Claude
+  # review on PR #132.
   #
   # Probable cause, not proven — task 0075's brief carries the
   # evidence chain, task 0074 the detector the incident shipped.
-  # Verified against kernel 6.18.44 (the pin of the day), which
-  # programmed this drive into PS4 after 100 ms of idle and carries
-  # no NO_DEEPEST_PS quirk for it. Falsifier: a dropout recurring
-  # with this in place refutes the PS4 theory; the next step is 0.
-  # Retire the line if a pinned kernel gains a PC401 quirk, or with
-  # the drive.
-  boot.kernelParams = [ "nvme_core.default_ps_max_latency_us=5500" ];
+  # Falsifier: a dropout recurring with this in place refutes the PS4
+  # theory; the next step is 0 (APST off entirely). Retire the line if
+  # a pinned kernel gains a PC401 quirk, or with the drive.
+  boot.kernelParams = [ "nvme_core.default_ps_max_latency_us=2000" ];
 
   # The boot loader (systemd-boot + the ESP fallback posture) comes from
   # modules/boot.nix, bound by flake.nix's nixosModules.host-xps9370

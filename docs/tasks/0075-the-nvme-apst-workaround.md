@@ -72,31 +72,43 @@ this block, verbatim:
 
 ```nix
   # Bar every NVMe controller in this machine from autonomous power
-  # states costing more than 5500 µs of entry+exit latency. On this
-  # chassis's single drive (the PC401 — disko.nix gives it the one
-  # M.2 slot) that bars PS4 (6000 µs, 7 mW), the state implicated in
-  # the 2026-09-16 write-path dropout, and keeps PS3 (2000 µs, 70 mW)
-  # as the idle floor — about 60 mW over full APST, against the watts
-  # that 0 (APST off) would cost. The parameter is module-global, not
-  # per-device: a second drive would inherit the bar.
+  # states whose EXIT latency exceeds 2000 µs. On this chassis's
+  # single drive (the PC401 — disko.nix gives it the one M.2 slot)
+  # that bars PS4 (exit latency 5000 µs, 7 mW), the state implicated
+  # in the 2026-09-16 write-path dropout, and keeps PS3 (exit latency
+  # 1000 µs, 70 mW) as the idle floor. Module-global, not per-device:
+  # a second drive would inherit the bar.
+  #
+  # The gate is exit latency ALONE, not entry+exit total: the kernel's
+  # nvme_configure_apst() skips a state when
+  # `exit_latency_us > ctrl->ps_max_latency_us`, and only uses the
+  # entry+exit sum afterward, for the transition-time calc — verified
+  # by reading drivers/nvme/host/core.c at v6.18, the running kernel,
+  # not the total-latency reasoning most online write-ups repeat. So
+  # the threshold sits between PS3's exit (1000) and PS4's exit
+  # (5000); 2000 leaves margin either side. An earlier 5500 here was a
+  # silent no-op (5000 ≤ 5500 still admits PS4), caught by the Claude
+  # review on PR #132.
   #
   # Probable cause, not proven — task 0075's brief carries the
   # evidence chain, task 0074 the detector the incident shipped.
-  # Verified against kernel 6.18.44 (the pin of the day), which
-  # programmed this drive into PS4 after 100 ms of idle and carries
-  # no NO_DEEPEST_PS quirk for it. Falsifier: a dropout recurring
-  # with this in place refutes the PS4 theory; the next step is 0.
-  # Retire the line if a pinned kernel gains a PC401 quirk, or with
-  # the drive.
-  boot.kernelParams = [ "nvme_core.default_ps_max_latency_us=5500" ];
+  # Falsifier: a dropout recurring with this in place refutes the PS4
+  # theory; the next step is 0 (APST off entirely). Retire the line if
+  # a pinned kernel gains a PC401 quirk, or with the drive.
+  boot.kernelParams = [ "nvme_core.default_ps_max_latency_us=2000" ];
 ```
 
 The comment deliberately carries the constraint, the scope, the
 arithmetic, and the falsifier — not the incident narrative, which
-lives here. The first draft of this brief specced the full narrative
-inline; review flagged it as the accretion pattern
+lives here. Two review rounds shaped it: `/code-review` flagged the
+first draft's inline narrative as the accretion pattern
 `docs/backlog/code-comments-accrete-the-reasoning-record.md` records,
-and the brief was corrected rather than the implementer deviating.
+and the Claude review on PR #132 caught the load-bearing correctness
+bug — the original 5500 was derived from entry+exit *total* latency
+(PS3 2000, PS4 6000), but the kernel gates on exit latency alone, so
+5500 would have admitted PS4 unchanged and shipped a silent no-op.
+The value and its arithmetic were corrected against the kernel source
+rather than the implementer deviating.
 
 In `hosts/`, not `modules/`, by the hard rule: which power states a
 particular drive in a particular chassis can safely enter is a
@@ -123,15 +135,17 @@ Human steps, after merge (they need the machine):
    (`nixos-rebuild switch --flake ~/projects/castle-turing-private#xps9370`
    — the switch needs the resident, per the standing sudo boundary).
 4. `cat /proc/cmdline` shows
-   `nvme_core.default_ps_max_latency_us=5500`.
-5. `sudo nvme get-feature /dev/nvme0 -f 0x0c -H` shows no entry with
-   ITPS 4 — the kernel reprograms the drive's APST table at probe
-   time under the new budget, and PS3 as the deepest programmed
-   state is the observable receipt that the bar is in force.
+   `nvme_core.default_ps_max_latency_us=2000`.
+5. Capture `sudo nvme get-feature /dev/nvme0 -f 0x0c -H` *before* the
+   rebuild (it currently shows ITPS 4) and again after, and diff:
+   the after-table must show no entry with ITPS 4, with PS3 as the
+   deepest programmed state. An unchanged table is the silent-no-op
+   signature the 5500 bug would have produced, so the diff — not just
+   the after-shot — is the receipt that the bar took effect.
 6. The real test is time: no recurrence. If a dropout does recur
    with the parameter in place, that refutes the PS4 theory — go to
-   `0`, and expect task 0074's canary (once deployed) to have
-   caught and timestamped it.
+   `0` (APST off entirely), and expect task 0074's canary (once
+   deployed) to have caught and timestamped it.
 
 ## Implementation prompt
 
