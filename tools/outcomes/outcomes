@@ -146,11 +146,9 @@ IMMUTABLE = {"schema", "task", "attempt", "queued", "tier", "model",
              "milestone", "probe", "env", "provenance"}
 
 # Cells that may go from `-` to a value exactly once, as the attempt's
-# outcome matures: the pull request opens, the review lands, the
-# resident says something.
+# outcome matures: the pull request opens, the review lands.
 PENDING = {"landed", "outcome", "pr", "cost_usd", "turns", "questions",
-           "question_wait_h", "redirects", "redirects_wrong", "reworks",
-           "findings", "findings_fixed", "verdict_ref"}
+           "question_wait_h", "reworks", "findings", "findings_fixed"}
 
 # The one amendable cell. See the header.
 AMENDABLE = {"note"}
@@ -1206,11 +1204,26 @@ def cmd_redirect(args):
     if header != COLUMNS:
         raise Fail(f"{log_path}: header is not schema {SCHEMA}'s columns")
 
+    # Every row is about to be rebuilt from `COLUMNS`, and `as_record`
+    # would quietly drop cells past the end or pad a short row with
+    # nothing. On an append-only log that is the one class of damage
+    # there is no way back from, so a malformed row stops the write
+    # rather than being normalised by it.
+    for r in rows:
+        if len(r["_cells"]) != len(COLUMNS):
+            raise Fail(
+                f"{log_path}:{r['_line']}: {len(r['_cells'])} cells, expected "
+                f"{len(COLUMNS)}; run `outcomes check` and repair the log before "
+                "writing a verdict into it"
+            )
+
     row = find_row(rows, args.task, args.attempt)
     rec = as_record(row)
     if rec["probe"] != UNRECORDED:
         raise Fail(f"{rec['task']} is a probe row; salt carries no verdict")
 
+    if args.wrong is not None and args.wrong < 0:
+        raise Fail("--wrong counts redirects judged wrong; it cannot be negative")
     kind = "reassessed" if args.wrong is not None else "redirect"
     ref_kind, pr, ident, body = parse_ref(args.ref)
     citation = f"{kind}/{body}"
