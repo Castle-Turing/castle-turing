@@ -148,17 +148,51 @@ reject "a cost that is not a 2-decimal amount" "2-decimal"
 base_log | sed '2s/\t2\t2\t/\t1\t2\t/' > "$LOG"
 reject "more findings fixed than raised" "findings_fixed exceeds findings"
 
-log "the receipt/verdict split"
+log "the receipt/verdict split, and the citations that carry it"
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t/\t1\t-\t-\t2\t2\t/' > "$LOG"
-reject "a redirect count with no miscorrection rate beside it" \
-  "a detection rate is never logged alone"
+# `verdict` rewrites columns 15..20 in one go: redirects, redirects_wrong,
+# reworks, findings, findings_fixed, verdict_ref. Written out rather than
+# patched cell by cell because the rules being tested are about how those
+# six agree with each other.
+verdict() { # verdict <redirects> <wrong> <verdict_ref>
+  base_log | sed "2s#\t-\t-\t-\t2\t2\t-\t#\t$1\t$2\t-\t2\t2\t$3\t#"
+}
+CITE1="redirect/pr-7-comment-9"
+CITE2="redirect/pr-8-comment-3"
+REASSESS="reassessed/record-20260914T051123Z-answer-ab12cd"
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t/\t1\t2\t-\t2\t2\t/' > "$LOG"
+verdict 1 - - > "$LOG"
+reject "a redirect count with no citation behind it" "cites 0 redirect event(s)"
+
+verdict 2 - "$CITE1" > "$LOG"
+reject "a redirect count that disagrees with its citations" \
+  "the count is the citations"
+
+verdict - - "$CITE1" > "$LOG"
+reject "a citation with no count beside it" "redirects is unrecorded"
+
+verdict 1 2 "$CITE1" > "$LOG"
 reject "more redirects judged wrong than were made" "exceeds redirects"
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t/\t1\t0\t-\t2\t2\t/' > "$LOG"
-reject "a verdict with nowhere the resident said it" "carries no verdict_ref"
+verdict - 0 - > "$LOG"
+reject "a miscorrection count with no redirects to divide" \
+  "redirects_wrong recorded without redirects"
+
+# The rule the whole column turns on: a value here says the resident
+# looked again, so a value with nowhere they looked is a fabrication —
+# including, and especially, a 0.
+verdict 1 0 "$CITE1" > "$LOG"
+reject "a reassessment with nowhere the resident made it" \
+  "cites no resident reassessment"
+
+verdict 1 - "pr-comment-9" > "$LOG"
+reject "a citation in the shape schema 1 used to allow" "is not <redirect|reassessed>"
+
+verdict 2 - "$CITE1,$CITE1" > "$LOG"
+reject "one citation counted twice" "twice"
+
+verdict 1 - "redirect/somebody-said-so" > "$LOG"
+reject "a citation naming no resolvable place" "is not <redirect|reassessed>"
 
 log "coverage, the detector"
 
@@ -205,8 +239,14 @@ accept() { # accept <name>
   base_log > "$LOG"
 }
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t2\t1\t-\t2\t2\tpr-comment-9\t/' > "$LOG"
-accept "a verdict pair arriving together with its citation"
+verdict 1 - "$CITE1" > "$LOG"
+accept "a cited redirect whose reassessment is still pending"
+
+verdict 2 1 "$CITE1,$CITE2,$REASSESS" > "$LOG"
+accept "two cited redirects and a cited reassessment of them"
+
+verdict 0 0 - > "$LOG"
+accept "no redirects and none wrong, which is arithmetic rather than judgment"
 
 base_log | sed '2s/\tlive\t-$/\tlive\tan amended note, which is the one cell that may be/' > "$LOG"
 accept "a note rewritten, because a note may need redacting"
@@ -215,6 +255,225 @@ accept "a note rewritten, because a note may need redacting"
 brief 0004-the-fourth-thing deep
 accept "a new row appended with its outcome still pending"
 rm -f "$SANDBOX/docs/tasks/0004-the-fourth-thing.md"
+
+# --- append-only, per citation -------------------------------------------
+#
+# The rules above hold a row against a base revision that carries no
+# verdict at all. These hold one against a base that does — which is the
+# only shape in which a verdict can be *rewritten*, and therefore the
+# only shape that matters. The base revision is advanced to a log with a
+# cited redirect in it, and `base_log` is redefined so the resets below
+# land back on that.
+
+log "append-only, per citation"
+
+CITED_BASE="$(verdict 1 - "$CITE1")"
+printf '%s\n' "$CITED_BASE" > "$LOG"
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t commit -aqm "a cited redirect"
+git -C "$SANDBOX" update-ref refs/remotes/origin/main HEAD
+base_log() { printf '%s\n' "$CITED_BASE"; }
+
+cited() { # cited <redirects> <wrong> <verdict_ref>
+  printf '%s\n' "$CITED_BASE" \
+    | sed "2s#\t1\t-\t-\t2\t2\t$CITE1\t#\t$1\t$2\t-\t2\t2\t$3\t#"
+}
+
+cited 2 - "$CITE1" > "$LOG"
+reject "a redirect count raised with no new citation" "the count is the citations"
+
+cited 2 - "$CITE1,$CITE2" > "$LOG"
+accept "a second redirect, arriving with the citation that licenses it"
+
+cited 1 - "$CITE2" > "$LOG"
+reject "an existing citation swapped for another" "never edited"
+
+cited 0 - - > "$LOG"
+reject "a citation deleted and the count walked back" "never edited"
+
+cited 2 - "$CITE2,$CITE1" > "$LOG"
+reject "citations reordered so the appended one is not last" "never edited"
+
+cited 1 0 "$CITE1" > "$LOG"
+reject "a reassessment written with nothing new cited" "cites no resident reassessment"
+
+cited 1 0 "$CITE1,$REASSESS" > "$LOG"
+accept "a reassessment maturing pending to zero, with the citation for it"
+
+# The move the brief spends a page on: a second redirect raising the
+# count is not an overwrite, and the log has to be able to tell that from
+# one.
+cited 2 1 "$CITE1,$CITE2,$REASSESS" > "$LOG"
+accept "a second redirect and a reassessment of both, each cited"
+
+# --- redirect, the verdict logger ----------------------------------------
+#
+# `redirect` is the only thing in this repository that writes a verdict
+# cell, so its refusals are the whole integrity story. The forge is
+# stubbed: every case the resolver must tell apart is a fixture file, and
+# anything else 404s exactly as the real `gh` does. No network.
+
+log "redirect"
+
+mkdir -p "$WORKDIR/bin" "$WORKDIR/gh" "$WORKDIR/journal"
+cat > "$WORKDIR/bin/gh" <<'SH'
+#!/usr/bin/env bash
+# A stand-in forge. `gh api <path>` serves $GH_FIXTURE/<path with / as _>
+# or 404s; `--jq .permission` reads that one field out of it.
+if [ "$1 $2" = "repo view" ]; then echo "castle/turing"; exit 0; fi
+f="$GH_FIXTURE/$(printf '%s' "$2" | tr '/' '_')"
+if [ ! -f "$f" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+if [ "${3:-}" = "--jq" ]; then
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["permission"])' "$f"
+else
+  cat "$f"
+fi
+SH
+chmod +x "$WORKDIR/bin/gh"
+export GH_FIXTURE="$WORKDIR/gh"
+
+comment() { # comment <id> <pr> <login> <type>
+  printf '{"user": {"login": "%s", "type": "%s"}, "issue_url": "https://api.github.com/repos/castle/turing/issues/%s"}\n' \
+    "$3" "$4" "$2" > "$GH_FIXTURE/repos_castle_turing_issues_comments_$1"
+}
+perm() { # perm <login> <permission>
+  printf '{"permission": "%s"}\n' "$2" \
+    > "$GH_FIXTURE/repos_castle_turing_collaborators_$1_permission"
+}
+record() { # record <id> <type>
+  printf -- '---\nid: %s\ntype: %s\nprovenance: requested\nrefs: \nseat: resident\ncreated: 2026-09-14T05:11:23Z\n---\n\nbody\n' \
+    "$1" "$2" > "$WORKDIR/journal/$1.md"
+}
+
+comment 100 7 theresident User
+comment 200 7 theresident User
+comment 300 7 anagent User
+comment 400 7 somebot Bot
+perm theresident admin
+perm anagent write
+record 20260914T051123Z-answer-ab12cd answer
+record 20260914T051124Z-request-ff00aa request
+
+# The log `redirect` writes into, and a base revision to hold it against.
+base_log > "$LOG"
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t commit -aqm "reset for redirect" \
+  --allow-empty
+git -C "$SANDBOX" update-ref refs/remotes/origin/main HEAD
+
+redirect() {
+  PATH="$WORKDIR/bin:$PATH" python3 "$OUTCOMES" --repo-root "$SANDBOX" redirect \
+    --journal-dir "$WORKDIR/journal" "$@"
+}
+cell() { # cell <task> <column-number>
+  grep "	$1	" "$LOG" | cut -f"$2"
+}
+refuses() { # refuses <name> <expected substring> <args...>
+  local name=$1 expect=$2 out; shift 2
+  local before; before="$(cat "$LOG")"
+  if out=$(redirect "$@" 2>&1); then
+    fail "$name: accepted"
+  elif ! printf '%s' "$out" | grep -qF -- "$expect"; then
+    fail "$name: refused for the wrong reason: $(printf '%s' "$out" | head -1)"
+  elif [ "$before" != "$(cat "$LOG")" ]; then
+    fail "$name: refused and wrote to the log anyway"
+  else
+    pass "$name"
+  fi
+}
+
+refuses "a task with no row" "no row for" \
+  0009-a-task-that-never-existed --ref 7#issuecomment-100
+refuses "a reference in no shape this understands" "is not a citation this understands" \
+  0002-the-second-thing --ref "the resident said so on Tuesday"
+refuses "a reference that resolves to nothing" "Not Found" \
+  0002-the-second-thing --ref 7#issuecomment-999
+refuses "a reference written by the agent rather than the resident" \
+  "whose permission on" 0002-the-second-thing --ref 7#issuecomment-300
+refuses "a reference written by a bot" "a bot account cannot hold one" \
+  0002-the-second-thing --ref 7#issuecomment-400
+refuses "a reassessment of a task with no redirect recorded" \
+  "no recorded redirect to reassess" \
+  0002-the-second-thing --ref 7#issuecomment-100 --wrong 0
+refuses "a record the journal does not have" "names no record at" \
+  0002-the-second-thing --ref 20260101T000000Z-answer-000000
+refuses "a record type a worker tenant is allowed to write" "is a 'request' record" \
+  0002-the-second-thing --ref 20260914T051124Z-request-ff00aa
+
+if out=$(PATH="$WORKDIR/bin:$PATH" python3 "$OUTCOMES" --repo-root "$SANDBOX" \
+          redirect 0002-the-second-thing --ref 7#issuecomment-300 \
+          --resident theresident 2>&1); then
+  fail "a configured resident did not override the permission check"
+elif printf '%s' "$out" | grep -qF "the configured resident is"; then
+  pass "a named resident refuses a reference written by anyone else"
+else
+  fail "the configured-resident refusal said: $(printf '%s' "$out" | head -1)"
+fi
+
+# A PATH with python3 on it and no gh — not an empty PATH, which would
+# only prove that the test runner cannot find an interpreter.
+mkdir -p "$WORKDIR/nogh"
+ln -sf "$(command -v python3)" "$WORKDIR/nogh/python3"
+if out=$(PATH="$WORKDIR/nogh" python3 "$OUTCOMES" --repo-root "$SANDBOX" redirect \
+          0002-the-second-thing --ref 7#issuecomment-100 2>&1); then
+  fail "a missing gh let an unverified verdict through"
+elif printf '%s' "$out" | grep -qF "refuses to write an unverified verdict"; then
+  pass "no gh is a refusal, not a skipped check"
+else
+  fail "a missing gh said: $(printf '%s' "$out" | head -1)"
+fi
+
+log "redirect, writing"
+
+if redirect 0002-the-second-thing --ref 7#issuecomment-100 >/dev/null \
+   && [ "$(cell 0002-the-second-thing 15)" = "1" ] \
+   && [ "$(cell 0002-the-second-thing 16)" = "-" ] \
+   && [ "$(cell 0002-the-second-thing 20)" = "redirect/pr-7-comment-100" ]; then
+  pass "a redirect matures the row to 1, cited, with the reassessment pending"
+else
+  fail "the first redirect wrote: $(cell 0002-the-second-thing 15) \
+$(cell 0002-the-second-thing 16) $(cell 0002-the-second-thing 20)"
+fi
+
+before="$(cat "$LOG")"
+if redirect 0002-the-second-thing --ref pr-7-comment-100 >/dev/null \
+   && [ "$before" = "$(cat "$LOG")" ]; then
+  pass "replaying a recorded citation, in the form the tool itself stored, changes nothing"
+else
+  fail "a replay was not a no-op"
+fi
+
+if redirect 0002-the-second-thing --ref 7#issuecomment-200 >/dev/null \
+   && [ "$(cell 0002-the-second-thing 15)" = "2" ] \
+   && [ "$(cell 0002-the-second-thing 20)" = "redirect/pr-7-comment-100,redirect/pr-7-comment-200" ]; then
+  pass "a second, distinct citation raises the count to 2"
+else
+  fail "the second redirect wrote: $(cell 0002-the-second-thing 15) \
+$(cell 0002-the-second-thing 20)"
+fi
+
+refuses "a reassessment claiming more wrong than there were redirects" \
+  "exceeds the 2 redirect(s)" \
+  0002-the-second-thing --ref 20260914T051123Z-answer-ab12cd --wrong 3
+
+if redirect 0002-the-second-thing --ref 20260914T051123Z-answer-ab12cd --wrong 1 \
+     >/dev/null \
+   && [ "$(cell 0002-the-second-thing 16)" = "1" ]; then
+  pass "a journal answer record matures redirects_wrong, pending to 1"
+else
+  fail "the reassessment wrote redirects_wrong=$(cell 0002-the-second-thing 16)"
+fi
+
+refuses "a different number replayed against a citation already spent" \
+  "needs its own citation" \
+  0002-the-second-thing --ref 20260914T051123Z-answer-ab12cd --wrong 2
+
+log "and the result of all that passes the checker"
+if check >/dev/null 2>&1; then
+  pass 'two cited redirects and a cited reassessment survive the checker'
+else
+  check || true
+  fail "redirect wrote a row its own checker rejects"
+fi
+base_log > "$LOG"
 
 # --- derive, where a wrong cell would be permanent -----------------------
 #

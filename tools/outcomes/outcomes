@@ -290,6 +290,14 @@ def check_cited_append_only(was, now, rel, line, problems):
     for name, kind in (("redirects", "redirect"), ("redirects_wrong", "reassessed")):
         if was[name] == now[name]:
             continue
+        if was[name] == UNRECORDED:
+            # Pending becoming a value for the first time is the ordinary
+            # maturation every other pending cell gets, and it needs no
+            # licence here because `check_values` has already pinned the
+            # number to the citations standing beside it. Without this a
+            # row could never record `redirects` 0 — "no redirect
+            # happened" is a real thing to say and it cites nothing.
+            continue
         if not any(k.startswith(kind + "/") for k in added):
             problems.append(
                 f"{rel}:{line}: {name} was {was[name]!r} at the base and is "
