@@ -172,12 +172,19 @@
     description = "Run the systemd-oomd liveness check shortly after boot, then daily";
     wantedBy = [ "timers.target" ];
     timerConfig = {
-      # A couple of minutes' grace on top of the check's own retry
-      # loop, then daily. Persistent so a laptop that's asleep at the
-      # daily mark still runs the check on its next boot rather than
-      # silently skipping a day.
+      # OnBootSec gives a couple of minutes' grace, on top of the
+      # check's own retry loop, for every boot. OnCalendar is the
+      # actual daily cadence — deliberately not OnUnitActiveSec=1d,
+      # which is a *monotonic* timer and, per systemd.timer(5),
+      # `Persistent=` "only has an effect on timers configured with
+      # OnCalendar=": paired with OnUnitActiveSec, `Persistent=true`
+      # silently does nothing, so a laptop asleep at the daily mark
+      # would just wait out the remaining monotonic uptime instead of
+      # catching up on wake as this unit's own description promises.
+      # OnCalendar + Persistent is the combination that actually does
+      # that.
       OnBootSec = "2min";
-      OnUnitActiveSec = "1d";
+      OnCalendar = "daily";
       Persistent = true;
       Unit = "castle-oomd-liveness-check.service";
     };
