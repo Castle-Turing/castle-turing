@@ -106,9 +106,11 @@ module docs:
   from `/proc/self/status` at startup as the receipt.
 - After startup, the daemon must never exec, fork, dlopen, or open
   any file outside the watched mounts' canary directories, `/proc`,
-  and `/dev/kmsg`. No NSS lookups (no `getpwnam`, no DNS), no locale
-  or timezone file loads after init — glibc reaches for files behind
-  all of these.
+  `/dev/kmsg`, and `/dev/pts` (the alarm path's pty writes — devpts
+  is RAM-virtual, so these opens touch no disk, which is why they
+  are compatible with this rule at all). No NSS lookups (no
+  `getpwnam`, no DNS), no locale or timezone file loads after init —
+  glibc reaches for files behind all of these.
 - A systemd timer firing a script is the forbidden shape: it execs at
   exactly the moment exec stops working. This is why the daemon is
   long-running.
