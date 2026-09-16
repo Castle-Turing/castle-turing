@@ -25,6 +25,31 @@
   # nixos-hardware dell-xps-13-9370 module does not set this itself.
   hardware.enableRedistributableFirmware = true;
 
+  # Bar the NVMe from its deepest autonomous power state (PS4). On
+  # 2026-09-16 at ~01:24 this chassis's PC401 stopped serving I/O
+  # while the machine ran on from page cache for 6.5 hours — task
+  # 0075's brief carries the evidence chain, task 0074 the detector
+  # the incident shipped. SMART afterwards: healthy media, and a
+  # controller that logged nothing because the commands never
+  # reached it — the link/power-state dropout shape reported for
+  # this drive in this chassis, not media failure. The drive's APST
+  # table was programmed to enter PS4 (7 mW, 5 ms exit) after 100 ms
+  # of idle from every operational state, and the pinned kernel
+  # carries no NO_DEEPEST_PS quirk for it (the programmed table is
+  # the proof: a quirked kernel never selects ITPS=4).
+  #
+  # 5500 rather than 0: the kernel admits a non-operational state
+  # only when its entry+exit latency fits this budget, so 5500 µs
+  # bars PS4 (1000+5000) and keeps PS3 (1000+1000, 70 mW) as the
+  # floor — roughly 60 mW of idle cost against APST off entirely,
+  # which would hold the drive at operational-idle watts. Probable
+  # cause, not proven (the proving kernel messages died with the
+  # unpersisted journal), so the falsifier is explicit: a dropout
+  # recurring with this parameter in place refutes the PS4 theory,
+  # and the next step is 0. Task 0074's canary is what makes such a
+  # recurrence visible rather than another blank night.
+  boot.kernelParams = [ "nvme_core.default_ps_max_latency_us=5500" ];
+
   # The boot loader (systemd-boot + the ESP fallback posture) comes from
   # modules/boot.nix, bound by flake.nix's nixosModules.host-xps9370
   # wrapper alongside diskLayout. This chassis is why that posture
