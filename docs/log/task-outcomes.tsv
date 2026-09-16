@@ -69,4 +69,5 @@ schema	task	attempt	queued	landed	outcome	tier	model	milestone	pr	cost_usd	turns
 1	0069-the-delivery-seat	1	2026-09-08	2026-09-09	merged	deep	claude-opus-5	m2-done	114	1.75	22	-	-	-	-	-	-	-	-	-	-	backfilled	-
 1	0070-the-task-outcome-log	1	2026-09-10	2026-09-16	merged	deep	claude-opus-5	m2-constraints	120	-	-	0	0.0	-	-	-	-	-	-	-	e1	live	the first live row; the 68 rows above it are the backfill this task landed with
 1	0073-the-oomd-swap-rule-and-a-liveness-check	1	2026-09-15	2026-09-16	merged	standard	-	none-hygiene	129	-	-	-	-	-	-	-	-	-	-	-	-	backfilled	-
+1	0071-the-delivery-seats-record-shim	1	2026-09-10	-	-	deep	-	m2-now	-	-	-	0	0.0	-	-	-	-	-	-	-	e1	live	brief only, no code; harness usage ledger not reachable from this worktree
 1	0074-a-dead-disk-reads-as-a-quiet-night	1	2026-09-16	-	-	standard	-	none-hygiene	131	-	-	-	-	-	-	-	-	-	-	-	e2	live	brief only (draft PR); canary implementation still to land; detector for the 2026-09-16 NVMe write-path incident
