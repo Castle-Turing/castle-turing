@@ -47,13 +47,15 @@ it explicitly.
 ### Constraints binding this milestone's work [m2-constraints]
 
 - **Baseline before intervention.** Prerequisite: task-level outcome
-  logging is running before pipeline-changing work lands. Authority:
-  the resident may knowingly waive this. Fallback: the intervention
-  lands anyway and is recorded as an unmeasured bet. Consequence of
-  violation: the interrupted time series and the study-grade exhaust
-  (the backlog's twelve-studies entry) are forfeit for every measure
-  without a pre-period. [inferred from the measurement review;
-  direction endorsed by the resident 2026-09-06]
+  logging is running before pipeline-changing work lands — the
+  mechanism is `docs/measurement.md`, the log is
+  `docs/log/task-outcomes.tsv`, and task 0070 is the reasoning.
+  Authority: the resident may knowingly waive this. Fallback: the
+  intervention lands anyway and is recorded as an unmeasured bet.
+  Consequence of violation: the interrupted time series and the
+  study-grade exhaust (the backlog's twelve-studies entry) are forfeit
+  for every measure without a pre-period. [inferred from the
+  measurement review; direction endorsed by the resident 2026-09-06]
 - **Receipts are never verdicts.** Prerequisite: no pipeline surface
   asserts completeness — evidence with citations only, and
   completion vocabulary is a lintable defect in generated reporting.
@@ -91,6 +93,17 @@ it explicitly.
   seat owes the journal do not exist yet: the shim translating the
   tenant's own events into `claim`, `result` and `question`
   records is backlog, not built.
-- Baseline instrumentation ([m2-constraints] first clause): not
-  started. [inferred] must precede the pipeline-changing briefs
-  above.
+- Baseline instrumentation ([m2-constraints] first clause): running
+  as of task 0070. `docs/log/task-outcomes.tsv` carries one row per
+  task attempt, `docs/measurement.md` defines the columns and what may
+  honestly be said from them, and `tools/outcomes/outcomes check`
+  gates every pull request that touches a brief or the log — a task
+  that lands unlogged fails CI. The pre-period is uneven and the brief
+  says exactly where: landing dates reach back to 2026-08-14 for all
+  68 prior briefs, pull-request numbers for 65 of them, per-task
+  spend for 23,
+  and the verdict columns (redirects and their miscorrection rate)
+  have no pre-period at all — their series starts here. [inferred]
+  the clause is satisfied for the measures with a pre-period and
+  explicitly not for the rest; an intervention landing against one of
+  those is a bet, and the document carrying it says so.
