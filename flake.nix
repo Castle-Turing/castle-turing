@@ -1126,6 +1126,22 @@
           import ./test/desktop-loop/test.nix { inherit self; }
         );
 
+      # docs/tasks/0073: proves castle-oomd-liveness-check's actual
+      # generated script (pulled from nixosConfigurations.example, not
+      # re-implemented) passes against a real systemd-oomd daemon
+      # watching both rules and fails against one watching neither —
+      # see test/oomd-liveness/test.nix's header for the two-node
+      # design. A `packages.*` output for the same reason as
+      # desktop-loop-test above: this boots real VMs, so it stays out
+      # of bare `nix flake check`'s fast gate and gets its own
+      # workflow/trigger instead. Lighter than desktop-loop-test (no
+      # desktop closure, no OCR, no graphical boot) but still a VM
+      # boot, so the same division of labor applies.
+      packages.x86_64-linux.oomd-liveness-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+          import ./test/oomd-liveness/test.nix { inherit self; }
+        );
+
       # docs/tasks/0036-reminder-banner-states.md: the password-reminder
       # state machine and its banner wording, table-tested against the
       # *generated* artifacts of nixosConfigurations.example rather

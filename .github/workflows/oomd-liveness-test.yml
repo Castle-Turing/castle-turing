@@ -1,0 +1,95 @@
+name: oomd-liveness-test
+
+# docs/tasks/0073: boots two minimal NixOS VMs — one with the oomd swap
+# and pressure rules wired, one without — and proves the real generated
+# castle-oomd-liveness-check script passes against the first and fails
+# against the second. See test/oomd-liveness/test.nix for the design.
+#
+# Its own workflow, not folded into check.yml's flake-check job, same
+# reasoning as desktop-loop-test.yml and vm-install-test.yml: this boots
+# real VMs under QEMU/KVM, which bare `nix flake check` (a `checks.*`
+# job) must never be made to do. Scoped narrower than either of those
+# two, though — this test imports no modules/* at all (its two nodes
+# declare their oomd settings directly; see test.nix's header), so a
+# modules/ change cannot affect it, unlike vm-install-test.yml's wider
+# net.
+#
+# The `flake.lock` path is in scope for a reason beyond "it might touch
+# anything": the check script's own parsing of `oomctl dump` is coupled
+# to that command's current text format (see the script's own comment
+# in hosts/xps9370/default.nix), and this is the one place that
+# actually runs the real generated script against a real, live
+# systemd-oomd daemon — so a nixpkgs bump that changes what `oomctl
+# dump` prints is exactly the drift this workflow re-verifies against,
+# not just a hypothetical it happens to also cover.
+on:
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "hosts/xps9370/**"
+      - "test/oomd-liveness/**"
+      - "test/ci/**"
+      - ".github/workflows/oomd-liveness-test.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "hosts/xps9370/**"
+      - "test/oomd-liveness/**"
+      - "test/ci/**"
+      - ".github/workflows/oomd-liveness-test.yml"
+  # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
+  # via `gh workflow run` — the only way to get a real CI result while
+  # iterating, since there is no `nix` on the development machine (see
+  # this repo's CLAUDE.md).
+  workflow_dispatch: {}
+
+jobs:
+  oomd-liveness-test:
+    runs-on: ubuntu-latest
+    # magic-nix-cache-action authenticates to the cache via OIDC.
+    permissions:
+      contents: read
+      id-token: write
+    # Two minimal (no desktop, no home-manager) VMs booting to
+    # multi-user.target plus one retry loop capped at 30s — locally this
+    # whole test finishes in well under a minute once the closure is
+    # substituted. Generous headroom over that for a cold cache.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+
+      # Same fix, same reasoning as the other two VM-test workflows:
+      # GitHub's hosted runners have nested virtualization available but
+      # /dev/kvm isn't group-writable by default, and this test's two
+      # VMs under TCG emulation would be needlessly slow rather than
+      # simply not run.
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-castle-turing-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            ls -la /dev/kvm
+          else
+            msg="KVM unavailable on this runner; failing fast rather than timing out opaquely under TCG emulation."
+            echo "$msg" >&2
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # test/ci/retry-on-known-transient.sh: the same bounded,
+      # signature-matched retry the sibling VM-test workflows use for
+      # CI's own recognizable infrastructure flakes (docs/tasks/0041).
+      # A failure that doesn't match a known signature gets zero
+      # retries and surfaces as this step's real exit code.
+      - name: Build and run the oomd-liveness test
+        run: test/ci/retry-on-known-transient.sh -- nix build .#oomd-liveness-test -L
