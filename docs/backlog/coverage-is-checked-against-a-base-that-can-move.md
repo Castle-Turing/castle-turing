@@ -50,6 +50,12 @@ setting, neither of which is enabled on this repository.
   review findings append missing rows by `derive` on a push to `main`
   that fails coverage. Removes the human from the loop at the cost of a
   bot writing rows into a write-once file, which wants its own argument
-  before anyone builds it.
+  before anyone builds it. That argument now exists: task 0072 §1 makes
+  it for the branch-side case and
+  `.github/workflows/outcomes-row.yml` is the result. It does not close
+  this entry — a row appended to the branch is still a row that predates
+  whatever lands next — but it narrows the window to exactly the race
+  described above, and it settles the question of whether a bot may
+  write receipt cells at all.
 - Accept the window and treat a red trunk as the signal to run
   `derive --fill`, which is what happened here and took one command.

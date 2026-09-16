@@ -79,12 +79,12 @@ checker, and no existing row is ever rewritten into the new shape.
 | 12 | `turns` | receipt | Model turns in the attempt, from the same ledger. |
 | 13 | `questions` | receipt | Clarifying questions this attempt routed to the resident. |
 | 14 | `question_wait_h` | receipt | Hours the attempt was blocked waiting for those answers, to one decimal, summed. |
-| 15 | `redirects` | **verdict** | Times the resident redirected this attempt after seeing its work. |
-| 16 | `redirects_wrong` | **verdict** | How many of those redirects were later judged to have been wrong. |
+| 15 | `redirects` | **verdict** | Times the resident redirected this attempt after seeing its work. Defined as the number of *distinct cited* redirect events: it equals the count of `redirect/` citations in `verdict_ref`, always. |
+| 16 | `redirects_wrong` | **verdict** | How many of those redirects the resident *later judged* to have been wrong. `-` means pending — not yet reassessed — and is the truthful value until they have looked again. Never defaulted to 0. |
 | 17 | `reworks` | receipt | The task number(s) whose merged work this attempt amends, comma-separated. |
 | 18 | `findings` | receipt | Findings raised by the cross-model review gate on this attempt's pull request. |
 | 19 | `findings_fixed` | receipt | How many of those were dispositioned as fixed rather than declined. |
-| 20 | `verdict_ref` | — | Where the resident said the thing a verdict column records: a pull-request comment number, a review URL fragment, or a journal record id. |
+| 20 | `verdict_ref` | — | Where the resident said the things the verdict columns record: a comma-separated, append-only list of **kinded citations**, `<kind>/<where>`. `kind` is `redirect` or `reassessed`; `where` is `pr-<n>-comment-<id>`, `pr-<n>-review-<id>`, or `record-<journal id>`. Content-free, like every other shareable column. |
 | 21 | `probe` | — | `-` for a real record; otherwise the probe's identifier. |
 | 22 | `env` | — | The environment key (see below). |
 | 23 | `provenance` | — | `live` if the row was written as the attempt happened, `backfilled` if it was reconstructed from history. |
@@ -99,15 +99,54 @@ work — merged, reverted, dismissed — and receipts may inform. A
 The system may grade how well it delivered; it may never grade whether
 it was right.
 
-Columns 15 and 16 are the only verdicts in schema 1, and the checker
-enforces two rules about them. A non-zero verdict must carry a
-`verdict_ref`, so that a judgment in the log always points at the place
-the resident actually made it. And `redirects` may not be recorded
-without `redirects_wrong` beside it: a redirect count is a *detection*
-rate, and measured conditional miscorrection rates run 53–94%, so a
-detection rate reported alone is uninterpretable
-(`docs/research/measurement-methodology.md`, design implication 1). The
-log will not hold half of that pair.
+Columns 15 and 16 are the only verdicts in schema 1, and everything
+below is what keeps them the resident's.
+
+**The count is the citations.** `redirects` is not a number someone
+writes down; it is the number of distinct `redirect/` citations in
+`verdict_ref`, and the checker holds the two equal. That is what turns
+"do not fabricate a verdict" from a request into a rule: an edit of the
+digit alone fails, because the evidence did not move with it.
+
+**Citations are appended, never edited.** The base revision's citation
+list must be a *prefix* of the current one — nothing removed, nothing
+reordered, nothing rewritten — and a verdict number that already carries
+a value may change only in a revision that appends a citation of the
+kind licensing it. So `redirects` maturing 1 → 2 beside a new citation
+is a second redirect; the identical edit without one is a rewrite and is
+refused. This is the write-once discipline held **per citation** rather
+than per cell, which is the only way a running count of events can live
+in an append-only log at all.
+
+**`redirects_wrong` is pending until the resident reassesses.** `-`
+beside a recorded `redirects` means exactly that, and the checker allows
+it. The alternative — writing 0 when the redirect is logged — would
+record the absence of a judgment as a judgment of correctness and bias
+the conditional miscorrection rate downward, in the direction that
+flatters the pipeline. The column is defined over redirects *later
+judged* wrong, and a judgment made in the same breath as the redirect is
+not a later one. Any recorded value, including 0, needs its own
+`reassessed/` citation; the single exception is a row with zero
+redirects, where the cell is arithmetic rather than judgment.
+
+**And the pairing rule, which now binds at reporting time.** A redirect
+count is a *detection* rate, and measured conditional miscorrection
+rates run 53–94%, so a detection rate reported alone is uninterpretable
+(`docs/research/measurement-methodology.md`, design implication 1).
+Schema 1 originally refused to hold half of that pair, which turned out
+to force the fabricated 0 described above. The constraint is therefore
+moved rather than dropped, and it is stronger where it now sits: **no
+report of a detection rate from this log may omit how much of it is
+unreassessed.** Rows with `redirects` recorded and `redirects_wrong`
+pending are counted and stated as pending. They are never folded in as
+zero, never dropped from the denominator without saying so, and a
+miscorrection rate computed over the reassessed rows alone is reported
+with the number of unreassessed ones beside it. That is a discipline on
+whoever writes the analysis, and this paragraph is the thing they are
+held to.
+
+`redirects_wrong` still may not be recorded without `redirects`: a
+numerator with no denominator is meaningless in every direction.
 
 Everything else is a receipt, derivable from artifact state by something
 with no model in it. That is deliberate and it is the same rule task
@@ -139,9 +178,13 @@ Rows are appended and matured, never rewritten. Three cell classes:
   `milestone`, `probe`, `env`, `provenance`): fixed when the row is
   written. A change to one is a rewrite of history.
 - **Pending** (`landed`, `outcome`, `pr`, `cost_usd`, `turns`,
-  `questions`, `question_wait_h`, `redirects`, `redirects_wrong`,
-  `reworks`, `findings`, `findings_fixed`, `verdict_ref`): `-` may
-  become a value exactly once. A value never becomes a different value.
+  `questions`, `question_wait_h`, `reworks`, `findings`,
+  `findings_fixed`): `-` may become a value exactly once. A value never
+  becomes a different value.
+- **Cited** (`redirects`, `redirects_wrong`, `verdict_ref`): `-` may
+  become a value once, as above, and after that the value may move only
+  in a revision that appends a citation licensing the move. See the
+  receipt/verdict split.
 - **Amendable** (`note`): may be rewritten, because a note is the only
   cell that could ever need redacting.
 
@@ -164,6 +207,48 @@ The same check enforces **coverage**: every brief under `docs/tasks/` or
 without being logged fails the very next pull request — which is the
 only moment when writing the row is still cheap and the facts are still
 in someone's head.
+
+## Who writes a cell, and how it gets written
+
+The rows do not appear because anyone remembers to write them. Task 0070
+built the mechanism and wired it to nothing, which meant the coverage
+gate below would have failed every task pull request after the first
+while the verdict columns stayed empty forever; task 0072 is the wiring,
+and `docs/log/README.md` is the operational version of this paragraph.
+
+**Receipts are written by machinery, from artifact state.**
+`.github/workflows/outcomes-row.yml` runs on every pull request touching
+`docs/tasks/`, runs `tools/outcomes/outcomes derive`, and commits the
+row to that branch, so a brief and its row land together. `derive` has
+no code path to a verdict cell, so automation is never grading itself.
+Where the workflow cannot act — a fork's branch, or an installation with
+no environment key configured — it fails loudly naming the one command
+someone runs instead, because `env` is immutable and a guessed
+environment key can never be corrected.
+
+**Verdicts are transcribed by an agent, from something the resident
+said.** `tools/outcomes/outcomes redirect` matures columns 15, 16 and 20
+and nothing else. It requires a citation, resolves it, and checks that
+the resident authored it — a forge login holding admin or maintain on
+the repository, or a journal record of a type `agent/castle` refuses to
+write on any tenant's behalf. The resident does not run it; that is the
+point of it. An agent may be the resident's hand and may never be a
+second opinion.
+
+The identity that check compares against is *configuration*, never
+repository content: this framework holds no resident's forge login
+(Principle 01, and the rule against personal data). The citation stored
+in the log is a public identifier and carries none either, which is why
+column 20 stays inside the shareable set.
+
+**What that check does not prove, stated here so nobody assumes
+otherwise.** It cannot tell whether the cited text actually states the
+verdict claimed for it — a machine that judged that would be authoring
+the verdict it is meant to be transcribing — and it cannot tell the
+resident's credential from the resident's hand, since an agent holding
+their forge token can post as them. Resolution is not detection. Both
+residues belong to the weekly audit's sampled reads, and `redirect
+--help` says so where the person running it will read it.
 
 ## Salt
 

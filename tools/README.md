@@ -198,33 +198,79 @@ never runs as a seat, and has no reason to exist on a resident's actual
 machine after this repo stops changing — it's tooling for people (and
 agent sessions) editing the repo itself, which is what `tools/` is for.
 
+## `reachability-check.py` — nothing is built that nothing calls
+
+```
+tools/reachability-check.py [--repo-root DIR]
+```
+
+Task 0072's detector, run by `.github/workflows/reachability-check.yml`.
+Two rules. A subcommand of a tool under `tools/` that nothing outside
+its own source and its own tests invokes is an **orphan entrypoint**. A
+workflow that runs one of those tools must carry a `# Feeder:` line
+naming what produces the artifact it gates, and the path it names must
+exist.
+
+The incident it comes from: task 0070 shipped a working tool, a thorough
+test suite and a required CI gate, all green, while nothing in the
+repository ever called the half of the tool that writes rows. Two
+exclusions carry the weight, and both were chosen by running the lint
+against that tree rather than reasoned out in advance — a test is not a
+caller, and neither is a synopsis, because `tools/README.md` had listed
+the orphan's usage the whole time. A caller is a line someone could
+paste and run.
+
+What it cannot do is judge whether a feature serves the resident's
+intent. That is acceptance and it is
+`docs/backlog/passing-tests-are-not-acceptance.md`'s problem; this
+catches the mechanical silhouette of the miss, not its cause.
+
 ## `outcomes/` — the task-outcome log's mechanism
 
 ```
 tools/outcomes/outcomes check [--base REF] [--no-base]
 tools/outcomes/outcomes derive [--harness-journal FILE]... [--env KEY] [--fill]
+tools/outcomes/outcomes redirect TASK --ref CITATION [--wrong N]
 ```
 
 The instrument specced in task 0070 and defined in
 `docs/measurement.md`. `docs/log/task-outcomes.tsv` carries one row per
 task attempt, and this is what keeps it honest.
 
-Two subcommands, deliberately unequal. `derive` reads git and — when
-pointed at one — a harness journal, and writes rows; it needs a
-repository, a history, and paths outside the checkout. `check` is a
-pure function of (log, working tree): no network, no forge, no model,
-no clock. It is what CI runs, and it still runs on a clone made after
-the forge this repository lives on has stopped existing. That is the
-same split `handover-ledger.py` and `handover-check.py` make, for the
-reason task 0062 gives.
+Three subcommands, deliberately unequal. `derive` reads git and — when
+pointed at one — a harness journal, and writes the **receipt** cells; it
+needs a repository, a history, and paths outside the checkout.
+`redirect` writes the **verdict** cells and only those, transcribing
+something the resident said from a citation it resolves and whose author
+it checks; it needs the forge or the journal (task 0072). `check` is a
+pure function of (log, working tree): no network, no forge, no model, no
+clock. It is what CI runs, and it still runs on a clone made after the
+forge this repository lives on has stopped existing. That is the same
+split `handover-ledger.py` and `handover-check.py` make, for the reason
+task 0062 gives.
+
+Nothing here is meant to be run by the resident. `derive` is run by
+`.github/workflows/outcomes-row.yml` on every task pull request;
+`redirect` is run by the agent that received a redirect, per
+`docs/log/README.md`. `redirect --help` carries the line it must not
+cross — it transcribes a verdict and never authors one — along with the
+two things its mechanical checks cannot prove. Read that before using
+it.
 
 What `check` guards, in one list: rows are append-only against the
 trunk, immutable cells never change, a pending cell goes from `-` to a
-value exactly once, every brief under `docs/tasks/` has a row, a
-verdict column carries a citation to where the resident said it, a
-redirect count never appears without its miscorrection rate beside it,
-salt never wears a real brief's name, and a note never carries an
-address or a home path.
+value exactly once, every brief under `docs/tasks/` has a row, the
+redirect count equals the citations standing behind it, citations are
+appended and never edited or reordered, a verdict that already has a
+value moves only when a new citation licenses it, salt never wears a
+real brief's name, and a note never carries an address or a home path.
+
+`redirects_wrong` may sit `-` beside a recorded `redirects`, which means
+*pending* and is the truthful value until the resident has reassessed.
+The rule that a detection rate is never reported without its
+miscorrection rate still holds — it binds at reporting time now, in
+`docs/measurement.md`, because enforcing it at writing time forced a
+fabricated 0.
 
 The coverage rule is the detector, in the sense the "an incident ships
 its detector" convention means: a task that lands unlogged fails the
