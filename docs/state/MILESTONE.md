@@ -94,16 +94,26 @@ it explicitly.
   tenant's own events into `claim`, `result` and `question`
   records is backlog, not built.
 - Baseline instrumentation ([m2-constraints] first clause): running
-  as of task 0070. `docs/log/task-outcomes.tsv` carries one row per
-  task attempt, `docs/measurement.md` defines the columns and what may
-  honestly be said from them, and `tools/outcomes/outcomes check`
-  gates every pull request that touches a brief or the log — a task
-  that lands unlogged fails CI. The pre-period is uneven and the brief
-  says exactly where: landing dates reach back to 2026-08-14 for all
-  68 prior briefs, pull-request numbers for 65 of them, per-task
-  spend for 23,
-  and the verdict columns (redirects and their miscorrection rate)
-  have no pre-period at all — their series starts here. [inferred]
-  the clause is satisfied for the measures with a pre-period and
-  explicitly not for the rest; an intervention landing against one of
-  those is a bet, and the document carrying it says so.
+  as of task 0070, and **wired** as of task 0072.
+  `docs/log/task-outcomes.tsv` carries one row per task attempt,
+  `docs/measurement.md` defines the columns and what may honestly be
+  said from them, and `tools/outcomes/outcomes check` gates every pull
+  request that touches a brief or the log — a task that lands unlogged
+  fails CI. As of 0072 that gate is fed rather than merely armed:
+  `.github/workflows/outcomes-row.yml` derives the receipt row onto
+  every task pull request's own branch, and
+  `tools/outcomes/outcomes redirect` gives the verdict columns an
+  invocation path an agent uses on the resident's behalf, citing where
+  the resident said it. Between 0070 and 0072 neither was true, which
+  is what the resident's redirect on PR #120 caught. The pre-period is
+  uneven and 0070's brief says exactly where: landing dates reach back
+  to 2026-08-14 for all 68 prior briefs, pull-request numbers for 65
+  of them, per-task spend for 23, and the verdict columns (redirects
+  and their miscorrection rate) have no pre-period at all — their
+  series starts with one datum, task 0070's own redirect, logged by
+  0072. [inferred] the clause is satisfied for the measures with a
+  pre-period and explicitly not for the rest; an intervention landing
+  against one of those is a bet, and the document carrying it says so.
+  The row-writing is an interim: it is CI's job today and the delivery
+  seat's by rights
+  (`docs/backlog/the-outcome-row-is-written-by-ci-not-the-seat.md`).
