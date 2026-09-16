@@ -35,16 +35,19 @@
 { self }:
 { pkgs, lib, ... }:
 let
-  livenessCheckScript =
-    self.nixosConfigurations.example.config.systemd.services.castle-oomd-liveness-check.script;
+  # The whole real service, not a hand-copied approximation of its
+  # wrapper fields: `script` is the part this file's header promises
+  # to inject unmodified, but `description`/`after`/`wants`/
+  # `serviceConfig.Type` are just as real, and re-typing them here
+  # would let hosts/xps9370/default.nix's actual wiring drift from
+  # what this test exercises with nothing to catch it.
+  liveService =
+    self.nixosConfigurations.example.config.systemd.services.castle-oomd-liveness-check;
 
   checkModule = {
     systemd.services.castle-oomd-liveness-check = {
-      description = "Assert systemd-oomd is watching cgroups under both its swap and pressure rules";
-      after = [ "systemd-oomd.service" ];
-      wants = [ "systemd-oomd.service" ];
-      serviceConfig.Type = "oneshot";
-      script = livenessCheckScript;
+      inherit (liveService) description after wants script;
+      serviceConfig.Type = liveService.serviceConfig.Type;
     };
   };
 in

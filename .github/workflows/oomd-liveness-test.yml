@@ -13,6 +13,15 @@ name: oomd-liveness-test
 # declare their oomd settings directly; see test.nix's header), so a
 # modules/ change cannot affect it, unlike vm-install-test.yml's wider
 # net.
+#
+# The `flake.lock` path is in scope for a reason beyond "it might touch
+# anything": the check script's own parsing of `oomctl dump` is coupled
+# to that command's current text format (see the script's own comment
+# in hosts/xps9370/default.nix), and this is the one place that
+# actually runs the real generated script against a real, live
+# systemd-oomd daemon — so a nixpkgs bump that changes what `oomctl
+# dump` prints is exactly the drift this workflow re-verifies against,
+# not just a hypothetical it happens to also cover.
 on:
   pull_request:
     paths:

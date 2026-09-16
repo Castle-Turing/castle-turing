@@ -115,26 +115,46 @@
       # confirmed against a live system, 2026-09-15). A short retry
       # loop, not just a boot delay, because how long oomd takes to
       # enumerate the slices above after its own unit starts isn't
-      # documented and shouldn't be guessed at as a single number.
+      # documented and shouldn't be guessed at as a single number --
+      # and the retry has to survive `oomctl` itself failing (e.g. its
+      # D-Bus call landing before systemd-oomd has registered its
+      # name), not just an empty watch list, so the command substitution
+      # sits in the `if`'s own test rather than a bare assignment: under
+      # `set -e` a bare `dump="$(oomctl dump)"` would abort the whole
+      # script on the first transient failure, defeating the retry
+      # entirely (test/ci/retry-on-known-transient.sh's header comment
+      # notes the same `set -e`-in-a-test-position exemption).
       attempt=0
       max_attempts=6
       while true; do
         attempt=$((attempt + 1))
-        dump="$("$oomctl" dump)"
-        swap_count="$(printf '%s\n' "$dump" | "$awk" '
-          /^Swap Monitored CGroups:/ { in_section = 1; next }
-          /^Memory Pressure Monitored CGroups:/ { in_section = 0 }
-          in_section && /^[[:space:]]+Path:/ { n++ }
-          END { print n + 0 }
-        ')"
-        pressure_count="$(printf '%s\n' "$dump" | "$awk" '
-          /^Memory Pressure Monitored CGroups:/ { in_section = 1; next }
-          in_section && /^[[:space:]]+Path:/ { n++ }
-          END { print n + 0 }
-        ')"
-        if [ "$swap_count" -gt 0 ] && [ "$pressure_count" -gt 0 ]; then
-          echo "systemd-oomd is watching $swap_count cgroup(s) under its swap rule and $pressure_count under its memory-pressure rule."
-          exit 0
+        if dump="$("$oomctl" dump 2>&1)"; then
+          # One awk pass, not two: both counters are derived from the
+          # same section-tracking state machine, so a single scan
+          # keeps the "which line ends which section" logic in one
+          # place. The pressure section's own terminator
+          # (`/^[^[:space:]]/`) exists even though it is the last
+          # section `oomctl dump` prints today, so a future oomd
+          # release adding a further section after it can't silently
+          # get counted as pressure-monitored cgroups.
+          counts="$(printf '%s\n' "$dump" | "$awk" '
+            /^Swap Monitored CGroups:/ { section = "swap"; next }
+            /^Memory Pressure Monitored CGroups:/ { section = "pressure"; next }
+            section == "swap" && /^[[:space:]]+Path:/ { swap_n++ }
+            section == "pressure" && /^[[:space:]]+Path:/ { pressure_n++ }
+            section == "pressure" && /^[^[:space:]]/ { section = "" }
+            END { print swap_n + 0, pressure_n + 0 }
+          ')"
+          set -- $counts
+          swap_count=$1
+          pressure_count=$2
+          if [ "$swap_count" -gt 0 ] && [ "$pressure_count" -gt 0 ]; then
+            echo "systemd-oomd is watching $swap_count cgroup(s) under its swap rule and $pressure_count under its memory-pressure rule."
+            exit 0
+          fi
+        else
+          swap_count=0
+          pressure_count=0
         fi
         if [ "$attempt" -ge "$max_attempts" ]; then
           break
@@ -142,7 +162,8 @@
         sleep 5
       done
 
-      echo "systemd-oomd's watch lists came up empty after $max_attempts attempts (swap=$swap_count, pressure=$pressure_count) -- a rule that reads as configured but is not watching any cgroup is exactly the regression docs/tasks/0073-the-oomd-swap-rule-and-a-liveness-check.md exists to catch. Run 'oomctl dump' by hand to see the daemon's current view." >&2
+      echo "systemd-oomd's watch lists came up empty after $max_attempts attempts (swap=$swap_count, pressure=$pressure_count; last 'oomctl dump' output follows) -- a rule that reads as configured but is not watching any cgroup is exactly the regression docs/tasks/0073-the-oomd-swap-rule-and-a-liveness-check.md exists to catch." >&2
+      printf '%s\n' "$dump" >&2
       exit 1
     '';
   };
