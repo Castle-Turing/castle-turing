@@ -4,7 +4,12 @@
 # consuming private layer. The nixos-hardware and disko modules this
 # host needs are bound by flake.nix's `nixosModules.host-xps9370`
 # export, which is how this directory should be consumed.
-{ lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 {
   imports = [
@@ -40,16 +45,122 @@
   zramSwap.enable = true;
 
   # The cost of zram-only swap, learned the hard way (2026-09-06, task
-  # 0063): with no disk swap the kernel OOM killer effectively never
-  # trips — under exhaustion the machine thrashes in reclaim until
-  # someone holds the power button. systemd-oomd runs by default on
-  # NixOS but watches zero cgroups; this points it at the user slices,
-  # which is where every agent session on this host actually runs, so a
-  # runaway workload gets its cgroup killed by memory pressure before
-  # the whole machine starves. Disk-swap headroom for the kernel killer
-  # is the deferred second half — see
+  # 0063; recurred 2026-09-15, task 0073): with no disk swap the kernel
+  # OOM killer effectively never trips — under exhaustion the machine
+  # thrashes in reclaim until someone holds the power button. Disk-swap
+  # headroom for the kernel killer is the deferred second half — see
   # docs/backlog/the-kernel-oom-killer-has-no-swap-headroom.md.
+  # systemd-oomd is this host's actual defense, and it needs both of
+  # its rules wired to do anything:
+  #
+  #   - The swap rule (`ManagedOOMSwap=kill`, set here on the root
+  #     slice per systemd-oomd.service(8)'s own recommendation — it
+  #     "works with the system-wide swap values", so setting it on
+  #     `-.slice` makes every descendant cgroup an eligible kill
+  #     candidate) is the primary trigger for this host's exhaustion
+  #     mode. The zram swap filling toward its 90% default limit is the
+  #     early warning this host emits before it livelocks, and this
+  #     rule fires on system-wide swap pressure regardless of which
+  #     cgroup is responsible.
+  #   - The pressure rule (`enableUserSlices`, below) is the backstop
+  #     for pressure that never shows up as swap. It is not sufficient
+  #     alone: on 2026-09-15 it saw roughly 90 seconds of visible
+  #     memory pressure and never fired, because its 80%-over-30s
+  #     sustained average is exactly the kind of threshold a fast
+  #     allocator on a zram-only host can outrun before it trips.
+  #
+  # Neither rule is any use if oomd isn't actually watching cgroups
+  # under it. Task 0063 wired the pressure rule alone, and its swap
+  # counterpart sat unassigned — no NixOS option sets `ManagedOOMSwap=`
+  # anywhere — from that day until task 0073 wired it here. The
+  # liveness check below (castle-oomd-liveness-check) is what would
+  # have caught that gap the day 0063 shipped: it fails loudly,
+  # against oomd's own runtime state, whenever either rule's watch
+  # list comes up empty.
   systemd.oomd.enableUserSlices = true;
+  systemd.slices."-".sliceConfig.ManagedOOMSwap = "kill";
+
+  # A rule that reads as configured while the daemon watches nothing is
+  # exactly the failure that went unnoticed from install until task
+  # 0063 (pressure) and from 0063 until task 0073 (swap) — evaluating
+  # fine and `systemctl status` looking healthy the whole time. This
+  # unit fails loudly (visible in `systemctl --failed` and the journal)
+  # unless systemd-oomd is actually watching at least one cgroup under
+  # BOTH rules above, checked shortly after boot and once a day.
+  #
+  # oomctl's dump is the only introspection surface systemd-oomd
+  # exposes — confirmed via `busctl introspect org.freedesktop.oom1
+  # /org/freedesktop/oom1`: its one interface,
+  # org.freedesktop.oom1.Manager, has a single method
+  # (DumpByFileDescriptor, what `oomctl dump` calls) and no queryable
+  # properties. So this parses the same human-facing text a resident
+  # would read by hand, not the unit files: `systemctl show` on a slice
+  # would only echo back the *configured* ManagedOOMSwap/
+  # ManagedOOMMemoryPressure values, which is precisely the "looks
+  # armed" half of the gap this check exists to catch, not the "is it
+  # watching" half.
+  systemd.services.castle-oomd-liveness-check = {
+    description = "Assert systemd-oomd is watching cgroups under both its swap and pressure rules";
+    after = [ "systemd-oomd.service" ];
+    wants = [ "systemd-oomd.service" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      set -eu
+
+      oomctl=${config.systemd.package}/bin/oomctl
+      awk=${pkgs.gawk}/bin/awk
+
+      # oomctl dump prints one "Path: ..." line per monitored cgroup,
+      # under two section headers, in this fixed order (oomctl(1);
+      # confirmed against a live system, 2026-09-15). A short retry
+      # loop, not just a boot delay, because how long oomd takes to
+      # enumerate the slices above after its own unit starts isn't
+      # documented and shouldn't be guessed at as a single number.
+      attempt=0
+      max_attempts=6
+      while true; do
+        attempt=$((attempt + 1))
+        dump="$("$oomctl" dump)"
+        swap_count="$(printf '%s\n' "$dump" | "$awk" '
+          /^Swap Monitored CGroups:/ { in_section = 1; next }
+          /^Memory Pressure Monitored CGroups:/ { in_section = 0 }
+          in_section && /^[[:space:]]+Path:/ { n++ }
+          END { print n + 0 }
+        ')"
+        pressure_count="$(printf '%s\n' "$dump" | "$awk" '
+          /^Memory Pressure Monitored CGroups:/ { in_section = 1; next }
+          in_section && /^[[:space:]]+Path:/ { n++ }
+          END { print n + 0 }
+        ')"
+        if [ "$swap_count" -gt 0 ] && [ "$pressure_count" -gt 0 ]; then
+          echo "systemd-oomd is watching $swap_count cgroup(s) under its swap rule and $pressure_count under its memory-pressure rule."
+          exit 0
+        fi
+        if [ "$attempt" -ge "$max_attempts" ]; then
+          break
+        fi
+        sleep 5
+      done
+
+      echo "systemd-oomd's watch lists came up empty after $max_attempts attempts (swap=$swap_count, pressure=$pressure_count) -- a rule that reads as configured but is not watching any cgroup is exactly the regression docs/tasks/0073-the-oomd-swap-rule-and-a-liveness-check.md exists to catch. Run 'oomctl dump' by hand to see the daemon's current view." >&2
+      exit 1
+    '';
+  };
+
+  systemd.timers.castle-oomd-liveness-check = {
+    description = "Run the systemd-oomd liveness check shortly after boot, then daily";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      # A couple of minutes' grace on top of the check's own retry
+      # loop, then daily. Persistent so a laptop that's asleep at the
+      # daily mark still runs the check on its next boot rather than
+      # silently skipping a day.
+      OnBootSec = "2min";
+      OnUnitActiveSec = "1d";
+      Persistent = true;
+      Unit = "castle-oomd-liveness-check.service";
+    };
+  };
 
   # Wi-Fi is this chassis's network path; NetworkManager belongs here, not
   # in modules/base, since a headless/wired host wouldn't want it.
