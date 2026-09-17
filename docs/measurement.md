@@ -125,6 +125,12 @@ defined here:
 
 - **`e1`** — the development laptop (`hosts/xps9370`, 16 GB, NixOS),
   work dispatched by emcee, model per row.
+- **`e2`** — the same laptop (`hosts/xps9370`), work driven by an
+  interactive Claude Code session rather than emcee dispatch —
+  spec, review, and any sub-agent implementation all launched from
+  the one session. Distinct from `e1` because the dispatch path is
+  different infrastructure, and infrastructure is a measured
+  variable here, not a footnote.
 
 A new environment gets a new key and a line here, in the pull request
 that first uses it. The key is a key and not a description on purpose:
