@@ -180,8 +180,8 @@ mechanical half is a lint in CI with two rules.
 **Orphan entrypoint.** Every subcommand of every tool under `tools/`
 must have an *operational* caller. Three kinds count: a workflow under
 `.github/`, another executable under `tools/`, or a documented step
-that declares itself with an `<!-- invokes: tools/x/x sub -->` marker
-in the document that owns it. Two kinds deliberately do not. A test
+that declares itself with an `invokes:` marker — an HTML comment naming
+the entrypoint — in the document that owns it. Two kinds deliberately do not. A test
 does not count, because the 0070 miss was precisely a command that
 worked, was tested, and was reachable by nobody; letting a test satisfy
 reachability would have let 0070 through this lint. A usage synopsis
@@ -195,7 +195,10 @@ making with a different instrument.
 entrypoint must carry a `# feeder: <entrypoint> (<location>)` line, and
 the lint verifies the citation the way `outcomes redirect` verifies
 its own: the named entrypoint must exist, and the named location must
-be a file that actually carries an `invokes` marker for it. A feeder
+be a file that actually carries an `invokes:` marker for it. A marker
+naming an entrypoint no tool exposes fails too, which is how the lint's
+own documentation stays honest — and it caught this brief's first draft
+citing a placeholder. A feeder
 line naming something imaginary fails; blank fails. This is the
 non-emptiness rule the conventions already apply to a decision's
 falsifier and a task's `Model-because:`.
