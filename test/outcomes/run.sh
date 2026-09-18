@@ -150,14 +150,43 @@ reject "more findings fixed than raised" "findings_fixed exceeds findings"
 
 log "the receipt/verdict split"
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t/\t1\t-\t-\t2\t2\t/' > "$LOG"
-reject "a redirect count with no miscorrection rate beside it" \
-  "a detection rate is never logged alone"
+# The verdict cells are counts over the citations in verdict_ref (task
+# 0072), so every mutation below is a number moving with nothing behind
+# it — which is the whole fabrication surface, and it has to be caught
+# by a checker with no network in it.
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t-\t-\t2\t2\t-\t/' > "$LOG"
+reject "a redirect count with no citation behind it" \
+  "never a number someone typed"
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t/\t1\t2\t-\t2\t2\t/' > "$LOG"
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t2\t-\t-\t2\t2\tr\/pr9\/ic1\t/' > "$LOG"
+reject "a redirect count larger than its citations" \
+  "never a number someone typed"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t-\t-\t-\t2\t2\tr\/pr9\/ic1\t/' > "$LOG"
+reject "a citation with no count read off it" \
+  "redirects is unrecorded"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t0\t-\t2\t2\tr\/pr9\/ic1\t/' > "$LOG"
+reject "a miscorrection rate of zero that nobody reassessed" \
+  "0 is a judgment too"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t2\t-\t2\t2\tr\/pr9\/ic1,w2\/pr9\/ic2\t/' > "$LOG"
 reject "more redirects judged wrong than were made" "exceeds redirects"
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t/\t1\t0\t-\t2\t2\t/' > "$LOG"
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t-\t0\t-\t2\t2\tw0\/pr9\/ic2\t/' > "$LOG"
+reject "a reassessment of redirects that were never cited" \
+  "reassesses redirects that were never cited"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t0\t-\t2\t2\tpr-comment-9\t/' > "$LOG"
+reject "a citation that is not a citation" "is not a citation token"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t2\t-\t-\t2\t2\tr\/pr9\/ic1,r\/pr9\/ic1\t/' > "$LOG"
+reject "the same citation counted twice" "cited twice"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t1\t-\t2\t2\tr\/pr9\/ic1,w0\/pr9\/ic2,w1\/pr9\/ic2\t/' > "$LOG"
+reject "one comment made to say two different things" "one citation states one judgment"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t0\t-\t2\t2\t-\t/' > "$LOG"
 reject "a verdict with nowhere the resident said it" "carries no verdict_ref"
 
 log "coverage, the detector"
@@ -193,6 +222,46 @@ reject "an immutable cell rewritten" "fixed when the row is written"
 base_log | sed '2s/\t1\.50\t/\t9.99\t/' > "$LOG"
 reject "a pending cell rewritten after it was recorded" "written once"
 
+# The citation list is append-only, and the verdict counts are read off
+# it, so these three are the only ways a recorded verdict could be
+# rewritten. They are held against a base revision that already carries
+# one citation.
+CITED='1\t0001-the-first-thing\t1\t2026-08-01\t2026-08-02\tmerged\tdeep\tclaude-opus-5\tm2-done\t7\t1.50\t20\t0\t0.0\t2\t-\t-\t2\t2\tr/pr9/ic1,r/pr9/ic2\t-\te1\tlive\t-'
+cited_log() { base_log | sed "2s#.*#$CITED#"; }
+cited_log > "$LOG"
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t commit -qam cited
+git -C "$SANDBOX" update-ref refs/remotes/origin/main HEAD
+
+cited_log | sed '2s#r/pr9/ic1,r/pr9/ic2#r/pr9/ic1#; 2s#\t2\t-\t-\t2\t2\t#\t1\t-\t-\t2\t2\t#' > "$LOG"
+reject "a citation removed since the base revision" "only ever appended"
+
+cited_log | sed '2s#r/pr9/ic1,r/pr9/ic2#r/pr9/ic2,r/pr9/ic1#' > "$LOG"
+reject "citations reordered, which is a substitution nobody can see" \
+  "only ever appended"
+
+cited_log | sed '2s#r/pr9/ic1,r/pr9/ic2#r/pr9/ic1,r/pr9/ic3#' > "$LOG"
+reject "a citation swapped for a different one" "only ever appended"
+
+cited_log > "$LOG"
+if check >/dev/null 2>&1; then
+  pass "a citation appended on top of the base is allowed"
+else
+  fail "appending a citation was rejected"
+fi
+cited_log | sed '2s#r/pr9/ic1,r/pr9/ic2#r/pr9/ic1,r/pr9/ic2,w1/pr9/ic3#; 2s#\t2\t-\t-\t2\t2\t#\t2\t1\t-\t2\t2\t#' > "$LOG"
+if check >/dev/null 2>&1; then
+  pass "a reassessment appended later matures redirects_wrong"
+else
+  check || true
+  fail "appending a reassessment was rejected"
+fi
+
+# Back to the uncited base for everything below.
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t checkout -q -- .
+base_log > "$LOG"
+git -C "$SANDBOX" -c user.email=t@t -c user.name=t commit -qam uncited
+git -C "$SANDBOX" update-ref refs/remotes/origin/main HEAD
+
 log "and what must still be allowed"
 
 accept() { # accept <name>
@@ -205,8 +274,18 @@ accept() { # accept <name>
   base_log > "$LOG"
 }
 
-base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t2\t1\t-\t2\t2\tpr-comment-9\t/' > "$LOG"
-accept "a verdict pair arriving together with its citation"
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t2\t1\t-\t2\t2\tr\/pr9\/ic1,r\/pr9\/ic2,w1\/pr9\/ic3\t/' > "$LOG"
+accept "a verdict pair arriving together with its citations"
+
+# The rule task 0072 relaxed, and the reason it had to be relaxed: a
+# redirect is logged the moment it happens, and whether it was a *wrong*
+# redirect is not knowable then. Defaulting the cell to 0 would record
+# the absence of a judgment as a judgment of correctness.
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t-\t-\t2\t2\tr\/pr9\/ic1\t/' > "$LOG"
+accept "a redirect standing with its reassessment still pending"
+
+base_log | sed '2s/\t-\t-\t-\t2\t2\t-\t/\t1\t0\t-\t2\t2\tr\/pr9\/ic1,w0\/pr9\/ic1\t/' > "$LOG"
+accept "a reassessment that found the redirect correct, cited"
 
 base_log | sed '2s/\tlive\t-$/\tlive\tan amended note, which is the one cell that may be/' > "$LOG"
 accept "a note rewritten, because a note may need redacting"
@@ -221,6 +300,129 @@ rm -f "$SANDBOX/docs/tasks/0004-the-fourth-thing.md"
 # `check` is the gate, but `derive` is what writes most cells, and every
 # cell it writes is written once. These are the three ways it could put a
 # confident wrong number into one.
+
+log "redirect, the verdict logger"
+
+# The resolver is the one place this tool touches a network, so it is
+# the one place substituted here. `check` keeps its no-network property
+# by never calling it at all; these tests keep theirs by replacing it.
+# What is *not* faked is everything the command decides after it has an
+# author: the identity comparison, the counting, the replay, and the
+# refusals.
+cat > "$WORKDIR/redirect.py" <<'DRIVER'
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("o", sys.argv[1])
+spec = importlib.util.spec_from_loader("o", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+author = sys.argv[2]
+
+
+def fake(repo_root, source, journals):
+    if author == "-":
+        raise m.Fail(f"{source} does not resolve")
+    return author
+
+
+m.resolve_author = fake
+sys.exit(m.main(sys.argv[3:]))
+DRIVER
+
+cat > "$WORKDIR/cell.py" <<'CELL'
+import sys
+log, task, name, header = sys.argv[1:5]
+cols = header.split("\t")
+for line in open(log):
+    c = line.rstrip("\n").split("\t")
+    if c[1] == task:
+        print(c[cols.index(name)])
+        break
+CELL
+
+XDG="$WORKDIR/xdg"
+mkdir -p "$XDG"
+# HOME and XDG_CONFIG_HOME are redirected so that the machine this runs
+# on cannot lend the test a resident identity it did not set itself.
+redirect() { # redirect <author-the-resolver-returns> <args...>
+  local author=$1; shift
+  env -u OUTCOMES_RESIDENT HOME="$WORKDIR/home" XDG_CONFIG_HOME="$XDG" \
+    python3 "$WORKDIR/redirect.py" "$OUTCOMES" "$author" \
+    --repo-root "$SANDBOX" redirect "$@"
+}
+
+expect_redirect() { # expect_redirect <name> <expect-exit> <author> <args...>
+  local name=$1 want=$2 author=$3; shift 3
+  local before after out rc
+  before=$(cat "$LOG")
+  out=$(redirect "$author" "$@" 2>&1) && rc=0 || rc=$?
+  after=$(cat "$LOG")
+  if [ "$rc" != "$want" ]; then
+    fail "$name: exit $rc, wanted $want — $(printf '%s' "$out" | head -1)"
+  elif [ "$want" != "0" ] && [ "$before" != "$after" ]; then
+    fail "$name: refused and wrote to the log anyway"
+  else
+    pass "$name"
+  fi
+}
+
+cell() { python3 "$WORKDIR/cell.py" "$LOG" "$1" "$2" "$HEADER"; }
+
+expect_cells() { # expect_cells <name> <task> <redirects> <wrong> <verdict_ref>
+  local name=$1 task=$2
+  local got="$(cell "$task" redirects)/$(cell "$task" redirects_wrong)/$(cell "$task" verdict_ref)"
+  if [ "$got" = "$3/$4/$5" ]; then pass "$name"; else fail "$name: row reads $got"; fi
+}
+
+base_log > "$LOG"
+
+expect_redirect "a citation the resident wrote matures the row" 0 boss \
+  0001-the-first-thing --ref 'https://github.com/o/r/pull/9#issuecomment-11' --resident boss
+expect_cells "  ...to one redirect, reassessment pending" \
+  0001-the-first-thing 1 - r/pr9/ic11
+
+expect_redirect "the same citation again is a replay" 0 boss \
+  0001-the-first-thing --ref 9#issuecomment-11 --resident boss
+expect_cells "  ...and changes nothing" 0001-the-first-thing 1 - r/pr9/ic11
+
+expect_redirect "a second, distinct citation is a second redirect" 0 boss \
+  0001-the-first-thing --ref 9#discussion_r12 --resident boss
+expect_cells "  ...counted as two" 0001-the-first-thing 2 - r/pr9/ic11,r/pr9/rc12
+
+expect_redirect "a cited reassessment matures redirects_wrong" 0 boss \
+  0001-the-first-thing --wrong 1 --ref 9#issuecomment-13 --resident boss
+expect_cells "  ...to the number the resident judged wrong" \
+  0001-the-first-thing 2 1 r/pr9/ic11,r/pr9/rc12,w1/pr9/ic13
+
+if check >/dev/null 2>&1; then
+  pass "the log the command wrote passes its own checker"
+else
+  check || true
+  fail "redirect wrote a log that does not check"
+fi
+
+base_log > "$LOG"
+
+expect_redirect "a comment somebody else wrote is refused" 2 stranger \
+  0001-the-first-thing --ref 9#issuecomment-11 --resident boss
+expect_redirect "a citation that does not resolve is refused" 2 - \
+  0001-the-first-thing --ref 9#issuecomment-11 --resident boss
+expect_redirect "a reference in no format it can read is refused" 2 boss \
+  0001-the-first-thing --ref 'the comment where they said it' --resident boss
+expect_redirect "no configured resident is refused, not assumed" 2 boss \
+  0001-the-first-thing --ref 9#issuecomment-11
+expect_redirect "a task with no row is refused" 2 boss \
+  0009-no-such-task --ref 9#issuecomment-11 --resident boss
+expect_redirect "a reassessment of a redirect nobody logged is refused" 2 boss \
+  0001-the-first-thing --wrong 1 --ref 9#issuecomment-13 --resident boss
+expect_redirect "an invocation with no --ref at all is refused" 2 boss \
+  0001-the-first-thing --resident boss
+
+expect_redirect "  (setup: one cited redirect)" 0 boss \
+  0001-the-first-thing --ref 9#issuecomment-11 --resident boss
+expect_redirect "more judged wrong than were ever cited is refused" 2 boss \
+  0001-the-first-thing --wrong 2 --ref 9#issuecomment-13 --resident boss
+
+base_log > "$LOG"
 
 log "derive"
 

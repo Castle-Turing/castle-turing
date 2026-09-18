@@ -1,5 +1,4 @@
-Title: Task 0072 — wire the outcome log, and give redirects a hand that
-isn't the resident's
+Title: Task 0072 — wire the outcome log, and its redirects
 Model: deep
 Milestone: m2-constraints
 Model-because: the deliverable changes what a write-once measurement
