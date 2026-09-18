@@ -342,6 +342,15 @@ reproduce would not be a score anybody could check.
 
 ## Running it
 
+This section is where these four steps are owned, and
+`tools/reachability-check.py` holds it to that: the markers below are
+what stop each of them being an entrypoint nobody invokes.
+
+<!-- invokes: tools/clarify/clarify check -->
+<!-- invokes: tools/clarify/clarify probe build -->
+<!-- invokes: tools/clarify/clarify probe score -->
+<!-- invokes: tools/clarify/clarify probe oracle -->
+
     tools/clarify/clarify check docs/state/<requirements>.md
     tools/clarify/clarify probe build cursor-too-small --out /tmp/run
     tools/clarify/clarify probe score cursor-too-small /tmp/run

@@ -2,6 +2,13 @@ name: outcomes-check
 
 # The task-outcome log's checker, checked (task 0070).
 #
+# This gate is armed: a brief with no row fails it. What feeds it is
+# named here, and tools/reachability-check.py verifies that the
+# citation resolves — a gate whose feeder is imaginary is the failure
+# task 0072 exists to repair.
+#
+# feeder: tools/outcomes/outcomes derive (docs/measurement.md)
+#
 # Its own workflow rather than a job in check.yml, for the reason
 # clarify-check.yml gives next door: check.yml carries
 # `paths-ignore: docs/**` on purpose, and everything this gate exists to

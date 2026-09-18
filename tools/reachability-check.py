@@ -98,43 +98,56 @@ def entrypoints(path, text):
     is the part that matters: `clarify probe build` is one entrypoint
     and `clarify probe` is a group, and a lint that flagged the group
     would demand a caller for something nobody can call.
+
+    Nodes are processed in source order — `ast.walk` is breadth-first,
+    which would see a parser used before the assignment that named it.
     """
     tree = ast.parse(text, filename=str(path))
-    # variable name -> command path it holds
-    parsers = {}
-    groups = {}
-    leaves = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+    parsers = {}       # variable -> the command path it holds
+    groups = {}        # variable -> the command path its parsers hang under
+    seen = set()       # every command path added
+    grouped = set()    # every command path that turned out to be a group
+
+    nodes = sorted(
+        (n for n in ast.walk(tree)
+         if isinstance(n, (ast.Assign, ast.Call)) and hasattr(n, "lineno")),
+        key=lambda n: (n.lineno, n.col_offset),
+    )
+    for node in nodes:
+        call = node.value if isinstance(node, ast.Assign) else node
+        if not isinstance(call, ast.Call):
             continue
-        target = node.targets[0]
-        if not isinstance(target, ast.Name) or not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            target = node.targets[0].id
         func = call.func
-        if isinstance(func, ast.Attribute) and func.attr == "add_subparsers":
-            if isinstance(func.value, ast.Name):
-                owner = func.value.id
-                groups[target.id] = parsers.get(owner, ())
-                # Its owner is a group, not a leaf.
-                leaves.pop(owner, None)
-        elif isinstance(func, ast.Attribute) and func.attr == "add_parser":
-            if not isinstance(func.value, ast.Name) or not call.args:
+        name = func.attr if isinstance(func, ast.Attribute) else \
+            (func.id if isinstance(func, ast.Name) else None)
+        if name == "ArgumentParser":
+            if target:
+                parsers[target] = ()
+        elif name == "add_subparsers" and isinstance(func, ast.Attribute) \
+                and isinstance(func.value, ast.Name):
+            owner = parsers.get(func.value.id)
+            if owner is None:
                 continue
-            name = call.args[0]
-            if not isinstance(name, ast.Constant) or not isinstance(name.value, str):
+            grouped.add(owner)
+            if target:
+                groups[target] = owner
+        elif name == "add_parser" and isinstance(func, ast.Attribute) \
+                and isinstance(func.value, ast.Name) and call.args:
+            arg = call.args[0]
+            if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
                 continue
             prefix = groups.get(func.value.id)
             if prefix is None:
                 continue
-            path_ = prefix + (name.value,)
-            parsers[target.id] = path_
-            leaves[target.id] = path_
-        elif isinstance(func, ast.Attribute) and func.attr == "ArgumentParser":
-            parsers[target.id] = ()
-        elif isinstance(func, ast.Name) and func.id == "ArgumentParser":
-            parsers[target.id] = ()
-    return sorted(set(leaves.values()))
+            command = prefix + (arg.value,)
+            seen.add(command)
+            if target:
+                parsers[target] = command
+    return sorted(seen - grouped)
 
 
 def logical_lines(text):

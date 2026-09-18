@@ -79,12 +79,12 @@ checker, and no existing row is ever rewritten into the new shape.
 | 12 | `turns` | receipt | Model turns in the attempt, from the same ledger. |
 | 13 | `questions` | receipt | Clarifying questions this attempt routed to the resident. |
 | 14 | `question_wait_h` | receipt | Hours the attempt was blocked waiting for those answers, to one decimal, summed. |
-| 15 | `redirects` | **verdict** | Times the resident redirected this attempt after seeing its work. |
-| 16 | `redirects_wrong` | **verdict** | How many of those redirects were later judged to have been wrong. |
+| 15 | `redirects` | **verdict** | Times the resident redirected this attempt after seeing its work. The number of `r` citations in `verdict_ref`, never a number written directly. |
+| 16 | `redirects_wrong` | **verdict** | How many of those redirects were *later* judged to have been wrong. The sum over `verdict_ref`'s reassessment citations. `-` until the resident reassesses, and never defaulted to `0`. |
 | 17 | `reworks` | receipt | The task number(s) whose merged work this attempt amends, comma-separated. |
 | 18 | `findings` | receipt | Findings raised by the cross-model review gate on this attempt's pull request. |
 | 19 | `findings_fixed` | receipt | How many of those were dispositioned as fixed rather than declined. |
-| 20 | `verdict_ref` | — | Where the resident said the thing a verdict column records: a pull-request comment number, a review URL fragment, or a journal record id. |
+| 20 | `verdict_ref` | — | Where the resident said the things the verdict columns record: an append-only, comma-separated list of citation tokens. The grammar is below. |
 | 21 | `probe` | — | `-` for a real record; otherwise the probe's identifier. |
 | 22 | `env` | — | The environment key (see below). |
 | 23 | `provenance` | — | `live` if the row was written as the attempt happened, `backfilled` if it was reconstructed from history. |
@@ -99,15 +99,54 @@ work — merged, reverted, dismissed — and receipts may inform. A
 The system may grade how well it delivered; it may never grade whether
 it was right.
 
-Columns 15 and 16 are the only verdicts in schema 1, and the checker
-enforces two rules about them. A non-zero verdict must carry a
-`verdict_ref`, so that a judgment in the log always points at the place
-the resident actually made it. And `redirects` may not be recorded
-without `redirects_wrong` beside it: a redirect count is a *detection*
-rate, and measured conditional miscorrection rates run 53–94%, so a
-detection rate reported alone is uninterpretable
-(`docs/research/measurement-methodology.md`, design implication 1). The
-log will not hold half of that pair.
+Columns 15 and 16 are the only verdicts in schema 1, and they are not
+written directly. Each is a **count over the citations in
+`verdict_ref`**, and the checker holds it to them — so a verdict moves
+only because a citation was added, and a number edited with nothing
+behind it is a check failure rather than a plausible cell. This is what
+lets an agent touch these columns at all: `tools/outcomes/outcomes
+redirect` *transcribes* a judgment the resident made and cites where
+they made it. It never authors one.
+
+### The citation grammar
+
+`verdict_ref` is `-`, or a comma-separated list of tokens:
+
+| token | means |
+| --- | --- |
+| `r/<source>` | one redirect, cited where the resident made it |
+| `w<n>/<source>` | a reassessment that judged `n` of this task's redirects wrong |
+
+`<source>` is the citation's own address: `pr<num>/ic<id>` for a
+pull-request comment, `pr<num>/rc<id>` for a review comment, `rec/<id>`
+for a harness journal record. `redirects` is the number of `r` tokens;
+`redirects_wrong` is the sum of `n` over the `w` tokens. One source may
+carry at most one token of each kind, so a single comment cannot be
+made to say two different things.
+
+`w0` is a real and necessary value: it records "reassessed, none
+wrong", **with a citation behind it**. `redirects_wrong` may not be `0`
+without one. That is the whole reason the column exists as a separate
+verdict rather than a default.
+
+### Where the pairing rule went
+
+A redirect count is a *detection* rate, measured conditional
+miscorrection rates run 53–94%, and a detection rate reported alone is
+uninterpretable (`docs/research/measurement-methodology.md`, design
+implication 1). Task 0070 enforced that by refusing to store
+`redirects` without `redirects_wrong` beside it.
+
+That was the right constraint in the wrong place, and task 0072 moved
+it. A redirect is logged the moment it happens; whether it was a
+*wrong* redirect is not knowable then, and the only value available to
+write is `0` — which would record the absence of a judgment as a
+judgment of correctness and bias the miscorrection rate downward across
+the whole series. So the log now holds `redirects` with
+`redirects_wrong` pending, and the pairing binds at **read** time
+instead: see "What may honestly be said from this log". Storing
+`redirects_wrong` without `redirects`, or more wrong than were ever
+made, remain errors.
 
 Everything else is a receipt, derivable from artifact state by something
 with no model in it. That is deliberate and it is the same rule task
@@ -145,9 +184,19 @@ Rows are appended and matured, never rewritten. Three cell classes:
   `milestone`, `probe`, `env`, `provenance`): fixed when the row is
   written. A change to one is a rewrite of history.
 - **Pending** (`landed`, `outcome`, `pr`, `cost_usd`, `turns`,
-  `questions`, `question_wait_h`, `redirects`, `redirects_wrong`,
-  `reworks`, `findings`, `findings_fixed`, `verdict_ref`): `-` may
-  become a value exactly once. A value never becomes a different value.
+  `questions`, `question_wait_h`, `reworks`, `findings`,
+  `findings_fixed`): `-` may become a value exactly once. A value never
+  becomes a different value.
+- **A citation list** (`verdict_ref`): append-only. The base revision's
+  tokens must be a *prefix* of this revision's — one may be added, none
+  removed, none reordered, none substituted. It is not a pending cell
+  because a task can be redirected twice, and a write-once cell could
+  only ever have recorded the first.
+- **Counts over that list** (`redirects`, `redirects_wrong`): each
+  equals the citations behind it and only ever grows. The write-once
+  discipline holds **per citation** rather than on the aggregate, which
+  is what makes a second redirect an append rather than a rewrite — and
+  a bare edit of the number still a rewrite.
 - **Amendable** (`note`): may be rewritten, because a note is the only
   cell that could ever need redacting.
 
@@ -170,6 +219,54 @@ The same check enforces **coverage**: every brief under `docs/tasks/` or
 without being logged fails the very next pull request — which is the
 only moment when writing the row is still cheap and the facts are still
 in someone's head.
+
+## Operating the log
+
+Three steps, and each names who runs it. The reachability lint
+(`tools/reachability-check.py`) holds this section to being true: an
+entrypoint named nowhere an operator reads is flagged in CI, which is
+the shape of the miss this section exists to repair.
+
+**When a task's pull request opens, its row is appended.** The session
+that did the work runs, on the branch, before opening the pull request:
+
+<!-- invokes: tools/outcomes/outcomes derive -->
+
+    tools/outcomes/outcomes derive --env <key> --fill
+
+It appends a row for every brief that has none and fills pending
+receipt cells that artifact state can now supply. The session that ran
+the attempt is the one party that knows `env` and `tier`, and both are
+immutable — a wrong value in either can never be corrected, so the
+writer has to be whoever holds the facts. That is why this is not done
+by CI, which knows neither, and it is why the gate can only ever fail:
+`outcomes check` is red on the branch where fixing it is cheap and the
+facts are still in someone's head.
+
+This step is an interim. The wired version has the delivery seat write
+the row when it opens the pull request, and the debt is filed at
+`docs/backlog/the-outcome-row-is-written-by-hand.md`.
+
+**When the resident redirects an attempt, the agent transcribes it.**
+
+<!-- invokes: tools/outcomes/outcomes redirect -->
+
+    tools/outcomes/outcomes redirect <task> --ref <where they said it>
+
+and, when the resident later reassesses whether that redirect was
+right:
+
+    tools/outcomes/outcomes redirect <task> --wrong <n> --ref <where they said that>
+
+The resident does not run this. An agent does, as part of closing out
+any exchange in which it was sent back — which is why it lives in
+`CLAUDE.md` as an obligation rather than here as an option. Read that
+command's `--help` before using it: it carries the whole argument for
+what a transcription may and may not claim, including two limits on
+how much the authorship check actually proves.
+
+**Every pull request runs the checks.** `outcomes-check` and
+`reachability-check`, both in CI, both pure functions of the tree.
 
 ## Salt
 
@@ -204,6 +301,19 @@ reads 97%.
 **Never a single run.** Agentic pass rates swing several points run to
 run at temperature zero. A row is one observation, and one row is never
 an argument.
+
+**A redirect rate is never reported without its unjudged remainder.**
+This is where task 0070's pairing rule now binds. `redirects_wrong` is
+`-` until the resident reassesses, so at any moment some redirects have
+been counted and not yet judged. A redirect rate quoted from this log
+carries, in the same sentence, how many of the redirects it counts have
+no reassessment behind them — because that number is the unknown
+denominator of the conditional miscorrection rate, and measured
+miscorrection runs 53–94%. A rate over a mostly-unjudged set is not a
+weaker finding, it is a different quantity. Saying only the first half
+is the failure the pairing rule was written against, and moving the
+rule from storage to reporting does not make it optional; it makes it
+the reader's, and this paragraph is the reader's instruction.
 
 **The baseline is already contaminated.** The pre-period is not an
 agent-free period — every task in it was done with agents. Any effect
