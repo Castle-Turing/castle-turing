@@ -754,6 +754,25 @@ def landing(repo_root, commit, main):
 
 HEADER_RE = re.compile(r"^([A-Za-z-]+):\s*(.*)$")
 
+# The header keys a brief may carry (the work-layout contract). Only a
+# line whose key is one of these starts a new header; any other
+# `Word:`-shaped line inside the block is a continuation of the value
+# above it. Without this, a wrapped value whose continuation line
+# happens to begin `See:`/`Note:`/`Origin:` was recorded as a spurious
+# header key — the same silent-misparse class task 0072 set out to
+# close, caught by the /code-review of PR #137. A key not in this set
+# reads as continuation, which is the safe direction (an unrecognised
+# header goes unread rather than displacing a real one); a genuinely
+# new key is added here in the PR that introduces it. The residual
+# ambiguity — a continuation line beginning with a literal recognised
+# key + colon — is left to docs/backlog and the append-only checker,
+# because closing it fully needs a format change (indented
+# continuations), not a parser heuristic.
+KNOWN_BRIEF_HEADERS = frozenset({
+    "title", "model", "model-because", "milestone",
+    "requires", "requires-because", "deliverable",
+})
+
 
 def brief_headers(path):
     """The `Key: value` header block, continuation lines included.
@@ -773,7 +792,7 @@ def brief_headers(path):
         if not line.strip():
             break
         m = HEADER_RE.match(line)
-        if m:
+        if m and m.group(1).lower() in KNOWN_BRIEF_HEADERS:
             last = m.group(1).lower()
             headers[last] = m.group(2).strip()
         elif last is not None:
