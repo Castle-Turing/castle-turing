@@ -417,8 +417,13 @@ def check_values(rows, path, problems):
             if rec[name] not in (UNRECORDED, "0") and rec["verdict_ref"] == UNRECORDED:
                 bad(row, f"{name} is a verdict and carries no verdict_ref")
         if UNRECORDED not in (rec["findings"], rec["findings_fixed"]):
-            if int(rec["findings_fixed"]) > int(rec["findings"]):
-                bad(row, "findings_fixed exceeds findings")
+            # Guarded, like the redirect comparison above: the
+            # enumeration check earlier has already reported a
+            # non-numeric cell, and a checker that tracebacks there
+            # reports one problem instead of all of them.
+            if INT_RE.match(rec["findings"]) and INT_RE.match(rec["findings_fixed"]):
+                if int(rec["findings_fixed"]) > int(rec["findings"]):
+                    bad(row, "findings_fixed exceeds findings")
         note = rec["note"]
         if note != UNRECORDED:
             if len(note) > NOTE_MAX:
@@ -915,6 +920,15 @@ def cmd_derive(args):
         headers = brief_headers(path)
         tier = headers.get("model", UNRECORDED).lower()
         row["tier"] = tier if tier in TIERS else UNRECORDED
+        if row["queued"] == UNRECORDED:
+            # `queued` is immutable, and the commonest way to get an
+            # empty one is now a normal mistake: the documented step
+            # runs `derive` before opening the pull request, and a
+            # brief that is not committed yet has no add-commit to
+            # date from. Say so while the fix is `git add`.
+            print(f"note: {path} is not committed yet, so no date can be "
+                  "read for `queued` — commit the brief first, or this "
+                  "row's queue date is unrecorded for good", file=sys.stderr)
         if row["tier"] == UNRECORDED:
             # `tier` is immutable, so a row written without one never
             # gains one, and CLAUDE.md makes stating the routing tier
@@ -1038,43 +1052,50 @@ def gh_json(*args):
     return json.loads(proc.stdout)
 
 
-def resolve_author(repo_root, source, journals):
-    """Who wrote the thing this citation points at.
+def resolve_journal_author(source, journals):
+    """Who wrote a journal record. A local file; no network involved."""
+    rec_id = source[len("rec/"):]
+    if not journals:
+        raise Fail(f"{source} is a journal record and no journal was given; "
+                   "pass --journal FILE")
+    for path in journals:
+        try:
+            text = pathlib.Path(path).read_text(encoding="utf-8")
+        except OSError as e:
+            raise Fail(f"cannot read the journal {path}: {e}")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(rec.get("id", "")) != rec_id:
+                continue
+            author = rec.get("author") or rec.get("actor") or rec.get("by")
+            if not author:
+                raise Fail(f"journal record {rec_id} names no author, so "
+                           "nothing about it proves the resident said it")
+            return str(author)
+    raise Fail(f"no journal record with id {rec_id} in "
+               + ", ".join(journals))
+
+
+def resolve_forge_author(repo_root, source):
+    """Who wrote the pull-request comment this citation points at.
+
+    This is the network boundary, and the only one in the whole tool
+    outside `derive`. `check` never reaches it — the log's integrity has
+    to be verifiable on a clone made after this forge stops existing —
+    and the tests substitute this function rather than calling out, for
+    the same reason.
 
     Raises rather than returning None when the citation does not
     resolve. An unresolvable citation is not a weaker citation, it is
     no citation, and the caller must not be able to treat the two the
     same by forgetting a null check.
-
-    This is the network boundary, and the only one in the whole tool
-    outside `derive`. `check` never calls it — the log's integrity has
-    to be verifiable on a clone made after this forge stops existing.
-    Tests substitute this function rather than reaching the forge, for
-    the same reason.
     """
-    if source.startswith("rec/"):
-        rec_id = source[len("rec/"):]
-        if not journals:
-            raise Fail(f"{source} is a journal record and no journal was given; "
-                       "pass --journal FILE")
-        for path in journals:
-            for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if str(rec.get("id", "")) != rec_id:
-                    continue
-                author = rec.get("author") or rec.get("actor") or rec.get("by")
-                if not author:
-                    raise Fail(f"journal record {rec_id} names no author, so "
-                               "nothing about it proves the resident said it")
-                return str(author)
-        raise Fail(f"no journal record with id {rec_id} in "
-                   + ", ".join(journals))
     m = re.match(r"^pr(\d+)/(ic|rc)(\d+)$", source)
     if not m:
         raise Fail(f"unresolvable citation source {source!r}")
@@ -1094,6 +1115,13 @@ def resolve_author(repo_root, source, journals):
     if not author:
         raise Fail(f"comment {cid} resolves with no author")
     return str(author)
+
+
+def resolve_author(repo_root, source, journals):
+    """Who wrote the thing this citation points at, wherever it lives."""
+    if source.startswith("rec/"):
+        return resolve_journal_author(source, journals)
+    return resolve_forge_author(repo_root, source)
 
 
 def resident_identity(args):
@@ -1135,6 +1163,19 @@ def cmd_redirect(args):
         raise Fail(f"{log_path}: not a schema {SCHEMA} log")
 
     matches = [r for r in rows if as_record(r)["task"] == args.task]
+    if not matches and TASK_RE.match(args.task):
+        # A row's `task` is immutable, so a brief renamed after its row
+        # was written is named in the log by its old stem — which
+        # `check` already resolves by number, and this has to resolve
+        # the same way or a renamed task becomes one whose redirects
+        # can never be logged. Same guard as `resolve()`: only where
+        # the number names exactly one row.
+        by_num = [r for r in rows if as_record(r)["task"][:4] == args.task[:4]]
+        if len(by_num) == 1:
+            matches = by_num
+            print(f"note: {args.task} is logged under "
+                  f"{as_record(by_num[0])['task']}, resolved by number",
+                  file=sys.stderr)
     if not matches:
         raise Fail(f"no row for {args.task} in {log_path}; the row is written "
                    "when the attempt starts (`outcomes derive`), and a verdict "
@@ -1167,10 +1208,21 @@ def cmd_redirect(args):
     if args.wrong is not None and not any(k == "r" for k, _, _ in existing):
         raise Fail("this task has no cited redirect to reassess; log the "
                    "redirect first")
-    if args.wrong is not None and args.wrong > sum(1 for k, _, _ in existing if k == "r"):
-        raise Fail(f"--wrong {args.wrong} exceeds the "
-                   f"{sum(1 for k, _, _ in existing if k == 'r')} redirect(s) "
-                   "cited for this task")
+    if args.wrong is not None:
+        # Against the *total* after this citation, not against this
+        # citation alone. Two reassessments of one redirect would
+        # otherwise both be accepted and write a row `check` refuses —
+        # and since citations are append-only, such a row could not be
+        # repaired once it reached the trunk. A command that can write
+        # a state the checker rejects is a trap, not a tool.
+        cited_r = sum(1 for k, _, _ in existing if k == "r")
+        already_wrong = sum(n for k, n, _ in existing if k == "w")
+        if args.wrong + already_wrong > cited_r:
+            raise Fail(
+                f"--wrong {args.wrong} would make {args.wrong + already_wrong} "
+                f"redirect(s) judged wrong out of {cited_r} cited for this task"
+                + (f" ({already_wrong} already reassessed)" if already_wrong else "")
+            )
 
     resident = resident_identity(args)
     author = resolve_author(repo_root, source, args.journal)

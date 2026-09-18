@@ -148,6 +148,10 @@ reject "a cost that is not a 2-decimal amount" "2-decimal"
 base_log | sed '2s/\t2\t2\t/\t1\t2\t/' > "$LOG"
 reject "more findings fixed than raised" "findings_fixed exceeds findings"
 
+base_log | sed '2s/\t2\t2\t/\tmany\t2\t/' > "$LOG"
+reject "a count that is not a count is reported, not crashed on" \
+  "is not an integer"
+
 log "the receipt/verdict split"
 
 # The verdict cells are counts over the citations in verdict_ref (task
@@ -318,13 +322,15 @@ loader.exec_module(m)
 author = sys.argv[2]
 
 
-def fake(repo_root, source, journals):
+def fake(repo_root, source):
     if author == "-":
         raise m.Fail(f"{source} does not resolve")
     return author
 
 
-m.resolve_author = fake
+# Only the forge half is substituted. A journal citation resolves out
+# of a real file, so the test exercises that path rather than faking it.
+m.resolve_forge_author = fake
 sys.exit(m.main(sys.argv[3:]))
 DRIVER
 
@@ -421,6 +427,54 @@ expect_redirect "  (setup: one cited redirect)" 0 boss \
   0001-the-first-thing --ref 9#issuecomment-11 --resident boss
 expect_redirect "more judged wrong than were ever cited is refused" 2 boss \
   0001-the-first-thing --wrong 2 --ref 9#issuecomment-13 --resident boss
+
+# The trap this command must not be able to set. Citations are
+# append-only, so a row the command wrote and the checker rejects could
+# not be repaired once it reached the trunk: CI would be red forever on
+# a file nobody is allowed to edit back. The guard therefore counts the
+# reassessments already recorded, not just the one being added.
+expect_redirect "  (setup: that one redirect judged wrong)" 0 boss \
+  0001-the-first-thing --wrong 1 --ref 9#issuecomment-13 --resident boss
+expect_redirect "a second reassessment of the same single redirect is refused" 2 boss \
+  0001-the-first-thing --wrong 1 --ref 9#issuecomment-14 --resident boss
+if check >/dev/null 2>&1; then
+  pass "  ...and the row it stopped at still checks"
+else
+  check || true
+  fail "redirect left a row the checker rejects"
+fi
+
+expect_redirect "a citation naming a journal that is not there is refused" 2 boss \
+  0001-the-first-thing --ref rec:abc --journal "$WORKDIR/no-such.jsonl" --resident boss
+expect_redirect "a journal citation with no journal to read is refused" 2 boss \
+  0001-the-first-thing --ref rec:abc --resident boss
+
+base_log > "$LOG"
+
+printf '%s\n' \
+  '{"id": "abc", "author": "boss"}' \
+  '{"id": "def", "author": "stranger"}' \
+  '{"id": "ghi"}' > "$WORKDIR/journal.jsonl"
+expect_redirect "a journal record the resident wrote is a citation" 0 boss \
+  0001-the-first-thing --ref rec:abc --journal "$WORKDIR/journal.jsonl" --resident boss
+expect_cells "  ...recorded as a record citation" 0001-the-first-thing 1 - r/rec/abc
+expect_redirect "a journal record somebody else wrote is refused" 2 boss \
+  0001-the-first-thing --ref rec:def --journal "$WORKDIR/journal.jsonl" --resident boss
+expect_redirect "a journal record naming no author is refused" 2 boss \
+  0001-the-first-thing --ref rec:ghi --journal "$WORKDIR/journal.jsonl" --resident boss
+expect_redirect "a journal record that is not in the journal is refused" 2 boss \
+  0001-the-first-thing --ref rec:zzz --journal "$WORKDIR/journal.jsonl" --resident boss
+
+base_log > "$LOG"
+
+# A brief renamed after its row was written is named in the log by its
+# old stem. `check` resolves that by number; so must this, or a renamed
+# task is one whose redirects can never be logged.
+base_log | sed '2s/0001-the-first-thing/0001-the-first-thing-renamed/' > "$LOG"
+expect_redirect "a row whose brief was renamed still takes a redirect" 0 boss \
+  0001-the-first-thing --ref 9#issuecomment-11 --resident boss
+expect_cells "  ...on the row it resolved by number" \
+  0001-the-first-thing-renamed 1 - r/pr9/ic11
 
 base_log > "$LOG"
 

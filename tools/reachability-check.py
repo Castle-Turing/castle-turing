@@ -68,6 +68,15 @@ OPERATIONAL_DIRS = (".github", "tools")
 CALLER_SUFFIXES = (".yml", ".yaml", ".sh", ".py", "")
 
 INVOKES_RE = re.compile(r"<!--\s*invokes:\s*(.+?)\s*-->")
+
+# Directories whose markdown is a *record* rather than an instruction
+# surface, and so cannot make anything reachable. A brief describes what
+# was built on one branch at one time; nobody operates from it, and a
+# marker copied into one — from the brief that introduced the marker, say
+# — would satisfy the orphan rule for a command nothing runs. That is
+# the exact shape this lint exists to catch, arriving through the lint's
+# own mechanism.
+RECORD_DIRS = ("docs/tasks", "docs/backlog", "docs/research")
 FEEDER_RE = re.compile(r"#\s*feeder:\s*(.+?)\s*\((.+?)\)\s*$")
 
 
@@ -257,10 +266,16 @@ def caller_files(root):
 
 
 def marked_invocations(root):
-    """Every `<!-- invokes: ... -->` marker, as {spec: [paths]}."""
+    """Every `invokes:` marker on an instruction surface, as {spec: [paths]}.
+
+    Records are excluded; see RECORD_DIRS.
+    """
     out = {}
     for path in sorted(root.rglob("*.md")):
         if ".git" in path.parts:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if any(rel.startswith(d + "/") for d in RECORD_DIRS):
             continue
         for m in INVOKES_RE.finditer(path.read_text(encoding="utf-8")):
             out.setdefault(" ".join(m.group(1).split()), []).append(path)
