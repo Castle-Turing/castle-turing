@@ -1,0 +1,44 @@
+name: reachability-check
+
+# The detector task 0072 owes its own incident (an incident ships its
+# detector, CLAUDE.md). Task 0070 shipped a command that wrote the
+# outcome log's rows and wired it to nothing, behind a gate that was
+# already armed; every test passed. This lint fails on the two
+# mechanical shapes of that: an entrypoint no operator path reaches,
+# and a gate naming nothing that feeds it.
+#
+# Its own workflow rather than a job in check.yml, for the reason
+# outcomes-check.yml gives next door: check.yml carries
+# `paths-ignore: docs/**`, and the documented steps this lint reads are
+# under docs/, so folding it in there would mean the gate never fires
+# on the pull requests most likely to break it.
+#
+# Paths are duplicated between the two triggers rather than shared via
+# a YAML anchor: GitHub Actions does not expand anchors in workflow
+# files.
+on:
+  pull_request:
+    paths:
+      - "tools/**"
+      - "docs/**"
+      - "test/reachability/**"
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/**"
+      - "docs/**"
+      - "test/reachability/**"
+      - ".github/workflows/**"
+  workflow_dispatch: {}
+
+jobs:
+  reachability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nix: the lint is a single stdlib Python script and its test
+      # is plain bash, so the stock runner's toolchain is the whole
+      # dependency list.
+      - run: test/reachability/run.sh

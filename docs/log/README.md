@@ -5,8 +5,17 @@ edited, because something later depends on its past being unaltered.
 
 `task-outcomes.tsv` is the first. Its definitions, its column meanings
 and the reasoning for all of it are in `docs/measurement.md`; task 0070
-is the brief. `tools/outcomes/outcomes check` enforces the rules on
-every pull request that touches it.
+is the brief and task 0072 wired it to the work it measures.
+`tools/outcomes/outcomes check` enforces the rules on every pull
+request that touches it.
+
+"Written once" is a claim about facts, not about characters. A row is
+appended when an attempt starts and its cells mature as the attempt
+does — a pending cell goes from unrecorded to a value exactly once, and
+one cell holds an append-only list of citations, because a task can be
+redirected twice and a write-once cell could only ever have recorded
+the first. What never happens is a recorded fact becoming a different
+fact.
 
 ## Why this is not `docs/state/`
 

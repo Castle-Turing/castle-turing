@@ -58,7 +58,15 @@ Parallel sessions use git worktrees, one branch per session. Do not commit
 directly to `main` from an agent session; merges go through PRs so the human
 can run the weekly-audit muscle on code the same way as on decisions.
 
-Before opening a PR, run `/code-review` on the branch and address its
+Before opening a PR, append the task's outcome row — run
+`tools/outcomes/outcomes derive --env <key> --fill` on the branch, and
+commit what it writes. The row belongs to the session that did the
+work because `env` and `tier` are immutable cells and nothing else
+knows them; a brief that lands without a row fails CI on the next pull
+request. `docs/measurement.md`'s "Operating the log" section is the
+authority.
+
+Then run `/code-review` on the branch and address its
 findings, then run `tools/codex-review.sh` for a second, cross-model
 opinion. Codex's findings are posted verbatim — no seat summarises or
 filters an independent reviewer before the human sees it — and any
@@ -154,6 +162,38 @@ What delegation does not relax:
   to touch the primary checkout.
 - **Every report is a claim, not evidence.** Whoever delegated re-reads
   the diff and re-runs the check.
+
+## Logging a redirect
+
+When the resident sends work back — in conversation, on a pull request,
+anywhere — that is a **redirect**, and logging it is part of closing
+out the exchange, not a separate errand:
+
+    tools/outcomes/outcomes redirect <task> --ref <where they said it>
+
+and, when the resident later reassesses whether the redirect was right,
+`--wrong <n>` with its own `--ref` pointing at where they said *that*.
+Read the command's `--help` first; it carries the whole argument.
+
+Three things this obligation is, in the order they matter:
+
+**You transcribe; you never originate.** The verdict columns are the
+resident's judgment, and `--ref` is the proof they made it. Never cite
+something you wrote. Never log a redirect the resident did not make,
+and never round your own change of direction up into one.
+
+**A redirect the resident stated in conversation needs somewhere
+citable before it can be logged.** Ask them to say it on the pull
+request, or record it where the journal can be cited — do not invent an
+address, and do not log it uncited.
+
+**`redirects_wrong` is not yours to fill.** It stays pending until the
+resident reassesses. Zero is a judgment, not a default, and writing it
+early is the same defect as a silent `Model:` header.
+
+If you are unsure whether an exchange was a redirect, say so in the
+pull request and leave it unlogged. An uncertain row is worse than a
+missing one; the coverage gate catches missing.
 
 ## Spec workflow
 
