@@ -186,7 +186,12 @@ mechanical half is a lint in CI with two rules.
 must have an *operational* caller. Three kinds count: a workflow under
 `.github/`, another executable under `tools/`, or a documented step
 that declares itself with an `invokes:` marker — an HTML comment naming
-the entrypoint — in the document that owns it. Two kinds deliberately do not. A test
+the entrypoint — in the document that owns it. A marker in a *record* —
+`docs/tasks/`, `docs/backlog/`, `docs/research/` — does not count, for
+the same reason the others do not: nobody operates from a brief, and a
+marker copied out of the brief that introduced markers would satisfy
+the lint for a command nothing runs. Two further kinds deliberately do
+not count either. A test
 does not count, because the 0070 miss was precisely a command that
 worked, was tested, and was reachable by nobody; letting a test satisfy
 reachability would have let 0070 through this lint. A usage synopsis
@@ -291,8 +296,12 @@ Automated, no human, in CI:
    configuration is refused, and the checker rejects a count edited
    without a citation, a citation removed, a citation reordered, a
    `redirects_wrong` exceeding `redirects`, and a `w` citation on a
-   task with no `r` citation. Resolution is faked through an injected
-   resolver so the test keeps `check`'s no-network property.
+   task with no `r` citation. Only the *forge* half of resolution is
+   substituted, so journal citations — a record the resident wrote, one
+   somebody else wrote, one naming no author, one that is not there,
+   and a journal file that does not exist — are exercised for real
+   against a real file. `check`'s no-network property is untouched
+   either way, because `check` resolves nothing.
 3. `tools/outcomes/outcomes check` over the real log, which now
    includes 0070's matured row and this task's own row.
 
@@ -301,6 +310,28 @@ Needs a human:
 - **Approving §4.** By construction.
 - **Whether the transcription is faithful** — that the cited comment
   says what the row claims. The weekly audit's sampled read, forever.
+
+## What review changed, and the one finding worth reading
+
+`/code-review` at high effort found six defects, all fixed on this
+branch. Five are ordinary — a traceback where a refusal belonged, a
+renamed brief that could not be redirected, a silent empty `queued`
+when `derive` is run against a brief that is not committed yet, a
+marker in a record counting as a caller.
+
+The sixth is the one this design had to get right and did not. `--wrong
+N` checked `N` against the number of cited redirects and ignored the
+reassessments already recorded, so two successive `--wrong 1`
+invocations with different citations both succeeded and wrote
+`redirects=1, redirects_wrong=2` — a row `check` rejects. Because
+citations are append-only, such a row could not be repaired once it
+reached the trunk: every later pull request would be red on a file
+nobody is permitted to edit back. A writer that can produce a state its
+own checker refuses is a trap rather than a tool, and the property the
+guard must hold is stronger than "validate the argument": **anything
+this command writes has to pass `check`, because nothing can take it
+back.** The test asserts exactly that — after the refusal, the row it
+stopped at still checks.
 
 ## Judgment calls made where the spec was silent or has been overtaken
 
