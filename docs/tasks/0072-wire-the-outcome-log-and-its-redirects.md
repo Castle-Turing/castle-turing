@@ -169,7 +169,12 @@ from `--resident`, else `OUTCOMES_RESIDENT`, else
 `$XDG_CONFIG_HOME/castle-turing/resident`. With none of them set the
 command refuses rather than degrading to an existence check, because a
 verification that silently stops verifying is worse than one that was
-never claimed. `docs/private-layer.md` names the slot.
+never claimed. The slot is named in `docs/measurement.md`'s operating
+section rather than in `docs/private-layer.md`: that document is the
+private *NixOS* configuration a stranger writes to deploy the
+framework, and this is configuration for the tooling that measures the
+framework's own development. Putting it there would have been filing it
+under the right word and the wrong reader.
 
 ### 3. `tools/reachability-check.py` — the detector
 
@@ -230,10 +235,18 @@ one. **A `CLAUDE.md` change always needs explicit approval, autonomy
 grant or not, and this task's dispatch does not supply it.** The text
 is drafted as a diff so that approving it is reading it, and it is the
 one piece of this pull request that should be reverted rather than
-merged if the resident does not want it. Everything else stands
-without it, with the cost that the row-writing step then has no named
-owner — which the lint will report as an orphan `derive`, loudly and
-in CI, which is the correct behaviour.
+merged if the resident does not want it.
+
+Be exact about what reverting costs, because it is easy to overstate.
+Everything else stands: the commands work, the operating section in
+`docs/measurement.md` still names both steps, and the reachability lint
+still passes, because the lint's question is whether a step is named
+somewhere an operator reads, not whether an agent is obliged to take
+it. What is lost is the obligation — the steps would be documented in a
+file agents consult and absent from the file agents load. That is
+close to the state task 0070 was already in, which is the argument for
+the paragraphs rather than a reason to pretend the lint would catch
+their absence.
 
 ## The inaugural datum
 

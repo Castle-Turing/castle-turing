@@ -258,6 +258,17 @@ right:
 
     tools/outcomes/outcomes redirect <task> --wrong <n> --ref <where they said that>
 
+The command needs to know who the resident *is*, to check that the
+citation's author is them. That identity is private configuration and
+this repository never carries it: `--resident LOGIN`, else
+`OUTCOMES_RESIDENT`, else `$XDG_CONFIG_HOME/castle-turing/resident`.
+With none of them set the command refuses rather than falling back to
+checking only that the citation exists — a verification that quietly
+stops verifying is worse than one that was never claimed. This is
+Principle 01 applied to an identity: the mechanism is public, the
+identity is configuration, and an installation with a different
+resident changes one file outside the checkout.
+
 The resident does not run this. An agent does, as part of closing out
 any exchange in which it was sent back — which is why it lives in
 `CLAUDE.md` as an obligation rather than here as an option. Read that
