@@ -1,35 +1,42 @@
 name: reachability-check
 
-# The detector task 0072 owes its own incident (an incident ships its
-# detector, CLAUDE.md). Task 0070 shipped a command that wrote the
-# outcome log's rows and wired it to nothing, behind a gate that was
-# already armed; every test passed. This lint fails on the two
-# mechanical shapes of that: an entrypoint no operator path reaches,
-# and a gate naming nothing that feeds it.
+# Fails on two mechanical shapes: an entrypoint no operator path
+# reaches, and a gate naming nothing that feeds it.
 #
-# Its own workflow rather than a job in check.yml, for the reason
-# outcomes-check.yml gives next door: check.yml carries
-# `paths-ignore: docs/**`, and the documented steps this lint reads are
-# under docs/, so folding it in there would mean the gate never fires
-# on the pull requests most likely to break it.
+# Its own workflow rather than a job in check.yml, because check.yml
+# carries `paths-ignore: docs/**` and the documented steps this lint
+# reads are under docs/, so folding it in would mean the gate never
+# fires on the pull requests most likely to break it.
 #
-# Paths are duplicated between the two triggers rather than shared via
-# a YAML anchor: GitHub Actions does not expand anchors in workflow
-# files.
+# The trigger paths must cover everything the lint reads, or a change
+# can alter reachability without firing the check: it scans markdown
+# anywhere outside the record directories (including root CLAUDE.md and
+# READMEs) and code comments under modules/, hosts/, tools/, agent/,
+# test/. Paths are duplicated between the two triggers rather than
+# shared via a YAML anchor: GitHub Actions does not expand anchors in
+# workflow files.
 on:
   pull_request:
     paths:
+      - "**/*.md"
+      - "CLAUDE.md"
+      - "modules/**"
+      - "hosts/**"
+      - "agent/**"
       - "tools/**"
-      - "docs/**"
-      - "test/reachability/**"
+      - "test/**"
       - ".github/workflows/**"
   push:
     branches:
       - main
     paths:
+      - "**/*.md"
+      - "CLAUDE.md"
+      - "modules/**"
+      - "hosts/**"
+      - "agent/**"
       - "tools/**"
-      - "docs/**"
-      - "test/reachability/**"
+      - "test/**"
       - ".github/workflows/**"
   workflow_dispatch: {}
 
