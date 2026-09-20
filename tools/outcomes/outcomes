@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""tools/outcomes/outcomes — the task-outcome log's mechanism (tasks 0070, 0072).
+"""tools/outcomes/outcomes — the task-outcome log's mechanism.
 
 WHAT THIS IS FOR (read before touching it)
 
-`docs/measurement.md` is the authority; this script is its teeth. The
-short version of why it exists: interrupted time series is the only
-credible causal design available to a project with one resident, and it
-is worthless without pre-intervention data
-(`docs/research/measurement-methodology.md`, design implication 9). So
-`docs/log/task-outcomes.tsv` starts before the pipeline-changing work
-lands, and something has to keep it honest afterwards.
+`docs/measurement.md` is the authority; this script is its teeth.
 
 THE SPLIT, AND WHY IT MATTERS
 
@@ -21,14 +15,9 @@ Three subcommands, deliberately unequal:
              cells. It needs the forge, or a journal, to resolve and
              verify the citation it is given.
   `check`    is a pure function of (log, working tree). No network, no
-             forge, no model, no clock. It is what CI runs.
-
-That is the same split `tools/handover-ledger.py` and
-`tools/handover-check.py` make, for the same reason: a check that
-re-derived truth from the live world would fail for reasons that have
-nothing to do with the thing it is checking. Here it buys something
-more specific — `check` can run on any clone, forever, including one
-made after the forge this repo lives on has stopped existing.
+             forge, no model, no clock. It is what CI runs, and it runs
+             on any clone, forever, including one made after the forge
+             this repo lives on has stopped existing.
 
 WHAT `check` GUARDS
 
@@ -48,12 +37,11 @@ past. Every rule below exists to make a rewrite loud:
     citations behind it. Receipts are machine-derived; verdicts are the
     resident's, and a verdict with no reference to where the resident
     said it is the system grading its own judgment
-    (`docs/architecture.md`, Proposal 06). Task 0072 made that
-    countable: `verdict_ref` is an append-only list of citation tokens,
-    `redirects` is the number of `r` tokens and `redirects_wrong` the
-    sum over `w` tokens, so a count moves only because a citation was
-    added. A number edited with nothing behind it fails here — in a
-    checker with no network in it.
+    (`docs/architecture.md`, Proposal 06). `verdict_ref` is an
+    append-only list of citation tokens, `redirects` is the number of
+    `r` tokens and `redirects_wrong` the sum over `w` tokens, so a
+    count moves only because a citation was added. A number edited with
+    nothing behind it fails here — in a checker with no network in it.
   * A probe row says it is a probe. Salt never masquerades as a real
     record — same proposal.
   * `note` is lint against the one hard rule this repository has: no
@@ -143,8 +131,7 @@ AMENDABLE = {"note"}
 # base revision's list must be a *prefix* of this one: a citation may
 # be added, none may be removed, and none may be reordered. It is not
 # a pending cell because a pending cell is written once and a task can
-# be redirected twice — which is exactly the thing 0070 had no way to
-# record. Task 0072.
+# be redirected twice.
 CITATIONS = {"verdict_ref"}
 
 # Cells the resident authors. Nothing in this repository may infer one.
@@ -172,7 +159,7 @@ INT_RE = re.compile(r"^\d+$")
 MONEY_RE = re.compile(r"^\d+\.\d{2}$")
 HOURS_RE = re.compile(r"^\d+\.\d$")
 
-# A citation token in `verdict_ref` (task 0072). Two kinds:
+# A citation token in `verdict_ref`. Two kinds:
 #
 #   r/<source>    one redirect, cited where the resident made it.
 #   w<n>/<source> a reassessment that judged n of this task's redirects
@@ -334,7 +321,7 @@ def check_values(rows, path, problems):
             else:
                 # Shape is not a calendar: DATE_RE admits 2026-13-40.
                 # Parse it so an impossible date is a defect, not a
-                # silently-stored one. Task 0070 review, finding P2.
+                # silently-stored one.
                 try:
                     datetime.date.fromisoformat(rec[name])
                 except ValueError:
@@ -362,12 +349,11 @@ def check_values(rows, path, problems):
             if rec[name] != UNRECORDED and not KEY_RE.match(rec[name].replace(",", "-")):
                 bad(row, f"{name} {rec[name]!r} is not a bare key")
         # The verdict rules. Proposal 06: only verdicts settle, and a
-        # verdict is something the resident said somewhere findable.
-        # Task 0072 made "somewhere findable" countable — each verdict
-        # cell is a count over the citations in `verdict_ref`, so the
-        # only way to move one is to add a citation, and this checker
-        # sees a number edited with nothing behind it without needing a
-        # network to do it.
+        # verdict is something the resident said somewhere findable —
+        # each verdict cell is a count over the citations in
+        # `verdict_ref`, so the only way to move one is to add a
+        # citation, and this checker sees a number edited with nothing
+        # behind it without needing a network to do it.
         try:
             r_cited, w_cited, reassessed = citation_counts(rec["verdict_ref"])
         except Fail as e:
@@ -401,12 +387,9 @@ def check_values(rows, path, problems):
                 bad(row, "verdict_ref reassesses redirects that were never cited")
         # `redirects_wrong` without `redirects` remains an error, and so
         # does a miscorrection count exceeding the detections it is
-        # conditioned on. What is *no longer* an error is `redirects`
-        # standing with `redirects_wrong` pending: the pairing rule that
-        # 0070 enforced at write time is now enforced at read time
-        # instead (docs/measurement.md, "What may honestly be said"),
-        # because the alternative was defaulting the cell the pairing
-        # exists to protect. Task 0072.
+        # conditioned on. `redirects` standing with `redirects_wrong`
+        # pending is not an error: the pairing rule binds at read time
+        # instead (docs/measurement.md, "What may honestly be said").
         if rec["redirects_wrong"] != UNRECORDED and rec["redirects"] == UNRECORDED:
             bad(row, "redirects_wrong recorded without redirects")
         if UNRECORDED not in (rec["redirects"], rec["redirects_wrong"]):
@@ -651,7 +634,7 @@ def run_git(repo_root, *args):
     # short/format renderings otherwise use each commit's own timezone,
     # which would put a date on the wrong calendar day for commits made
     # west of UTC late in the day. Forcing the environment is the only
-    # rendering-independent fix. Task 0070 review, finding P1.
+    # rendering-independent fix.
     env = {**os.environ, "TZ": "UTC"}
     proc = subprocess.run(["git", *args], cwd=repo_root, env=env,
                           capture_output=True, text=True, check=True)
@@ -758,16 +741,15 @@ HEADER_RE = re.compile(r"^([A-Za-z-]+):\s*(.*)$")
 # line whose key is one of these starts a new header; any other
 # `Word:`-shaped line inside the block is a continuation of the value
 # above it. Without this, a wrapped value whose continuation line
-# happens to begin `See:`/`Note:`/`Origin:` was recorded as a spurious
-# header key — the same silent-misparse class task 0072 set out to
-# close, caught by the /code-review of PR #137. A key not in this set
-# reads as continuation, which is the safe direction (an unrecognised
-# header goes unread rather than displacing a real one); a genuinely
-# new key is added here in the PR that introduces it. The residual
-# ambiguity — a continuation line beginning with a literal recognised
-# key + colon — is left to docs/backlog and the append-only checker,
-# because closing it fully needs a format change (indented
-# continuations), not a parser heuristic.
+# happens to begin `See:`/`Note:`/`Origin:` is recorded as a spurious
+# header key. A key not in this set reads as continuation, which is the
+# safe direction (an unrecognised header goes unread rather than
+# displacing a real one); a genuinely new key is added here in the PR
+# that introduces it. The residual ambiguity — a continuation line
+# beginning with a literal recognised key + colon — is left to
+# docs/backlog and the append-only checker, because closing it fully
+# needs a format change (indented continuations), not a parser
+# heuristic.
 KNOWN_BRIEF_HEADERS = frozenset({
     "title", "model", "model-because", "milestone",
     "requires", "requires-because", "deliverable",
@@ -777,14 +759,12 @@ KNOWN_BRIEF_HEADERS = frozenset({
 def brief_headers(path):
     """The `Key: value` header block, continuation lines included.
 
-    A header's value wraps. `Model-because:` is a paragraph by
-    convention and titles run long, and every brief in this repository
-    written since those conventions landed wraps at least one of them.
-    Treating a wrapped line as the end of the block meant every header
-    *after* the first wrapped one went unread — so a brief whose title
-    ran to two lines logged no `tier` and no `milestone`, silently, in
-    immutable cells that can never be corrected. The block ends at the
-    first blank line, which is what the format actually says. Task 0072.
+    A header's value wraps: `Model-because:` is a paragraph by
+    convention and titles run long. A wrapped line is not the end of
+    the block — treating it as one would silently lose every header
+    after the first wrapped one, in immutable cells that can never be
+    corrected. The block ends at the first blank line, which is what
+    the format actually says.
     """
     headers = {}
     last = None
@@ -911,9 +891,9 @@ def cmd_derive(args):
     # changes its stem, so a stem-only check would append a second row
     # for the same task. Where the number denotes exactly one current
     # brief, a logged number means that brief is already covered under
-    # its old stem. The two-0003 case in this repo's history is why the
-    # uniqueness guard is there rather than a bare number match. Task
-    # 0070 review, finding P1.
+    # its old stem. This repository has two briefs numbered 0003, which
+    # is why the uniqueness guard is there rather than a bare number
+    # match.
     known_nums = {as_record(r)["task"][:4] for r in existing_rows}
     attempts = collections.Counter(as_record(r)["task"] for r in existing_rows)
 
@@ -975,7 +955,7 @@ def cmd_derive(args):
             # each row — exactly what docs/measurement.md forbids ("Left
             # `-` where the ledger cannot say — a task attempted more
             # than once"). Only fill when there is a single attempt to
-            # attribute to. Task 0070 review, finding P1.
+            # attribute to.
             if attempts[rec["task"]] == 1:
                 for name in ("cost_usd", "turns", "pr"):
                     if rec[name] == UNRECORDED and f.get(name):

@@ -212,22 +212,20 @@ This is a synopsis, not the place any of these steps is *owned*.
 does not make a command reachable, because a reference table that lists
 everything would otherwise make everything reachable.
 
-The instrument specced in task 0070 and defined in
-`docs/measurement.md`. `docs/log/task-outcomes.tsv` carries one row per
-task attempt, and this is what keeps it honest.
+The instrument defined in `docs/measurement.md`.
+`docs/log/task-outcomes.tsv` carries one row per task attempt, and this
+is what keeps it honest.
 
 Three subcommands, deliberately unequal. `derive` reads git and — when
 pointed at one — a harness journal, and writes rows; it needs a
 repository, a history, and paths outside the checkout. `redirect`
-(task 0072) transcribes a redirect the resident stated somewhere
-citable into the row's verdict cells, and needs the forge to resolve
-the citation and verify who wrote it; read its `--help` before using
-it, which carries the argument for what a transcription may and may not
-claim. `check` is a pure function of (log, working tree): no network,
-no forge, no model, no clock. It is what CI runs, and it still runs on a clone made after
-the forge this repository lives on has stopped existing. That is the
-same split `handover-ledger.py` and `handover-check.py` make, for the
-reason task 0062 gives.
+transcribes a redirect the resident stated somewhere citable into the
+row's verdict cells, and needs the forge to resolve the citation and
+verify who wrote it; read its `--help` before using it, which carries
+the argument for what a transcription may and may not claim. `check`
+is a pure function of (log, working tree): no network, no forge, no
+model, no clock. It is what CI runs, and it still runs on a clone made
+after the forge this repository lives on has stopped existing.
 
 What `check` guards, in one list: rows are append-only against the
 trunk, immutable cells never change, a pending cell goes from `-` to a
@@ -275,10 +273,10 @@ no network, zero models.
 tools/reachability-check.py [REPO_ROOT]
 ```
 
-The detector task 0072 owes its own incident. Task 0070 shipped the
-command that writes the outcome log's rows and wired it to nothing,
-behind a gate that was already armed; every test passed. Two rules,
-both mechanical:
+Lints for one specific defect shape: a command that exists, is wired to
+a gate that is already armed, and whose tests all pass, but that
+nothing in this repository's operational surface ever actually calls.
+Two rules, both mechanical:
 
 - **Orphan entrypoint.** A subcommand of a tool under `tools/` needs an
   operational caller: a workflow under `.github/`, another executable
@@ -291,11 +289,10 @@ both mechanical:
   what it checks, and the citation is verified: the entrypoint must
   exist and the cited document must actually carry the marker.
 
-It catches the shape of the 0070 miss, not its cause. The cause was a
-feature that satisfied its implementer's reading of the requirement and
-not the resident's, which is acceptance —
-`docs/backlog/passing-tests-are-not-acceptance.md` — and no lint will
-ever be it.
+It catches this shape of defect, not its cause: a feature can satisfy
+its implementer's reading of a requirement and not the resident's,
+which is acceptance — `docs/backlog/passing-tests-are-not-acceptance.md`
+— and no lint will ever be that.
 
 ### Verification
 

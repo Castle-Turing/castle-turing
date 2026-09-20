@@ -3,8 +3,7 @@
 This document defines what a task outcome is, how it is recorded, and
 what may honestly be said about the recording afterwards. The log it
 governs is `docs/log/task-outcomes.tsv`; the mechanism that keeps the
-log honest is `tools/outcomes/outcomes`. Task 0070 is the reasoning
-behind all three.
+log honest is `tools/outcomes/outcomes`.
 
 It is a *mechanism* document, in the same sense as
 `docs/clarifying-questions.md`: public, versioned, and inherited by
@@ -128,25 +127,6 @@ made to say two different things.
 wrong", **with a citation behind it**. `redirects_wrong` may not be `0`
 without one. That is the whole reason the column exists as a separate
 verdict rather than a default.
-
-### Where the pairing rule went
-
-A redirect count is a *detection* rate, measured conditional
-miscorrection rates run 53–94%, and a detection rate reported alone is
-uninterpretable (`docs/research/measurement-methodology.md`, design
-implication 1). Task 0070 enforced that by refusing to store
-`redirects` without `redirects_wrong` beside it.
-
-That was the right constraint in the wrong place, and task 0072 moved
-it. A redirect is logged the moment it happens; whether it was a
-*wrong* redirect is not knowable then, and the only value available to
-write is `0` — which would record the absence of a judgment as a
-judgment of correctness and bias the miscorrection rate downward across
-the whole series. So the log now holds `redirects` with
-`redirects_wrong` pending, and the pairing binds at **read** time
-instead: see "What may honestly be said from this log". Storing
-`redirects_wrong` without `redirects`, or more wrong than were ever
-made, remain errors.
 
 Everything else is a receipt, derivable from artifact state by something
 with no model in it. That is deliberate and it is the same rule task
@@ -314,17 +294,16 @@ run at temperature zero. A row is one observation, and one row is never
 an argument.
 
 **A redirect rate is never reported without its unjudged remainder.**
-This is where task 0070's pairing rule now binds. `redirects_wrong` is
-`-` until the resident reassesses, so at any moment some redirects have
-been counted and not yet judged. A redirect rate quoted from this log
-carries, in the same sentence, how many of the redirects it counts have
-no reassessment behind them — because that number is the unknown
+The pairing rule binds at read time: `redirects_wrong` is `-` until the
+resident reassesses, so at any moment some redirects have been counted
+and not yet judged. A redirect rate quoted from this log carries, in
+the same sentence, how many of the redirects it counts have no
+reassessment behind them — because that number is the unknown
 denominator of the conditional miscorrection rate, and measured
 miscorrection runs 53–94%. A rate over a mostly-unjudged set is not a
 weaker finding, it is a different quantity. Saying only the first half
-is the failure the pairing rule was written against, and moving the
-rule from storage to reporting does not make it optional; it makes it
-the reader's, and this paragraph is the reader's instruction.
+is the failure this rule guards against, and stating it is the
+reader's obligation, not optional.
 
 **The baseline is already contaminated.** The pre-period is not an
 agent-free period — every task in it was done with agents. Any effect

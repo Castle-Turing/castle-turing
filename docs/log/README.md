@@ -4,8 +4,7 @@ One kind of file lives here: a log that is written once and never
 edited, because something later depends on its past being unaltered.
 
 `task-outcomes.tsv` is the first. Its definitions, its column meanings
-and the reasoning for all of it are in `docs/measurement.md`; task 0070
-is the brief and task 0072 wired it to the work it measures.
+and the reasoning for all of it are in `docs/measurement.md`.
 `tools/outcomes/outcomes check` enforces the rules on every pull
 request that touches it.
 
