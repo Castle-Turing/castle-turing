@@ -186,6 +186,21 @@ accept "a subprocess string-list call rescues its subcommand"
 
 fresh; baseline_callers
 cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+<!-- invokes: tools/caller.py -->
+MD
+cat > "$SANDBOX/tools/caller.py" <<'PY'
+import subprocess
+
+subprocess.run([
+    "tools/thing/thing",
+    "write",
+])
+PY
+accept "a call argument list spanning multiple source lines still rescues its subcommand"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
 <!-- invokes: tools/caller.py -->
 MD
 cat > "$SANDBOX/tools/caller.py" <<'PY'

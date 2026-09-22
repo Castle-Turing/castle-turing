@@ -294,3 +294,30 @@ another parser heuristic — the same class as emcee's
   header once did, before task 0072. New fixtures added: an
   extensionless Python file's docstring does not rescue a subcommand
   it only mentions; a real call in one still does.
+
+`cross-vendor-review` (PR #139, Codex gpt-5.6-sol; one finding fixed,
+one declined):
+
+- **[P1]** Declined. A third restatement of the same real-tree
+  reachability-check failure named above under "Real-tree consequence"
+  and "Judgment calls" — the widened lint really does flag exactly
+  those five tools and leave `reachability-check.yml` red, and this
+  brief already argues, twice, that papering over that with an invented
+  marker is the ritual the brief exists to rule out. The disposition is
+  the resident's to make, not a defect to autofix a third time it is
+  raised.
+- **[P2]** Fixed. `call_argument_strings` kept a source range per
+  string constant but not which call it belonged to, so `code_only`
+  grouped a kept STRING token by its own source line
+  (`tok.start[0]`) rather than the line of the call it names. A real
+  caller whose list argument is formatted one element per line —
+  `subprocess.run(["tools/x/x",\n    "sub"])` — had its path and
+  subcommand tokens land on two different reconstructed lines, and
+  `invokes()` only searches within one logical line, so the call was
+  reported as an orphan: exactly the false-positive direction the
+  module header commits to avoiding. Each kept range now also carries
+  its owning `ast.Call`'s own start line, and `code_only` groups a kept
+  STRING token by that line instead of the token's own. New fixture in
+  `test/reachability/run.sh`'s "string-argument callers (change 1)"
+  section: a call argument list spanning multiple source lines still
+  rescues its subcommand.

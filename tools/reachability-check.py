@@ -259,6 +259,17 @@ def call_argument_strings(tree):
     would still let `code_only` strip the second fragment's own STRING
     token. Any token whose start falls inside a kept range counts.
 
+    Each range also carries the owning call's own start line
+    (`node.lineno` of the `ast.Call`, not of the individual string) —
+    `code_only` groups a kept token by that line instead of the token's
+    own, so a list argument formatted one element per source line still
+    reconstructs onto a single logical line for `invokes()` to search.
+    Without this, `subprocess.run(["tools/x/x",\n    "sub"])` would
+    have its path and subcommand tokens land on two different output
+    lines, and a call `invokes()` never searches across lines would
+    report a genuinely-called subcommand as an orphan — the false-
+    positive direction the module header says this lint avoids.
+
     A NAMED GAP: `cmd = ["tools/outcomes/outcomes", "derive"];
     subprocess.run(cmd)` — the list built in one statement and passed
     by name in the next — is invisible here. This walks each call's
@@ -268,20 +279,20 @@ def call_argument_strings(tree):
     """
     keep = []
 
-    def literal(node):
+    def literal(node, call_line):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             keep.append(((node.lineno, node.col_offset),
-                         (node.end_lineno, node.end_col_offset)))
+                         (node.end_lineno, node.end_col_offset), call_line))
         elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             for elt in node.elts:
-                literal(elt)
+                literal(elt, call_line)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             for arg in node.args:
-                literal(arg)
+                literal(arg, node.lineno)
             for kw in node.keywords:
-                literal(kw.value)
+                literal(kw.value, node.lineno)
     return keep
 
 
@@ -301,7 +312,11 @@ def code_only(path, text):
     which is the false-positive direction the module header says this
     lint avoids. `call_argument_strings` keeps exactly the strings a
     call could plausibly be naming and drops the rest, so a docstring or
-    a comment mentioning the same invocation still does not count.
+    a comment mentioning the same invocation still does not count. A
+    kept token is grouped by its owning call's own line rather than the
+    token's, so a call whose list argument spans several source lines
+    still reconstructs as one logical line — see that function's own
+    docstring.
 
     Routed by `is_python_tool`, not `path.suffix == ".py"`: an
     extensionless Python tool — `tools/outcomes/outcomes`,
@@ -326,8 +341,12 @@ def code_only(path, text):
             for tok in tk.generate_tokens(io.StringIO(text).readline):
                 if tok.type == tk.COMMENT:
                     continue
-                if tok.type == tk.STRING and not any(
-                        start <= tok.start < end for start, end in keep):
+                if tok.type == tk.STRING:
+                    call_line = next((line for start, end, line in keep
+                                       if start <= tok.start < end), None)
+                    if call_line is None:
+                        continue
+                    out.append((call_line, tok.string))
                     continue
                 out.append((tok.start[0], tok.string))
         except (tk.TokenError, IndentationError, SyntaxError):
