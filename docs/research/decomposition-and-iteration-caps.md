@@ -460,3 +460,69 @@ preference itself), not a reason to reverse it — the sample is too
 thin to license either direction. `arXiv:2103.10355` remains
 citable-and-unread; if the resident can supply that PDF too, it
 should get the same first-hand treatment.
+
+---
+
+## Addendum 2, 2026-09-22: Saremi et al. (2021) read first-hand
+
+*The resident supplied Saremi, Lotfalian Saremi, Jena, Anzalone and
+Bahabry, "Impact of Task Cycle Pattern on Project Success in Software
+Crowdsourcing" (arXiv:2103.10355) as a PDF directly. This session read
+it in full; everything below is [V] against the paper itself unless
+marked otherwise. Both papers the sweep flagged as citable-but-unread
+in RQ1's dry angle have now been read.*
+
+**This paper does not answer the question it was flagged for.** The
+sweep filed it as a candidate for the vertical-vs-horizontal /
+dependency-first-vs-risk-first decomposition-strategy dry angle,
+sight unseen, going only on its title. Having read it, that is not
+its subject. Its actual question is task-cycle *timing* — which batch
+of tasks arrives when relative to a project's ongoing cycle — and it
+coins four patterns for that: Prior Cycle, Current Cycle, Fresh Cycle,
+Orbit Cycle. Decomposition strategy (horizontal vs. vertical) appears
+only in its background section (2.2), citing the identical Jiang and
+Matsubara (2014) simulation Khanfor (2023) cites for the same claim.
+Two independent teams pointing at the same secondhand source, neither
+testing it themselves, is worth noting as corroboration that the
+citation trail is real; it is not corroboration of the claim itself,
+which stays [R] against Jiang and Matsubara's own primary.
+
+**The dry angle stands exactly as the sweep stated it, now on
+stronger footing.** Both candidates the original sweep could not read
+have been read, and neither turns out to be a study of decomposition-
+sequencing strategy at all. No study comparing dependency-first
+against risk-first sequencing of a decomposition was found — that
+finding now rests on having exhausted the two candidates that looked
+closest by title, not merely on a search that came up empty.
+
+**What the paper actually finds, for the record.** Analyzing 4,907
+TopCoder tasks (4,770 after filtering) across 403 projects and 8,108
+workers, January 2014 to February 2015 — nearly the identical dataset
+window Khanfor (2023) used, and likely the same underlying corpus
+given the overlapping author group (Khanfor is cited here at [9] for
+a companion failure-prediction study on the same platform) — the
+paper reports failure concentrating in the Implementation (64%) and
+Testing (23%) phases, and finds, as its headline claim, that Prior
+Cycle tasks have the lowest failure rate and Fresh Cycle tasks the
+highest. **The exact numbers behind that claim are internally
+inconsistent and should not be cited past the qualitative direction.**
+The RQ3 results paragraph gives 44%/4%/15%/37% as the *proportion of
+tasks* falling into Fresh/Prior/Current/Orbit cycles respectively,
+with failure rates of 18% (Orbit) and 20% (Fresh) stated separately —
+but the conclusion then reuses the same 44% and 4% as if they were
+themselves the *failure rates* for Fresh and Prior cycles. That is
+either a drafting error or a genuine identity the paper never states
+as such; either way, the direction (prior-cycle tasks fail least,
+fresh-cycle tasks fail most) is what the paper backs, and the specific
+percentages are not reliable enough to carry forward.
+
+**The paper's own threats-to-validity section is a caution worth
+generalizing across this whole corpus lineage**: single-platform
+(TopCoder only), no causal isolation of task failure's actual drivers
+("different task failure probability-focused approaches may lead us
+to different, but similar results"), and project-level description
+and limitations explicitly excluded from the analysis. The same three
+caveats apply, structurally, to Khanfor's six-project comparison in
+the addendum above — both papers are thin, single-platform,
+correlational looks drawn from what is likely the same shared dataset,
+not independent replications.
