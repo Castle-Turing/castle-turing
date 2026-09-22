@@ -395,3 +395,68 @@ flagged for its own open questions.
    would be new ground, not an inherited design — worth knowing before
    the brief is written, so it is written as an experiment the project
    is running, not as a known-good pattern being installed.
+
+---
+
+## Addendum, 2026-09-22: Khanfor (2023) read first-hand
+
+*The resident supplied Khanfor, "Tasks Decomposition Approaches in
+Crowdsourcing Software Development" (arXiv:2302.05099) as a PDF
+directly. This session read it in full; everything below is [V]
+against the paper itself unless marked otherwise. It closes half of
+RQ1's dry angle on Khanfor and leaves the other half — Szajnfarber,
+Vrolijk and Crusan's "Impact of Task Cycle Pattern on Project Success
+in Software Crowdsourcing" (arXiv:2103.10355) — still unread.*
+
+**The paper is not the empirical comparison the sweep was hoping
+for, and its own author says so.** Sections 1–2 are background —
+software decomposition concepts, Green's 2013 Adobe blog post on
+horizontal versus vertical Agile splitting (industry testimony, not
+a study), and Cockburn's altitude notation for requirements levels.
+Section 2.3 reviews prior crowdsourcing-decomposition tools
+(CrowdForge, Turkomatic, Cascade), all built for short, low-reward
+MTurk-style microtasks that the paper itself says do not transfer
+cleanly to CSD's longer, skilled tasks. One background citation is
+directly on point and worth carrying forward at its own grade:
+**[R] Jiang and Matsubara (2014) ran a simulation and found that
+"in general, vertical task decomposition outperforms horizontal
+decomposition in obtaining better quality outcomes from the
+crowd."** This session has not read Jiang and Matsubara's own paper,
+only Khanfor's citation of it, so the claim stays [R] — now a located,
+citable secondhand claim rather than an unlocated one.
+
+**Khanfor's own contribution is a six-project, first-pass
+correlational look, and it trends against the claim he just cited.**
+Section 3–4: a historical TopCoder dataset, January 2014 to January
+2015, 4,907 tasks, 15.7% overall failure rate. Six projects are
+classified horizontal or vertical by a coarse proxy — whether most of
+a project's tasks use both frontend and backend technologies
+(vertical) or split cleanly into one or the other (horizontal) — not
+by any verified decomposition-strategy label. Project 5104, the one
+he calls horizontal, has a success rate above the platform average;
+project 7424, the one he calls vertical, falls below it — the
+opposite direction from "vertical outperforms horizontal." Two of
+the paper's six projects are the entire empirical base for this
+observation; there is no significance test, and no control for the
+confounds that would obviously matter (domain, team, task complexity,
+reward). The paper's own conclusion asks for "future work" to
+"compare vertical and horizontal decompositions on a large scale and
+their impact on the success rate" — Khanfor is explicit that this
+paper has not yet done that.
+
+**What this changes for the sweep, stated plainly.** RQ1's dry-angle
+paragraph called this paper "citable, not read" and noted no
+empirical comparison of decomposition strategy was found. That
+verdict stands: reading the paper does not close the dry angle, it
+narrows it to a thinner shape. There is now a first-party data point,
+and it is *inconsistent* with, rather than confirmatory of, the one
+simulation-based claim in the literature that vertical slicing wins —
+on an N of two projects, using a proxy label rather than a verified
+one. This is a reason for more caution about the practitioner
+consensus favoring vertical slicing (design implication 1 already
+warns against treating INVEST/SPIDR-style heuristics as validated;
+the same caution now extends to the vertical-over-horizontal
+preference itself), not a reason to reverse it — the sample is too
+thin to license either direction. `arXiv:2103.10355` remains
+citable-and-unread; if the resident can supply that PDF too, it
+should get the same first-hand treatment.
