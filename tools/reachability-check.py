@@ -13,14 +13,27 @@ do with that task.
 
 Two mechanical shapes fell out of it, and this lint is both:
 
-  ORPHAN ENTRYPOINT      a subcommand a tool exposes that nothing calls.
+  ORPHAN ENTRYPOINT      a subcommand a tool exposes that nothing calls
+                         — or, for a tool with no subcommand tree at
+                         all (every `.sh` script, every single-command
+                         Python tool), the tool itself that nothing
+                         calls.
   ARMED GATE, NO FEEDER  a CI check over an artifact that no named step
-                         produces.
+                         produces — whether the checker is an argparse
+                         `check` subcommand or a standalone script a
+                         workflow runs directly.
 
-WHAT COUNTS AS A CALLER, AND WHY THE TWO EXCLUSIONS ARE THE POINT
+WHAT COUNTS AS A TOOL, AND WHAT COUNTS AS A CALLER
+
+Every executable under `tools/` is a tool: `.py`, `.sh`, and
+extensionless files with a Python shebang all get read for an argparse
+subcommand tree; anything without one — most of them — gets a single
+bare entrypoint, keyed by its path alone, so it still needs a caller.
 
 Operational callers: a workflow under `.github/`, another executable
-under `tools/`, or a documented step that declares itself with
+under `tools/` (a string passed to a call — `subprocess.run(["tools/x/x",
+"sub"])` — counts the same as a bare name), or a documented step that
+declares itself with
 
     <!-- invokes: tools/outcomes/outcomes derive -->
 
@@ -31,8 +44,9 @@ worked, was covered by tests, and was reachable by nobody; if a test
 satisfied reachability this lint would have passed the very incident it
 exists for. A **usage synopsis** does not count either — `tools/README.md`
 lists every command by construction, so accepting a mention there would
-accept everything. The explicit marker is what separates a step somebody
-owns from a line in a reference table.
+accept everything. Nor does a tool's own prose: a docstring or comment
+that merely names an invocation is not a call to it. The explicit marker
+is what separates a step somebody owns from a line in a reference table.
 
 WHAT THIS LINT IS NOT
 
@@ -44,12 +58,17 @@ ever be it. This is a floor under reading the diff, not a substitute.
 
 A NAMED GAP
 
-The feeder rule fires on a workflow that invokes a `check` entrypoint
-directly. A gate reached only through a test wrapper is out of its
-reach: the wrapper's own fixture checks are indistinguishable, from
-here, from a check over the repository's committed artifacts. Naming
-the gap rather than papering it: a gate hidden behind a wrapper is
-still an unfed gate, and this lint will not say so.
+The feeder rule fires on a workflow that invokes a checker directly —
+an argparse `check` subcommand, or a standalone script whose filename
+stem is `check` or ends `-check`. A gate reached only through a test
+wrapper is out of its reach either way: the wrapper's own fixture
+checks are indistinguishable, from here, from a check over the
+repository's committed artifacts. Naming the gap rather than papering
+it: a gate hidden behind a wrapper is still an unfed gate, and this
+lint will not say so. (This repository's own `handover-check.py` and
+`reachability-check.py` are both this shape today — each reached only
+through `test/*/run.sh` — which is why widening the rule to standalone
+checkers did not, on its own, newly arm either of them.)
 
 Stdlib only, no network, no model — same contract as everything else in
 this directory.
@@ -81,20 +100,38 @@ FEEDER_RE = re.compile(r"#\s*feeder:\s*(.+?)\s*\((.+?)\)\s*$")
 
 
 def is_executable_tool(path):
-    return path.is_file() and path.suffix in (".py", "") and not path.name.startswith(".")
+    return (path.is_file() and path.suffix in (".py", ".sh", "")
+            and not path.name.startswith("."))
+
+
+def is_python_tool(path, text):
+    """Would `ast.parse` plausibly succeed? Checked before parsing so a
+    shell script's syntax never reaches the parser — `entrypoints`
+    crashing on a `.sh` file would take the whole lint down with it.
+    """
+    if path.suffix == ".py":
+        return True
+    if path.suffix:
+        return False
+    first_line = text.splitlines()[0] if text else ""
+    return first_line.startswith("#!") and "python" in first_line
 
 
 def find_tools(root):
-    """Every executable under tools/ that argparse can be read out of."""
+    """Every executable under tools/. What each exposes is decided later
+    by `entrypoints`: a tool with an argparse subcommand tree keeps its
+    subcommands, everything else — including every single-command tool
+    and every `.sh` script — gets one bare entrypoint (task 0076). A
+    tool skipped here is invisible to the lint entirely, so this list
+    must not be narrower than "every tool a resident could run."
+    """
     out = []
     for path in sorted((root / "tools").rglob("*")):
         if not is_executable_tool(path):
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
-            continue
-        if "add_subparsers" not in text:
             continue
         out.append(path)
     return out
@@ -110,7 +147,15 @@ def entrypoints(path, text):
 
     Nodes are processed in source order — `ast.walk` is breadth-first,
     which would see a parser used before the assignment that named it.
+
+    A tool with no argparse subcommand tree — every `.sh` script, and
+    every single-command Python tool like `handover-ledger.py` — gets
+    one bare entrypoint instead: `()`, the empty command path. That is
+    what lets `main` key it by the tool's path alone, with nothing to
+    call it demands the tool itself be named by a caller.
     """
+    if not is_python_tool(path, text):
+        return [()]
     tree = ast.parse(text, filename=str(path))
     parsers = {}       # variable -> the command path it holds
     groups = {}        # variable -> the command path its parsers hang under
@@ -156,7 +201,8 @@ def entrypoints(path, text):
             seen.add(command)
             if target:
                 parsers[target] = command
-    return sorted(seen - grouped)
+    commands = sorted(seen - grouped)
+    return commands if commands else [()]
 
 
 def logical_lines(text):
@@ -190,22 +236,66 @@ def aliases(text, relpath, name):
     return found
 
 
-def code_only(path, text):
-    """The file with its comments and string literals removed.
+def call_argument_strings(tree):
+    """Positions of string constants that name a call's arguments.
 
-    Without this a tool's own prose counts as a call: this lint's header
-    names `tools/outcomes/outcomes derive` as its worked example, and on
-    the first run that example alone rescued the very orphan the example
-    is about. A lint that can be satisfied by describing the problem is
-    not a lint.
+    Direct arguments, and strings one level inside a list/tuple/set
+    literal that is itself an argument — the shape of
+    `subprocess.run(["tools/outcomes/outcomes", "derive"])`. Anything
+    deeper, or a string that is not part of a call at all (a docstring,
+    a bare expression statement, comment prose), is not collected here
+    and so stays stripped by `code_only` below.
+    """
+    keep = set()
+
+    def literal(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            keep.add((node.lineno, node.col_offset))
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for elt in node.elts:
+                literal(elt)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for arg in node.args:
+                literal(arg)
+            for kw in node.keywords:
+                literal(kw.value)
+    return keep
+
+
+def code_only(path, text):
+    """The file with its comments removed, and its string literals
+    removed except where they name a call's argument.
+
+    Without the comment/docstring exclusion a tool's own prose counts as
+    a call: this lint's header names `tools/outcomes/outcomes derive` as
+    its worked example, and on the first run that example alone rescued
+    the very orphan the example is about. A lint that can be satisfied
+    by describing the problem is not a lint.
+
+    But blanket-stripping every string also hides a real caller: a
+    `subprocess.run(["tools/outcomes/outcomes", "derive"])` has its path
+    and subcommand tokens removed before `invokes()` ever sees them,
+    which is the false-positive direction the module header says this
+    lint avoids. `call_argument_strings` keeps exactly the strings a
+    call could plausibly be naming and drops the rest, so a docstring or
+    a comment mentioning the same invocation still does not count.
     """
     if path.suffix == ".py":
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except (SyntaxError, ValueError):
+            tree = None
+        keep = call_argument_strings(tree) if tree is not None else set()
         try:
             import io
             import tokenize as tk
             out = []
             for tok in tk.generate_tokens(io.StringIO(text).readline):
-                if tok.type in (tk.COMMENT, tk.STRING):
+                if tok.type == tk.COMMENT:
+                    continue
+                if tok.type == tk.STRING and tok.start not in keep:
                     continue
                 out.append((tok.start[0], tok.string))
         except (tk.TokenError, IndentationError, SyntaxError):
@@ -255,6 +345,18 @@ def invokes(text, relpath, name, command):
     return False
 
 
+def spec_key(rel, command):
+    """The string a marker or feeder line has to match exactly.
+
+    A bare entrypoint (`command == ()`) keys as the path alone, with no
+    trailing space — `' '.join(())` is `''`, and `f"{rel} "` would leave
+    one, which would never match a marker written as
+    `<!-- invokes: tools/x/x -->` (rendering strips it, but the spec
+    string this lint compares against does not).
+    """
+    return rel if not command else f"{rel} {' '.join(command)}"
+
+
 def caller_files(root):
     for d in OPERATIONAL_DIRS:
         base = root / d
@@ -292,7 +394,7 @@ def main(argv=None):
         text = tool.read_text(encoding="utf-8")
         rel = str(tool.relative_to(root))
         for command in entrypoints(tool, text):
-            specs[f"{rel} {' '.join(command)}"] = (tool, rel, command)
+            specs[spec_key(rel, command)] = (tool, rel, command)
     if not specs:
         print("no tool entrypoints found; is this the repository root?",
               file=sys.stderr)
@@ -323,19 +425,33 @@ def main(argv=None):
         for path in markers.get(spec, []):
             callers[spec].append(path)
         if not callers[spec]:
+            label = " ".join(command) if command else rel
+            noun = "subcommand" if command else "tool"
             problems.append(
-                f"{rel}: `{' '.join(command)}` has no operational caller — no "
+                f"{rel}: `{label}` has no operational caller — no "
                 "workflow, no other tool, and no documented step declaring "
-                f"`<!-- invokes: {spec} -->`. A subcommand nothing invokes is "
+                f"`<!-- invokes: {spec} -->`. A {noun} nothing invokes is "
                 "the shape of task 0070's miss; give it a caller or delete it."
             )
 
     # The second rule: a gate that runs a checker must name what feeds it.
+    # A checker is either an argparse subcommand named `check` (the
+    # original shape) or a standalone tool — the bare entrypoint Change
+    # 2 above gives every non-argparse tool — whose filename says the
+    # same thing: stem `check`, or a stem ending `-check`
+    # (`handover-check.py`, `reachability-check.py`). Task 0076: the
+    # armed-gate rule used to see only the first shape, which is the
+    # repo's own `tools/handover-check.py` run straight from a workflow.
+    def is_checker(tool, command):
+        if command:
+            return command[-1] == "check"
+        return tool.stem == "check" or tool.stem.endswith("-check")
+
     for path in sorted((root / ".github").rglob("*.y*ml")) if (root / ".github").is_dir() else []:
         text = path.read_text(encoding="utf-8")
         code = code_only(path, text)
         gated = [spec for spec, (tool, rel, command) in sorted(specs.items())
-                 if command and command[-1] == "check"
+                 if is_checker(tool, command)
                  and invokes(code, rel, tool.name, command)]
         if not gated:
             continue

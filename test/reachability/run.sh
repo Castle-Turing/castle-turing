@@ -143,6 +143,7 @@ reject "a usage synopsis does not rescue an orphan either" \
 fresh; baseline_callers
 cat > "$SANDBOX/docs/how.md" <<'MD'
 <!-- invokes: tools/thing/thing write -->
+<!-- invokes: tools/wrapper.sh -->
 MD
 cat > "$SANDBOX/tools/wrapper.sh" <<'SH'
 #!/bin/sh
@@ -168,6 +169,61 @@ cat > "$SANDBOX/tools/prose.py" <<'PY'
 PY
 rm -f "$SANDBOX/docs/leaf.md"
 reject "a tool's own prose is not a call" "\`group leaf\` has no operational caller"
+
+log "string-argument callers (change 1)"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+<!-- invokes: tools/caller.py -->
+MD
+cat > "$SANDBOX/tools/caller.py" <<'PY'
+import subprocess
+
+subprocess.run(["tools/thing/thing", "write"])
+PY
+accept "a subprocess string-list call rescues its subcommand"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/caller.py -->
+MD
+cat > "$SANDBOX/tools/caller.py" <<'PY'
+"""subprocess.run(["tools/thing/thing", "write"]) is only described here,
+never called."""
+# tools/thing/thing write is mentioned in this comment too.
+PY
+reject "a docstring or comment mentioning the same call is not a call" \
+  "\`write\` has no operational caller"
+
+log "single-command tools are enumerated (change 2)"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/lonely.sh" <<'SH'
+#!/usr/bin/env bash
+echo lonely
+SH
+reject "a single-command tool with no caller is flagged" \
+  "\`tools/lonely.sh\` has no operational caller"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/lonely.sh" <<'SH'
+#!/usr/bin/env bash
+echo lonely
+SH
+cat > "$SANDBOX/.github/workflows/lonely.yml" <<'YML'
+jobs:
+  run-lonely:
+    steps:
+      - run: tools/lonely.sh
+YML
+accept "the same tool named by a workflow is clean"
 
 log "the armed-gate rule"
 
@@ -236,6 +292,47 @@ cat > "$SANDBOX/docs/how.md" <<'MD'
 <!-- invokes: tools/thing/thing write -->
 MD
 accept "a gate whose feeder citation resolves to the step that owns it"
+
+log "standalone checkers are gates too (change 3)"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/widget-check.sh" <<'SH'
+#!/usr/bin/env bash
+echo widget-check
+SH
+cat > "$SANDBOX/.github/workflows/widget.yml" <<'YML'
+jobs:
+  widget:
+    steps:
+      - run: tools/widget-check.sh
+YML
+reject "a standalone *-check script run by a workflow with no feeder" \
+  "names nothing that feeds it"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+<!-- invokes: tools/widget-produce.sh -->
+MD
+cat > "$SANDBOX/tools/widget-check.sh" <<'SH'
+#!/usr/bin/env bash
+echo widget-check
+SH
+cat > "$SANDBOX/tools/widget-produce.sh" <<'SH'
+#!/usr/bin/env bash
+echo widget-produce
+SH
+cat > "$SANDBOX/.github/workflows/widget.yml" <<'YML'
+# feeder: tools/widget-produce.sh (docs/how.md)
+jobs:
+  widget:
+    steps:
+      - run: tools/widget-check.sh
+YML
+accept "a feeder line citing a marked document makes a standalone checker clean"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
