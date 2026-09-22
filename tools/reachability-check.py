@@ -152,11 +152,18 @@ def entrypoints(path, text):
     every single-command Python tool like `handover-ledger.py` — gets
     one bare entrypoint instead: `()`, the empty command path. That is
     what lets `main` key it by the tool's path alone, with nothing to
-    call it demands the tool itself be named by a caller.
+    call it demands the tool itself be named by a caller. A `.py` file
+    that fails to parse gets the same bare fallback rather than crashing
+    the lint outright (task 0076: `find_tools` no longer pre-filters by
+    `add_subparsers`, so this is reached by every `.py` under `tools/`,
+    not just tools already known to be argparse-shaped).
     """
     if not is_python_tool(path, text):
         return [()]
-    tree = ast.parse(text, filename=str(path))
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except (SyntaxError, ValueError):
+        return [()]
     parsers = {}       # variable -> the command path it holds
     groups = {}        # variable -> the command path its parsers hang under
     seen = set()       # every command path added
@@ -237,7 +244,7 @@ def aliases(text, relpath, name):
 
 
 def call_argument_strings(tree):
-    """Positions of string constants that name a call's arguments.
+    """Source ranges of string constants that name a call's arguments.
 
     Direct arguments, and strings one level inside a list/tuple/set
     literal that is itself an argument — the shape of
@@ -245,12 +252,26 @@ def call_argument_strings(tree):
     deeper, or a string that is not part of a call at all (a docstring,
     a bare expression statement, comment prose), is not collected here
     and so stays stripped by `code_only` below.
+
+    A *range*, not a single position: Python merges adjacent string
+    literals — `"tools/outcomes/" "outcomes"` — into one `Constant`
+    spanning both, so keeping only the constant's own start position
+    would still let `code_only` strip the second fragment's own STRING
+    token. Any token whose start falls inside a kept range counts.
+
+    A NAMED GAP: `cmd = ["tools/outcomes/outcomes", "derive"];
+    subprocess.run(cmd)` — the list built in one statement and passed
+    by name in the next — is invisible here. This walks each call's
+    own argument expressions; it does not trace what a variable was
+    last assigned. Closing that needs data-flow, not another AST
+    pattern, and is out of this pass's scope.
     """
-    keep = set()
+    keep = []
 
     def literal(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            keep.add((node.lineno, node.col_offset))
+            keep.append(((node.lineno, node.col_offset),
+                         (node.end_lineno, node.end_col_offset)))
         elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             for elt in node.elts:
                 literal(elt)
@@ -287,7 +308,7 @@ def code_only(path, text):
             tree = ast.parse(text, filename=str(path))
         except (SyntaxError, ValueError):
             tree = None
-        keep = call_argument_strings(tree) if tree is not None else set()
+        keep = call_argument_strings(tree) if tree is not None else []
         try:
             import io
             import tokenize as tk
@@ -295,7 +316,8 @@ def code_only(path, text):
             for tok in tk.generate_tokens(io.StringIO(text).readline):
                 if tok.type == tk.COMMENT:
                     continue
-                if tok.type == tk.STRING and tok.start not in keep:
+                if tok.type == tk.STRING and not any(
+                        start <= tok.start < end for start, end in keep):
                     continue
                 out.append((tok.start[0], tok.string))
         except (tk.TokenError, IndentationError, SyntaxError):
@@ -412,15 +434,22 @@ def main(argv=None):
 
     callers = {spec: [] for spec in specs}
     files = list(caller_files(root))
+    # code_only's output depends only on the file, never on which spec
+    # is being checked against it — computed once per file rather than
+    # once per (spec, file) pair, which Change 2 made a much bigger
+    # product by giving every single-command tool its own spec.
+    stripped = {}
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        stripped[path] = code_only(path, text)
     for spec, (tool, rel, command) in sorted(specs.items()):
-        for path in files:
+        for path, code in stripped.items():
             if path == tool:
                 continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue
-            if invokes(code_only(path, text), rel, tool.name, command):
+            if invokes(code, rel, tool.name, command):
                 callers[spec].append(path)
         for path in markers.get(spec, []):
             callers[spec].append(path)
