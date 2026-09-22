@@ -1,3 +1,20 @@
+Title: Task 0077 — cross-review the 18 unreviewed merged PRs
+Model: deep
+Milestone: none — hygiene
+Model-because: the deliverable is 18 disposition judgments, each
+weighed against this repo's own conventions (`docs/backlog/README`,
+the incident-detector rule, the verbatim-findings rule) rather than
+against a spec an implementer can check mechanically — a standard
+implementer would file a backlog entry for a finding that's already
+stale, or clear one that's still live, and nothing catches that until
+the resident reads it. The marker substitution in step 4 is the other
+half: posting the live marker instead of the retro one fires
+`handle-review-findings.yml` eighteen times against closed PRs with
+deleted branches, a failure mode invisible until the runs go red. A
+cheap-tier implementer would follow the recipe's mechanics correctly
+and still get the judgment calls wrong, which is the failure this
+tier exists to catch.
+
 # Task 0077 — cross-review the 18 unreviewed merged PRs
 
 ## Why
@@ -28,10 +45,15 @@ entry; trust `gh` over the list if they disagree, and say so.
    run `git fetch origin main` once so every merge commit is local).
 3. Run the review locally, without posting:
 
-       /home/wesley/projects/chevaline-whharris/scripts/cross-vendor-review.py \
+       <your chevaline checkout>/scripts/cross-vendor-review.py \
          --repo <your worktree> --base <sha>^ --head <sha> \
          --reviewer opencode --model opencode/kimi-k3 \
          --timeout 900 --out <your worktree>/.review-sweep/review-N.json
+
+   The script lives in the resident's private Chevaline profile, not
+   in this repo (`docs/backlog/the-review-gate-fails-silently.md`);
+   locate your own checkout rather than assuming a path, since this
+   brief runs on whatever machine picks it up.
 
    Keep `--out` inside your own worktree (writes outside it are
    vetoed) and never commit `.review-sweep/`. Provider policy, from
@@ -87,12 +109,13 @@ are read by the resident through the normal pipeline afterwards.
 
 ## Implementation prompt
 
-Read this brief in full, then
-`docs/backlog/merged-code-prs-were-never-cross-reviewed.md`. Commit
-this brief at
-`docs/tasks/0077-cross-review-the-unreviewed-merged-prs.md` on your
-branch, updating it in the same PR if the plan shifts, and delete the
-backlog entry in that same commit. Work the 18 PRs per the recipe,
-file what the dispositions require, append the receipts table, and
-report any judgment call you had to make where these instructions
-were ambiguous — the still-live calls especially.
+Read this brief in full — it is self-contained; the backlog entry
+that seeded it, `docs/backlog/merged-code-prs-were-never-cross-reviewed.md`,
+was promoted into this file and deleted in commit `d0e23c9`, so it no
+longer exists in the working tree. Its titles and merge dates, if
+ever needed, are `git show d0e23c9^:docs/backlog/merged-code-prs-were-never-cross-reviewed.md`
+— though `gh` is trusted over that list per the Why section above.
+Update this brief in the same PR if the plan shifts. Work the 18 PRs
+per the recipe, file what the dispositions require, append the
+receipts table, and report any judgment call you had to make where
+these instructions were ambiguous — the still-live calls especially.
