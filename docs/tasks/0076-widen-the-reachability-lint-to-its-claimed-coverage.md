@@ -251,3 +251,46 @@ another parser heuristic — the same class as emcee's
    anywhere. Worth noting because it means every standalone checker in
    this repository is currently reached only through a test wrapper,
    which is the pre-existing named gap, not new.
+
+## Review findings
+
+`/code-review` (four findings, all fixed on this branch):
+
+- Adjacent string literals inside a call argument —
+  `["tools/outcomes/" "outcomes", "derive"]` — merge into one AST
+  `Constant`; keeping only its start position left the second
+  fragment's own STRING token still stripped. `call_argument_strings`
+  now keeps a source *range* per constant and checks token membership
+  against it, not equality against a single position.
+- `entrypoints()` called `ast.parse` with no exception handling, and
+  `find_tools()` no longer pre-filters `.py` files by the
+  `add_subparsers` substring (that filter is the entire point being
+  widened), so a syntactically invalid `.py` anywhere under `tools/`
+  would crash the whole lint. Now caught, falling back to a bare
+  entrypoint — the same conservative direction `code_only` already
+  used for the identical failure.
+- `code_only()` was being recomputed once per `(spec, caller file)`
+  pair rather than once per file; Change 2 made the spec count much
+  larger by giving every single-command tool its own entry. Now
+  computed once per file before the per-spec loop.
+- `cmd = [...]; subprocess.run(cmd)` — a list built and passed by name
+  — is invisible to `call_argument_strings`, which walks each call's
+  own argument expressions rather than tracing an assignment. Named as
+  a residual gap in that function's own docstring rather than fixed;
+  closing it needs data-flow analysis, out of this pass's scope.
+
+`tools/codex-review.sh` (two findings):
+
+- **[P1]** Restated the real-tree reachability-check failure already
+  covered above under "Real-tree consequence" and "Judgment calls."
+  No new information; not independently actioned.
+- **[P2]** Fixed. `code_only()` was branching on `path.suffix == ".py"`
+  rather than `is_python_tool()`, so an extensionless Python caller —
+  `tools/outcomes/outcomes`, `tools/clarify/clarify`, exactly the
+  tools most likely to call another one — fell into the shell/YAML
+  branch, which only strips an unquoted `#` comment and leaves
+  docstrings and bare prose intact. A mention in either file's own
+  prose could have rescued an orphan the same way the module's own
+  header once did, before task 0072. New fixtures added: an
+  extensionless Python file's docstring does not rescue a subcommand
+  it only mentions; a real call in one still does.
