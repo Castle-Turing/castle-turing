@@ -196,6 +196,34 @@ PY
 reject "a docstring or comment mentioning the same call is not a call" \
   "\`write\` has no operational caller"
 
+log "extensionless Python callers are parsed as Python, not shell"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/extcaller -->
+MD
+cat > "$SANDBOX/tools/extcaller" <<'PY'
+#!/usr/bin/env python3
+"""tools/thing/thing write is only described here, never called."""
+PY
+chmod +x "$SANDBOX/tools/extcaller"
+reject "an extensionless Python file's docstring is not a call" \
+  "\`write\` has no operational caller"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+<!-- invokes: tools/extcaller -->
+MD
+cat > "$SANDBOX/tools/extcaller" <<'PY'
+#!/usr/bin/env python3
+import subprocess
+
+subprocess.run(["tools/thing/thing", "write"])
+PY
+chmod +x "$SANDBOX/tools/extcaller"
+accept "an extensionless Python file's real call still rescues its subcommand"
+
 log "single-command tools are enumerated (change 2)"
 
 fresh; baseline_callers

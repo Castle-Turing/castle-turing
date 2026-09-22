@@ -302,8 +302,18 @@ def code_only(path, text):
     lint avoids. `call_argument_strings` keeps exactly the strings a
     call could plausibly be naming and drops the rest, so a docstring or
     a comment mentioning the same invocation still does not count.
+
+    Routed by `is_python_tool`, not `path.suffix == ".py"`: an
+    extensionless Python tool — `tools/outcomes/outcomes`,
+    `tools/clarify/clarify` — is exactly the shape most likely to call
+    another tool, and the shell/YAML branch below only strips an
+    unquoted `#` comment. Sending such a file down that branch instead
+    of the AST one would leave its docstrings and bare prose intact,
+    letting a mention rescue an orphan the same way the module's own
+    header once did — the false-negative direction this function
+    exists to close.
     """
-    if path.suffix == ".py":
+    if is_python_tool(path, text):
         try:
             tree = ast.parse(text, filename=str(path))
         except (SyntaxError, ValueError):
