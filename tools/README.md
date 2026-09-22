@@ -203,28 +203,38 @@ agent sessions) editing the repo itself, which is what `tools/` is for.
 ```
 tools/outcomes/outcomes check [--base REF] [--no-base]
 tools/outcomes/outcomes derive [--harness-journal FILE]... [--env KEY] [--fill]
+tools/outcomes/outcomes redirect TASK --ref CITATION [--wrong N] [--resident LOGIN]
 ```
 
-The instrument specced in task 0070 and defined in
-`docs/measurement.md`. `docs/log/task-outcomes.tsv` carries one row per
-task attempt, and this is what keeps it honest.
+This is a synopsis, not the place any of these steps is *owned*.
+`docs/measurement.md`'s "Operating the log" section is, and
+`tools/reachability-check.py` enforces the difference: a mention here
+does not make a command reachable, because a reference table that lists
+everything would otherwise make everything reachable.
 
-Two subcommands, deliberately unequal. `derive` reads git and — when
+The instrument defined in `docs/measurement.md`.
+`docs/log/task-outcomes.tsv` carries one row per task attempt, and this
+is what keeps it honest.
+
+Three subcommands, deliberately unequal. `derive` reads git and — when
 pointed at one — a harness journal, and writes rows; it needs a
-repository, a history, and paths outside the checkout. `check` is a
-pure function of (log, working tree): no network, no forge, no model,
-no clock. It is what CI runs, and it still runs on a clone made after
-the forge this repository lives on has stopped existing. That is the
-same split `handover-ledger.py` and `handover-check.py` make, for the
-reason task 0062 gives.
+repository, a history, and paths outside the checkout. `redirect`
+transcribes a redirect the resident stated somewhere citable into the
+row's verdict cells, and needs the forge to resolve the citation and
+verify who wrote it; read its `--help` before using it, which carries
+the argument for what a transcription may and may not claim. `check`
+is a pure function of (log, working tree): no network, no forge, no
+model, no clock. It is what CI runs, and it still runs on a clone made
+after the forge this repository lives on has stopped existing.
 
 What `check` guards, in one list: rows are append-only against the
 trunk, immutable cells never change, a pending cell goes from `-` to a
 value exactly once, every brief under `docs/tasks/` has a row, a
-verdict column carries a citation to where the resident said it, a
-redirect count never appears without its miscorrection rate beside it,
-salt never wears a real brief's name, and a note never carries an
-address or a home path.
+verdict column equals the number of citations behind it, a citation is
+only ever appended and never removed or reordered, a miscorrection
+count never exceeds the redirects it is conditioned on and is never a
+bare `0` that nobody reassessed, salt never wears a real brief's name,
+and a note never carries an address or a home path.
 
 The coverage rule is the detector, in the sense the "an incident ships
 its detector" convention means: a task that lands unlogged fails the
@@ -250,10 +260,47 @@ to log.
 
 `test/outcomes/run.sh`, in CI via `.github/workflows/outcomes-check.yml`.
 It runs `check` over the real log, then builds a synthetic repository
-and mutates it once per rule — twenty-odd rejects, each asserted to be
-caught by the rule that owns it, plus the three transitions that must
-still be *allowed*. Plain bash, stdlib python3, no Nix, no network,
-zero models.
+and mutates it once per rule — thirty-odd rejects, each asserted to be
+caught by the rule that owns it, plus the transitions that must still
+be *allowed*. `redirect` is exercised with its resolver substituted, so
+the test reaches every decision the command makes after it has an
+author without reaching a network. Plain bash, stdlib python3, no Nix,
+no network, zero models.
+
+## `reachability-check.py` — an entrypoint nothing calls is a defect
+
+```
+tools/reachability-check.py [REPO_ROOT]
+```
+
+Lints for one specific defect shape: a command that exists, is wired to
+a gate that is already armed, and whose tests all pass, but that
+nothing in this repository's operational surface ever actually calls.
+Two rules, both mechanical:
+
+- **Orphan entrypoint.** A subcommand of a tool under `tools/` needs an
+  operational caller: a workflow under `.github/`, another executable
+  under `tools/`, or a documented step declaring itself with an
+  `invokes:` marker in the document that owns it. A test does not
+  count — the incident this exists for had tests — and neither does a
+  usage synopsis, or this file would rescue everything.
+- **Armed gate with no feeder.** A workflow that runs a `check`
+  entrypoint carries a `# feeder:` line naming the step that produces
+  what it checks, and the citation is verified: the entrypoint must
+  exist and the cited document must actually carry the marker.
+
+It catches this shape of defect, not its cause: a feature can satisfy
+its implementer's reading of a requirement and not the resident's,
+which is acceptance — `docs/backlog/passing-tests-are-not-acceptance.md`
+— and no lint will ever be that.
+
+### Verification
+
+`test/reachability/run.sh`, in CI via
+`.github/workflows/reachability-check.yml`. It lints this repository,
+then builds synthetic trees and asserts each rule fires on the shape it
+owns — including the two exclusions, where a test and a synopsis are
+each shown *not* to rescue an orphan.
 
 ## `clarify/` — check a clarifying-questions phase run
 

@@ -1,13 +1,16 @@
 name: outcomes-check
 
-# The task-outcome log's checker, checked (task 0070).
+# The task-outcome log's checker. This gate is armed: a brief with no
+# row fails it. The feeder is named below; tools/reachability-check.py
+# verifies the citation resolves.
 #
-# Its own workflow rather than a job in check.yml, for the reason
-# clarify-check.yml gives next door: check.yml carries
-# `paths-ignore: docs/**` on purpose, and everything this gate exists to
-# guard — the log, the briefs it must cover, the document that defines
-# it — is under docs/. Folding this in there would mean the one gate on
-# those files never fires on the pull requests that change them.
+# feeder: tools/outcomes/outcomes derive (docs/measurement.md)
+#
+# Its own workflow rather than a job in check.yml, because check.yml
+# carries `paths-ignore: docs/**` and everything this gate guards — the
+# log, the briefs it covers, the document that defines it — is under
+# docs/, so folding it in would mean it never fires on the pull requests
+# that change those files.
 #
 # Paths are duplicated between the two triggers rather than shared via a
 # YAML anchor: GitHub Actions does not expand anchors in workflow files.

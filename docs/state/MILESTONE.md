@@ -97,16 +97,26 @@ it explicitly.
   translation itself — and the schema it pins against — is a
   separate implementation task, not yet built.
 - Baseline instrumentation ([m2-constraints] first clause): running
-  as of task 0070. `docs/log/task-outcomes.tsv` carries one row per
+  as of task 0070, and fed as of task 0072.
+  `docs/log/task-outcomes.tsv` carries one row per
   task attempt, `docs/measurement.md` defines the columns and what may
   honestly be said from them, and `tools/outcomes/outcomes check`
   gates every pull request that touches a brief or the log — a task
-  that lands unlogged fails CI. The pre-period is uneven and the brief
+  that lands unlogged fails CI. Rows are appended by the session that
+  opens the task's pull request, a named step in `docs/measurement.md`
+  rather than a wired one — the delivery seat writing its own rows is
+  filed at `docs/backlog/the-outcome-row-is-written-by-hand.md`. The
+  verdict columns have an invocation path: `outcomes redirect`
+  transcribes a resident's redirect against a citation whose author it
+  verifies, and `tools/reachability-check.py` fails CI if either step
+  loses its named caller. The pre-period is uneven and the brief
   says exactly where: landing dates reach back to 2026-08-14 for all
   68 prior briefs, pull-request numbers for 65 of them, per-task
   spend for 23,
   and the verdict columns (redirects and their miscorrection rate)
-  have no pre-period at all — their series starts here. [inferred]
+  have no pre-period at all — their series starts with the first
+  transcribed redirect, which is task 0070's own, logged by task
+  0072. [inferred]
   the clause is satisfied for the measures with a pre-period and
   explicitly not for the rest; an intervention landing against one of
   those is a bet, and the document carrying it says so.

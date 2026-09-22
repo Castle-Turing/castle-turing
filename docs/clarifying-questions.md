@@ -7,9 +7,9 @@ asking.
 This document is the phase's mechanism: what it produces, what rules it
 runs under, and which of those rules a machine checks. The evidence for
 every rule is in `docs/research/elicitation-papers.md`, which is a
-record and is not repeated here; task 0065 is the brief that compressed
-it into this design. `tools/clarify/clarify` is the checker, and
-`test/clarify/run.sh` is the proof that the checker can fail.
+record and is not repeated here. `tools/clarify/clarify` is the
+checker, and `test/clarify/run.sh` is the proof that the checker can
+fail.
 
 ## Why the phase exists at all
 
@@ -41,9 +41,10 @@ project should expect to be measuring rather than inheriting.
 
 The agent layer already calls a seat **intake**: the surface that turns
 a resident's words into a `request` record (`castle ask`,
-`agent/castle-modal`). Task 0065's title uses "intake" again for this
-phase. Two different things, one word, and a reader cannot tell which is
-meant — so nothing here is called intake. The vocabulary is:
+`agent/castle-modal`). This phase is a different thing that could
+easily be called the same name — two different things, one word, and a
+reader cannot tell which is meant — so nothing here is called intake.
+The vocabulary is:
 
 - The **statement** is the resident's request as it arrives.
 - The **transcript** is the conversation: the statement, the questions
@@ -342,6 +343,15 @@ reproduce would not be a score anybody could check.
 
 ## Running it
 
+This section is where these four steps are owned, and
+`tools/reachability-check.py` holds it to that: the markers below are
+what stop each of them being an entrypoint nobody invokes.
+
+<!-- invokes: tools/clarify/clarify check -->
+<!-- invokes: tools/clarify/clarify probe build -->
+<!-- invokes: tools/clarify/clarify probe score -->
+<!-- invokes: tools/clarify/clarify probe oracle -->
+
     tools/clarify/clarify check docs/state/<requirements>.md
     tools/clarify/clarify probe build cursor-too-small --out /tmp/run
     tools/clarify/clarify probe score cursor-too-small /tmp/run
@@ -355,8 +365,8 @@ when every blocking check passed; warnings do not fail unless
 ## What this phase does not do
 
 It is not wired into `castle-modal`. Questions do not yet route to the
-resident automatically; that is the answer channel task 0022 built, and
-connecting the two is separate work. The phase works today as a
+resident automatically; that answer channel already exists elsewhere,
+and connecting the two is separate work. The phase works today as a
 conversation over files, which is the order the design demands: a phase
 that only works through a UI cannot be checked, and a phase that cannot
 be checked is the thing this document exists to avoid.

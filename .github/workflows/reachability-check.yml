@@ -1,0 +1,51 @@
+name: reachability-check
+
+# Fails on two mechanical shapes: an entrypoint no operator path
+# reaches, and a gate naming nothing that feeds it.
+#
+# Its own workflow rather than a job in check.yml, because check.yml
+# carries `paths-ignore: docs/**` and the documented steps this lint
+# reads are under docs/, so folding it in would mean the gate never
+# fires on the pull requests most likely to break it.
+#
+# The trigger paths must cover everything the lint reads, or a change
+# can alter reachability without firing the check: it scans markdown
+# anywhere outside the record directories (including root CLAUDE.md and
+# READMEs) and code comments under modules/, hosts/, tools/, agent/,
+# test/. Paths are duplicated between the two triggers rather than
+# shared via a YAML anchor: GitHub Actions does not expand anchors in
+# workflow files.
+on:
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "CLAUDE.md"
+      - "modules/**"
+      - "hosts/**"
+      - "agent/**"
+      - "tools/**"
+      - "test/**"
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.md"
+      - "CLAUDE.md"
+      - "modules/**"
+      - "hosts/**"
+      - "agent/**"
+      - "tools/**"
+      - "test/**"
+      - ".github/workflows/**"
+  workflow_dispatch: {}
+
+jobs:
+  reachability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nix: the lint is a single stdlib Python script and its test
+      # is plain bash, so the stock runner's toolchain is the whole
+      # dependency list.
+      - run: test/reachability/run.sh

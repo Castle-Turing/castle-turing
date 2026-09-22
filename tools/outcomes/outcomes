@@ -1,31 +1,23 @@
 #!/usr/bin/env python3
-"""tools/outcomes/outcomes — the task-outcome log's mechanism (task 0070).
+"""tools/outcomes/outcomes — the task-outcome log's mechanism.
 
 WHAT THIS IS FOR (read before touching it)
 
-`docs/measurement.md` is the authority; this script is its teeth. The
-short version of why it exists: interrupted time series is the only
-credible causal design available to a project with one resident, and it
-is worthless without pre-intervention data
-(`docs/research/measurement-methodology.md`, design implication 9). So
-`docs/log/task-outcomes.tsv` starts before the pipeline-changing work
-lands, and something has to keep it honest afterwards.
+`docs/measurement.md` is the authority; this script is its teeth.
 
 THE SPLIT, AND WHY IT MATTERS
 
-Two subcommands, deliberately unequal:
+Three subcommands, deliberately unequal:
 
-  `derive`  reads git and — when pointed at one — a harness journal, and
-            writes rows. It needs a repository and a history.
-  `check`   is a pure function of (log, working tree). No network, no
-            forge, no model, no clock. It is what CI runs.
-
-That is the same split `tools/handover-ledger.py` and
-`tools/handover-check.py` make, for the same reason: a check that
-re-derived truth from the live world would fail for reasons that have
-nothing to do with the thing it is checking. Here it buys something
-more specific — `check` can run on any clone, forever, including one
-made after the forge this repo lives on has stopped existing.
+  `derive`   reads git and — when pointed at one — a harness journal, and
+             writes rows. It needs a repository and a history.
+  `redirect` transcribes a resident's judgment into a row's verdict
+             cells. It needs the forge, or a journal, to resolve and
+             verify the citation it is given.
+  `check`    is a pure function of (log, working tree). No network, no
+             forge, no model, no clock. It is what CI runs, and it runs
+             on any clone, forever, including one made after the forge
+             this repo lives on has stopped existing.
 
 WHAT `check` GUARDS
 
@@ -41,10 +33,15 @@ past. Every rule below exists to make a rewrite loud:
   * Every brief in `docs/tasks/` has a row. This is the detector: a task
     that lands without being logged fails the very next pull request,
     which is the only moment the row is still cheap to write.
-  * A verdict cell carries a citation. Receipts are machine-derived;
-    verdicts are the resident's, and a verdict with no reference to
-    where the resident said it is the system grading its own judgment
-    (`docs/architecture.md`, Proposal 06).
+  * A verdict cell carries a citation, and equals the number of
+    citations behind it. Receipts are machine-derived; verdicts are the
+    resident's, and a verdict with no reference to where the resident
+    said it is the system grading its own judgment
+    (`docs/architecture.md`, Proposal 06). `verdict_ref` is an
+    append-only list of citation tokens, `redirects` is the number of
+    `r` tokens and `redirects_wrong` the sum over `w` tokens, so a
+    count moves only because a citation was added. A number edited with
+    nothing behind it fails here — in a checker with no network in it.
   * A probe row says it is a probe. Salt never masquerades as a real
     record — same proposal.
   * `note` is lint against the one hard rule this repository has: no
@@ -61,13 +58,17 @@ USAGE
     tools/outcomes/outcomes derive [--log FILE] [--repo-root DIR]
                                    [--harness-journal FILE]... [--env KEY]
                                    [--fill] [-o FILE]
+    tools/outcomes/outcomes redirect TASK --ref CITATION [--wrong N]
+                                   [--attempt N] [--resident LOGIN]
 
 `check` exits non-zero having printed every problem it found. `--base`
 takes the revision the log's history is held against: `origin/main` by
 default, and in CI the *merge base* with it, so a branch cut before
 another row landed is not accused of deleting that row. `derive` prints candidate rows for briefs with no
 row; `--fill` instead rewrites the log with pending cells filled from
-artifact state, for a human to read as a diff.
+artifact state, for a human to read as a diff. `redirect` transcribes a
+redirect the resident stated somewhere citable; see its `--help`, which
+carries the whole integrity argument for what it may and may not do.
 """
 
 import argparse
@@ -121,13 +122,23 @@ IMMUTABLE = {"schema", "task", "attempt", "queued", "tier", "model",
 # outcome matures: the pull request opens, the review lands, the
 # resident says something.
 PENDING = {"landed", "outcome", "pr", "cost_usd", "turns", "questions",
-           "question_wait_h", "redirects", "redirects_wrong", "reworks",
-           "findings", "findings_fixed", "verdict_ref"}
+           "question_wait_h", "reworks", "findings", "findings_fixed"}
 
 # The one amendable cell. See the header.
 AMENDABLE = {"note"}
 
+# The citation list. `-` or a comma-separated list of tokens, and the
+# base revision's list must be a *prefix* of this one: a citation may
+# be added, none may be removed, and none may be reordered. It is not
+# a pending cell because a pending cell is written once and a task can
+# be redirected twice.
+CITATIONS = {"verdict_ref"}
+
 # Cells the resident authors. Nothing in this repository may infer one.
+# They are not written directly: each is a count over CITATIONS, and
+# `check` enforces the equality, so the only way to move one is to add
+# a citation. That is what makes "an agent may transcribe, never
+# originate" mechanical rather than aspirational.
 VERDICT = {"redirects", "redirects_wrong"}
 
 UNRECORDED = "-"
@@ -147,6 +158,29 @@ KEY_RE = re.compile(r"^[a-z0-9]+([._/-][a-z0-9]+)*$")
 INT_RE = re.compile(r"^\d+$")
 MONEY_RE = re.compile(r"^\d+\.\d{2}$")
 HOURS_RE = re.compile(r"^\d+\.\d$")
+
+# A citation token in `verdict_ref`. Two kinds:
+#
+#   r/<source>    one redirect, cited where the resident made it.
+#   w<n>/<source> a reassessment that judged n of this task's redirects
+#                 wrong. n may be 0 — that is how "reassessed, none
+#                 wrong" is recorded with a citation behind it rather
+#                 than defaulted, which is the whole point of keeping
+#                 `redirects_wrong` pending until someone says.
+#
+# <source> is the citation's own address, normalised by `redirect`:
+#
+#   pr<num>/ic<id>  a pull-request (issue) comment
+#   pr<num>/rc<id>  a pull-request review comment
+#   rec/<id>        a harness journal record
+#
+# Tokens are comma-separated. The grammar is deliberately inside
+# KEY_RE's existing alphabet, so the column's shape did not change when
+# this landed: every separator here is one KEY_RE already admits.
+CITE_RE = re.compile(
+    r"^(?:r|w\d+)"
+    r"/(?:pr\d+/(?:ic|rc)\d+|rec/[a-z0-9]+([._-][a-z0-9]+)*)$"
+)
 
 NOTE_MAX = 200
 # Crude, deliberate, and cheap: the two shapes personal data has taken
@@ -184,6 +218,49 @@ def key(rec):
 
 
 # --- check ---------------------------------------------------------------
+
+
+def parse_citations(cell):
+    """`verdict_ref` as a list of (kind, n, token). Raises Fail on junk.
+
+    Order is preserved because the append-only check holds the base
+    revision's list as a *prefix* of this one: a citation may be added,
+    none may be removed, and none may be reordered. A set would let a
+    reordering through, and a reordering is indistinguishable from a
+    substitution once you stop looking at position.
+    """
+    if cell == UNRECORDED:
+        return []
+    out = []
+    seen = set()
+    for token in cell.split(","):
+        if not CITE_RE.match(token):
+            raise Fail(f"{token!r} is not a citation token "
+                       "(r/<source> or w<n>/<source>; see docs/measurement.md)")
+        if token in seen:
+            raise Fail(f"{token!r} is cited twice; "
+                       "a citation is one event, counted once")
+        seen.add(token)
+        kind, _, source = token.partition("/")
+        k = "r" if kind == "r" else "w"
+        if (k, source) in seen:
+            # One comment states one redirect and at most one
+            # reassessment of it. Without this, `w0/x` and `w1/x` could
+            # both be cited and the same sentence would be made to say
+            # two different things.
+            raise Fail(f"{source!r} is cited twice as a {k} verdict; "
+                       "one citation states one judgment")
+        seen.add((k, source))
+        out.append(("r", 1, token) if kind == "r" else ("w", int(kind[1:]), token))
+    return out
+
+
+def citation_counts(cell):
+    """(redirects implied, redirects_wrong implied, any reassessment)."""
+    cites = parse_citations(cell)
+    r = sum(1 for k, _, _ in cites if k == "r")
+    w = sum(n for k, n, _ in cites if k == "w")
+    return r, w, any(k == "w" for k, _, _ in cites)
 
 
 def check_shape(header, rows, path, problems):
@@ -244,7 +321,7 @@ def check_values(rows, path, problems):
             else:
                 # Shape is not a calendar: DATE_RE admits 2026-13-40.
                 # Parse it so an impossible date is a defect, not a
-                # silently-stored one. Task 0070 review, finding P2.
+                # silently-stored one.
                 try:
                     datetime.date.fromisoformat(rec[name])
                 except ValueError:
@@ -271,26 +348,65 @@ def check_values(rows, path, problems):
         for name in ("model", "milestone", "env", "probe", "verdict_ref", "reworks"):
             if rec[name] != UNRECORDED and not KEY_RE.match(rec[name].replace(",", "-")):
                 bad(row, f"{name} {rec[name]!r} is not a bare key")
-        # The pairing rule. A detection rate reported without its
-        # conditional miscorrection rate is uninterpretable
-        # (docs/research/measurement-methodology.md, design implication 1),
-        # so the log will not hold one without the other.
-        if rec["redirects"] != UNRECORDED and rec["redirects_wrong"] == UNRECORDED:
-            bad(row, "redirects recorded without redirects_wrong; "
-                     "a detection rate is never logged alone")
+        # The verdict rules. Proposal 06: only verdicts settle, and a
+        # verdict is something the resident said somewhere findable —
+        # each verdict cell is a count over the citations in
+        # `verdict_ref`, so the only way to move one is to add a
+        # citation, and this checker sees a number edited with nothing
+        # behind it without needing a network to do it.
+        try:
+            r_cited, w_cited, reassessed = citation_counts(rec["verdict_ref"])
+        except Fail as e:
+            bad(row, f"verdict_ref: {e}")
+            r_cited, w_cited, reassessed = None, None, None
+        if r_cited is not None:
+            if rec["redirects"] != UNRECORDED and INT_RE.match(rec["redirects"]):
+                if int(rec["redirects"]) != r_cited:
+                    bad(row, f"redirects is {rec['redirects']} and verdict_ref "
+                             f"carries {r_cited} redirect citation(s); the count "
+                             "is the citations, never a number someone typed")
+            elif r_cited:
+                bad(row, f"verdict_ref carries {r_cited} redirect citation(s) "
+                         "and redirects is unrecorded")
+            if rec["redirects_wrong"] != UNRECORDED and INT_RE.match(rec["redirects_wrong"]):
+                if int(rec["redirects_wrong"]) != w_cited:
+                    bad(row, f"redirects_wrong is {rec['redirects_wrong']} and "
+                             f"verdict_ref's reassessments account for {w_cited}")
+                if not reassessed:
+                    # Including 0. A redirect nobody has reassessed is
+                    # pending, not correct: defaulting it to 0 would
+                    # record the absence of a judgment as a judgment,
+                    # and bias the miscorrection rate downward.
+                    bad(row, "redirects_wrong is recorded with no reassessment "
+                             "citation; 0 is a judgment too, and stays `-` until "
+                             "the resident makes it")
+            elif reassessed:
+                bad(row, "verdict_ref cites a reassessment and redirects_wrong "
+                         "is unrecorded")
+            if reassessed and not r_cited:
+                bad(row, "verdict_ref reassesses redirects that were never cited")
+        # `redirects_wrong` without `redirects` remains an error, and so
+        # does a miscorrection count exceeding the detections it is
+        # conditioned on. `redirects` standing with `redirects_wrong`
+        # pending is not an error: the pairing rule binds at read time
+        # instead (docs/measurement.md, "What may honestly be said").
         if rec["redirects_wrong"] != UNRECORDED and rec["redirects"] == UNRECORDED:
             bad(row, "redirects_wrong recorded without redirects")
         if UNRECORDED not in (rec["redirects"], rec["redirects_wrong"]):
-            if int(rec["redirects_wrong"]) > int(rec["redirects"]):
-                bad(row, "redirects_wrong exceeds redirects")
-        # Proposal 06: only verdicts settle, and a verdict is something
-        # the resident said somewhere findable.
+            if INT_RE.match(rec["redirects"]) and INT_RE.match(rec["redirects_wrong"]):
+                if int(rec["redirects_wrong"]) > int(rec["redirects"]):
+                    bad(row, "redirects_wrong exceeds redirects")
         for name in sorted(VERDICT):
             if rec[name] not in (UNRECORDED, "0") and rec["verdict_ref"] == UNRECORDED:
                 bad(row, f"{name} is a verdict and carries no verdict_ref")
         if UNRECORDED not in (rec["findings"], rec["findings_fixed"]):
-            if int(rec["findings_fixed"]) > int(rec["findings"]):
-                bad(row, "findings_fixed exceeds findings")
+            # Guarded, like the redirect comparison above: the
+            # enumeration check earlier has already reported a
+            # non-numeric cell, and a checker that tracebacks there
+            # reports one problem instead of all of them.
+            if INT_RE.match(rec["findings"]) and INT_RE.match(rec["findings_fixed"]):
+                if int(rec["findings_fixed"]) > int(rec["findings"]):
+                    bad(row, "findings_fixed exceeds findings")
         note = rec["note"]
         if note != UNRECORDED:
             if len(note) > NOTE_MAX:
@@ -445,6 +561,36 @@ def check_append_only(rows, repo_root, log_path, base, problems):
                     f"{rel}:{line}: {name} was {was[name]!r} at {base} and is "
                     f"{now[name]!r} here; that cell is fixed when the row is written"
                 )
+            elif name in CITATIONS:
+                # Append-only as a list. The base's citations must be a
+                # prefix of this revision's: one may be added, none
+                # removed, none reordered, none substituted. This is
+                # what lets the verdict counts move at all — a task can
+                # be redirected twice, and the write-once rule the rest
+                # of the log runs on could only have recorded the first.
+                was_l = [] if was[name] == UNRECORDED else was[name].split(",")
+                now_l = [] if now[name] == UNRECORDED else now[name].split(",")
+                if now_l[:len(was_l)] != was_l:
+                    problems.append(
+                        f"{rel}:{line}: {name} was {was[name]!r} at {base} and is "
+                        f"{now[name]!r} here; citations are only ever appended — "
+                        "removing or reordering one rewrites a verdict"
+                    )
+            elif name in VERDICT:
+                # A verdict is a count over the citations above, and
+                # check_values has already held it to them. All this
+                # has to refuse is a count going backwards, which is a
+                # judgment being withdrawn rather than a new one added.
+                if was[name] != UNRECORDED and (
+                        now[name] == UNRECORDED
+                        or not INT_RE.match(now[name])
+                        or not INT_RE.match(was[name])
+                        or int(now[name]) < int(was[name])):
+                    problems.append(
+                        f"{rel}:{line}: {name} was {was[name]!r} at {base} and is "
+                        f"{now[name]!r} here; a verdict count only ever grows, and "
+                        "only because a citation was added"
+                    )
             elif was[name] != UNRECORDED:
                 problems.append(
                     f"{rel}:{line}: {name} was already recorded as {was[name]!r} at "
@@ -488,7 +634,7 @@ def run_git(repo_root, *args):
     # short/format renderings otherwise use each commit's own timezone,
     # which would put a date on the wrong calendar day for commits made
     # west of UTC late in the day. Forcing the environment is the only
-    # rendering-independent fix. Task 0070 review, finding P1.
+    # rendering-independent fix.
     env = {**os.environ, "TZ": "UTC"}
     proc = subprocess.run(["git", *args], cwd=repo_root, env=env,
                           capture_output=True, text=True, check=True)
@@ -591,17 +737,48 @@ def landing(repo_root, commit, main):
 
 HEADER_RE = re.compile(r"^([A-Za-z-]+):\s*(.*)$")
 
+# The header keys a brief may carry (the work-layout contract). Only a
+# line whose key is one of these starts a new header; any other
+# `Word:`-shaped line inside the block is a continuation of the value
+# above it. Without this, a wrapped value whose continuation line
+# happens to begin `See:`/`Note:`/`Origin:` is recorded as a spurious
+# header key. A key not in this set reads as continuation, which is the
+# safe direction (an unrecognised header goes unread rather than
+# displacing a real one); a genuinely new key is added here in the PR
+# that introduces it. The residual ambiguity — a continuation line
+# beginning with a literal recognised key + colon — is left to
+# docs/backlog and the append-only checker, because closing it fully
+# needs a format change (indented continuations), not a parser
+# heuristic.
+KNOWN_BRIEF_HEADERS = frozenset({
+    "title", "model", "model-because", "milestone",
+    "requires", "requires-because", "deliverable",
+})
+
 
 def brief_headers(path):
-    """The `Key: value` header block, stopping where the parser stops."""
+    """The `Key: value` header block, continuation lines included.
+
+    A header's value wraps: `Model-because:` is a paragraph by
+    convention and titles run long. A wrapped line is not the end of
+    the block — treating it as one would silently lose every header
+    after the first wrapped one, in immutable cells that can never be
+    corrected. The block ends at the first blank line, which is what
+    the format actually says.
+    """
     headers = {}
+    last = None
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             break
         m = HEADER_RE.match(line)
-        if not m:
+        if m and m.group(1).lower() in KNOWN_BRIEF_HEADERS:
+            last = m.group(1).lower()
+            headers[last] = m.group(2).strip()
+        elif last is not None:
+            headers[last] = f"{headers[last]} {line.strip()}".strip()
+        else:
             break
-        headers[m.group(1).lower()] = m.group(2).strip()
     return headers
 
 
@@ -714,9 +891,9 @@ def cmd_derive(args):
     # changes its stem, so a stem-only check would append a second row
     # for the same task. Where the number denotes exactly one current
     # brief, a logged number means that brief is already covered under
-    # its old stem. The two-0003 case in this repo's history is why the
-    # uniqueness guard is there rather than a bare number match. Task
-    # 0070 review, finding P1.
+    # its old stem. This repository has two briefs numbered 0003, which
+    # is why the uniqueness guard is there rather than a bare number
+    # match.
     known_nums = {as_record(r)["task"][:4] for r in existing_rows}
     attempts = collections.Counter(as_record(r)["task"] for r in existing_rows)
 
@@ -742,6 +919,22 @@ def cmd_derive(args):
         headers = brief_headers(path)
         tier = headers.get("model", UNRECORDED).lower()
         row["tier"] = tier if tier in TIERS else UNRECORDED
+        if row["queued"] == UNRECORDED:
+            # `queued` is immutable, and the commonest way to get an
+            # empty one is now a normal mistake: the documented step
+            # runs `derive` before opening the pull request, and a
+            # brief that is not committed yet has no add-commit to
+            # date from. Say so while the fix is `git add`.
+            print(f"note: {path} is not committed yet, so no date can be "
+                  "read for `queued` — commit the brief first, or this "
+                  "row's queue date is unrecorded for good", file=sys.stderr)
+        if row["tier"] == UNRECORDED:
+            # `tier` is immutable, so a row written without one never
+            # gains one, and CLAUDE.md makes stating the routing tier
+            # non-optional precisely because a silent default is the
+            # case worth catching. Say it here, where it is still cheap.
+            print(f"note: {path} states no usable `Model:` header, so this "
+                  "row's tier is unrecorded for good", file=sys.stderr)
         row["milestone"] = normalise_milestone(headers.get("milestone", ""))
         f = facts.get(stem, {})
         for name in ("cost_usd", "turns", "model", "pr"):
@@ -762,7 +955,7 @@ def cmd_derive(args):
             # each row — exactly what docs/measurement.md forbids ("Left
             # `-` where the ledger cannot say — a task attempted more
             # than once"). Only fill when there is a single attempt to
-            # attribute to. Task 0070 review, finding P1.
+            # attribute to.
             if attempts[rec["task"]] == 1:
                 for name in ("cost_usd", "turns", "pr"):
                     if rec[name] == UNRECORDED and f.get(name):
@@ -796,6 +989,325 @@ def cmd_derive(args):
     return 0
 
 
+# --- redirect ------------------------------------------------------------
+#
+# The one command in this repository that writes a resident's judgment
+# into a measurement. Everything in it is arranged around one sentence:
+# an agent may transcribe a verdict, and may never originate one.
+
+REF_FORMS = (
+    # A pull-request comment, as a URL or as the token's own source.
+    (re.compile(r"^(?:https?://[^/]+/[^/]+/[^/]+/pull/)?(\d+)"
+                r"(?:#issuecomment-|/ic|:)(\d+)$"), "ic"),
+    (re.compile(r"^(?:https?://[^/]+/[^/]+/[^/]+/pull/)?(\d+)"
+                r"(?:#discussion_r|/rc)(\d+)$"), "rc"),
+)
+REC_RE = re.compile(r"^rec[:/]([a-z0-9]+([._-][a-z0-9]+)*)$")
+
+
+def normalise_ref(ref):
+    """A citation as the agent typed it -> the token's `<source>`.
+
+    Accepts what someone actually has to hand: the URL from the
+    browser's address bar, the bare `<pr>#issuecomment-<id>` fragment,
+    or a harness journal record id. Normalising here rather than
+    demanding the token form is deliberate — a citation format nobody
+    can produce from what they are looking at is a citation nobody
+    writes.
+    """
+    ref = ref.strip()
+    m = REC_RE.match(ref)
+    if m:
+        return f"rec/{m.group(1)}"
+    for pattern, kind in REF_FORMS:
+        m = pattern.match(ref)
+        if m:
+            return f"pr{m.group(1)}/{kind}{m.group(2)}"
+    raise Fail(
+        f"{ref!r} is not a citation this command can resolve. Give a "
+        "pull-request comment URL, `<pr>#issuecomment-<id>`, "
+        "`<pr>#discussion_r<id>`, or `rec:<journal record id>`."
+    )
+
+
+def repo_slug(repo_root):
+    """`owner/repo` from the checkout's origin, for the forge lookup."""
+    try:
+        url = run_git(repo_root, "remote", "get-url", "origin").strip()
+    except subprocess.CalledProcessError:
+        raise Fail("this checkout has no `origin` remote, so a pull-request "
+                   "citation cannot be resolved; cite a journal record instead")
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
+    if not m:
+        raise Fail(f"cannot read an owner/repo out of origin ({url})")
+    return f"{m.group(1)}/{m.group(2)}"
+
+
+def gh_json(*args):
+    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise Fail("the forge lookup failed, so the citation is unverified "
+                   "and nothing was written:\n" + proc.stderr.strip())
+    return json.loads(proc.stdout)
+
+
+def resolve_journal_author(source, journals):
+    """Who wrote a journal record. A local file; no network involved."""
+    rec_id = source[len("rec/"):]
+    if not journals:
+        raise Fail(f"{source} is a journal record and no journal was given; "
+                   "pass --journal FILE")
+    for path in journals:
+        try:
+            text = pathlib.Path(path).read_text(encoding="utf-8")
+        except OSError as e:
+            raise Fail(f"cannot read the journal {path}: {e}")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(rec.get("id", "")) != rec_id:
+                continue
+            author = rec.get("author") or rec.get("actor") or rec.get("by")
+            if not author:
+                raise Fail(f"journal record {rec_id} names no author, so "
+                           "nothing about it proves the resident said it")
+            return str(author)
+    raise Fail(f"no journal record with id {rec_id} in "
+               + ", ".join(journals))
+
+
+def resolve_forge_author(repo_root, source):
+    """Who wrote the pull-request comment this citation points at.
+
+    This is the network boundary, and the only one in the whole tool
+    outside `derive`. `check` never reaches it — the log's integrity has
+    to be verifiable on a clone made after this forge stops existing —
+    and the tests substitute this function rather than calling out, for
+    the same reason.
+
+    Raises rather than returning None when the citation does not
+    resolve. An unresolvable citation is not a weaker citation, it is
+    no citation, and the caller must not be able to treat the two the
+    same by forgetting a null check.
+    """
+    m = re.match(r"^pr(\d+)/(ic|rc)(\d+)$", source)
+    if not m:
+        raise Fail(f"unresolvable citation source {source!r}")
+    pr, kind, cid = m.group(1), m.group(2), m.group(3)
+    slug = repo_slug(repo_root)
+    if kind == "ic":
+        data = gh_json(f"repos/{slug}/issues/comments/{cid}")
+        belongs = str(data.get("issue_url", "")).rsplit("/", 1)[-1]
+    else:
+        data = gh_json(f"repos/{slug}/pulls/comments/{cid}")
+        belongs = str(data.get("pull_request_url", "")).rsplit("/", 1)[-1]
+    if belongs != pr:
+        # The citation would otherwise read as evidence about a pull
+        # request it has nothing to do with.
+        raise Fail(f"comment {cid} belongs to #{belongs}, not #{pr}")
+    author = (data.get("user") or {}).get("login")
+    if not author:
+        raise Fail(f"comment {cid} resolves with no author")
+    return str(author)
+
+
+def resolve_author(repo_root, source, journals):
+    """Who wrote the thing this citation points at, wherever it lives."""
+    if source.startswith("rec/"):
+        return resolve_journal_author(source, journals)
+    return resolve_forge_author(repo_root, source)
+
+
+def resident_identity(args):
+    """The configured resident, or a refusal.
+
+    Principle 01, applied to an identity: the mechanism is public —
+    verify the citation's author against the resident — and the
+    identity is private configuration that this repository never
+    carries. Three sources, most explicit first, and no default. With
+    none of them set the command refuses rather than degrading to an
+    existence check: a verification that quietly stops verifying is
+    worse than one that was never claimed.
+    """
+    if args.resident:
+        return args.resident.strip()
+    env = os.environ.get("OUTCOMES_RESIDENT", "").strip()
+    if env:
+        return env
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    path = pathlib.Path(base) / "castle-turing" / "resident"
+    if path.is_file():
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    raise Fail(
+        "no resident identity is configured, so a citation's authorship "
+        "cannot be checked and nothing was written. Set one of: "
+        "--resident LOGIN, OUTCOMES_RESIDENT, or "
+        f"{path}. It is private configuration and never lives in this "
+        "repository (docs/private-layer.md)."
+    )
+
+
+def cmd_redirect(args):
+    repo_root = args.repo_root
+    log_path = args.log or str(pathlib.Path(repo_root) / "docs/log/task-outcomes.tsv")
+    header, rows = read_log(log_path)
+    if header != COLUMNS:
+        raise Fail(f"{log_path}: not a schema {SCHEMA} log")
+
+    matches = [r for r in rows if as_record(r)["task"] == args.task]
+    if not matches and TASK_RE.match(args.task):
+        # A row's `task` is immutable, so a brief renamed after its row
+        # was written is named in the log by its old stem — which
+        # `check` already resolves by number, and this has to resolve
+        # the same way or a renamed task becomes one whose redirects
+        # can never be logged. Same guard as `resolve()`: only where
+        # the number names exactly one row.
+        by_num = [r for r in rows if as_record(r)["task"][:4] == args.task[:4]]
+        if len(by_num) == 1:
+            matches = by_num
+            print(f"note: {args.task} is logged under "
+                  f"{as_record(by_num[0])['task']}, resolved by number",
+                  file=sys.stderr)
+    if not matches:
+        raise Fail(f"no row for {args.task} in {log_path}; the row is written "
+                   "when the attempt starts (`outcomes derive`), and a verdict "
+                   "matures a row that already exists")
+    if args.attempt:
+        matches = [r for r in matches if as_record(r)["attempt"] == args.attempt]
+        if not matches:
+            raise Fail(f"{args.task} has no attempt {args.attempt}")
+    if len(matches) > 1:
+        raise Fail(f"{args.task} has {len(matches)} attempts; say which with "
+                   "--attempt N rather than having this guess")
+    row = matches[0]
+    rec = as_record(row)
+
+    source = normalise_ref(args.ref)
+    kind = "r" if args.wrong is None else f"w{args.wrong}"
+    token = f"{kind}/{source}"
+    if not CITE_RE.match(token):
+        raise Fail(f"{token!r} is not a citation token")
+
+    existing = parse_citations(rec["verdict_ref"])
+    tokens = [t for _, _, t in existing]
+    if token in tokens:
+        # Idempotent replay, and deliberately offline: re-running a
+        # transcription must be free and must touch nothing, so that an
+        # agent closing out an exchange can log without first working
+        # out whether it already did.
+        print(f"{args.task}: {token} is already recorded; nothing to do")
+        return 0
+    if args.wrong is not None and not any(k == "r" for k, _, _ in existing):
+        raise Fail("this task has no cited redirect to reassess; log the "
+                   "redirect first")
+    if args.wrong is not None:
+        # Against the *total* after this citation, not against this
+        # citation alone. Two reassessments of one redirect would
+        # otherwise both be accepted and write a row `check` refuses —
+        # and since citations are append-only, such a row could not be
+        # repaired once it reached the trunk. A command that can write
+        # a state the checker rejects is a trap, not a tool.
+        cited_r = sum(1 for k, _, _ in existing if k == "r")
+        already_wrong = sum(n for k, n, _ in existing if k == "w")
+        if args.wrong + already_wrong > cited_r:
+            raise Fail(
+                f"--wrong {args.wrong} would make {args.wrong + already_wrong} "
+                f"redirect(s) judged wrong out of {cited_r} cited for this task"
+                + (f" ({already_wrong} already reassessed)" if already_wrong else "")
+            )
+
+    resident = resident_identity(args)
+    author = resolve_author(repo_root, source, args.journal)
+    if author != resident:
+        raise Fail(
+            f"{source} was written by {author!r}, not by the configured "
+            f"resident {resident!r}. This command transcribes a judgment the "
+            "resident made; it does not make one."
+        )
+
+    new_tokens = tokens + [token]
+    rec["verdict_ref"] = ",".join(new_tokens)
+    r_cited, w_cited, reassessed = citation_counts(rec["verdict_ref"])
+    rec["redirects"] = str(r_cited)
+    rec["redirects_wrong"] = str(w_cited) if reassessed else UNRECORDED
+
+    lines = pathlib.Path(log_path).read_text(encoding="utf-8").split("\n")
+    lines[row["_line"] - 1] = "\t".join(rec[c] for c in COLUMNS)
+    pathlib.Path(log_path).write_text("\n".join(lines), encoding="utf-8")
+
+    print(f"{args.task}: recorded {token} (author {author})")
+    print(f"  redirects={rec['redirects']} "
+          f"redirects_wrong={rec['redirects_wrong']}")
+    if rec["redirects_wrong"] == UNRECORDED:
+        print("  redirects_wrong stays pending until the resident reassesses; "
+              "it is never defaulted to 0")
+    return 0
+
+
+REDIRECT_EPILOG = """\
+WHAT THIS COMMAND IS, AND WHAT IT IS NOT
+
+It transcribes a verdict the resident stated. It does not author one.
+`docs/architecture.md` Proposal 06 divides outcomes into receipts,
+which the system may grade for itself, and verdicts, which are the
+resident's alone. `redirects` and `redirects_wrong` are the only
+verdict columns in schema 1, and this is their only writer.
+
+--ref is the proof of authorship, and two things about it are checked
+mechanically: the citation resolves to a real comment or record, and
+its author is the configured resident. Existence alone would not do —
+a reference to a real comment the agent itself wrote would pass an
+existence check while carrying no resident judgment at all.
+
+Two limits, stated here rather than left to be discovered:
+
+  * Where agents post to the forge through the resident's own
+    credential, a comment written by an agent and one written by the
+    resident carry the same login, and this check cannot separate
+    them. It rules out citing someone else's comment; it does not yet
+    rule out citing your own. A distinct machine identity for agent
+    comments is what closes that, and it is not installed here.
+
+  * Nothing mechanical can verify that the cited text actually states
+    the verdict being claimed. That reading is the weekly audit's,
+    sampled, and always will be. The check above is a floor under it,
+    not a substitute for it.
+
+An agent may transcribe. It may never originate.
+
+COUNTING
+
+`redirects` is the number of distinct cited redirect events, and the
+count lives in the citations: each invocation appends one token to
+`verdict_ref` and the count is read back off it. Citing the same
+reference twice is a replay — exit zero, change nothing. A different
+reference is a second redirect.
+
+`redirects_wrong` stays `-` until the resident reassesses. It is not
+defaulted to 0 at redirect time, because the measure is defined over
+redirects *later judged* wrong, and writing 0 would record the absence
+of a judgment as a judgment of correctness. `--wrong N` matures it,
+and needs its own --ref pointing at where the resident reassessed.
+`--wrong 0` is a real and useful value: it records "reassessed, none
+wrong", with a citation behind it.
+
+EXAMPLES
+
+  outcomes redirect 0070-the-task-outcome-log \\
+      --ref https://github.com/owner/repo/pull/120#issuecomment-5659322373
+  outcomes redirect 0070-the-task-outcome-log --wrong 0 \\
+      --ref 120#issuecomment-5659322373
+  outcomes redirect 0081-something --ref rec:01hx... --journal ~/journal.jsonl
+"""
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--repo-root", default=".",
@@ -825,8 +1337,37 @@ def main(argv=None):
     d.add_argument("-o", "--output", help="write somewhere other than the log")
     d.set_defaults(func=cmd_derive)
 
+    r = sub.add_parser(
+        "redirect",
+        help="transcribe a resident's redirect into a row's verdict cells",
+        description="Transcribe a redirect the resident stated somewhere "
+                    "citable into the task's row. Read the epilogue before "
+                    "using it.",
+        epilog=REDIRECT_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    r.add_argument("task", help="the row's task cell, e.g. 0070-the-task-outcome-log")
+    r.add_argument("--ref", required=True,
+                   help="where the resident said it: a pull-request comment URL, "
+                        "`<pr>#issuecomment-<id>`, `<pr>#discussion_r<id>`, or "
+                        "`rec:<journal record id>`")
+    r.add_argument("--wrong", type=int, metavar="N",
+                   help="transcribe a reassessment instead: N of this task's "
+                        "cited redirects were judged wrong. --ref must point at "
+                        "the reassessment, not at the redirect")
+    r.add_argument("--attempt", help="which attempt's row, when a task has more than one")
+    r.add_argument("--resident", metavar="LOGIN",
+                   help="the resident's identity on the forge. Falls back to "
+                        "OUTCOMES_RESIDENT, then "
+                        "$XDG_CONFIG_HOME/castle-turing/resident. Private "
+                        "configuration; it is never committed here")
+    r.add_argument("--journal", action="append", default=[],
+                   help="a harness journal to resolve `rec:` citations in; repeatable")
+    r.set_defaults(func=cmd_redirect)
+
     args = ap.parse_args(argv)
-    if getattr(args, "provenance", None) == "live" and args.env == UNRECORDED:
+    if getattr(args, "provenance", None) == "live" and \
+            getattr(args, "env", None) == UNRECORDED:
         # `env` is immutable, so a live row written without one can never
         # gain it. That is the single irreversible way to break the
         # pooling requirement docs/measurement.md claims is met by
