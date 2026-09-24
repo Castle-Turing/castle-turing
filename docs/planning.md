@@ -55,10 +55,15 @@ Recorded because they will be proposed again.
 **Role-shaped agents** — an "AI product manager" who writes the
 requirements and an "AI architect" who decomposes them. The seat
 vocabulary names function rather than org-chart titles
-(`docs/architecture.md`), and the elicitation research found that role
-and seniority framing predicts little about what a model actually does.
-A seat named for a job title invites a reader to assume capabilities
-from the title rather than from the contract.
+(`docs/architecture.md`), and a seat named for a job title invites a
+reader to assume capabilities from the title rather than from the
+contract. The closest evidence there is points the same way and is
+about people rather than models: the elicitation library's family of
+experiments found analyst seniority a weak predictor of elicitation
+effectiveness, with domain familiarity and specific interviewing skill
+carrying the variance (`docs/research/elicitation-papers.md`). Nothing
+measures whether role-shaped prompting helps a model, which is itself
+the reason not to build a seat vocabulary on it.
 
 **A fixed unit-size target** — "every brief is half a day", an INVEST or
 SPIDR score, a story-point ceiling. The size-versus-success evidence is
@@ -181,13 +186,14 @@ mapping drift, and the drift is silent.
 ## The checker
 
 `tools/plan/plan check <slate>` — mechanical, stdlib only, no network,
-no model. Every rule below is a presence, a name that resolves, or a
-graph property, which is why all of them block rather than warn: unlike
-`clarify`'s style lint there is no precision to lose.
+no model. Eight rules, and each says what a machine can check and what
+it cannot, because some of this is judgment and a validator pretending
+to grade judgment would produce ritual compliance rather than reasoning.
 
-Eight rules. Each says what a machine can check and what it cannot,
-because some of this is judgment and a validator that pretended to grade
-judgment would produce ritual compliance rather than reasoning.
+All eight block rather than warn, which is a difference from `clarify`
+and follows from what they are: every rule here is a presence, a name
+that resolves, or a graph property, so unlike that tool's style lint
+there is no precision to lose by blocking.
 
 **`header` — the knobs, before anything computed from them.**
 `Requirements:` names a file that exists and `Brief-budget:` is a whole
@@ -235,10 +241,11 @@ edge breaks nothing, serialises a sprint that could have run in
 parallel, and costs nothing anybody measures.
 
 **`numbers` — allocation.** No brief's number is already taken under
-`Tasks:`. *Checked:* fully, against the live directory rather than a
-listing. *Not checked:* nothing — but see the note on proposals below,
-because this rule is weaker in *time* than it looks rather than in
-substance.
+`Tasks:`, read from the directory at check time rather than from any
+listing. *Checked:* fully, and this is the one rule whose weakness is
+in time rather than in substance: it was true when it ran, and other
+work lands between a slate's writing and its transfer. That is why a
+slate's numbers are proposals, re-checked at transfer — see below.
 
 **`form` — what the format would otherwise drop silently.** One
 disposition per field, fields where the format reads them, and a number
