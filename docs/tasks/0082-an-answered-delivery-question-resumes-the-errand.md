@@ -136,14 +136,15 @@ time, a second answer to one park refuses rather than overwriting the
 first, and the detector is checked in both directions — reporting a
 stranded question and staying quiet once a claim exists.
 
-**Every new check has a confirmed falsifier.** Nine mutations were
+**Every new check has a confirmed falsifier.** Ten mutations were
 applied to the shim and each was observed to fail the check that claims
 to catch it: dropping the spent-answer subtraction, dropping the intake
 filter, never writing the claim, paraphrasing the answer on the way to
 the tenant, dropping the run scoping, ignoring the grace interval,
 attributing an operator's own relaunch to the shim, letting `stranded`
-ignore whether a claim spent the answer, and claiming a park that is
-gone instead of refusing.
+ignore whether a claim spent the answer, claiming a park that is gone
+instead of refusing, and spending a second answer on a park that has
+already had its resumption.
 
 **One of those mutations found a check that could not fail, and it is
 recorded rather than quietly fixed.** The first version of the
@@ -175,6 +176,18 @@ resumes both errands. The per-answer accounting is the claim, which is
 what the bound is about. Invoking once per answer would race the
 tenant's own per-repository sprint lock and report its refusal of the
 second invocation as a failure, which is the opposite of true.
+
+*A second answer to one park refuses.* Found in self-review of this
+branch rather than anticipated by the plan, and it is the defect this
+task's shape makes easiest to write: two unspent answers to one question
+were both claimed, and the second silently overwrote the first in the
+tenant's file — one resumption carrying one of the two answers, with the
+other recorded as spent. `file_answer` cannot produce that shape, so only
+the `castle record --type answer` back door can, which is exactly the
+population this fold already stopped trusting elsewhere. It refuses now,
+naming the answer that already bought the park's resumption, because a
+park carries a single answer section and choosing between two would be a
+judgment this seat does not have.
 
 *A resumption the operator made by hand gets its receipt.* When the
 tenant's question file already says resolved and no claim names the
