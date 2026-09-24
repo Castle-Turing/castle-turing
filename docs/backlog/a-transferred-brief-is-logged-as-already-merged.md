@@ -6,11 +6,12 @@ Title: A transferred brief is logged as already merged, dated to the PR that fil
 a brief that has not been implemented, taking them from the pull request
 that filed the *backlog entry* the brief was transferred from. Those
 three are immutable cells — written once, never corrected — so the log
-now holds four confident wrong landings.
+now holds three confident wrong landings, with a fourth one keystroke
+away.
 
 ## What is in the log
 
-Four rows, committed at the 2026-09-24 transfer of tasks 0079 to 0082:
+Three rows, committed at the 2026-09-24 transfer of tasks 0079 to 0082:
 
     0079-the-planner-seat            landed 2026-09-07  merged  pr 109
     0080-the-acceptance-harness      landed 2026-09-10  merged  pr 123
@@ -53,7 +54,7 @@ main. Only the *work* is not.
 `landed` and `outcome` are what every time series in
 `docs/measurement.md` is computed against, and the immutability rule
 means these cannot be repaired by the session that notices. A queue of
-four tasks reads as four merged tasks: lead time comes out at zero or
+four tasks reads as three merged ones: lead time comes out at zero or
 negative, and the pre-period the `[m2-constraints]` baseline clause
 exists to protect is polluted for every measure that groups by landing
 date.
@@ -83,7 +84,7 @@ commit. A commit of that shape is a *queueing*, and `landing()` should
 return `(None, None)` for it rather than dating the work to it.
 
 Whichever lands, the check belongs in `tools/outcomes/outcomes check` so
-that the next transfer fails CI instead of quietly writing four more
+that the next transfer fails CI instead of quietly writing the next batch of
 wrong rows.
 
 ## What this entry does not do
