@@ -394,7 +394,7 @@ not check rather than letting a green exit read as a verdict.
 `oracle/slate.md` is a worked example — the `clarify` probe's
 requirements document decomposed for real, not an invented one — and
 `test/plan/run.sh` runs the whole thing in CI, mostly as its negative
-half: forty-odd mutations of that example, each asserted to be caught by
+half: fifty-odd checks over that example, mostly mutations, each asserted to be caught by
 the rule that owns it.
 
 Same boundary as `clarify/` above, and the same answer: this never

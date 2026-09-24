@@ -279,6 +279,17 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
             field = FIELD_RE.match(line)
             if field and field.group("key") in HEADER_KEYS:
                 header[field.group("key")] = field.group("value").strip()
+            elif field and field.group("key") in SLATE_FIELDS + BRIEF_FIELDS:
+                # Above the first section heading, where the header's
+                # keys live. A `Deferred:` or a brief's field up here
+                # would be read by nothing at all, and a deferral read
+                # by nothing is a clause silently uncovered.
+                report.fail(
+                    "form",
+                    f"{path.name}:{number}",
+                    f"a {field.group('key')}: line in the slate's header block, "
+                    f"where only {', '.join(HEADER_KEYS)} are read",
+                )
             continue
 
         field = FIELD_RE.match(line)
@@ -979,12 +990,16 @@ def cmd_check(args: argparse.Namespace) -> int:
     slate, report = parse_slate(path)
     requirements, budget = check_header(slate, report)
 
+    # A header travels with the file, so `Tasks:` resolves against the
+    # slate's own directory — that is what lets a slate be moved or
+    # copied without its rules quietly changing meaning. A flag is typed
+    # at a shell, so `--tasks` resolves against the working directory,
+    # which is the only reading a shell's tab-completion agrees with.
     tasks: pathlib.Path | None = None
-    declared_tasks = args.tasks or slate.header.get("Tasks", "").strip()
-    if declared_tasks:
-        tasks = pathlib.Path(declared_tasks)
-        if not tasks.is_absolute():
-            tasks = (path.parent / declared_tasks).resolve()
+    if args.tasks:
+        tasks = pathlib.Path(args.tasks).resolve()
+    elif slate.header.get("Tasks", "").strip():
+        tasks = (path.parent / slate.header["Tasks"].strip()).resolve()
 
     if requirements is None:
         return emit(report)

@@ -344,6 +344,54 @@ sed -i 's/^Requires: 0002$/Requires: 0003/' "$DIR/slate.md"
 expect_catch "a brief requiring itself" edges -- \
     "$PLAN" check "$DIR/slate.md"
 
+# The cycle finder, over graphs a slate fixture cannot conveniently
+# express. Two of these cases are where a naive implementation is wrong:
+# a ring reachable only from a node the search enters later (a
+# finished-node set that is checked before the on-path set swallows it),
+# and two rings sharing a node (a per-node report counts them as one, or
+# as four). The deep chain is here because the recursive form of this
+# search crashes rather than reporting, and a tool that crashes looks
+# like a tool with nothing to say.
+python3 - "$PLAN" <<'PY' || fail "the cycle finder is wrong on a graph a fixture cannot express"
+import importlib.machinery, pathlib, shutil, sys, tempfile
+
+with tempfile.TemporaryDirectory() as tmp:
+    # Imported through a `.py` copy: `plan` is extensionless, and
+    # dataclasses needs the module registered under a real name.
+    copy = pathlib.Path(tmp) / "planmod.py"
+    shutil.copyfile(sys.argv[1], copy)
+    sys.path.insert(0, tmp)
+    import planmod
+
+    cases = {
+        "a chain with no cycle": ({"a": ["b"], "b": ["c"], "c": []}, 0),
+        "a three-brief ring": ({"a": ["b"], "b": ["c"], "c": ["a"]}, 1),
+        "two disjoint rings": ({"a": ["b"], "b": ["a"], "c": ["d"], "d": ["c"]}, 2),
+        "a diamond, which is acyclic": (
+            {"a": ["b", "c"], "b": ["d"], "c": ["d"], "d": []}, 0),
+        "a ring with a tail into it": ({"t": ["a"], "a": ["b"], "b": ["a"]}, 1),
+        "two rings sharing one brief": (
+            {"a": ["b"], "b": ["c", "a"], "c": ["b"]}, 2),
+        "an empty graph": ({}, 0),
+        "an edge out of the slate": ({"a": ["zz"]}, 0),
+        "a ring reachable only from a later root": (
+            {"z": ["a"], "a": ["b"], "b": ["a"]}, 1),
+    }
+    n = 20000
+    chain = {str(i): [str(i + 1)] for i in range(n)}
+    chain[str(n)] = ["0"]
+    cases[f"a chain of {n} closing into a ring"] = (chain, 1)
+
+    bad = False
+    for name, (graph, want) in cases.items():
+        got = planmod.find_cycles(graph)
+        if len(got) != want:
+            print(f"    {name}: expected {want} cycle(s), got {len(got)}: {got}")
+            bad = True
+    sys.exit(1 if bad else 0)
+PY
+echo "  ok   the cycle finder is right on nine graphs, including a 20000-long chain"
+
 echo
 echo "== numbers: allocated against the live directory, never from a stale listing =="
 
@@ -458,6 +506,30 @@ DIR="$(mutate form-stranded-brief-field)"
 append_coverage "$DIR/slate.md" "Model: cheap"
 expect_catch "a brief's field stranded outside every brief" form -- \
     "$PLAN" check "$DIR/slate.md"
+
+DIR="$(mutate form-field-in-header-block)"
+sed -i '0,/^Brief-budget: 3$/s//Brief-budget: 3\nDeferred: cursor-target-host — up where only the knobs are read./' \
+    "$DIR/slate.md"
+expect_catch "a deferral in the header block, where only the knobs are read" form -- \
+    "$PLAN" check "$DIR/slate.md"
+
+echo
+echo "== the tasks directory: a header travels with the file, a flag is typed at a shell =="
+
+# `--tasks` resolves against the working directory and the header
+# against the slate. Getting that backwards is silent: the flag would
+# resolve to something under the slate's directory, usually nothing, and
+# the `numbers` rule would fail for a reason the caller did not cause.
+DIR="$(mutate tasks-flag)"
+sed -i '/^Tasks: /d' "$DIR/slate.md"
+# `run` rather than a pipeline: this file sets `pipefail`, so piping a
+# deliberately-failing command into grep reports the command's status,
+# not grep's, and the assertion would read backwards.
+expect_pass "--tasks resolves against the working directory" \
+    bash -c "cd '$REPO_ROOT' && '$PLAN' check '$DIR/slate.md' --tasks tools/plan/oracle/tasks"
+
+expect_catch "the same slate against the real docs/tasks, where 0002 is taken" numbers -- \
+    bash -c "cd '$REPO_ROOT' && '$PLAN' check '$DIR/slate.md' --tasks docs/tasks"
 
 echo
 echo "== scaffold: the mechanical half, and it does not pretend to be the other half =="
