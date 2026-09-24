@@ -456,19 +456,20 @@ class Fold:
         if rec.get("session"):
             fields["tenant-session"] = str(rec["session"])
         asked = rec.get("question_file")
-        text, note = "", ""
+        text = ""
         if asked:
             try:
                 text = pathlib.Path(asked).read_text(encoding="utf-8").strip()
             except OSError as exc:
-                note = (
-                    f"The tenant's question file could not be read ({exc.__class__.__name__}). "
-                    "Its path, as the tenant's log recorded it, is below; the question "
-                    "itself is there and not here."
-                )
+                raise Refused(
+                    f"{errand}: the tenant's question file {asked!r} could not be read "
+                    f"({exc.__class__.__name__}), so the resident's actual question "
+                    "cannot be sourced. A placeholder here would be answered as if it "
+                    "were the real question and the errand would stay parked forever. "
+                    "Nothing was written for this event; it is retried on the next pass."
+                ) from exc
         paragraphs = [
             text or "The delivery seat blocked on a judgment only the resident can supply.",
-            note,
             self.brief_line(errand),
             "Answering this does not resume the errand on its own: the inbound "
             "mechanism is a separate piece of work and until it exists an answered "
