@@ -421,6 +421,83 @@ sed -i 's/^    manual: .*/    manual:/' "$R"
 expect_catch "a manual criterion naming no step" grounding -- \
     "$ACCEPT" check "$R"
 
+R="$(mutate_receipt malformed-criteria-count)"
+sed -i 's/^Criteria: .*/Criteria: an unspecified number/' "$R"
+expect_catch "a Criteria: header that does not open with a count" form -- \
+    "$ACCEPT" check "$R"
+
+# The closed pair — one command, one exit — is the whole of a criterion's
+# evidence. Two of either lets a contradiction hide behind whichever one
+# a reader happens to notice first.
+R="$(mutate_receipt two-exits)"
+python3 - "$R" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace("    exit: 0\n", "    exit: 0\n    exit: 1\n", 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+expect_catch "a criterion section carrying two exit statuses" grounding -- \
+    "$ACCEPT" check "$R"
+
+R="$(mutate_receipt two-commands)"
+python3 - "$R" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+lines = text.splitlines(keepends=True)
+out, inserted = [], False
+for line in lines:
+    out.append(line)
+    if not inserted and line.startswith("    $ "):
+        out.append(line)
+        inserted = True
+open(path, "w", encoding="utf-8").write("".join(out))
+PY
+expect_catch "a criterion section carrying two command lines" grounding -- \
+    "$ACCEPT" check "$R"
+
+# The standing limit is required in the receipt's own closing prose, not
+# merely somewhere in the file: the same indented and fenced spans the
+# claim lint reads past would also let a receipt carry the limit as inert
+# transcript text while its actual closing paragraph is gone.
+R="$(mutate_receipt limit-in-transcript)"
+python3 - "$R" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+cut = text.index("What this run observed is that")
+limit = text[cut:].rstrip("\n")
+indented = "\n".join("    | " + line for line in limit.splitlines())
+open(path, "w", encoding="utf-8").write(text[:cut] + indented + "\n")
+PY
+expect_catch "the standing limit present only inside an indented block" form -- \
+    "$ACCEPT" check "$R"
+
+# A heading with every explanatory bullet removed still reads, from
+# `NOT_CHECKED_HEADING not in lines` alone, as a section that is present.
+R="$(mutate_receipt empty-not-checked)"
+python3 - "$R" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+lines = text.splitlines(keepends=True)
+out, dropping = [], False
+for line in lines:
+    if line.strip() == "## What this run did not check":
+        dropping = True
+        out.append(line)
+        continue
+    if dropping and line.strip().startswith("- "):
+        continue
+    if dropping and line.strip() and not line.strip().startswith("- "):
+        dropping = False
+    out.append(line)
+open(path, "w", encoding="utf-8").write("".join(out))
+PY
+expect_catch "a not-checked section with every bullet removed" form -- \
+    "$ACCEPT" check "$R"
+
 echo "== the frozen rule =="
 
 # A throwaway repository per case: the criteria as committed on the base

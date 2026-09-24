@@ -158,6 +158,13 @@ person is satisfied. The resident's verdict stays the only verdict
 already survived its stated criteria.
 """.strip()
 
+# Where `not_checked`'s bullets end and the standing limit begins in a
+# generated receipt — render() places LIMIT immediately after that
+# section with no heading between them, so this is what the empty-section
+# check treats as the boundary instead of walking into the limit's own
+# text and reading it as the section's content.
+LIMIT_FIRST_LINE = LIMIT.splitlines()[0].strip()
+
 # How much of a command's output the receipt carries. A transcript is
 # evidence and a wall of it is not read, so the tail is kept — the end
 # is where a check says why it failed — and what was dropped is stated
@@ -863,8 +870,18 @@ def check_receipt(text: str, where: str, report: Report) -> None:
         )
 
     sections = _sections(lines)
-    declared = re.match(r"^(\d+)", header.get("Criteria", ""))
-    if declared and int(declared.group(1)) != len(sections):
+    criteria_header = header.get("Criteria", "")
+    declared = re.match(r"^(\d+)", criteria_header)
+    if criteria_header and not declared:
+        report.fail(
+            "form",
+            where,
+            f"the Criteria: header ({criteria_header!r}) does not open with a "
+            "count. A count is what lets a reader tell a dropped tail from a "
+            "short brief without counting sections by hand, and a header "
+            "that names none defeats that same check the count exists for",
+        )
+    elif declared and int(declared.group(1)) != len(sections):
         report.fail(
             "form",
             where,
@@ -910,17 +927,40 @@ def check_receipt(text: str, where: str, report: Report) -> None:
             "left alone in the same document as what it exercised; stated "
             "elsewhere, it is not read",
         )
-    if _normalise(LIMIT) not in _normalise(text):
+    else:
+        heading_index = lines.index(NOT_CHECKED_HEADING)
+        body = []
+        for line in lines[heading_index + 1 :]:
+            if line.startswith("## ") or line.strip() == LIMIT_FIRST_LINE:
+                break
+            body.append(line)
+        if not any(line.strip() for line in body):
+            report.fail(
+                "form",
+                where,
+                f"the `{NOT_CHECKED_HEADING}` section has no content beneath "
+                "its heading. The heading promises this run's blind spots are "
+                "stated here, and one with every bullet removed keeps the "
+                "promise's shape while breaking it — the same gap a missing "
+                "heading leaves, reached by deleting the body instead of the "
+                "title",
+            )
+
+    prose = prose_lines(text)
+    prose_text = "\n".join(line for _, line in prose)
+    if _normalise(LIMIT) not in _normalise(prose_text):
         report.fail(
             "form",
             where,
-            "the standing limit is missing or altered. It is required "
-            "verbatim: a receipt that has lost the sentence saying it is not "
-            "a verdict is the promotion Proposal 06 forbids, arriving through "
-            "the surface most likely to be read as one",
+            "the standing limit is missing, altered, or not in the receipt's "
+            "own prose. It is required verbatim, in plain closing text rather "
+            "than inside a quote, a fenced block or an indented transcript — "
+            "all three are read past by this same rule, so the sentence "
+            "saying a receipt is not a verdict must not be one a receipt can "
+            "carry only there while promoting itself everywhere else",
         )
 
-    for number, line in prose_lines(text):
+    for number, line in prose:
         for match in BANNED_RE.finditer(line):
             report.fail(
                 "claim",
@@ -997,14 +1037,16 @@ def _check_section(
                 "receipt means",
             )
         return
-    if not commands or not exits:
+    if len(commands) != 1 or len(exits) != 1:
         report.fail(
             "grounding",
             f"{where}:{line_no}",
-            f"criterion {number} is reported as exercised without both the "
-            "command (`    $ …`) and its exit status (`    exit: …`). Those "
-            "two lines are the whole of the evidence — a claim about a run "
-            "with neither is the assertion this format exists to refuse",
+            f"criterion {number} is reported as exercised with "
+            f"{len(commands)} command line(s) and {len(exits)} exit "
+            "line(s) — exactly one of each is the whole of the evidence a "
+            "criterion carries. Fewer than one is the assertion this format "
+            "exists to refuse, and more than one lets two commands or two "
+            "contradictory exits stand in for one observation",
         )
     elif not _agrees(phrase, EXIT_RE.match(exits[0]).group("status")):
         # The outcome phrase against the exit status beside it. Without
