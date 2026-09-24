@@ -398,18 +398,78 @@ above. The dependency runs downward on purpose — a harness that
 depends on nothing above it stays usable by anyone, and whoever
 integrates it pays for the integration — so this document fixes the
 records and leaves the translator as tooling that is specced but not
-yet built (task 0071). **And the
-arrow into this seat is still unnamed:** a filed backlog entry
-becomes a numbered brief today by the resident's hand or an ad-hoc
-session's, and naming that seat is its own work rather than a side
-effect of this one (the backlog entry
-"the-speccing-step-is-an-unnamed-seat"). The name,
+yet built (task 0071). **And the arrow into this seat is the
+planner's,** described below: what reaches delivery is a numbered
+brief in a checkout's `docs/tasks/`, and as of task 0079 the seat
+that decomposes a requirements document into such briefs is named.
+What delivery may read of that seat's output beyond the brief itself
+— the slate, the clause keys a brief traces, the requirements
+document behind them — is not settled here and no record settles it
+yet. The name,
 last: `seat: delivery` is a new value in an existing category — a
 reasoning seat, as worker and router already are — and deliberately
 not `builder`, which belongs to the seat that compiles, because a
 seat is what reads and writes and "which seat compiled something"
 must not have the same answer as "which seat opened a pull request in
 my name".
+
+**Planner** (a reasoning seat — the fourth, after worker, router and
+delivery). The seat that turns a requirements document into a
+**slate**: a set of numbered task briefs, the dependency edges
+between them, and an accounting of every requirement showing which
+brief carries it or why none does. It reads a requirements document
+that passes `clarify check`, the milestone state, and the briefs that
+already exist; it writes one slate and the mechanism is
+`docs/planning.md`. This is the arrow the delivery paragraph above
+called unnamed: a filed backlog entry became a numbered brief by the
+resident's hand or an ad-hoc session's, and that step is a seat like
+any other.
+
+Its ceiling, stated the way delivery's is: **the planner proposes; it
+never dispatches.** No brief it writes is eligible work until the
+resident approves the slate. It never approves its own slate, never
+launches a sprint, and never edits the documents it is checked
+against — a requirement that needs changing goes back through the
+clarifying-questions phase, because a planner that edits the
+requirements document has made coverage a statement about its own
+output. **The unit of approval is the slate, not the brief**, because
+a decomposition is wrong in ways no single brief shows: two briefs
+that overlap, a seam in the wrong place, an edge that serialises work
+that could have run at once. And like delivery, it opens a
+`question` rather than deciding when the decomposition turns on a
+judgment only the resident can supply — including when a clause it
+must decompose still carries an ambiguity the clarifying-questions
+phase deliberately left open, which it may neither settle nor quietly
+route around. In this slice that question travels through the session
+or the pull request carrying the slate, file-native, exactly as the
+clarifying phase's do; wiring it to the modal is the question-routing
+work and not this seat's.
+
+The guard sentence the plumbing seats above carry — do not give it a
+policy — points the wrong way here, for the same reason it does for
+delivery. This seat *is* judgment: where the seams go, what each
+brief has to demonstrate, which tier implements it. What it needs is
+a ceiling on its authority rather than a floor under its discretion,
+and the ceiling is the paragraph above. `tools/plan/plan` checks the
+mechanical residue — coverage, grounding, the graph, the obligations
+every brief owes — and a green run there is a receipt that the
+discipline was followed, never a verdict that the decomposition is
+right (Proposal 06). The verdict is the resident's, on a checklist
+`docs/planning.md` writes down so that it is a discipline rather than
+a vibe, and it is unrun: no requirements document has been decomposed
+for real yet.
+
+The name, last: `seat: planner` is a new value in an existing
+category — a reasoning seat, as worker, router and delivery already
+are — and deliberately not `architect` or `product manager`. The seat
+vocabulary names function rather than org-chart titles, and a seat
+named for a job title invites a reader to assume capabilities from
+the title rather than from the contract; the elicitation research
+also found role and seniority framing predicts little about what a
+model does. Nor `speccer`: what this seat produces is a decomposition
+of a document the clarifying-questions phase already specced, and
+"which seat wrote the spec" must not have the same answer as "which
+seat decided how to cut it up".
 
 **Sensors.** Answer one question for the router: may I interrupt, and
 is it worth it. Raw sensor streams live in a ring buffer that answers
