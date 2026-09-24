@@ -61,8 +61,10 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 
@@ -556,15 +558,28 @@ def exercise(
         return Observation(criterion=criterion, phrase=MANUAL)
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             ["/bin/sh", "-c", criterion.value],
             cwd=str(root),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as exc:
+    except OSError as exc:  # no shell, or the cwd is gone
+        raise SystemExit(f"criterion {criterion.index}: {exc}")
+
+    try:
+        stdout, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # `start_new_session` put the command in its own process group, so
+        # a timeout that killed only `proc` — the `/bin/sh` — would leave a
+        # descendant it had backgrounded (`sleep 3 && touch marker &`)
+        # running after the receipt already reports an escalation and
+        # mutating the checkout behind it. The whole group goes down
+        # together instead.
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        stdout, _ = proc.communicate()
         report.fail(
             "escalate",
             f"criterion {criterion.index}",
@@ -574,12 +589,7 @@ def exercise(
         )
         # Whatever it printed before it hung is the only evidence there
         # is about *where* it hung, so it is carried rather than dropped.
-        # `stdout` here is bytes even under `text=True`, which is a
-        # documented wart of TimeoutExpired rather than a choice.
-        partial = exc.stdout or b""
-        if isinstance(partial, bytes):
-            partial = partial.decode("utf-8", "replace")
-        output, dropped = _tail(partial)
+        output, dropped = _tail(stdout or "")
         return Observation(
             criterion=criterion,
             phrase=ESCALATED,
@@ -587,10 +597,8 @@ def exercise(
             output=output,
             dropped=dropped,
         )
-    except OSError as exc:  # no shell, or the cwd is gone
-        raise SystemExit(f"criterion {criterion.index}: {exc}")
 
-    output, dropped = _tail(proc.stdout)
+    output, dropped = _tail(stdout)
     observation = Observation(
         criterion=criterion,
         phrase=OBSERVED,

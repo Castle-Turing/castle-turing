@@ -247,6 +247,21 @@ grep -qF "about-to-hang" "$WORKDIR/hung.md" \
     || fail "the receipt dropped what the timed-out check had printed"
 echo "  ok   the timed-out check's partial transcript is in the receipt"
 
+# A timeout has to kill the whole process group, not just the shell named
+# in the criterion: a backgrounded descendant does not die with its
+# parent on SIGKILL, and one left running after the receipt already
+# reports an escalation can go on mutating the checkout unsupervised.
+MARKER="$WORKDIR/leaked-marker"
+B="$(brief leaked-process \
+    "Title: a timeout that must not leave a background job running" \
+    "Criterion: the check's own descendants die with it" \
+    "Check: (sleep 2 && touch $MARKER) & wait")"
+expect_catch "a check that times out after backgrounding a descendant" \
+    escalate -- "$ACCEPT" run "$B" --timeout 1 -o "$WORKDIR/leaked.md"
+sleep 3
+[ -f "$MARKER" ] \
+    && fail "the timed-out check's backgrounded descendant kept running and created $MARKER"
+echo "  ok   a timed-out check's process group is killed, not just its shell"
 
 B="$(brief manual-only "Title: nothing here is executable" \
     "Criterion: the resident sees the redesigned surface" \
