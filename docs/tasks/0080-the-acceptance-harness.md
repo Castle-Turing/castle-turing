@@ -1,5 +1,4 @@
 Title: The acceptance harness — a completion claim must survive its criteria
-Status: ready
 Model: deep
 Model-because: the design decides what an automated pass may claim on
 the resident's behalf — the receipt/verdict boundary under Proposal
@@ -9,7 +8,7 @@ runs that mean nothing, which is this task's own subject. The runner's
 mechanics, once the rules are fixed, are standard-tier work kept here
 so rules and enforcement land together.
 Milestone: m2-done
-Requires: the planner seat (backlog item the-speccing-step-is-an-unnamed-seat; task id fixed at transfer)
+Requires: 0079-the-planner-seat
 Requires-because: acceptance checks are authored into each brief by the planner's slate format; this harness executes what the planner defines, and its criteria-immutability rule leans on criteria having a committed, spec-time home the planner creates.
 
 # The acceptance harness — a completion claim must survive its criteria
@@ -29,8 +28,8 @@ caught only by a human reading the PR.
 ## The mechanism
 
 **Criteria are compiled at spec time and frozen against the
-implementer.** Each brief's verification plan (mandatory, per the
-planner item's slate format — id fixed at transfer) carries
+implementer.** Each brief's verification plan (mandatory, per task
+0079's slate format) carries
 acceptance criteria that assert
 reachability — a feature is accepted when exercised in its real
 invocation path, never when it merely exists and unit-passes. They are

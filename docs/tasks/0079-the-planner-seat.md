@@ -1,5 +1,4 @@
 Title: The planner seat — a requirements document becomes a brief slate
-Status: ready
 Model: deep
 Model-because: the deliverable is a seat contract and an artifact
 format that every later decomposition will be checked against — the
@@ -79,8 +78,7 @@ where real) plus, mandatorily:
 - **Traces:** the requirements clause keys this brief serves.
 - **A verification plan whose criteria assert reachability** — what
   demonstrates the feature working in its real invocation path, per
-  the acceptance doctrine (the acceptance-harness item is its
-  harness; id fixed at transfer). Authored here,
+  the acceptance doctrine (task 0080 is its harness). Authored here,
   at spec time, before implementation exists: the pre-commitment
   that is the best-measured defense against a verifier rationalizing
   toward what got built (false positives 0.72 to 0.01 in the

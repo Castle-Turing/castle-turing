@@ -1,5 +1,4 @@
 Title: An answered delivery question resumes the errand
-Status: ready
 Model: deep
 Model-because: the deliverable is exactly-once accounting on an
 append-only journal — the claim/answer chaining that makes a
@@ -8,8 +7,7 @@ tenant boundary. A smaller model following the mechanism list would
 produce a working watcher whose double-spend and claim-without-invoke
 cases are decided by accident; those cases are the task.
 Milestone: m2-done
-Requires: the record shim (backlog item
-the-record-shim-is-specced-but-not-built; task id fixed at transfer)
+Requires: 0081-implement-the-delivery-record-shim
 Requires-because: the answer this mechanism spends closes a
 `question` record only the shim's fold puts in the journal; without
 it there is nothing to notice.

@@ -1,5 +1,4 @@
 Title: Implement the delivery record shim — outbound, per task 0071
-Status: ready
 Model: deep
 Model-because: task 0071's spec is thorough but names three open
 frictions the implementer must navigate at the live boundary — the
