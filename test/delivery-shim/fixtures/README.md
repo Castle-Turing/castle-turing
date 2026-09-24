@@ -52,15 +52,16 @@ delete this.
 
 ## What was changed, and it is the only thing
 
-One substitution, applied mechanically to every byte of every file:
+Three substitutions, applied mechanically to every byte of every file:
+the operator's home-directory prefix becomes `/home/operator`, their
+login name wherever a record quotes it becomes `operator`, and the name
+of their private profile repository — which appears inside command
+strings the tenant journaled — becomes `chevaline-profile`.
 
-    /home/wesley         ->  /home/operator
-    "wesley"             ->  "operator"
-    chevaline-whharris   ->  chevaline-profile
-
-The operator's home directory, login name and private profile
-repository are personal data, and this repository takes no personal
-data in any file, fixtures included. Everything else — timestamps,
+Those three are personal data, and this repository takes no personal
+data in any file, fixtures included. They are described here rather
+than tabulated for the same reason: a table of what was redacted would
+put the values back. Everything else — timestamps,
 session ids, costs, turn counts, model ids, pull-request URLs, the
 tenant's own error strings, and the records the shim ignores entirely —
 is exactly as emcee wrote it.
