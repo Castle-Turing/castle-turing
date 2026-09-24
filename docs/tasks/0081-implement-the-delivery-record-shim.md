@@ -152,3 +152,16 @@ same position and for a related reason
 (`docs/backlog/nothing-polls-the-delivery-shim.md`); task 0071 left the
 wake interval to the resident's own tolerance for a blind window, and
 it still is.
+
+**The outcome row was left unfilled, deliberately.** This plan asks for
+outcomes-check green, and it is — but the prescribed step that would
+normally precede a pull request, `outcomes derive --env e2 --fill`,
+writes `outcome: merged` and a `landed` date into this task's row while
+the work is still in a worktree. Both cells are write-once, so
+committing that would put a permanently wrong receipt in the log to
+satisfy a step. The row appended at transfer stands as it is, `check`
+passes on it, and the defect is filed at
+`docs/backlog/a-transferred-brief-reads-as-merged-work.md` with the
+mechanism reproduced — the fallback's ancestry test asks whether the
+*brief's* commit is on the trunk, which the transfer convention made
+true from the moment the task was dispatched.
