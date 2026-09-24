@@ -164,10 +164,29 @@ ok "the parked turn's own account is a result whose tenant-outcome says parked"
 echo "6. two attempts on one errand produce two records, not one"
 # emcee's own sprint of 2026-08-20: 0007-greeting was parked, answered by
 # the operator, and re-run in the same journal. Two step_started records
-# for one errand — the case content-based dedup would collapse.
+# for one errand — the case content-based dedup would collapse. The run
+# is copied and its machine-local question path rewritten, exactly as
+# case 5 does and for the same reason: the park's question must be
+# sourceable, or its refusal (a behavior case 6b pins) would hide the
+# per-errand-refusal property case 7 exists to test.
+RUN_R="$WORK/emcee/2026-08-20"
+mkdir -p "$(dirname "$RUN_R")"
+cp -r "$FIX/emcee/2026-08-20" "$RUN_R"
+python3 - "$RUN_R" <<'PY'
+import json, pathlib, sys
+run = pathlib.Path(sys.argv[1])
+path = run / "journal.jsonl"
+out = []
+for line in path.read_text().splitlines():
+    rec = json.loads(line)
+    if rec.get("question_file"):
+        rec["question_file"] = str(run / "parked" / pathlib.Path(rec["question_file"]).name)
+    out.append(json.dumps(rec, sort_keys=True, separators=(",", ":")))
+path.write_text("\n".join(out) + "\n")
+PY
 STATE_R="$(new_journal resume)"
 set +e
-CASTLE_STATE_DIR="$STATE_R" "$SHIM" fold --run-dir "$FIX/emcee/2026-08-20" \
+CASTLE_STATE_DIR="$STATE_R" "$SHIM" fold --run-dir "$RUN_R" \
   --tasks-dir "$FIX/emcee-tasks" > "$WORK/resume.out" 2> "$WORK/resume.err"
 rc=$?
 set -e
@@ -192,10 +211,29 @@ grep -h '^tenant-outcome: pr_opened$' "$STATE_R"/journal/*.md > /dev/null \
 ok "a journal predating the tenant's required model field refuses its results"
 
 # The refusals are per-errand: everything sourceable in the same journal
-# still folded.
-grep -l '^type: question' "$STATE_R"/journal/*.md > /dev/null \
+# still folded — the park's question is written, with the tenant's own
+# words, despite two refusals on other errands in the same fold.
+rquestion="$(grep -l '^type: question' "$STATE_R"/journal/*.md)" \
   || die "a refusal elsewhere in the journal suppressed a question it should not have"
+grep -q 'address the operator by name' "$rquestion" \
+  || die "the surviving question does not carry the tenant's own words"
 ok "a refusal stops its own errand and nothing else"
+
+# 6b. And the refusal the copy avoids is itself pinned: folding the
+# fixture in place leaves its machine-local question path unreadable,
+# which must refuse that event — named, retryable, nothing written —
+# rather than write a placeholder the resident would answer into a
+# stranded errand (the cross-vendor finding on the shim's first draft).
+STATE_U="$(new_journal unreadable)"
+set +e
+CASTLE_STATE_DIR="$STATE_U" "$SHIM" fold --run-dir "$FIX/emcee/2026-08-20" \
+  --tasks-dir "$FIX/emcee-tasks" > /dev/null 2> "$WORK/unreadable.err"
+set -e
+grep -q 'question file' "$WORK/unreadable.err" \
+  || die "an unreadable question file was not refused by name"
+grep -l '^type: question' "$STATE_U"/journal/*.md > /dev/null 2>&1 \
+  && die "an unreadable question file still produced a question record"
+ok "an unsourceable question refuses its own event and writes nothing"
 
 # ---------------------------------------------------------------------
 echo "8. giving up folds to a result that names the failure and its provider"
