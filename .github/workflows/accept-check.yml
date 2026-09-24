@@ -18,10 +18,13 @@ name: accept-check
 #
 # The worked example's criteria run against this repository's own outcome
 # log, on purpose: a criterion satisfied only by a fixture is a row the
-# pipeline never wrote. The cost is a duplicate signal — a log
-# `outcomes-check` would already reject also fails here — and that is
-# accepted rather than papered over, because the alternative empties the
-# example out.
+# pipeline never wrote. Two consequences, both accepted rather than
+# papered over, because the alternative empties the example out. The
+# signal is duplicated — a log `outcomes-check` would already reject also
+# fails here. And the trigger paths have to carry what those criteria
+# execute (`tools/outcomes/**`, the log itself), or a renamed flag over
+# there breaks this gate on some later, unrelated pull request instead of
+# on the one that renamed it.
 #
 # Its own workflow rather than a job in check.yml, for the reason
 # clarify-check.yml gives: check.yml carries `paths-ignore: docs/**` on
@@ -37,6 +40,8 @@ on:
       - "tools/accept/**"
       - "test/accept/**"
       - "docs/planning.md"
+      - "tools/outcomes/**"
+      - "docs/log/task-outcomes.tsv"
       - ".github/workflows/accept-check.yml"
   push:
     branches:
@@ -45,6 +50,8 @@ on:
       - "tools/accept/**"
       - "test/accept/**"
       - "docs/planning.md"
+      - "tools/outcomes/**"
+      - "docs/log/task-outcomes.tsv"
       - ".github/workflows/accept-check.yml"
   # Same escape hatch every other workflow here carries: a branch that
   # isn't on a PR yet can still get a real run via `gh workflow run`.

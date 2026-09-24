@@ -198,6 +198,21 @@ B="$(brief wrapped "Title: a check that wraps" \
 expect_pass "a Check: wrapped over two lines runs as one command" \
     "$ACCEPT" run "$B" --root "$WORKDIR"
 
+# The title line and the header's values are quoted identifiers, not the
+# run's prose. Linting them made the tool refuse to report on anything
+# named after the word it bans — every brief under docs/tasks/done/ failed
+# on its own path, and this repository's own task 0080 failed on its title.
+B="$(brief banned-title \
+    "Title: finish the cursor sweep and mark the rollout done" \
+    "Criterion: the thing works in its real invocation path" \
+    "Check: true")"
+expect_pass "a brief whose own title carries banned vocabulary" \
+    "$ACCEPT" run "$B" --root "$WORKDIR" -o "$WORKDIR/titled.md"
+grep -qF "finish the cursor sweep" "$WORKDIR/titled.md" \
+    || fail "the receipt dropped the brief's title rather than quoting it"
+expect_pass "and the receipt it wrote still passes the lint" \
+    "$ACCEPT" check "$WORKDIR/titled.md"
+
 echo "== what a run observes =="
 
 B="$(brief failing "Title: a criterion that does not hold" \
@@ -221,9 +236,17 @@ grep -qF "## Criterion 1 — could not be exercised; escalated to the resident" 
 echo "  ok   a command that could not run escalates rather than reading as a failure"
 
 B="$(brief slow "Title: a check that does not finish" \
-    "Criterion: the path answers promptly" "Check: sleep 30")"
+    "Criterion: the path answers promptly" \
+    "Check: echo about-to-hang; sleep 30")"
 expect_catch "a check that outlasts the timeout" escalate -- \
-    "$ACCEPT" run "$B" --timeout 1
+    "$ACCEPT" run "$B" --timeout 1 -o "$WORKDIR/hung.md"
+# Whatever it printed before it hung is the only evidence about where it
+# hung, so a receipt that dropped it would escalate to the resident with
+# nothing to read.
+grep -qF "about-to-hang" "$WORKDIR/hung.md" \
+    || fail "the receipt dropped what the timed-out check had printed"
+echo "  ok   the timed-out check's partial transcript is in the receipt"
+
 
 B="$(brief manual-only "Title: nothing here is executable" \
     "Criterion: the resident sees the redesigned surface" \
@@ -305,6 +328,47 @@ R="$(mutate_receipt renumbered)"
 sed -i 's/^## Criterion 2 — /## Criterion 3 — /' "$R"
 expect_catch "criterion sections that skip a number" form -- \
     "$ACCEPT" check "$R"
+
+# The closed phrase set buys nothing unless the phrase is held to the
+# evidence beside it: "observed as the criterion states" over a non-zero
+# exit is a verdict in the one place a reader trusts most.
+R="$(mutate_receipt heading-contradicts-evidence)"
+sed -i 's/^    exit: 0$/    exit: 1/' "$R"
+expect_catch "a criterion headed as observed-as-stated over a failing exit" \
+    grounding -- "$ACCEPT" check "$R"
+
+R="$(mutate_receipt heading-contradicts-timeout)"
+python3 - "$R" <<'PY_INNER'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+# An escalation's heading over an ordinary zero exit: the other direction
+# of the same defect.
+text = text.replace(
+    "## Criterion 1 — observed as the criterion states",
+    "## Criterion 1 — could not be exercised; escalated to the resident",
+    1,
+)
+open(path, "w", encoding="utf-8").write(text)
+PY_INNER
+expect_catch "a criterion headed as escalated over a clean exit" grounding -- \
+    "$ACCEPT" check "$R"
+
+# Numbering alone cannot see a dropped tail: 1..N still runs after the
+# last two sections are deleted, which is how a receipt loses exactly the
+# criteria that diverged.
+R="$(mutate_receipt dropped-sections)"
+python3 - "$R" <<'PY_INNER'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+cut = text.index("## Criterion 3 —")
+keep = text.index("## What this run did not check")
+open(path, "w", encoding="utf-8").write(text[:cut] + text[keep:])
+PY_INNER
+expect_catch "a receipt reporting fewer criteria than its header declares" \
+    form -- "$ACCEPT" check "$R"
 
 R="$(mutate_receipt no-exit)"
 sed -i '0,/^    exit: /{/^    exit: /d}' "$R"
@@ -414,6 +478,23 @@ else
     expect_die "--base outside a git checkout" "not inside a git checkout" -- \
         "$ACCEPT" run "$B" --base main
 fi
+
+# The commit attests the artifact the commands ran against, which is
+# --root's checkout and not the brief's. The two are the same repository
+# in the documented step and need not be.
+D="$(freeze_repo two-checkouts)"
+OTHER="$WORKDIR/other-checkout"
+mkdir -p "$OTHER"
+git -C "$OTHER" init -q -b main
+echo "the artifact under test" > "$OTHER/artifact"
+git -C "$OTHER" add artifact
+git -C "$OTHER" commit -qm "the artifact the criteria are run against"
+expect_pass "a brief in one checkout, an artifact in another" \
+    "$ACCEPT" run "$D/brief.md" --root "$OTHER" -o "$WORKDIR/elsewhere.md"
+grep -qF "Commit: $(git -C "$OTHER" rev-parse --short HEAD)" \
+    "$WORKDIR/elsewhere.md" \
+    || fail "the receipt cites a commit the commands were not run against"
+echo "  ok   the receipt cites the commit the commands ran against"
 
 echo "== the vocabulary has one home =="
 

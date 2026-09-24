@@ -448,11 +448,16 @@ promotion cannot happen quietly:
   file that runs on its own, and `test/accept/run.sh` fails if the two
   copies ever differ.
 
-A quoted criterion and a captured transcript are read past by that lint.
-A criterion whose own prose says "complete" is the spec-time author's
-sentence, and a test named `test_completes_cleanly` in captured output is
-evidence rather than a claim; masking both is what lets the lint be
-blocking without making the receipt unable to quote its own inputs.
+A quoted criterion and a captured transcript are read past by that lint,
+and so are the title's text and the header's values. A criterion whose own
+prose says "complete" is the spec-time author's sentence, a test named
+`test_completes_cleanly` in captured output is evidence rather than a
+claim, and a brief's own title or its path under `docs/tasks/done/` is an
+identifier — a lint that read those would refuse to report on anything
+named after the word it bans. Masking them is what lets the lint be
+blocking without making the receipt unable to quote its own inputs. The
+header's *keys* stay visible, so a header renamed into a sentence is still
+read.
 
 An agent-as-user pass is solid evidence a mechanism fired and weak
 evidence a person is satisfied. That is what the simulated-user research
@@ -537,7 +542,8 @@ rather than passing over.
 
 **`criterion` — what was observed.** A check that exited non-zero is
 reported as observed differently from what the criterion states, with its
-transcript. *Checked:* the exit status. *Not checked:* whether the
+transcript. A check that timed out carries whatever it had printed before
+it hung, which is the only evidence there is about where it hung. *Checked:* the exit status. *Not checked:* whether the
 criterion's own wording captures what the resident meant — the receipt
 carries the evidence, and the reading stays a person's.
 
@@ -557,10 +563,21 @@ above as the successor.
 the case that needs a checker at all: a receipt that arrives from an
 acceptance agent is prose somebody wrote, in exactly the register a model
 reaches for when asked whether work is done. Three rules — `form` (the
-title, the five headers in order, criteria numbered 1..N, an outcome
-phrase from the closed set, the standing limit verbatim), `grounding`
-(each criterion quoted, and either a command with its exit status or a
-named manual step, never both), and `claim` (the vocabulary). The run
+title, the five headers in order, criteria numbered 1..N and as many of
+them as the header declares, an outcome phrase from the closed set, the
+standing limit verbatim), `grounding` (each criterion quoted, and either a
+command with its exit status or a named manual step, never both — and the
+outcome phrase agreeing with the exit status beside it), and `claim` (the
+vocabulary).
+
+Two of those exist because the format's own defences are otherwise
+one-sided. Numbering 1..N cannot see a dropped tail, so the declared count
+is compared against the sections present: delete the last two and the
+numbering still runs, which is how a receipt loses exactly the criteria
+that diverged. And a closed phrase set buys nothing unless the phrase is
+held to its evidence, so "observed as the criterion states" over a
+non-zero exit is refused — the heading is the line a reader trusts, and it
+is the one written by hand. The run
 lints its own output through the same three before anybody reads it: the
 generator controls its output, so a violation there is a bug in the tool
 rather than a style note.
@@ -578,7 +595,10 @@ its omission is a defect in this document.
     tools/accept/accept check <receipt>
 
 Run from the repository root, which is where a criterion's check is run
-unless `--root` says otherwise. `--base` is what arms the frozen rule;
+unless `--root` says otherwise. The receipt's `Commit:` is that
+checkout's, because it attests the artifact the commands ran against
+rather than the tree the criteria were read from — the two are the same
+repository in this step and need not be. `--base` is what arms the frozen rule;
 `--cycle` and `--cap` carry the repair loop's position. Exit status is
 zero when every criterion with an executable check was exercised and
 observed as the criterion states, and when nothing else above blocked.

@@ -564,7 +564,7 @@ def exercise(
             text=True,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         report.fail(
             "escalate",
             f"criterion {criterion.index}",
@@ -572,7 +572,21 @@ def exercise(
             "cannot be observed is not a criterion that failed, and this run "
             "will not guess which it was — that is the resident's, now",
         )
-        return Observation(criterion=criterion, phrase=ESCALATED, status=None)
+        # Whatever it printed before it hung is the only evidence there
+        # is about *where* it hung, so it is carried rather than dropped.
+        # `stdout` here is bytes even under `text=True`, which is a
+        # documented wart of TimeoutExpired rather than a choice.
+        partial = exc.stdout or b""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", "replace")
+        output, dropped = _tail(partial)
+        return Observation(
+            criterion=criterion,
+            phrase=ESCALATED,
+            status=None,
+            output=output,
+            dropped=dropped,
+        )
     except OSError as exc:  # no shell, or the cwd is gone
         raise SystemExit(f"criterion {criterion.index}: {exc}")
 
@@ -755,14 +769,23 @@ def not_checked(
 def prose_lines(text: str) -> list[tuple[int, str]]:
     """The lines of a receipt the claim lint reads.
 
-    Three spans are invisible to it, each for a stated reason. A
+    Four spans are invisible to it, each for a stated reason. A
     blockquote carries the criterion's own spec-time prose, quoted. An
     indented block carries a command and the transcript it produced,
     which is evidence and not an assertion — a test named
     `test_completes_cleanly` in captured output is not the run claiming
-    anything. A fenced block is the same case. What is left is the
-    receipt's own sentences, which are generated, and a violation in
-    them is a generator bug rather than a style note.
+    anything. A fenced block is the same case.
+
+    The fourth is the title's text and the header's values: a brief's
+    own `Title:`, the path it was read from, a commit, a ref, two
+    counts. Those are quoted identifiers rather than sentences, and
+    linting them made the tool refuse to report on anything named after
+    the word it bans — every brief under `docs/tasks/done/` failed on
+    its own path. The key stays visible so that a header renamed into
+    prose is still read.
+
+    What is left is the receipt's own sentences, which are generated, and
+    a violation in them is a generator bug rather than a style note.
     """
     out = []
     fenced = False
@@ -772,6 +795,12 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
             continue
         if fenced or line.startswith(">") or line.startswith("    "):
             continue
+        title = TITLE_RE.match(line)
+        if title:
+            continue
+        field = FIELD_RE.match(line)
+        if field and field.group("key") in RECEIPT_HEADER_KEYS:
+            line = line[: len(field.group("key")) + 1]
         out.append((number, CODE_SPAN.sub(lambda m: " " * len(m.group(0)), line)))
     return out
 
@@ -826,6 +855,17 @@ def check_receipt(text: str, where: str, report: Report) -> None:
         )
 
     sections = _sections(lines)
+    declared = re.match(r"^(\d+)", header.get("Criteria", ""))
+    if declared and int(declared.group(1)) != len(sections):
+        report.fail(
+            "form",
+            where,
+            f"the header declares {declared.group(1)} criteria and "
+            f"{len(sections)} are reported. A receipt that reports fewer than "
+            "it read has dropped exactly the criterion a reader is looking "
+            "for, and the numbering alone cannot see it: drop the last two "
+            "sections and 1..N still runs",
+        )
     if not sections:
         report.fail(
             "form",
@@ -958,6 +998,21 @@ def _check_section(
             "two lines are the whole of the evidence — a claim about a run "
             "with neither is the assertion this format exists to refuse",
         )
+    elif not _agrees(phrase, EXIT_RE.match(exits[0]).group("status")):
+        # The outcome phrase against the exit status beside it. Without
+        # this the closed phrase set buys nothing: a receipt can head a
+        # criterion "observed as the criterion states" over `exit: 1` and
+        # pass every other rule, which is the smuggled verdict in the one
+        # place a reader trusts most.
+        report.fail(
+            "grounding",
+            f"{where}:{line_no}",
+            f"criterion {number} is headed {phrase!r} and its evidence says "
+            f"exit: {EXIT_RE.match(exits[0]).group('status')}. The heading and "
+            "the exit status are two statements about one run, and a reader "
+            "who trusts the heading is reading the one that was written by "
+            "hand",
+        )
     if manual:
         report.fail(
             "grounding",
@@ -965,6 +1020,27 @@ def _check_section(
             f"criterion {number} is reported as exercised and also as standing "
             "on a manual step; one disposition per criterion",
         )
+
+
+def _agrees(phrase: str, status: str) -> bool:
+    """Does the outcome phrase say what the exit status says?
+
+    The mapping is the one `exercise` uses, read the other way: zero is
+    observed-as-stated, 127 and a timeout are escalations because nothing
+    can tell a missing artifact from a broken check, and everything else
+    is observed-differently.
+    """
+    if status == "timed out":
+        return phrase == ESCALATED
+    try:
+        code = int(status)
+    except ValueError:
+        return False
+    if code == 0:
+        return phrase == OBSERVED
+    if code == 127:
+        return phrase == ESCALATED
+    return phrase == DIVERGED
 
 
 def _normalise(text: str) -> str:
@@ -1024,8 +1100,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             "takes them",
         )
 
+    # The commit attests the artifact the commands were run against, so
+    # it is read from `--root` rather than from the brief's own checkout.
+    # The two are the same repository in the documented step and need not
+    # be: a receipt citing the commit of the checkout the *criteria* came
+    # from would name a tree the checks never touched.
     commit = "(not a git checkout — no commit recorded)"
-    root_git = toplevel(brief)
+    root_git = toplevel(root)
     if root_git is not None:
         status, out = git(root_git, "rev-parse", "--short", "HEAD")
         if status == 0 and out.strip():
