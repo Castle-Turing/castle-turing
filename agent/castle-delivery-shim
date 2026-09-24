@@ -173,8 +173,10 @@ import os
 import pathlib
 import re
 import shlex
+import stat
 import subprocess
 import sys
+import tempfile
 
 SEAT = "delivery"
 TENANT = "emcee"
@@ -804,7 +806,13 @@ def write_answer_into(parked: Parked, body: str, answer_id: str) -> None:
 
     Idempotent by construction — the file is rewritten from the same inputs,
     so a second pass over an answer whose claim was written but whose
-    invocation died produces the same bytes.
+    invocation died produces the same bytes. That idempotence depends on
+    the original headers still being there to match against on the retry,
+    which is why the write itself is a temp-file-then-`os.replace`: an
+    in-place write left torn by a crash mid-write would destroy the very
+    `Answered-by:` and `## Answer` markers a later pass needs to parse, and
+    a claim already durable in the journal by then would have nothing left
+    to recover onto.
     """
     text = parked.path.read_text(encoding="utf-8")
     line = answered_by_line(answer_id)
@@ -820,13 +828,25 @@ def write_answer_into(parked: Parked, body: str, answer_id: str) -> None:
         raise Refused(
             f"{parked.path}: no `## {PARKED_ANSWER_SECTION}` section, so there is "
             "nowhere the tenant would read an answer from. Nothing was handed over.")
-    parked.path.write_text(
+    new_text = (
         text[:heading.end()]
         + "\n\n"
         + body.strip()
         + f"\n\n<!-- Transcribed from the castle journal: {answer_id}. The resident's\n"
-          "     own words, verbatim; this comment is not part of them. -->\n",
-        encoding="utf-8")
+          "     own words, verbatim; this comment is not part of them. -->\n")
+    mode = stat.S_IMODE(parked.path.stat().st_mode)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=parked.path.parent, prefix=f".{parked.path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new_text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, parked.path)
+    except BaseException:
+        pathlib.Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 # --- the inbound fold --------------------------------------------------------
@@ -845,6 +865,22 @@ def parse_source_event(value: str) -> "tuple[str, str, str] | None":
     if not errand or not key or not seq:
         return None
     return errand, key, seq
+
+
+def is_resident_answer(rec) -> bool:
+    """Whether an `answer` record looks like the resident's own.
+
+    `file_answer` — the one path a resident's answer takes, from the CLI or
+    the modal — always writes `provenance: requested` and `seat: intake`.
+    Shared by `Resumption.answers()`'s eligibility fold and by `stranded`'s
+    diagnosis, so the two cannot disagree about what `resume` would act on:
+    an answer this predicate rejects is one `resume` will never spend, and
+    `stranded` must not tell an operator to run a command that will do
+    nothing.
+    """
+    return (rec.type == "answer"
+            and rec.fields.get("provenance") == "requested"
+            and rec.fields.get("seat") == "intake")
 
 
 def record_created(castle, rec) -> "dt.datetime | None":
@@ -978,10 +1014,7 @@ class Resumption:
         questions = self.questions()
         found = [
             rec for rec in self.records.values()
-            if rec.type == "answer"
-            and rec.fields.get("provenance") == "requested"
-            and rec.fields.get("seat") == "intake"
-            and any(ref in questions for ref in rec.refs)
+            if is_resident_answer(rec) and any(ref in questions for ref in rec.refs)
         ]
         return self.castle.order_records(found)
 
@@ -1031,12 +1064,24 @@ class Resumption:
                 continue
             if answer.id in spent:
                 # Already paid for. The only question left is whether the
-                # invocation it paid for actually reached the tenant.
+                # invocation it paid for actually reached the tenant — and
+                # only a delivery resumption claim naming *this* question
+                # answers that. `spent()` is deliberately global (a generic
+                # answer can close a worker request and a delivery question
+                # at once), so `claims_naming` can return a claim some other
+                # seat wrote for the same answer; recovering on that claim
+                # would buy this errand a second resumption from an answer
+                # already spent elsewhere, which is exactly the double
+                # spend the global `spent()` set exists to prevent.
                 if parked is None or not parked.is_open:
+                    continue
+                delivery_claims = [c for c in self.claims_naming(answer.id)
+                                   if c.fields.get(RESUMED_QUESTION_FIELD) == question.id]
+                if not delivery_claims:
                     continue
                 written = [when for when in
                            (record_created(self.castle, c)
-                            for c in self.claims_naming(answer.id)) if when]
+                            for c in delivery_claims) if when]
                 age = min(((now - when).total_seconds() for when in written),
                           default=None)
                 if age is not None and age < grace_seconds:
@@ -1060,6 +1105,16 @@ class Resumption:
                     f"`Task: {parked.task}`. Resuming an errand that file does not name "
                     "would spend this answer on the wrong park. Nothing was written.")
                 continue
+            recorded_question = _section(question.body, PARKED_QUESTION_SECTION)
+            if recorded_question and parked.question != recorded_question:
+                refused.append(
+                    f"{errand}: the tenant's question file at {path} no longer holds "
+                    f"the question answer {answer.id} closes. An errand's `Task:` "
+                    "survives a second park on the same errand, but the `## "
+                    f"{PARKED_QUESTION_SECTION}` text does not — a live question that "
+                    "the resident has not yet answered would otherwise be overwritten "
+                    "by an answer to the one it replaced. Nothing was written.")
+                continue
             if not parked.is_open:
                 # The errand resumed without this mechanism: the operator
                 # relaunched the tenant by hand, which was the only path
@@ -1080,7 +1135,41 @@ class Resumption:
                 answer=answer, question=question, errand=errand, parked=parked,
                 state=Candidate.NEW))
             resumed[question.id] = answer.id
-        return plan, refused
+        # The tenant's resume verb is run-scoped (see `cmd_resume`): invoking
+        # it for the candidates above also resumes every other answered-open
+        # park in this run, whether this fold knows about it or not. A park
+        # answered directly in the tenant's file — never through a castle
+        # `answer` record, so `self.answers()` never sees it and it is in
+        # neither `plan` nor `refused` above — would be swept along with no
+        # claim naming it, which is the one shape "one answer, one
+        # resumption, chained by a claim" cannot survive. So every errand
+        # this run has a delivery question for is checked here regardless of
+        # whether this pass had anything to do for it, and an unaccounted
+        # answered-open park blocks the invocation rather than riding along.
+        #
+        # A question already in `resumed` is not this case even when this
+        # pass added no `Candidate` for it — RECOVER inside its grace
+        # interval is exactly that, and `resumed` already carries it from
+        # the pre-population above. What is being screened for is an answer
+        # that never went through this fold at all.
+        accounted = {c.errand for c in plan}
+        unaccounted: list = []
+        for question_id, (_, errand) in questions.items():
+            if errand in accounted or question_id in resumed:
+                continue
+            other_path = parked_path(self.run_dir, errand)
+            other_parked = read_parked(other_path)
+            if other_parked is not None and other_parked.is_open and other_parked.is_answered:
+                unaccounted.append(errand)
+                refused.append(
+                    f"{errand}: the tenant's question file at {other_path} carries an "
+                    "answer this pass has no castle record and no claim for — "
+                    "`Answered-by:` is filled and `Status:` still reads `open`. "
+                    "Invoking the tenant's resume verb would resume this errand too, "
+                    "as a side effect of resuming any other park in this run, with "
+                    "nothing in the journal accounting for it. Nothing is invoked "
+                    "while this sits unaccounted for.")
+        return plan, refused, unaccounted
 
     # -- spending it ------------------------------------------------------
 
@@ -1267,20 +1356,26 @@ def cmd_resume(args: argparse.Namespace) -> int:
     tasks_dir = pathlib.Path(tasks_dir) if tasks_dir else None
 
     castle = load_castle()
-    # The same lock `fold` takes, and held over the same span for the same
-    # reason: two passes would otherwise both read an answer as unspent and
-    # both claim it, which is the one failure the claim exists to make
-    # impossible. Released before the verb is invoked, deliberately — the
-    # invocation runs a whole errand and can last hours, and holding a lock
-    # across it would make one parked errand block every other run's
-    # resumption. Concurrency past this point is the tenant's own sprint
-    # lock's business, which refuses a second sprint before journaling.
-    lock = castle.acquire_lock_blocking(castle.runtime_dir() / "delivery-shim.lock")
+    # `spend_lock_path()`, not a lock private to this shim: the bound it
+    # protects is "one further turn per answer, ever", a property of the
+    # *answer*, and a generic answer can close both a worker request and a
+    # delivery question at once (`Resumption.spent()`'s own reasoning for
+    # why it reads claims globally). A lock scoped to this shim would let a
+    # concurrent `castle work` dispatch and this resume both read the same
+    # answer as unspent and both write a claim for it — exactly the double
+    # spend the global lock exists to make impossible. Held over the same
+    # span `spend_lock_path()` documents and released before the verb is
+    # invoked, deliberately — the invocation runs a whole errand and can
+    # last hours, and holding a lock across it would make one parked errand
+    # block every other run's resumption, worker turns included. Concurrency
+    # past this point is the tenant's own sprint lock's business, which
+    # refuses a second sprint before journaling.
+    lock = castle.acquire_lock_blocking(castle.spend_lock_path())
     claimed: list = []
     refused: list = []
     try:
         fold = Resumption(castle, run_dir)
-        plan, refused = fold.plan(grace_seconds=args.grace_seconds)
+        plan, refused, unaccounted = fold.plan(grace_seconds=args.grace_seconds)
         for candidate in plan:
             if args.dry_run:
                 claimed.append(f"{candidate} (dry run, nothing written or invoked)")
@@ -1305,8 +1400,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
     for line in claimed:
         print(line)
+    # An unaccounted answered-open park (see `plan`) blocks the invocation
+    # outright: the tenant's resume verb is run-scoped, so invoking it for
+    # any candidate below would also resume that park, with no claim naming
+    # it. The candidates already claimed above stay claimed either way —
+    # only the invocation is withheld, and the next pass picks them up once
+    # the unaccounted park is accounted for.
     invoke = [c for c in plan if c.state != Candidate.OBSERVED] \
-        if not args.dry_run else []
+        if not args.dry_run and not unaccounted else []
     rc = 0
     if invoke:
         argv = resume_argv(run_dir, repo, tasks_dir)
@@ -1378,7 +1479,7 @@ def cmd_stranded(args: argparse.Namespace) -> int:
             spent.update(rec.refs)
     answers_by_question: dict = {}
     for rec in records.values():
-        if rec.type == "answer":
+        if is_resident_answer(rec):
             for ref in rec.refs:
                 answers_by_question.setdefault(ref, []).append(rec)
 
