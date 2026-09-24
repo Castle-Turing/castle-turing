@@ -112,3 +112,94 @@ their own judgment — the calibration the source entry reserves, and
 this harness's falsifier: if receipts and the resident's verdicts
 diverge on the sample, the compilation is wrong, and the receipt
 says which criterion diverged.
+
+## What implementation settled that this brief left open
+
+Added in the implementing pull request, per the convention that the same
+PR updates a brief the work has overtaken. Each of these was a judgment
+call where the brief was silent or where following it literally would
+have produced something worse; none changes what a pass may claim.
+
+**A criterion carries its check as a field, and `plan` learned two of
+them.** The brief requires criteria that assert reachability and requires
+an uncompilable criterion to "say so", and is silent on where either
+lives. They are `Check:` and `Manual:` field lines immediately under each
+`Criterion:`, repeatable, exactly one per criterion, neither blank — and
+`plan check` enforces the pairing at spec time. The alternative was for
+the implementer to compile criteria into commands at run time, which is
+the implementer authoring its own gate: the same defect the frozen rule
+exists to stop, arriving one level down. The cost is that the slate
+format changed under task 0079's checker, which is why that checker, its
+fixtures and its worked example are all in this pull request.
+
+**The receipt's lint is `accept check`, not `accept lint`.** Naming
+matters mechanically here, not only for consistency with `clarify check`,
+`plan check` and `outcomes check`: `tools/reachability-check.py` treats a
+subcommand named `check` as a gate and then requires the workflow running
+it to name what feeds it. A subcommand named `lint` would have left this
+workflow's feeder line unvalidated decoration, and the feeder is the one
+honest thing this gate can say — a receipt really is produced by a tool,
+which is more than the planner seat's feeder can claim.
+
+**The frozen rule is off without `--base`, and says so twice.** Making it
+mandatory was considered and rejected on two grounds. The worked example
+is introduced by this pull request, so a mandatory comparison would flag
+the example against its own base and teach nothing; and the criteria of
+an already-merged task are post-hoc by construction. The receipt states
+the rule did not run on its `Base:` line and again in what the run did
+not check, because a rule that can be skipped silently is not a rule.
+
+**A brief whose criteria are all manual exits non-zero.** The brief
+requires refusing an *empty* criteria section. It does not say what to do
+when every criterion legally stands on a person's eyes, and the answer
+here is a receipt naming every step that stands in place of a check and a
+non-zero exit under a `vacuous` rule whose message says this is not a
+defect in the brief. A green exit over nothing exercised is the promotion
+Proposal 06 forbids wearing an exit status.
+
+**Escalate-on-novelty is two mechanical shapes.** The brief names the
+rule; the shapes that can carry it are a command that could not be run at
+all (exit 127) and a check that outlasted the timeout. Both are reported
+as escalations rather than failures, and the message says out loud that
+nothing here can tell a missing artifact from a broken check — the
+distinction is exactly the interpretation the rule forbids the loop from
+making.
+
+**A criterion's outcome heading is a closed set of four phrases.** The
+banned-vocabulary lint the brief asks for would admit "criterion
+satisfied" or "acceptance passed", neither of which contains a banned
+word and both of which are verdicts. The receipt's headings are therefore
+a closed vocabulary and `check` holds a receipt to it, because a heading
+is where a reader looks first.
+
+**The completion vocabulary is duplicated rather than imported, and a
+test holds the copies identical.** `tools/handover-check.py` is the
+list's first home. Importing it was considered and rejected: the import
+would name that file in a string, `tools/reachability-check.py` reads a
+string naming a tool as a call to it, and the lint would then print
+`handover-check.py` as operationally reachable — which an import of a
+constant is not. Duplication's cost is silent drift, so
+`test/accept/run.sh` extracts both lists and fails if they differ.
+
+**The committed receipt is a specimen, not a golden file.** It carries
+the commit it ran at and a scratch directory name from one check's
+transcript, so a byte comparison would pin a sha and rot. CI holds it to
+passing `accept check` and re-runs the worked example's criteria against
+the checkout instead.
+
+**The isolation rules are written down and not enforced, on the record.**
+What a tool can be held to is its inputs, and `accept run` reads the
+brief and runs commands — no diff, no transcript, no reasoning. Whether
+the agent reading the receipt ran in a separate context, and on a
+different model family, is stated in `docs/planning.md` as the caller's
+discipline and marked not checked. Recording it as enforced would have
+been an unsourced closure.
+
+**What is not built, named rather than implied.** No harness runs this on
+a pull request; no second agent reads a receipt; and no brief already in
+`docs/tasks/` carries the disposition fields — this one included.
+Retrofitting eighty briefs is not this task's, and the format arrives
+with the slates the planner seat writes. The per-model correction and
+introduction rates that would replace the repair cap with the measured
+stopping rule are named as the successor in `docs/planning.md` and are
+not measured here.
