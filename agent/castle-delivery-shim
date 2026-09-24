@@ -133,6 +133,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 SEAT = "delivery"
 TENANT = "emcee"
@@ -253,6 +254,35 @@ def errand_of(record: dict) -> str | None:
     `task` everywhere else — the tenant's own two spellings."""
     value = record.get("step") or record.get("task")
     return str(value) if value else None
+
+
+def errand_only_journal(run_dir: pathlib.Path, errand: str) -> pathlib.Path:
+    """A copy of the tenant journal holding only this errand's own lines.
+
+    `outcomes derive --fill` walks the whole outcome log and fills
+    every row it finds facts for in the journal it is given — right for
+    a sprint backfill, wrong for a seat maturing one errand's row on
+    that errand's own branch: a run journal spanning several tasks
+    would let this branch write another task's receipt cells, against
+    the stated invariant that a row belongs on its own errand branch.
+    Filtering to the errand before handing the journal to `derive`
+    keeps this call's reach to the one row it was asked to mature.
+    """
+    path = run_dir / JOURNAL_NAME
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if errand_of(rec) == errand:
+            lines.append(line)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", prefix="castle-delivery-shim-row-",
+        delete=False, encoding="utf-8")
+    with handle:
+        handle.writelines(lines)
+    return pathlib.Path(handle.name)
 
 
 # --- sourcing the facts a record may not invent ------------------------------
@@ -702,17 +732,21 @@ def cmd_row(args: argparse.Namespace) -> int:
               "to mature.", file=sys.stderr)
         return 2
 
-    derive = subprocess.run(
-        [sys.executable, str(outcomes), "derive", "--repo-root", str(checkout),
-         "--harness-journal", str(run_dir / JOURNAL_NAME), "--env", args.env, "--fill"],
-        capture_output=True, text=True)
+    filtered_journal = errand_only_journal(run_dir, errand)
+    try:
+        derive = subprocess.run(
+            [sys.executable, str(outcomes), "--repo-root", str(checkout), "derive",
+             "--harness-journal", str(filtered_journal), "--env", args.env, "--fill"],
+            capture_output=True, text=True)
+    finally:
+        filtered_journal.unlink(missing_ok=True)
     sys.stdout.write(derive.stdout)
     sys.stderr.write(derive.stderr)
     if derive.returncode != 0:
         return derive.returncode
 
     check = subprocess.run(
-        [sys.executable, str(outcomes), "check", "--repo-root", str(checkout)],
+        [sys.executable, str(outcomes), "--repo-root", str(checkout), "check"],
         capture_output=True, text=True)
     sys.stdout.write(check.stdout)
     sys.stderr.write(check.stderr)
