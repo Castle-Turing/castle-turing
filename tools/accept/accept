@@ -345,6 +345,23 @@ def parse_criteria(
     return criteria
 
 
+def brief_title(text: str, path: pathlib.Path) -> str:
+    """The brief's own `Title:`, for the receipt's first line.
+
+    Falling back to the filename, which is what a brief in `docs/tasks/`
+    is named by anyway. The receipt says which brief it is a receipt for
+    before it says anything else, and `0072-wire-the-outcome-log` is a
+    name a reader can resolve where `brief` is not.
+    """
+    for line in text.splitlines():
+        if not line.strip():
+            break
+        field = FIELD_RE.match(line)
+        if field and field.group("key") == "Title" and field.group("value").strip():
+            return field.group("value").strip()
+    return path.stem
+
+
 def check_criteria(criteria: list[Criterion], where: str, report: Report) -> None:
     """Every criterion has prose and exactly one non-empty disposition.
 
@@ -630,7 +647,7 @@ def wrap_quote(text: str, width: int = 72) -> list[str]:
 
 
 def render(
-    brief: pathlib.Path,
+    title: str,
     brief_as_given: str,
     observations: list[Observation],
     commit: str,
@@ -641,7 +658,7 @@ def render(
     runnable = [o for o in observations if o.criterion.runnable]
     manual = [o for o in observations if not o.criterion.runnable]
     out = [
-        f"# Acceptance run — {brief.stem}",
+        f"# Acceptance run — {title}",
         "",
         f"Brief: {brief_as_given}",
         f"Commit: {commit}",
@@ -968,7 +985,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise SystemExit(f"--root {root}: not a directory")
 
     report = Report()
-    criteria = parse_criteria(brief, brief.read_text(encoding="utf-8"), report)
+    text = brief.read_text(encoding="utf-8")
+    criteria = parse_criteria(brief, text, report)
     check_criteria(criteria, brief.name, report)
     if report.findings:
         # Nothing is run and no receipt is written. A receipt over
@@ -1015,7 +1033,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             commit = out.strip() + (" (working tree modified)" if dirty else "")
 
     receipt = render(
-        brief=brief,
+        title=brief_title(text, brief),
         brief_as_given=args.brief,
         observations=observations,
         commit=commit,
