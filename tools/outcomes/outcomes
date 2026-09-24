@@ -765,6 +765,17 @@ def brief_headers(path):
     after the first wrapped one, in immutable cells that can never be
     corrected. The block ends at the first blank line, which is what
     the format actually says.
+
+    A NAMED GAP (task 0076, residual of the fix above): the
+    `KNOWN_BRIEF_HEADERS` whitelist stops a non-header continuation line
+    from being mistaken for a new header, but it cannot resolve a
+    continuation line that *starts with a real header's own key and a
+    colon* — `Model-because: ...\nModel: this reads like a header too`
+    parses as one `model-because` value, silently swallowing a second
+    `Model:` a human meant literally. Closing that fully needs a format
+    change — indented continuations, RFC-822 style — not another parser
+    heuristic; the same class as emcee's
+    `a-wrapped-header-value-silently-voids-later-headers`.
     """
     headers = {}
     last = None
@@ -1223,6 +1234,18 @@ def cmd_redirect(args):
                 + (f" ({already_wrong} already reassessed)" if already_wrong else "")
             )
 
+    # Every static rejection has to land before the network boundary
+    # below (task 0076) — including the one `citation_counts` would
+    # otherwise catch only after paying for a `gh api` round-trip: two
+    # reassessments of the same source, cited with different `--wrong`
+    # counts, are two different tokens and so slip past the replay
+    # check above, but `parse_citations` still rejects the pair as one
+    # source judged twice. Re-validating the whole prospective list here
+    # is cheap — no network, no clock — and it is exactly what
+    # `citation_counts` was about to do anyway.
+    new_tokens = tokens + [token]
+    parse_citations(",".join(new_tokens))
+
     resident = resident_identity(args)
     author = resolve_author(repo_root, source, args.journal)
     if author != resident:
@@ -1232,7 +1255,6 @@ def cmd_redirect(args):
             "resident made; it does not make one."
         )
 
-    new_tokens = tokens + [token]
     rec["verdict_ref"] = ",".join(new_tokens)
     r_cited, w_cited, reassessed = citation_counts(rec["verdict_ref"])
     rec["redirects"] = str(r_cited)

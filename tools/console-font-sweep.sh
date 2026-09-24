@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# reachability: interactive — the operator judges console fonts by looking at a live VT.
 # tools/console-font-sweep.sh — compare virtual-console fonts by looking.
 #
 # WHY THIS EXISTS (read this before touching the script)

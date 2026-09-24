@@ -444,6 +444,38 @@ else
   fail "redirect left a row the checker rejects"
 fi
 
+# The static citation check has to precede the network boundary (task
+# 0076): a duplicate reassessment of one source under a different
+# `--wrong` count is not caught by the idempotent-replay check (the
+# token differs) or by the redirects-vs-wrong count check (the totals
+# still add up) — only `parse_citations` on the full prospective list
+# catches it, and it must do so before `resolve_author` spends a
+# network round-trip finding out the citation was doomed all along.
+base_log > "$LOG"
+expect_redirect "  (setup: two redirects)" 0 boss \
+  0001-the-first-thing --ref 9#issuecomment-11 --resident boss
+expect_redirect "  (setup: ...and a second)" 0 boss \
+  0001-the-first-thing --ref 9#issuecomment-12 --resident boss
+expect_redirect "  (setup: one of them reassessed wrong)" 0 boss \
+  0001-the-first-thing --wrong 1 --ref 9#issuecomment-13 --resident boss
+
+# The resolver is faked to fail unconditionally ("-"), standing in for
+# a `gh` that cannot succeed. If the static check ran after the
+# network call, this would fail with "does not resolve" instead.
+before=$(cat "$LOG")
+out=$(redirect - 0001-the-first-thing --wrong 0 --ref 9#issuecomment-13 \
+  --resident boss 2>&1) && rc=0 || rc=$?
+after=$(cat "$LOG")
+if [ "$rc" != 2 ]; then
+  fail "a doomed duplicate reassessment: exit $rc, wanted 2 — $(printf '%s' "$out" | head -1)"
+elif [ "$before" != "$after" ]; then
+  fail "a doomed duplicate reassessment: refused and wrote to the log anyway"
+elif printf '%s' "$out" | grep -q "one citation states one judgment"; then
+  pass "a doomed duplicate reassessment fails the static check, not the resolver"
+else
+  fail "a doomed duplicate reassessment failed for the wrong reason: $(printf '%s' "$out" | head -1)"
+fi
+
 expect_redirect "a citation naming a journal that is not there is refused" 2 boss \
   0001-the-first-thing --ref rec:abc --journal "$WORKDIR/no-such.jsonl" --resident boss
 expect_redirect "a journal citation with no journal to read is refused" 2 boss \

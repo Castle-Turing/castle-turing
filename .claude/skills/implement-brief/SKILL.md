@@ -120,8 +120,9 @@ just exit status.
   reads this.
 - **`/code-review` before opening the PR**, scoped against
   `origin/main` after a `git fetch` — never a local branch ref. Then
-  `tools/codex-review.sh` for the cross-model pass; post its output
-  verbatim and put your dispositions in a separate comment underneath.
+  `tools/codex-review.sh` for the cross-model pass
+  <!-- invokes: tools/codex-review.sh -->; post its output verbatim and
+  put your dispositions in a separate comment underneath.
 - **Push, then report — do not poll CI from inside the task.** The
   harness re-invokes you when work completes, so an agent that loops
   waiting on `gh run list` pays full freight to advance nothing. One
