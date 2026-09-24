@@ -615,7 +615,31 @@ grep -q 'nothing to resume' "$WORK/impostor.out" || die "a non-intake answer was
 ok "only an answer written the way file_answer writes one can buy a resumption"
 
 # ---------------------------------------------------------------------
-echo "24. an errand the operator already relaunched is recorded, not resumed again"
+echo "24. a second answer to one park cannot buy a second resumption"
+# `file_answer` refuses a second answer to a question, so this shape only
+# arrives through the `castle record --type answer` back door — and it
+# must not silently pick one. The tenant reads a single answer section;
+# choosing between two would be a judgment this seat does not have.
+rm -f "$WORK/tenant.argv"
+CASTLE_STATE_DIR="$STATE_I" python3 "$CASTLE" record --type answer \
+  --provenance requested --seat intake --refs "$Q_A" \
+  --body 'And actually, do the opposite.' > /dev/null
+before="$(records_of "$STATE_I")"
+set +e
+CASTLE_STATE_DIR="$STATE_I" CASTLE_DELIVERY_RESUME_COMMAND="$WORK/tenant" \
+  "$SHIM" resume --run-dir "$RUN_A" --repo "$REPO_D" \
+  > "$WORK/second.out" 2> "$WORK/second.err"
+rc=$?
+set -e
+[ "$rc" = "1" ] || die "a second answer on one park should refuse with 1, got $rc"
+grep -q 'has already bought a resumption' "$WORK/second.err" \
+  || die "the refusal does not say what already spent this park"
+[ "$(records_of "$STATE_I")" = "$before" ] || die "a second answer on one park was claimed"
+[ ! -f "$WORK/tenant.argv" ] || die "a second answer on one park invoked the tenant"
+ok "one park, one answer — a second refuses rather than overwriting the first"
+
+# ---------------------------------------------------------------------
+echo "25. an errand the operator already relaunched is recorded, not resumed again"
 RUN_F="$WORK/runs/dovetail/2026-09-05T06-55-00"
 stage_run "$PARK" "$RUN_F"
 STATE_H="$(new_journal byhand)"
@@ -637,7 +661,7 @@ obs="$(grep -l "^resumes: $A_F$" "$STATE_H"/journal/*-claim-*.md)"
 ok "the answer is recorded spent by the operator's own relaunch, and nothing is invoked"
 
 # ---------------------------------------------------------------------
-echo "25. the tenant's real resume verb, as captured from the live exercise"
+echo "26. the tenant's real resume verb, as captured from the live exercise"
 # EVIDENCE, not a live run — `tenant-boundary.sh` is the live one and it
 # needs the tenant installed. What this checks is that the recorded run
 # says what the write-ahead ordering relies on, and that this shim's
@@ -685,7 +709,7 @@ PY
 ok "the shim reads a tenant-written park exactly as the tenant does"
 
 # ---------------------------------------------------------------------
-echo "26. a stranded delivery question is a reported defect, not a quiet day"
+echo "27. a stranded delivery question is a reported defect, not a quiet day"
 # The detector task 0082 owes, and the rule
 # docs/backlog/nothing-sweeps-the-pipeline-invariants.md gains. Ages come
 # off the records, so the cutoff is moved rather than the fixture aged: a
@@ -727,7 +751,7 @@ grep -q '^ok: 1 delivery question' "$WORK/s3.out" \
 ok "once the claim exists the question has a resumption path and is not reported"
 
 # ---------------------------------------------------------------------
-echo "27. the resumption's records validate, and so do the captured run's"
+echo "28. the resumption's records validate, and so do the captured run's"
 CASTLE_STATE_DIR="$STATE_I" python3 "$CASTLE" validate > "$WORK/ivalidate.out" 2>&1 \
   || { cat "$WORK/ivalidate.out"; die "the inbound half wrote records castle validate condemns"; }
 ok "castle validate accepts a resumption claim whose refs name an answer"

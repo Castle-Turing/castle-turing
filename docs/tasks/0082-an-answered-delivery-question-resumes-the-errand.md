@@ -119,8 +119,8 @@ the pinned header spelling fails there rather than silently making an
 answer invisible to the tenant.
 
 **Everything this plan asked for automatically is in
-`test/delivery-shim/run.sh`,** twelve new numbered checks under the
-existing fifteen, carrying twenty-two assertions, wired into the same
+`test/delivery-shim/run.sh`,** thirteen new numbered checks under the
+existing fifteen, carrying twenty-three assertions, wired into the same
 `check.yml` job that already runs the outbound half's. One answer produces exactly
 one resumption and its claim's `refs` name the answer; a replay produces
 none and invokes nothing; two answers closing two questions produce two,
@@ -132,7 +132,8 @@ grepped for a phrase, an answer that did not come through `file_answer`'s
 own provenance buys nothing, a park the tenant no longer has refuses
 rather than recording an impossible resumption, an errand the operator
 already relaunched by hand is recorded as theirs and not resumed a second
-time, and the detector is checked in both directions — reporting a
+time, a second answer to one park refuses rather than overwriting the
+first, and the detector is checked in both directions — reporting a
 stranded question and staying quiet once a claim exists.
 
 **Every new check has a confirmed falsifier.** Nine mutations were

@@ -847,7 +847,7 @@ def parse_source_event(value: str) -> "tuple[str, str, str] | None":
     return errand, key, seq
 
 
-def record_age(castle, rec) -> "dt.datetime | None":
+def record_created(castle, rec) -> "dt.datetime | None":
     """A record's own timestamp, falling back to the one in its id.
 
     The field first, because it is the record's own statement about itself;
@@ -999,18 +999,43 @@ class Resumption:
         now = dt.datetime.now(dt.timezone.utc)
         plan: list = []
         refused: list = []
+        # Which of this run's questions already have a resumption behind
+        # them, by either route: an answer of theirs some claim names, or
+        # an answer of theirs this pass is about to claim. One park cannot
+        # be handed two answers — the tenant reads a single `## Answer`
+        # section — and choosing between them would be a judgment this
+        # seat does not have, so the second one refuses rather than
+        # overwriting the first. `file_answer` cannot produce this shape
+        # (it refuses a second answer to a question), so reaching it means
+        # the `castle record --type answer` back door was used, which is
+        # exactly the population this fold already stopped trusting.
+        resumed: dict = {}
+        for rec in self.records.values():
+            if rec.type != "answer" or rec.id not in spent:
+                continue
+            for ref in rec.refs:
+                if ref in questions:
+                    resumed.setdefault(ref, rec.id)
         for answer in self.answers():
             question, errand = next(
                 questions[ref] for ref in answer.refs if ref in questions)
             path = parked_path(self.run_dir, errand)
             parked = read_parked(path)
+            if answer.id not in spent and question.id in resumed:
+                refused.append(
+                    f"{errand}: answer {answer.id} closes question {question.id}, which "
+                    f"answer {resumed[question.id]} has already bought a resumption for. "
+                    "One park carries one answer — the tenant reads a single answer "
+                    "section — and choosing between two would be a judgment this seat "
+                    "does not have. Nothing was claimed for this answer.")
+                continue
             if answer.id in spent:
                 # Already paid for. The only question left is whether the
                 # invocation it paid for actually reached the tenant.
                 if parked is None or not parked.is_open:
                     continue
                 written = [when for when in
-                           (record_age(self.castle, c)
+                           (record_created(self.castle, c)
                             for c in self.claims_naming(answer.id)) if when]
                 age = min(((now - when).total_seconds() for when in written),
                           default=None)
@@ -1049,10 +1074,12 @@ class Resumption:
                     state=Candidate.OBSERVED,
                     note="the tenant's question file already reads "
                          f"`Status: {parked.status}`"))
+                resumed[question.id] = answer.id
                 continue
             plan.append(Candidate(
                 answer=answer, question=question, errand=errand, parked=parked,
                 state=Candidate.NEW))
+            resumed[question.id] = answer.id
         return plan, refused
 
     # -- spending it ------------------------------------------------------
@@ -1223,6 +1250,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
               "the tenant's journal hook supply EMCEE_RUN_DIR.", file=sys.stderr)
         return 2
     run_dir = pathlib.Path(run_dir)
+    if not run_dir.is_dir():
+        print(f"castle-delivery-shim resume: no run directory at {run_dir}. A path that "
+              "is not there would otherwise read as 'nothing to resume', which is "
+              "exactly what an idle run reads as — the one confusion this mechanism "
+              "exists to remove.", file=sys.stderr)
+        return 2
     repo = pathlib.Path(args.repo) if args.repo else None
     if repo is None:
         print("castle-delivery-shim resume: no --repo. The tenant's resume verb works "
@@ -1253,11 +1286,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 claimed.append(f"{candidate} (dry run, nothing written or invoked)")
                 continue
             try:
-                if candidate.state is Candidate.RECOVER:
+                if candidate.state == Candidate.RECOVER:
                     record_id = "(claimed by an earlier pass)"
                 else:
                     record_id = fold.write_claim(candidate)
-                if candidate.state is not Candidate.OBSERVED:
+                if candidate.state != Candidate.OBSERVED:
                     write_answer_into(candidate.parked, candidate.answer.body,
                                       candidate.answer.id)
             except Refused as exc:
@@ -1272,7 +1305,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
     for line in claimed:
         print(line)
-    invoke = [c for c in plan if c.state is not Candidate.OBSERVED] \
+    invoke = [c for c in plan if c.state != Candidate.OBSERVED] \
         if not args.dry_run else []
     rc = 0
     if invoke:
@@ -1357,7 +1390,7 @@ def cmd_stranded(args: argparse.Namespace) -> int:
         if not castle._is_blocking(rec):
             continue
         counted += 1
-        when = record_age(castle, rec)
+        when = record_created(castle, rec)
         if when is None or now - when < cutoff:
             continue
         age = (now - when).days
