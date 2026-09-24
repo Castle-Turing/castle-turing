@@ -526,3 +526,91 @@ caveats apply, structurally, to Khanfor's six-project comparison in
 the addendum above — both papers are thin, single-platform,
 correlational looks drawn from what is likely the same shared dataset,
 not independent replications.
+
+---
+
+## Addendum 3, 2026-09-22: Siddeeq et al. (2026) read first-hand — a correction, not a narrowing
+
+*The resident supplied Siddeeq, Abbasi, Rasku, Zhang, Christophe,
+Mikkonen and Abrahamsson, "Epic-Organized vs. Requirement-Aligned
+Gherkin: An Empirical Evaluation of LLM-Based Acceptance Criteria
+Generation" (arXiv:2607.01980) as a PDF. Read in full. This one is not
+like the two addenda above: the sweep's grading of this paper was
+wrong, not merely thin, and one of the sweep's numbered design
+implications does not survive the correction.*
+
+**The original entry inverted the paper's own finding.** RQ1's sweep
+graded this citation "[V, partial — extraction of the PDF body
+degraded to a paraphrase-level summary]" and reported: "requirement-
+aligned (atomic) generation produces better traceability and less
+redundant, more focused coverage than epic-grouped generation." Read
+properly, the paper finds close to the opposite. It compares an
+epic-organized, JSON-constrained two-pass LLM pipeline ("Timeless")
+against a zero-shot per-requirement baseline, across four PURE-dataset
+SRS documents (107 requirements), using automated structural and
+coverage metrics plus a pre-registered blind evaluation by four SE
+researchers. Epic-organized generation matched or beat the
+requirement-aligned baseline on semantic coverage and on every
+human-rated dimension; the one axis the baseline won outright was
+lexical (TF-IDF) coverage. Semantic
+requirement coverage was comparable (94.3% vs. 92.9%); the 22-point
+lexical gap favoring the baseline (72.0% vs. 76.0% TF-IDF RCR) is
+attributed by the paper
+itself to a measurement artifact — TF-IDF cannot match paraphrased,
+epic-level scenarios against atomic requirement wording — not to a
+real coverage difference, a reading its own semantic metric and its
+human raters both back. That attribution is the paper's
+interpretation, and a reasonable one; it does not change which way
+the lexical number itself points. Four blind expert raters preferred
+epic-organized output on Correctness (4.61 vs. 4.14), Executability
+(4.61 vs. 4.07), and **Completeness (4.31 vs. 3.50)** — the last
+against the paper's own pre-registered hypothesis, which predicted the
+baseline would win on Completeness. The paper states plainly: "H3 is
+rejected."
+
+**Design implication 3 does not survive this and should not be acted
+on.** It read: "Author acceptance criteria at requirement-aligned,
+atomic granularity, not grouped by epic — the one piece of this sweep
+with direct, if thin, empirical support in the same direction the
+project's own conventions already point." That citation does not
+support that claim; read correctly, it leans the other way for the
+narrow thing it actually studied. Two things are worth separating.
+First, the paper never studies decomposing a requirement into
+separately implementable *engineering task units* — it studies how
+already-elicited requirements should be grouped when generating
+Gherkin/BDD *acceptance-criteria scenarios*, a downstream artifact-
+authoring question. The analogy between "atomic Gherkin" and "small
+task briefs" was this sweep's own move, not the paper's claim.
+Second, once that analogy is drawn at all, the paper's actual result
+argues against it, not for it: practitioners preferred a coherent,
+epic-shaped grouping of related requirements over one-scenario-per-
+requirement atomization, on every dimension including how complete
+the result felt. If this transfers to task decomposition at all — and
+it should not be leaned on hard, given it studies a different artifact
+— it argues for grouping decomposed work by coherent capability rather
+than maximizing atomicity, the opposite lean from what design
+implication 3 claimed. The honest position is that this question is
+open again, not resolved in either direction; one paper on an adjacent
+question should not decide it.
+
+**Caveats the paper states about itself, worth carrying forward.**
+Single model (`gpt-4o-mini`) for generation and, via a shared
+provider, for the semantic-coverage embedding — the paper names this
+as its own construct-validity threat ("provider coupling... may
+inflate [scores] if both models share similar internal
+representations") and asks for replication with an independent
+embedding model. Four documents, single run each, no statistical
+generalization claimed. Inter-rater agreement (Fleiss' κ, −0.08 to
+0.03) is near zero, though the paper attributes this to consistent
+scale-usage differences between raters rather than directional
+disagreement — the directional ranking favoring epic-organized output
+holds for 15 or 16 of 16 rater-document pairs on every dimension.
+
+**Owning this plainly.** The sweep flagged its own PDF-extraction
+degradation and graded the claim down for it, which is the right
+discipline — but degraded-and-graded-down is not the same guarantee as
+correctly-directioned-but-imprecise, and this is the case where that
+distinction mattered. The fix is this addendum and the retraction of
+design implication 3 above; anyone who already read the original
+implications list before this addendum landed should treat implication
+3 as withdrawn.
