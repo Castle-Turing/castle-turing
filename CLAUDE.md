@@ -30,9 +30,10 @@ decisions.
   number as names. Deriving work cites state clause keys — see
   `docs/state/README.md` (task 0061).
 - Deferred work lives in `docs/backlog/`, one plain-text file per item,
-  not in an issue tracker — see that directory's README. Speccing an
-  entry promotes it to a numbered brief and deletes the backlog file in
-  the same commit.
+  not in an issue tracker — see that directory's README. An entry is
+  specced in place, and only once the resident marks it `Status: ready`
+  does it transfer verbatim to a numbered brief, deleting the backlog
+  file in the same commit.
 - **An incident ships its detector.** A backlog entry filed from a
   regression, outage, or silent failure answers, in its own section,
   how it would have been caught sooner; the brief that fixes it either
