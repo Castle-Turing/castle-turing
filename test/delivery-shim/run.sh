@@ -423,7 +423,8 @@ A_A="$(answer_id "$STATE_I" "$Q_A")"
 CASTLE_STATE_DIR="$STATE_I" CASTLE_DELIVERY_RESUME_COMMAND="$WORK/tenant" \
   "$SHIM" resume --run-dir "$RUN_A" --repo "$REPO_D" --tasks-dir "$FIX/dovetail-tasks" \
   > "$WORK/r1.out" 2>&1
-rclaim="$(grep -l "^resumes: $A_A$" "$STATE_I"/journal/*-claim-*.md)"
+rclaim="$(grep -l "^resumes: $A_A$" "$STATE_I"/journal/*-claim-*.md || true)"
+[ -n "$rclaim" ] || die "the answer was not claimed, so nothing spent it"
 [ "$(printf '%s\n' "$rclaim" | wc -l)" = "1" ] || die "one answer produced more than one claim"
 [ "$(field "$rclaim" refs)" = "$A_A,$Q_A" ] \
   || die "the claim's refs do not name the answer, then the question"
@@ -477,36 +478,52 @@ ok "the second pass over a spent answer writes nothing and invokes nothing"
 
 # ---------------------------------------------------------------------
 echo "20. two answers closing two questions produce two resumptions"
-# The second run is the same captured journal at a second stamp: the
+# Both answers are filed before either is spent, and that ordering is the
+# check rather than an incidental detail: a fold with no run-scoping at all
+# passes a version of this that resumes run A first, because A's answer is
+# already spent by the time the run-B pass could leak onto it. Here neither
+# is, so a pass over run B that reaches run A's answer spends it — against
+# run B's own park, since both runs are copies of one capture and the
+# errand's name is the same in each.
+#
+# The second run is that same captured journal at a second stamp: the
 # corpus carries no single run with two parks, and a stamp is a directory
-# name the harness already rewrites. What it buys is a castle journal
-# holding two delivery questions at once, which is where a fold's
-# run-scoping can actually be wrong.
+# name this harness already rewrites. What it buys is one castle journal
+# holding two delivery questions, which is where run-scoping can be wrong.
 RUN_B="$WORK/runs/dovetail/2026-09-05T02-11-00"
 stage_run "$PARK" "$RUN_B"
-CASTLE_STATE_DIR="$STATE_I" "$SHIM" fold --run-dir "$RUN_B" \
-  --tasks-dir "$FIX/dovetail-tasks" > /dev/null
+STATE_T="$(new_journal tworuns)"
+for r in "$RUN_A" "$RUN_B"; do
+  CASTLE_STATE_DIR="$STATE_T" "$SHIM" fold --run-dir "$r" \
+    --tasks-dir "$FIX/dovetail-tasks" > /dev/null
+done
+Q_A2="$(basename "$(grep -l '^source-event: README@dovetail/2026-09-05T01-45-45#23$' \
+  "$STATE_T"/journal/*-question-*.md)" .md)"
 Q_B="$(basename "$(grep -l '^source-event: README@dovetail/2026-09-05T02-11-00#23$' \
-  "$STATE_I"/journal/*-question-*.md)" .md)"
-CASTLE_STATE_DIR="$STATE_I" python3 "$CASTLE" answer "$Q_B" \
-  'Option A for this one, and only the socket path.' > /dev/null
-A_B="$(answer_id "$STATE_I" "$Q_B")"
-rm -f "$WORK/tenant.argv"
-CASTLE_STATE_DIR="$STATE_I" CASTLE_DELIVERY_RESUME_COMMAND="$WORK/tenant" \
-  "$SHIM" resume --run-dir "$RUN_B" --repo "$REPO_D" > "$WORK/r3.out" 2>&1
-[ "$(grep -l "^resumes: $A_B$" "$STATE_I"/journal/*-claim-*.md | wc -l)" = "1" ] \
-  || die "the second answer did not produce exactly one claim"
-grep -qx -- "$RUN_B" "$WORK/tenant.argv" || die "the second resumption named the wrong run"
-ok "two answers, two claims, each invocation scoped to its own run"
+  "$STATE_T"/journal/*-question-*.md)" .md)"
+[ "$Q_A2" != "$Q_B" ] || die "two runs folded to one question"
+CASTLE_STATE_DIR="$STATE_T" python3 "$CASTLE" answer "$Q_A2" 'Both paths.' > /dev/null
+CASTLE_STATE_DIR="$STATE_T" python3 "$CASTLE" answer "$Q_B" 'Only the socket path.' > /dev/null
+A_A2="$(answer_id "$STATE_T" "$Q_A2")"
+A_B="$(answer_id "$STATE_T" "$Q_B")"
 
-# And the scoping is the point: the pass over run B never touched run A's
-# answer, and a pass over A now finds nothing left to spend.
 rm -f "$WORK/tenant.argv"
-CASTLE_STATE_DIR="$STATE_I" CASTLE_DELIVERY_RESUME_COMMAND="$WORK/tenant" \
+CASTLE_STATE_DIR="$STATE_T" CASTLE_DELIVERY_RESUME_COMMAND="$WORK/tenant" \
+  "$SHIM" resume --run-dir "$RUN_B" --repo "$REPO_D" > "$WORK/r3.out" 2>&1
+[ "$(grep -l "^resumes: $A_B$" "$STATE_T"/journal/*-claim-*.md | wc -l)" = "1" ] \
+  || die "the run B answer did not produce exactly one claim"
+[ "$(grep -l "^resumes: $A_A2$" "$STATE_T"/journal/*-claim-*.md 2>/dev/null | wc -l)" = "0" ] \
+  || die "a pass over run B spent run A's answer"
+grep -qx -- "$RUN_B" "$WORK/tenant.argv" || die "the resumption named the wrong run"
+ok "a pass over one run leaves another run's answer alone"
+
+rm -f "$WORK/tenant.argv"
+CASTLE_STATE_DIR="$STATE_T" CASTLE_DELIVERY_RESUME_COMMAND="$WORK/tenant" \
   "$SHIM" resume --run-dir "$RUN_A" --repo "$REPO_D" > "$WORK/r4.out" 2>&1
-grep -q 'nothing to resume' "$WORK/r4.out" \
-  || die "an answer from another run leaked into this run's pass"
-ok "an answer closing another run's question is another invocation's business"
+[ "$(grep -l "^resumes: $A_A2$" "$STATE_T"/journal/*-claim-*.md | wc -l)" = "1" ] \
+  || die "the run A answer did not produce exactly one claim"
+grep -qx -- "$RUN_A" "$WORK/tenant.argv" || die "the second resumption named the wrong run"
+ok "two answers, two claims, each invocation scoped to its own run"
 
 # ---------------------------------------------------------------------
 echo "21. claim-without-invoke recovers without double-spending"
