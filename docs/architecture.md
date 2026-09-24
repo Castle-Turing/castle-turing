@@ -397,8 +397,9 @@ events, and a castle-side translator turns them into the records
 above. The dependency runs downward on purpose — a harness that
 depends on nothing above it stays usable by anyone, and whoever
 integrates it pays for the integration — so this document fixes the
-records and leaves the translator as tooling that is specced but not
-yet built (task 0071). **And the
+records and leaves the translator to tooling built beside them rather
+than to the contract: `agent/castle-delivery-shim`, specced by task
+0071 and pinned against the tenant's own event schema by task 0081. **And the
 arrow into this seat is still unnamed:** a filed backlog entry
 becomes a numbered brief today by the resident's hand or an ad-hoc
 session's, and naming that seat is its own work rather than a side
