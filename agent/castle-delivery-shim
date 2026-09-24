@@ -234,8 +234,10 @@ def read_tenant_journal(run_dir: pathlib.Path) -> list[dict]:
         try:
             out.append(json.loads(line))
         except ValueError as exc:
-            if last:
-                break
+            # A newline-terminated line was a completed write, so an
+            # invalid one is corruption, not a torn tail, regardless of
+            # position — the newline check above is what earns the
+            # "torn" reading, and it has already passed by this point.
             raise Refused(f"{path}: line {i} is not valid JSON: {exc}") from exc
     return out
 
