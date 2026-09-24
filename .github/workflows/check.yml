@@ -135,7 +135,15 @@ jobs:
       # shim's correctness rests on — a replay writes nothing, a second
       # attempt writes a second record, a lying hook payload changes
       # nothing, and an unsourceable provenance or an unidentifiable
-      # journal refuses out loud. In this job rather than a new one for
+      # journal refuses out loud. Since task 0082 it also covers the
+      # inbound direction — an answer closing a delivery question
+      # spends exactly once against the `claim` that names it, a
+      # replay spends nothing, and a claim whose invocation died
+      # recovers without a second spend. The tenant's own resume verb
+      # is not run here: `test/delivery-shim/tenant-boundary.sh` is
+      # that exercise and needs emcee installed, which this runner has
+      # no business having, so what runs here reads the capture that
+      # script produced. In this job rather than a new one for
       # record-order.sh's reason: `castle-delivery-shim` is stdlib
       # Python reading JSON lines and writing records, so it needs
       # nothing the stock runner does not already have, and it drives

@@ -96,15 +96,28 @@ it explicitly.
   in `agent/README.md`). The fold is idempotent on the tenant's own
   per-event identity, refuses rather than guesses where a fact is not
   sourceable, and is exercised against four journals captured from
-  real sprints. Two halves are designed and unwired: nothing polls it,
-  so a dropped hook firing is a record that never arrives
+  real sprints. The inbound direction — an answered delivery question
+  resuming the errand — is built as of task 0082:
+  `castle-delivery-shim resume` folds the journal for an answer closing
+  a delivery question, writes the `claim` that spends it before
+  anything reaches the tenant, hands the resident's words over
+  verbatim, and invokes the tenant's own resume verb, which was
+  exercised for real rather than mocked
+  (`test/delivery-shim/tenant-boundary.sh`, and the capture it produced
+  in `test/delivery-shim/fixtures/resumed/`). The falsifier is unrun:
+  the resident's own answer, through the real surface, on a real parked
+  errand — the one step that needs their hands. Two halves are
+  designed and unwired: nothing polls either direction, so a dropped
+  hook firing is a record that never arrives and a missed tick is a
+  resumption that waits
   (`docs/backlog/nothing-polls-the-delivery-shim.md`), and nothing
   calls its outcome-log step, which by construction only the seat can
   call at the moment the row is still accurate
-  (`docs/backlog/the-outcome-row-is-written-by-hand.md`). The inbound
-  direction — an answered delivery question resuming the errand — is
-  task 0082 and unbuilt, so an answered delivery question still
-  resumes nothing automatically.
+  (`docs/backlog/the-outcome-row-is-written-by-hand.md`). The unwired
+  poll is not silent, which is the difference task 0082 made to it:
+  `castle-delivery-shim stranded` reports a delivery question that has
+  had no resumption path for N days, so an idle watcher stops looking
+  like a quiet day.
 - Baseline instrumentation ([m2-constraints] first clause): running
   as of task 0070, and fed as of task 0072.
   `docs/log/task-outcomes.tsv` carries one row per
