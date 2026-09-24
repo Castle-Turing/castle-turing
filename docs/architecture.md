@@ -421,9 +421,17 @@ brief carries it or why none does. It reads a requirements document
 that passes `clarify check`, the milestone state, and the briefs that
 already exist; it writes one slate and the mechanism is
 `docs/planning.md`. This is the arrow the delivery paragraph above
-called unnamed: a filed backlog entry became a numbered brief by the
-resident's hand or an ad-hoc session's, and that step is a seat like
-any other.
+points back at, and until task 0079 it had no name: a filed backlog
+entry became a numbered brief by the resident's hand or an ad-hoc
+session's, and that step is a seat like any other.
+
+Its records, in this slice: a `question`, for the reason the next
+paragraph gives, and nothing else. The slate is a file rather than a
+record — it is read by the resident and by `tools/plan/plan`, neither
+of which reads the journal — and whether this seat also emits a
+`claim` when it takes a requirements document and a `result` when it
+finishes one is not settled here. Nothing dispatches it yet, so
+nothing yet needs to know.
 
 Its ceiling, stated the way delivery's is: **the planner proposes; it
 never dispatches.** No brief it writes is eligible work until the
@@ -464,9 +472,13 @@ category — a reasoning seat, as worker, router and delivery already
 are — and deliberately not `architect` or `product manager`. The seat
 vocabulary names function rather than org-chart titles, and a seat
 named for a job title invites a reader to assume capabilities from
-the title rather than from the contract; the elicitation research
-also found role and seniority framing predicts little about what a
-model does. Nor `speccer`: what this seat produces is a decomposition
+the title rather than from the contract. The closest evidence there
+is points the same way and is about people rather than models: the
+elicitation library's family of experiments found analyst seniority a
+weak predictor of elicitation effectiveness — domain familiarity and
+specific interviewing skill carried the variance
+(`docs/research/elicitation-papers.md`) — which undercuts a
+seniority-shaped framing rather than supporting one. Nor `speccer`: what this seat produces is a decomposition
 of a document the clarifying-questions phase already specced, and
 "which seat wrote the spec" must not have the same answer as "which
 seat decided how to cut it up".

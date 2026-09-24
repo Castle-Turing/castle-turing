@@ -393,9 +393,9 @@ not check rather than letting a green exit read as a verdict.
 
 `oracle/slate.md` is a worked example — the `clarify` probe's
 requirements document decomposed for real, not an invented one — and
-`test/plan/run.sh` runs the whole thing in CI, mostly as its negative
-half: fifty-odd checks over that example, mostly mutations, each asserted to be caught by
-the rule that owns it.
+`test/plan/run.sh` runs the whole thing in CI and is mostly its negative
+half: fifty-odd checks over that example, all but a few of them
+mutations, each asserted to be caught by the rule that owns it.
 
 Same boundary as `clarify/` above, and the same answer: this never
 touches a journal and never runs as a seat, the artifacts it reads are
