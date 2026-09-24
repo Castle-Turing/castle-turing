@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# reachability: interactive — the operator compares foot settings by eye on the real panel.
 # tools/foot-setting-sweep.sh — compare one foot setting side by side on
 # the real panel.
 #
