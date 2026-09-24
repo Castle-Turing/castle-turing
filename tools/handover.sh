@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# reachability: interactive — generated on demand by the operator at handover time; nothing schedules it.
 # tools/handover.sh — generate the operator handover, and refuse to hand
 # over one that does not check out.
 #
