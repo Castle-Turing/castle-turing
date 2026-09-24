@@ -91,11 +91,20 @@ it explicitly.
   since). The seat it occupies is named as of task 0069 —
   **delivery**, in `docs/architecture.md` — and the shim translating
   the tenant's own events into `claim`, `result` and `question`
-  records is specced as of task 0071: its castle-side contract and
-  reconciliation policy, not its code. The tenant's exact hook and
-  event schema were not reachable from that task's worktree, so the
-  translation itself — and the schema it pins against — is a
-  separate implementation task, not yet built.
+  records is built as of task 0081, against the tenant's real schema
+  (`agent/castle-delivery-shim`, pinned to emcee 0.1.0 and documented
+  in `agent/README.md`). The fold is idempotent on the tenant's own
+  per-event identity, refuses rather than guesses where a fact is not
+  sourceable, and is exercised against four journals captured from
+  real sprints. Two halves are designed and unwired: nothing polls it,
+  so a dropped hook firing is a record that never arrives
+  (`docs/backlog/nothing-polls-the-delivery-shim.md`), and nothing
+  calls its outcome-log step, which by construction only the seat can
+  call at the moment the row is still accurate
+  (`docs/backlog/the-outcome-row-is-written-by-hand.md`). The inbound
+  direction — an answered delivery question resuming the errand — is
+  task 0082 and unbuilt, so an answered delivery question still
+  resumes nothing automatically.
 - Baseline instrumentation ([m2-constraints] first clause): running
   as of task 0070, and fed as of task 0072.
   `docs/log/task-outcomes.tsv` carries one row per
@@ -104,8 +113,10 @@ it explicitly.
   gates every pull request that touches a brief or the log — a task
   that lands unlogged fails CI. Rows are appended by the session that
   opens the task's pull request, a named step in `docs/measurement.md`
-  rather than a wired one — the delivery seat writing its own rows is
-  filed at `docs/backlog/the-outcome-row-is-written-by-hand.md`. The
+  rather than a wired one. The delivery seat has a castle-side command
+  for it as of task 0081 and nothing calls it yet;
+  `docs/backlog/the-outcome-row-is-written-by-hand.md` carries the
+  remaining half and the three design questions task 0081 closed. The
   verdict columns have an invocation path: `outcomes redirect`
   transcribes a resident's redirect against a citation whose author it
   verifies, and `tools/reachability-check.py` fails CI if either step

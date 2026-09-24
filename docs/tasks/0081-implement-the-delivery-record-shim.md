@@ -83,3 +83,72 @@ outcomes-check green.
 
 Needs the resident: nothing during implementation; the blockers named
 above, if hit, come back as questions.
+
+## Verification plan, as amended by the implementing PR
+
+**Tier 1 was enough: no shape needed provoking, and none is synthetic.**
+The inventory of existing run history covered the checklist outright.
+Sixty-one journals were read; four were captured whole, and between
+them they carry every shape the checklist names — a brief taken, a
+pull request opened, a give-up, a park with the question file it names
+still beside it, and a park answered by the resident followed by a
+second attempt on the same errand in the same journal. The second tier
+(provoke the missing shape with a one-task sprint against a disposable
+repository) was therefore not reached, and the third (a hand-written
+fixture, labelled, with a criterion named as resting on it) was not
+reached either. **No criterion in this plan rests on a synthetic
+fixture.** `test/delivery-shim/fixtures/README.md` is the corpus's own
+account of itself, including the one mechanical redaction — the
+operator's home directory, login name and private profile repository —
+applied to every byte of every file, because this repository takes no
+personal data in any file, fixtures included.
+
+Two shapes came free and are worth naming because they are the ones a
+hand-written fixture would never have produced. One journal predates
+emcee making `model` a required field, so it exercises the refusal that
+fires when a result cannot name its implementer; one ran through the
+OpenCode adapter, which declares its provider explicitly, so it
+exercises the first of the two provider-sourcing rules while the others
+exercise the second.
+
+`no-identity/` is the single derived fixture and says so by its name: a
+real journal with every `seq` removed, which the shim must refuse.
+
+**What the automated half proves**, in `test/delivery-shim/run.sh`
+(eighteen checks, wired into `check.yml`'s `agent-loop-test` job): one
+errand folds to its claim and its result, with outcome, tenant, model,
+provider and the pull request all read from the tenant's log; a park
+folds to a blocking question carrying the tenant's own words verbatim;
+a double run appends nothing, on provoked-real logs rather than mocks;
+one errand attempted twice produces two records rather than one; a hook
+payload that lies about every fact it could lie about produces exactly
+the records the log describes, and a run with no payload at all
+produces the same ones; provenance on every record is sourced and reads
+back to a brief that exists, with the sourcing named on the record; a
+journal stripped of event identity refuses the whole pass and writes
+nothing. `castle validate` accepts everything written, and `castle
+route` routes it — the seat's records are usable by the surface they
+exist for, not merely well-formed.
+
+**Where the end-to-end run landed.** `castle-turing/2026-09-22T09-09-47`
+is this repository's own sprint on tasks 0076 and 0077, folded against
+this repository's own `docs/tasks/`, and committed as a fixture. That
+is the "one real sprint task's records folded into the castle journal"
+this plan asked for.
+
+**What was left out, and why.** The outcome-log row is implemented as
+`castle-delivery-shim row` and has no caller. The row belongs on the
+errand's own branch before the pull request opens — both the cheap
+moment and the only moment `queued` is still accurate — and a journal
+hook fires against the operator's primary checkout, which is on `main`.
+Rather than paper that over by maturing rows on the wrong branch, `row`
+refuses any checkout that is not on the errand's branch, so the
+shortfall is a mechanical failure rather than a sentence in a document.
+The remaining half is a caller inside the seat, which is emcee: the
+contract gap is recorded in
+`docs/backlog/the-outcome-row-is-written-by-hand.md`, whose three open
+questions this implementation does answer. The liveness poll is in the
+same position and for a related reason
+(`docs/backlog/nothing-polls-the-delivery-shim.md`); task 0071 left the
+wake interval to the resident's own tolerance for a blind window, and
+it still is.
