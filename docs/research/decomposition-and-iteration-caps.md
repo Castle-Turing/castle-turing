@@ -550,13 +550,18 @@ against a zero-shot per-requirement baseline, across four PURE-dataset
 SRS documents (107 requirements), using automated structural and
 coverage metrics plus a pre-registered blind evaluation by four SE
 researchers. Epic-organized generation matched or beat the
-requirement-aligned baseline on every axis actually measured. Semantic
-requirement coverage was comparable (94.3% vs. 92.9%); a 22-point
-lexical (TF-IDF) gap favoring the baseline is attributed by the paper
+requirement-aligned baseline on semantic coverage and on every
+human-rated dimension; the one axis the baseline won outright was
+lexical (TF-IDF) coverage. Semantic
+requirement coverage was comparable (94.3% vs. 92.9%); the 22-point
+lexical gap favoring the baseline (72.0% vs. 76.0% TF-IDF RCR) is
+attributed by the paper
 itself to a measurement artifact — TF-IDF cannot match paraphrased,
 epic-level scenarios against atomic requirement wording — not to a
 real coverage difference, a reading its own semantic metric and its
-human raters both back. Four blind expert raters preferred
+human raters both back. That attribution is the paper's
+interpretation, and a reasonable one; it does not change which way
+the lexical number itself points. Four blind expert raters preferred
 epic-organized output on Correctness (4.61 vs. 4.14), Executability
 (4.61 vs. 4.07), and **Completeness (4.31 vs. 3.50)** — the last
 against the paper's own pre-registered hypothesis, which predicted the
