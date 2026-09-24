@@ -436,17 +436,15 @@ class Fold:
                     "Its path, as the tenant's log recorded it, is below; the question "
                     "itself is there and not here."
                 )
-        body = "\n".join([
+        paragraphs = [
             text or "The delivery seat blocked on a judgment only the resident can supply.",
-            "",
             note,
-            "",
             self.brief_line(errand),
-            "",
             "Answering this does not resume the errand on its own: the inbound "
             "mechanism is a separate piece of work and until it exists an answered "
             "delivery question resumes nothing automatically (docs/architecture.md).",
-        ])
+        ]
+        body = "\n\n".join(part for part in paragraphs if part)
         return fields, body
 
     def result(self, errand: str, rec: dict) -> tuple[dict, str]:
@@ -549,6 +547,10 @@ class Fold:
             record_id = self.castle.write_record(
                 journal,
                 type=kind,
+                # The one value, and `common()` above is where it was
+                # earned: nothing reaches this line without a brief file
+                # having been found, and a brief is in the tasks
+                # directory only by the resident's own act.
                 provenance="requested",
                 seat=SEAT,
                 refs=[],
