@@ -30,9 +30,11 @@ decisions.
   number as names. Deriving work cites state clause keys — see
   `docs/state/README.md` (task 0061).
 - Deferred work lives in `docs/backlog/`, one plain-text file per item,
-  not in an issue tracker — see that directory's README. Speccing an
-  entry promotes it to a numbered brief and deletes the backlog file in
-  the same commit.
+  not in an issue tracker — see that directory's README. Speccing
+  happens in place: the item's file grows the task header and body as
+  the spec matures, and stays in the backlog while it does. When the
+  resident approves a fully specced item, it is marked `Status: ready`
+  in its header — the resident's act, never inferred.
 - **An incident ships its detector.** A backlog entry filed from a
   regression, outage, or silent failure answers, in its own section,
   how it would have been caught sooner; the brief that fixes it either
@@ -43,10 +45,18 @@ decisions.
   day; only a check outlives the memory of the incident. (Adopted
   2026-09-08, from the review-pipeline regression that was found by
   the resident rather than by anything automated.)
-- Implementation work is specced as numbered briefs in `docs/tasks/`
-  (`0001-`, `0002-`, …). A brief is committed on the branch that implements
-  it, never separately — spec and implementation merge and get audited
-  together.
+- Implementation work is dispatched as numbered briefs in `docs/tasks/`
+  (`0001-`, `0002-`, …). A brief arrives there only by verbatim transfer
+  of a `Status: ready` backlog item: headers and body copied unchanged
+  except the `Status:` line, the number and filename allocated at
+  transfer against the live directory, and the backlog file deleted in
+  the same commit. The transfer commit lands on `main` and is pushed —
+  placing a file in `docs/tasks/` is the dispatch trigger for any
+  harness watching it, a spend decision, so the ready mark keeps
+  editorial judgment out of that act: approval happens where the spec
+  lives, the transfer is mechanical, and what was approved is what
+  runs. This is the one commit class an agent session makes directly
+  on `main`.
 - Prefer plain text and standard formats everywhere: they are the point of
   the project. If a tool choice trades AI-legibility for features, flag it.
 - Keep the flake evaluating (`nix flake check`) once it is non-trivial.
@@ -198,15 +208,16 @@ missing one; the coverage gate catches missing.
 ## Spec workflow
 
 When asked to spec a feature: choose the smallest next chunk of useful
-work, ask clarifying questions first, then draft a numbered brief in
-`docs/tasks/` containing the spec, plan, and an implementation prompt
-for a separate session. The brief is committed on the branch that
-implements it, per the tasks convention.
+work, ask clarifying questions first, then grow the spec in place in
+the item's backlog file — the spec, plan, and an implementation prompt
+for a separate session. The item reaches `docs/tasks/` only through
+the resident's `Status: ready` mark and the mechanical transfer, per
+the tasks convention.
 
 **Every piece of implementation work gets a brief, however small.**
 Proportionality decides a brief's length, never whether it exists: a
 feature earns clarifying questions and a full spec, a mechanical change
-earns fifteen lines committed alongside the work. What must not happen
+earns fifteen lines. What must not happen
 is a change whose reasoning lives only in a PR description — that is on
 a hosting service, not in the repo, and it is the one place these
 conventions exist to avoid depending on. `docs/tasks/` is the log a
@@ -215,16 +226,18 @@ especially what was considered and rejected; git history records only
 what changed.
 
 **If the design shifts during implementation, the same PR updates the
-brief.** Briefs are written up front and ride their branch, so nothing
-else corrects one the work has overtaken, and a brief confidently
-describing an abandoned design is worse than none.
+brief.** Briefs are written up front, so nothing else corrects one the
+work has overtaken, and a brief confidently describing an abandoned
+design is worse than none.
 
-**Approval, and how autonomy overrides it.** Ask for explicit approval
-before writing a brief to disk. That default is suspended for the scope
-of an explicit instruction to work autonomously — then write the brief,
-proceed, and record every judgment call that would otherwise have been
-a question, so the approval happens in review rather than not at all.
-Autonomy relaxes *when* the human is consulted; it never relaxes the
+**Approval, and how autonomy overrides it.** The approval act is the
+resident's `Status: ready` mark on the backlog item; no agent applies
+it on its own judgment, and no brief reaches `docs/tasks/` without it.
+Growing a spec in the backlog needs no approval — that is what the
+backlog is for. An explicit instruction to work autonomously relaxes
+*when* the resident is consulted during speccing — write, proceed, and
+record every judgment call that would otherwise have been a question —
+but it never confers the ready mark, and it never relaxes the
 conventions themselves. Watch for this specifically: the two times a
 brief has been skipped in this project, both were under an autonomy
 grant, by an agent treating "work autonomously" as licence to decide a

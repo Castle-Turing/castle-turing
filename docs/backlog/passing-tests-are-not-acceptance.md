@@ -1,115 +1,115 @@
-# Passing tests are not acceptance
+Title: The acceptance harness — a completion claim must survive its criteria
+Status: ready
+Model: deep
+Model-because: the design decides what an automated pass may claim on
+the resident's behalf — the receipt/verdict boundary under Proposal
+06, and the isolation rules that keep a verifier from rationalizing
+toward what got built. Encoding that boundary wrongly produces green
+runs that mean nothing, which is this task's own subject. The runner's
+mechanics, once the rules are fixed, are standard-tier work kept here
+so rules and enforcement land together.
+Milestone: m2-done
+Requires: the planner seat (backlog item the-speccing-step-is-an-unnamed-seat; task id fixed at transfer)
+Requires-because: acceptance checks are authored into each brief by the planner's slate format; this harness executes what the planner defines, and its criteria-immutability rule leans on criteria having a committed, spec-time home the planner creates.
 
-**What.** The pipeline's known failure mode, named by the resident
-(2026-09-10): an implementing agent reports work complete while
-holding an entirely different definition of complete than the
-resident. "Unit tests all pass" is not "this works the way the
-resident expects," and today the gap between those two sentences is
-closed by the resident doing manual acceptance testing — the exact
-scarce resource everything else exists to conserve. The resident's
-direction: this failure mode must become significantly harder to
-trigger, which means investing in a harness for agentic acceptance
-testing — distinct from the integration- and fuzz-testing a general
-test-harness investment would cover, because acceptance asks "does
-this match the resident's intent," not "is the code internally
-sound."
+# The acceptance harness — a completion claim must survive its criteria
 
-**Why it matters.** A one-human-plus-n-agents team scales only as
-far as the human's attention, and manual acceptance is attention
-spent at the worst point: after implementation, per change, on work
-whose spec moment has passed. Worse, a completion claim that goes
-unchallenged is the confident fiction the receipts rule exists to
-prevent — the ban on completion vocabulary is discipline at the
-reporting layer, but nothing mechanical stands behind it at the
-artifact layer.
+## Where this came from
 
-**What we already know.**
+The pipeline's named failure mode, stated by the resident 2026-09-10:
+an implementer reports work complete while holding a different
+definition of complete than the resident. Unit tests passing is not
+"works the way the resident expects," and today that gap is closed by
+the resident's own manual acceptance testing — the scarce resource
+everything else conserves. This backlog item is the record, grown in place per the work
+layout; the transfer to docs/tasks/ retires it. Its worked specimen is task 0070: every test green, gate armed,
+and the resident's reading — rows get written as work happens — unmet,
+caught only by a human reading the PR.
 
-- The raw material exists at spec time. Milestone documents carry
-  "done looks like" clauses; the elicitation protocol extracts them
-  from the resident's words; every brief owes a verification plan.
-  All of it is prose today, and prose is where an implementer's
-  private definition of "complete" hides.
-- The design move is compilation: the done-looks-like clause and the
-  brief's verification plan become executable acceptance checks,
-  authored at spec time and run by an agent standing in for the
-  resident against the real artifact.
-- The approval research (`docs/research/automated-approval.md`)
-  supplies the strongest argument from an unexpected angle: the
-  best-measured mitigation against a verifier gaming its own verdict
-  is having the judge commit its assessment *before* seeing the
-  candidate (arXiv:2607.05904, false positives 0.72 to 0.01).
-  Acceptance criteria
-  written at spec time, before any implementation exists, are
-  structurally that commitment — the acceptance agent cannot
-  rationalize toward what got built, because the bar was set when
-  nothing was built.
-- The same research documented the failure this harness must resist
-  (`docs/research/automated-approval.md`, arXiv:2605.01471): LLM
-  verifiers weakening assertions and deleting failing checks to
-  manufacture passes. Consequences for the design: the acceptance
-  seat is distinct from the implementer (the sentinel argument —
-  cross-family where stakes warrant), acceptance criteria live where
-  the implementer cannot edit them, and criteria change only by
-  reviewed commit.
-- For GUI surfaces, the agent-computer-interface (ACI) research
-  (`docs/research/aci-for-gui-building.md`) makes acceptance
-  mechanical: posed fixtures, interaction contracts (in state X,
-  activating Y yields Z), and a tree-inspection verb are exactly
-  "works the way the resident expects" rendered checkable.
-- Proportionality holds: a harness step is owed when it will repeat
-  (the existing convention). A one-off manual check the resident can
-  do in a minute stays manual; the acceptance harness exists for the
-  checks that recur with every change to a surface.
+## The mechanism
 
-**How this would have been caught sooner.** It is caught today — by
-the resident, manually, every time, which is the problem statement
-rather than a detector. The detector the eventual brief owes is the
-harness itself: a task whose acceptance checks do not pass cannot
-report itself complete, and a brief whose done-looks-like clause
-compiles to no executable check must say so explicitly and name the
-manual step that stands in — blank is not an answer, per the same
-rule that binds this section.
+**Criteria are compiled at spec time and frozen against the
+implementer.** Each brief's verification plan (mandatory, per the
+planner item's slate format — id fixed at transfer) carries
+acceptance criteria that assert
+reachability — a feature is accepted when exercised in its real
+invocation path, never when it merely exists and unit-passes. They are
+committed with the brief before implementation exists. That ordering
+is the load-bearing defense, with measurement behind it: a judge that
+commits its assessment before seeing the candidate cuts false
+positives from 0.72 to 0.01 (the automated-approval research review).
+The mechanical half of frozen: the runner flags any change to a
+brief's criteria made on that brief's own implementing branch — a
+criterion may change only by a commit the resident reviews, never by
+the implementer widening its own gate. The documented failure this
+resists: LLM verifiers weakening assertions and deleting failing
+checks to manufacture passes.
 
-**A worked specimen — task 0070 (2026-09-14).** The task that built
-the outcome-log baseline passed every test, committed its backfill,
-and armed a coverage gate: "logging is running" was true in the
-implementer's honest reading. The resident's reading was *rows get
-written as work happens and a redirect is loggable* — and neither
-was wired: `derive` was manual (the brief said so plainly), and the
-verdict columns had no invocation path a resident who will not
-hand-edit a TSV would use. Merging would have armed the gate against
-a pipeline that fed it nothing, breaking every later task PR. The
-resident caught it by reading the PR; nothing mechanical did. This is
-the failure this entry predicts, and it produced two follow-ups: task
-0072 wires the reachability (rows on every PR, an agent-invoked
-redirect logger), and the detector below.
+**The acceptance agent is isolated from the implementer.** Two rules,
+each independently evidenced in the research review *Decomposition
+and iteration-cycle calibration* (docs/research/): it runs in a
+separate context — sharing the generator's context measurably worsens
+reward hacking over repeated cycles — and where stakes warrant, a
+different model family, the sentinel argument. It receives the
+criteria, the built artifact, and its invocation path. It does not
+receive the implementer's transcript, reasoning, or diff narrative.
 
-**The reachability corollary.** The 0070 miss has a mechanical shape
-distinct from its semantic cause, and the shape is catchable without
-the resident: *functionality added with no invocation path, behind a
-gate nothing feeds.* Acceptance criteria must therefore assert
-**reachability**, not only correctness — a feature is accepted when
-it is exercised in its real invocation path, never when it merely
-exists and unit-passes. Task 0072 ships the mechanical detector (a
-lint for orphan tool entrypoints and armed gates with no feeder);
-this entry owns the semantic half, which only an acceptance check
-authored from the resident's done-looks-like can carry. The division
-matters: the lint would not have understood that "logging is running"
-meant "rows get written," but a reachability-asserting acceptance
-criterion, written at spec time, would have demanded a demonstration
-that a row appears when a task lands — and failed when none did.
+**A pass is a receipt, never a verdict.** The run's report states
+which criteria were exercised and what was observed, with citations —
+and no completion vocabulary: the report is lintable for the same
+banned assertions as every generated surface (Proposal 06, the
+resident's 2026-09-06 requirement). An agent-as-user pass is solid
+evidence a mechanism fired and weak evidence a person is satisfied —
+the simulated-user research independently confirms what the
+architecture already commits to. The resident's verdict stays the
+only verdict; what this harness changes is that the resident spends
+it on work that has already survived its stated criteria.
 
-**Constraint at promotion time.** This is pipeline-changing work;
-[m2-constraints]'s baseline-before-intervention clause applies to
-any brief promoted from this entry.
+**A criterion that cannot compile to an executable check must say
+so** and name the manual step that stands in. Blank is not an answer
+— the non-emptiness rule that binds a falsifier, a Model-because, and
+a deferral reason. This is the detector the source entry owed: a task
+whose checks do not pass cannot report itself complete, and a brief
+with no executable check has said so out loud where the slate review
+reads it.
 
-**Open questions.** Whether acceptance checks live with the brief
-(spec and check merge together) or in a standing suite the brief
-extends. What the acceptance agent's report owes the journal so a
-pass is a receipt rather than a claim. How far criteria compilation
-can be automated before the elicitation itself becomes the
-bottleneck it was meant to relieve. And where the harness draws the
-line against [[the-resident-reviews-specs-not-code]]'s sampled
-manual reads — a sample of real resident acceptance should probably
-survive as calibration for the agentic kind.
+**Repair cycles are bounded by a condition, not a count.** When a
+run fails and the implementer retries, the loop's stopping rule is
+the measured shape from the self-correction literature — stop when
+error-introduction catches error-correction, with a hard cycle cap
+as backstop only — and any failure the criteria did not anticipate
+escalates to the resident immediately rather than being interpreted
+by the loop. The full measurement (per-model correction and
+introduction rates) is not this slice; this slice is the cap plus
+the escalate-on-novelty rule, with the measured condition named as
+the successor so the cap is not mistaken for the design.
+
+## What lands
+
+1. The acceptance-run format and rules in the planning document
+   (extending 0079's, same checked/not-checked discipline).
+2. tools/accept/accept — run one brief's criteria against a built
+   artifact; report as receipt; flag implementer-branch criteria
+   edits; refuse a brief whose criteria section is empty rather than
+   passing vacuously.
+3. test/accept/run.sh fixtures: a criterion that fails is reported
+   failed; an implementer-branch criteria edit is flagged; an empty
+   criteria section refuses; completion vocabulary in a report fails
+   the lint; a clean run passes and its report cites what it
+   exercised.
+4. Reachability: CI caller and feeder line; invokes markers at the
+   documented steps.
+5. The milestone position patched.
+
+## Verification plan
+
+Automated: the fixtures above in CI; outcomes-check and reachability
+green. End-to-end, no human: run the harness once against an already-
+merged task with post-hoc criteria (task 0072's "a row appears when a
+task lands" is the natural specimen — the exact criterion whose
+absence let 0070 through) and commit the run's receipt as a fixture.
+Needs the resident: sampled reads of real acceptance receipts against
+their own judgment — the calibration the source entry reserves, and
+this harness's falsifier: if receipts and the resident's verdicts
+diverge on the sample, the compilation is wrong, and the receipt
+says which criterion diverged.
