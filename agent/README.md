@@ -790,9 +790,13 @@ required cannot name its implementer, and says so rather than guessing.
 
 The tenant's `--journal-hook CMD` runs CMD once per appended record,
 with that record on stdin and `EMCEE_RUN_DIR` in the environment. The
-shim reads the environment variable and **discards stdin unparsed**.
-The payload says *when* to look and never *what happened*; what
-happened always comes from the tenant's log, read fresh.
+shim reads the environment variable and **never reads stdin at all** —
+not read-and-discarded, never opened. The payload says *when* to look
+and never *what happened*; what happened always comes from the tenant's
+log, read fresh. The tenant caps a record at 16 KiB against a 64 KiB
+pipe buffer, so nothing blocks on the unread end; a version that did
+drain it hung the interval poll, whose stdin is an inherited descriptor
+nobody closes.
 
 That is what makes a missed firing a liveness problem rather than a
 correctness one, and it has a consequence worth stating plainly: the

@@ -94,10 +94,25 @@ pull request opened, a give-up, a park with the question file it names
 still beside it, and a park answered by the resident followed by a
 second attempt on the same errand in the same journal. The second tier
 (provoke the missing shape with a one-task sprint against a disposable
-repository) was therefore not reached, and the third (a hand-written
-fixture, labelled, with a criterion named as resting on it) was not
-reached either. **No criterion in this plan rests on a synthetic
-fixture.** `test/delivery-shim/fixtures/README.md` is the corpus's own
+repository) was therefore not reached.
+
+**The third tier was reached once, and this is the downgrade it
+requires.** One criterion rests on a synthetic fixture: *an attempt's
+facts belong to that attempt, not to the errand* — that a result names
+the model and pull request of its own attempt rather than the last one
+the errand had. Attribution across attempts is only observable where
+one errand is attempted twice inside one run and the facts differ, and
+the corpus's single instance of that shape is the 2026-08-20 journal,
+which predates `model` being required: both of its results refuse, so a
+misattribution between them leaves no trace. The fixture is that real
+journal with `model` and `model_source` added to its two
+`step_started` records and nothing else changed; it is named
+`synthetic-retry/` and says so in `fixtures/README.md`. It should be
+replaced by a capture the first time a real run retries a task and
+records a model. The property it pins is not cosmetic — it was a defect
+in the first implementation of this shim, found in self-review, where
+the facts were collected per errand instead of per attempt, and the
+mutant is confirmed to fail this check. `test/delivery-shim/fixtures/README.md` is the corpus's own
 account of itself, including the one mechanical redaction — the
 operator's home directory, login name and private profile repository —
 applied to every byte of every file, because this repository takes no

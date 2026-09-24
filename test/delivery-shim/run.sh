@@ -217,7 +217,45 @@ grep -q '^tenant-error: OpenCodeError:' "$fresult" \
 ok "a give-up becomes a failed result carrying the tenant's error and its declared provider"
 
 # ---------------------------------------------------------------------
-echo "9. a journal with no event identity refuses the whole pass"
+echo "9. an attempt's facts belong to that attempt, not to the errand"
+# SYNTHETIC — see fixtures/README.md. The corpus's one retry inside a
+# single run predates the tenant making `model` required, so both of its
+# results refuse and the misattribution this pins would be invisible. The
+# fixture is that real journal with `model`/`model_source` added to its
+# step_started records, differing between the two attempts, and nothing
+# else changed.
+STATE_A="$(new_journal attempts)"
+set +e
+CASTLE_STATE_DIR="$STATE_A" "$SHIM" fold --run-dir "$FIX/synthetic-retry/2026-08-20" \
+  --tasks-dir "$FIX/emcee-tasks" > "$WORK/attempts.out" 2> "$WORK/attempts.err"
+set -e
+first="$(grep -l '^source-event: 0007-greeting@synthetic-retry/2026-08-20#14$' "$STATE_A"/journal/*.md)"
+second="$(grep -l '^source-event: 0007-greeting@synthetic-retry/2026-08-20#19$' "$STATE_A"/journal/*.md)"
+[ -n "$first" ] && [ -n "$second" ] || die "the two attempts did not both produce a result"
+[ "$(field "$first" model)" = "claude-sonnet-5" ] || die "the first attempt's result names the wrong model"
+[ "$(field "$second" model)" = "claude-haiku-4-5" ] || die "the second attempt's result names the wrong model"
+[ "$(field "$first" 'tenant-outcome')" = "parked" ] || die "the first attempt's outcome moved"
+[ "$(field "$second" 'tenant-outcome')" = "error" ] || die "the second attempt's outcome moved"
+ok "two attempts on one errand each name their own model, not the last one seen"
+
+# ---------------------------------------------------------------------
+echo "10. the fold never waits on the doorbell's payload"
+# The poll runs under a timer with no hook in sight, and inherits
+# whatever stdin that timer had. A fold that reads stdin blocks there
+# forever — the liveness half hanging on the payload it exists not to
+# need. Proven by giving it a pipe nobody will ever close.
+set +e
+( sleep 45 ) | timeout 20 env CASTLE_STATE_DIR="$(new_journal stdin)" "$SHIM" fold \
+  --run-dir "$FIX/castle-turing/2026-09-22T09-09-47" \
+  --tasks-dir "$REPO_ROOT/docs/tasks" > "$WORK/stdin.out" 2>&1
+rc=$?
+set -e
+[ "$rc" != "124" ] || die "the fold blocked on an stdin nobody closes"
+grep -q ' claim ' "$WORK/stdin.out" || die "the fold wrote nothing with a pipe attached"
+ok "an stdin nobody closes does not stop the fold"
+
+# ---------------------------------------------------------------------
+echo "11. a journal with no event identity refuses the whole pass"
 STATE_N="$(new_journal noident)"
 set +e
 CASTLE_STATE_DIR="$STATE_N" "$SHIM" fold --run-dir "$FIX/no-identity" \
@@ -231,7 +269,7 @@ grep -q 'no stable per-event identity' "$WORK/noident.err" \
 ok "no stable identity, no fold — the blocker surfaces instead of being papered"
 
 # ---------------------------------------------------------------------
-echo "10. everything written validates as a castle journal"
+echo "12. everything written validates as a castle journal"
 CASTLE_STATE_DIR="$STATE" python3 "$CASTLE" validate > "$WORK/validate.out" 2>&1 \
   || { cat "$WORK/validate.out"; die "the shim wrote records castle validate condemns"; }
 CASTLE_STATE_DIR="$STATE_Q" python3 "$CASTLE" validate > /dev/null 2>&1 \
@@ -239,7 +277,7 @@ CASTLE_STATE_DIR="$STATE_Q" python3 "$CASTLE" validate > /dev/null 2>&1 \
 ok "castle validate accepts the shim's records, including the blocking question"
 
 # ---------------------------------------------------------------------
-echo "11. the router can read them"
+echo "13. the router can read them"
 # The delivery seat's whole reason for writing records is that something
 # downstream acts on them. notify-send is stubbed, as test/agent-loop
 # stubs it, so the router's notify channel does not need a desktop.
@@ -253,7 +291,7 @@ grep -q 'notify' "$WORK/route.out" \
 ok "a sourced provenance routes the seat's blocking question to an interruption"
 
 # ---------------------------------------------------------------------
-echo "12. the outcome row refuses a checkout that is not the errand's branch"
+echo "14. the outcome row refuses a checkout that is not the errand's branch"
 set +e
 "$SHIM" row --run-dir "$FIX/castle-turing/2026-09-22T09-09-47" \
   --task 0076-widen-the-reachability-lint-to-its-claimed-coverage \

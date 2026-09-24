@@ -44,7 +44,7 @@ THE HOOK IS A DOORBELL, NOT THE MAIL
 
 emcee's `--journal-hook CMD` runs CMD once per appended record, with the
 record on stdin and `EMCEE_RUN_DIR` in the environment. This shim reads
-`EMCEE_RUN_DIR` and *discards stdin unparsed*: the payload says when to
+`EMCEE_RUN_DIR` and *never reads stdin at all*: the payload says when to
 look and never what happened. That is not a stylistic choice — it is
 what makes a missed firing a liveness problem rather than a correctness
 one. The consequence is that the doorbell and the interval poll are the
@@ -308,21 +308,46 @@ class Fold:
         self.key = run_key(run_dir)
         self.records = read_tenant_journal(run_dir)
         self.check_identity()
-        # Facts read for a record's fields, never a record of their own.
-        self.settings: dict[str, dict] = {}
-        self.pull_requests: dict[str, str] = {}
-        self.models: dict[str, dict] = {}
+        self.attempts = self.index_attempts()
+
+    def index_attempts(self) -> dict[int, dict]:
+        """Facts scoped to the attempt they belong to, keyed by the `seq`
+        of the `step_finished` that closes it.
+
+        Scoped rather than collected per errand, because one errand can
+        be attempted twice inside one run — the tenant retries, and a
+        park the resident answers is re-run from the same journal. A
+        per-errand collection would attribute the second attempt's model
+        and pull request to the first attempt's result, which is the
+        quiet kind of wrong: every field present, every field plausible,
+        one of them belonging to a different session. The tenant's own
+        records are already in order and `step_started` opens exactly
+        one attempt, so the interval between a start and its finish is
+        all the scoping this needs.
+        """
+        by_finish: dict[int, dict] = {}
+        open_attempt: dict[str, dict] = {}
         for rec in self.records:
             errand = errand_of(rec)
             if not errand:
                 continue
             kind = rec.get("type")
-            if kind == "session_settings":
-                self.settings[errand] = rec
-            elif kind == "pr" and rec.get("url"):
-                self.pull_requests[errand] = str(rec["url"])
-            elif kind == "step_started" and rec.get("model"):
-                self.models[errand] = rec
+            if kind == "step_started":
+                open_attempt[errand] = {"started": rec, "settings": None, "pr": None}
+            elif kind == "step_finished":
+                # A finish with no start is not something the tenant
+                # writes, but a journal read from a run that began before
+                # the hook was configured could be truncated into one.
+                # An empty attempt refuses downstream rather than
+                # borrowing another attempt's facts.
+                attempt = open_attempt.pop(errand, {"started": None, "settings": None, "pr": None})
+                by_finish[rec["seq"]] = attempt
+            elif errand in open_attempt:
+                if kind == "session_settings":
+                    open_attempt[errand]["settings"] = rec
+                elif kind == "pr" and rec.get("url"):
+                    open_attempt[errand]["pr"] = str(rec["url"])
+        return by_finish
 
     def check_identity(self) -> None:
         """Refuse the whole pass unless every record carries a distinct `seq`.
@@ -449,7 +474,8 @@ class Fold:
                 "object nor an error, so what happened cannot be sourced."
             )
 
-        started = self.models.get(errand)
+        attempt = self.attempts.get(rec["seq"], {})
+        started = attempt.get("started")
         if not started or not started.get("model"):
             raise Refused(
                 f"{errand}: the tenant's log names no model for this attempt, so the "
@@ -459,12 +485,12 @@ class Fold:
                 "Nothing was written for this event."
             )
         model = str(started["model"])
-        provider, provider_source = provider_of(model, self.settings.get(errand))
+        provider, provider_source = provider_of(model, attempt.get("settings"))
         fields["model"] = model
         fields["model-source"] = str(started.get("model_source", ""))
         fields["provider"] = provider
         fields["provider-source"] = provider_source
-        url = self.pull_requests.get(errand)
+        url = attempt.get("pr")
         if url:
             fields["pull-request"] = url
 
@@ -535,18 +561,21 @@ class Fold:
 
 
 def cmd_fold(args: argparse.Namespace) -> int:
-    # The doorbell's payload, discarded unparsed and unread. Draining it
-    # rather than ignoring it keeps the tenant's hook thread from
-    # blocking on a full pipe; *not parsing it* is the contract — the
-    # record this shim writes is a function of the tenant's log alone,
-    # so a hook that fires with a lying payload, a truncated one, or no
-    # payload at all produces exactly the same records.
-    if not sys.stdin.isatty():
-        try:
-            sys.stdin.buffer.read()
-        except OSError:
-            pass
-
+    # stdin is never read. Not "read and discarded" — never opened. The
+    # doorbell's payload is the one input this command must not have,
+    # and the strongest way to say so is for there to be no code that
+    # could come to read it later.
+    #
+    # An earlier version drained it, on the theory that leaving a pipe
+    # unread could block the tenant's hook thread. It cannot: the tenant
+    # caps a record at 16 KiB and a pipe buffer holds 64 KiB, so the
+    # write completes into the buffer whether anything reads it or not,
+    # and the tenant reaps a hook that outlives ten seconds regardless.
+    # What draining *did* do was hang this command outright whenever
+    # stdin was an inherited descriptor nobody would ever close — which
+    # is exactly the interval poll, running under a timer with the
+    # journal hook nowhere in sight. The liveness half would have
+    # blocked forever on the payload it exists not to need.
     run_dir = args.run_dir or os.environ.get("EMCEE_RUN_DIR")
     if not run_dir:
         print("castle-delivery-shim fold: no run directory. Pass --run-dir, or let the "

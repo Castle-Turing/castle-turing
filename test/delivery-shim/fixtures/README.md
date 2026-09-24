@@ -1,10 +1,12 @@
 # The delivery shim's fixture corpus
 
 Every journal here came out of emcee's own writer on a real sprint.
-None was written by hand. That is the corpus's whole value: a
-hand-written fixture encodes what somebody believed the tenant's schema
-to be, and a captured one encodes the schema — including the quirks
-nobody would have thought to reproduce.
+That is the corpus's whole value: a hand-written fixture encodes what
+somebody believed the tenant's schema to be, and a captured one encodes
+the schema — including the quirks nobody would have thought to
+reproduce. Two directories are derived from captures rather than
+captures themselves, and both say so in their names: `no-identity/` and
+`synthetic-retry/`.
 
 ## The shape checklist, and where each shape is covered
 
@@ -15,6 +17,7 @@ nobody would have thought to reproduce.
 | given up | `emcee/2026-09-05T13-22-37` | `step_finished{error}` — the tenant died on a provider error |
 | parked on a question | `dovetail/2026-09-05T01-45-45` | `parked`, with the question file it names still beside it |
 | resumed second attempt | `emcee/2026-08-20` | parked, `answered`, then a second `step_started` for the same errand |
+| an attempt's facts, per attempt | `synthetic-retry/` — **synthetic**, see below | two `step_started` records for one errand, with different models |
 | a replayed event | every fixture | a property of the fold, proven by running it twice over these same logs rather than by a shape in any of them |
 
 Two of them carry a second shape worth having on purpose. `emcee/2026-08-20`
@@ -24,14 +27,28 @@ the refusal that fires when a result cannot name its implementer; and
 explicitly, so it exercises the first of the two provider rules while
 the others exercise the second.
 
-**No shape needed provoking, and nothing here is synthetic.** The
-brief's second tier — run a one-task sprint against a disposable
-repository to force a missing shape — was not reached, because the
-inventory of existing run history covered the checklist outright. Its
-third tier, a hand-written fixture carrying a label and a stated
-downgrade, was therefore not reached either. If a future shape does
-need one, the label is not optional: a synthetic fixture passing
-silently as real coverage is a checker that cannot fail.
+**No shape on the checklist needed provoking.** The brief's second tier
+— run a one-task sprint against a disposable repository to force a
+missing shape — was not reached, because the inventory of existing run
+history covered the checklist outright.
+
+**One fixture is synthetic, and it is `synthetic-retry/`.** It is named
+that way on purpose; a synthetic fixture passing silently as real
+coverage is a checker that cannot fail. It exists because of a property
+the corpus cannot otherwise show: an attempt's model and pull request
+must be attributed to *that* attempt, and the corpus's one retry inside
+a single run is the 2026-08-20 journal, which predates `model` being
+required — so both of its results refuse, and a misattribution between
+them would be invisible. `synthetic-retry/` is that same real journal
+with `model` and `model_source` added to its `step_started` records,
+differing between the two attempts, and nothing else changed.
+
+**The criterion resting on it, named:** "an attempt's facts belong to
+that attempt, not to the errand" (check 9). Every other criterion in
+`../run.sh` runs against captured journals. This one is downgraded from
+real to synthetic, and it will stay that way until a run with a
+retry-and-a-model lands in history — at which point capture it and
+delete this.
 
 ## What was changed, and it is the only thing
 
