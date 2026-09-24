@@ -45,9 +45,11 @@ decisions.
   2026-09-08, from the review-pipeline regression that was found by
   the resident rather than by anything automated.)
 - Implementation work is specced as numbered briefs in `docs/tasks/`
-  (`0001-`, `0002-`, …). A brief is committed on the branch that implements
-  it, never separately — spec and implementation merge and get audited
-  together.
+  (`0001-`, `0002-`, …). A ready backlog entry's verbatim transfer to
+  `docs/tasks/` is its own commit on the default branch, pushed; the
+  implementing branch then starts from a main that already carries the
+  brief, so spec and implementation still meet in review — the reviewer
+  reads the diff against a brief that is already the record.
 - Prefer plain text and standard formats everywhere: they are the point of
   the project. If a tool choice trades AI-legibility for features, flag it.
 - Keep the flake evaluating (`nix flake check`) once it is non-trivial.
@@ -201,8 +203,8 @@ missing one; the coverage gate catches missing.
 When asked to spec a feature: choose the smallest next chunk of useful
 work, ask clarifying questions first, then draft a numbered brief in
 `docs/tasks/` containing the spec, plan, and an implementation prompt
-for a separate session. The brief is committed on the branch that
-implements it, per the tasks convention.
+for a separate session. The brief lands in `docs/tasks/` before an
+implementing branch starts, per the tasks convention.
 
 **Every piece of implementation work gets a brief, however small.**
 Proportionality decides a brief's length, never whether it exists: a
