@@ -34,6 +34,16 @@ the other way round — an automated splitter would have produced more
 briefs than this and implemented fewer of them
 (`docs/research/decomposition-and-iteration-caps.md`).
 
+Every criterion carries a disposition — `Check:` with the command that
+exercises it, or `Manual:` with the step a person takes instead — because
+a criterion the acceptance harness can neither run nor hand to somebody is
+a verification plan that passes review and then verifies nothing
+(`tools/accept/accept`). Two of the five are executable and three are not,
+which is what work judged by eye looks like honestly accounted for. One of
+the commands carries `<the other host>` as a placeholder rather than a
+name: `[cursor-target-host]`'s ambiguity is open on the record, and a
+check that quietly named a host would settle it.
+
 This slate defers nothing, and that is deliberate. The `Deferred:` form
 is in `docs/planning.md` and every rule about it is exercised in
 `test/plan/run.sh`; deferring a clause this decomposition can perfectly
@@ -62,16 +72,25 @@ Criterion: running the documented sweep command puts the candidate
     the candidates, or shows them one after another, does not satisfy
     this: [cursor-visible-size] asks for a comparison, and a comparison
     needs both things visible at once.
+Manual: run the sweep on the host, look at the candidates side by side,
+    and press Enter; then confirm the pointer is back to the size the host
+    is configured for. Nothing can look on the resident's behalf, which is
+    the clause's own point.
 Criterion: the pointer the candidates change is the one the compositor
     draws. If the sweep only moves an XWayland or GTK client's cursor,
     it is sweeping the surface [cursor-surface] excludes and the run
     fails however good the resulting number looks.
+Manual: with the sweep open, move the pointer across a Wayland-native
+    surface and an XWayland one; the candidates change the pointer on
+    both, and the one that stops changing when the compositor's own
+    setting is reverted is the one under test.
 Criterion: the chosen number, and the fact that it was chosen by
     looking, are recorded in this brief's own pull request. A number
     that turns out to equal the panel scale times a constant is not
     evidence of anything either way — the clause rules out *deriving* it,
     not the value a derivation would have produced, so the receipt is
     the record of the look.
+Check: gh pr view --json body --jq .body | grep -qiE 'cursor size.*(chosen|picked) by looking'
 
 The tool is `tools/font-sweep.sh`'s cursor-size counterpart, invoked
 against the internal panel at its default scale. `[cursor-value-by-sweep]`
@@ -118,11 +137,17 @@ Criterion: after a rebuild and a switch on the host, the compositor's
     value appearing in the module is not the criterion: task 0013 shipped
     a cursor size that was correct in the file and unusable on the panel,
     and this is the criterion that would have caught it.
+Manual: rebuild and switch on the host, then photograph the pointer on the
+    internal panel at default scale beside the candidate the sweep chose.
+    A screenshot is the artifact; a person comparing them is the check.
 Criterion: the value lives in that host's own module and nothing changes
     for a second host with a different panel. Checked by building the
     other host's configuration and finding the cursor size unchanged —
     [cursor-target-host] is a claim about where the value lives, so the
     demonstration has to be somewhere it does not.
+Check: ! nix eval --json
+    ".#nixosConfigurations.<the other host>.config.environment.sessionVariables"
+    | grep -q XCURSOR_SIZE
 
 ## Questions
 

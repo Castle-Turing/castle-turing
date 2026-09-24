@@ -254,6 +254,56 @@ drop_field "$DIR/slate.md" Criterion
 expect_catch "a brief whose verification plan is empty" obligations -- \
     "$PLAN" check "$DIR/slate.md"
 
+# A criterion's disposition — `Check:` with the command that exercises it,
+# `Manual:` with the step a person takes instead — is what the acceptance
+# harness runs, and exactly one of them is mandatory (task 0080). A
+# criterion carrying neither passes review as a verification plan and
+# verifies nothing.
+DIR="$(mutate obligations-no-disposition)"
+drop_field "$DIR/slate.md" Check
+drop_field "$DIR/slate.md" Manual
+expect_catch "a criterion with no Check: and no Manual:" obligations -- \
+    "$PLAN" check "$DIR/slate.md"
+
+DIR="$(mutate obligations-empty-disposition)"
+sed -i "s|^Check: gh pr view.*|Check:|" "$DIR/slate.md"
+expect_catch "a criterion whose Check: names no command" obligations -- \
+    "$PLAN" check "$DIR/slate.md"
+
+# The pairing is the part the format could swallow: a disposition binds to
+# the criterion above it, so one with no criterion above it answers a
+# question nobody asked, and two on one criterion leave a reader unable to
+# tell whether it is run or stands aside.
+DIR="$(mutate form-orphan-disposition)"
+python3 - "$DIR/slate.md" <<'INNER'
+import sys
+path = sys.argv[1]
+lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+out = []
+for line in lines:
+    if line.startswith("Traces:"):
+        out.append("Check: true\n")
+    out.append(line)
+open(path, "w", encoding="utf-8").write("".join(out))
+INNER
+expect_catch "a Check: with no Criterion: above it" form -- \
+    "$PLAN" check "$DIR/slate.md"
+
+DIR="$(mutate form-two-dispositions)"
+python3 - "$DIR/slate.md" <<'INNER'
+import sys
+path = sys.argv[1]
+lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+out = []
+for line in lines:
+    out.append(line)
+    if line.startswith("Check: gh pr view"):
+        out.append("Manual: and a person looks as well\n")
+open(path, "w", encoding="utf-8").write("".join(out))
+INNER
+expect_catch "a criterion carrying both a Check: and a Manual:" form -- \
+    "$PLAN" check "$DIR/slate.md"
+
 echo
 echo "== budget: the bound on the cheap error =="
 

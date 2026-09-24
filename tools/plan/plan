@@ -71,14 +71,26 @@ BRIEF_FIELDS = (
     "Requires-because",
     "Traces",
     "Criterion",
+    "Check",
+    "Manual",
     "Deliverable",
 )
+
+# `Check:` and `Manual:` are the two dispositions a criterion may carry,
+# and exactly one of them is mandatory (task 0080, the acceptance
+# harness): a criterion that compiles to an executable check names the
+# command, and one that cannot says so and names the manual step that
+# stands in its place. Blank is not a third option — the same
+# non-emptiness rule as `Model-because:` — so a criterion the harness
+# could neither run nor hand to a person is caught here, at spec time,
+# where the slate review reads it.
+DISPOSITIONS = ("Check", "Manual")
 
 # Fields that may appear more than once in one brief. Everything else is
 # refused on a second occurrence rather than allowed to overwrite the
 # first silently — a brief whose recorded Model is not the Model anyone
 # wrote is the shape of defect this whole file exists for.
-REPEATABLE_BRIEF_FIELDS = ("Criterion",)
+REPEATABLE_BRIEF_FIELDS = ("Criterion",) + DISPOSITIONS
 
 # Fields that belong to the slate rather than to a brief. `Deferred:` is
 # the only one, and it is the half of coverage that makes a clause's
@@ -156,11 +168,29 @@ class Report:
 
 
 @dataclasses.dataclass
+class SlateCriterion:
+    """One `Criterion:` and the disposition that answers it.
+
+    The pair is the unit the acceptance harness runs
+    (`tools/accept/accept`, docs/planning.md): the prose is what the
+    criterion demonstrates, and the disposition is either the command
+    that exercises it in its real invocation path or the manual step that
+    stands in place of one. Kept as one object rather than two fields
+    because a criterion whose disposition belongs to the criterion above
+    it is the defect the pairing rule exists for.
+    """
+
+    text: str
+    kind: str | None = None
+    value: str = ""
+
+
+@dataclasses.dataclass
 class Brief:
     number: str
     title: str
     fields: dict[str, str]
-    criteria: list[str]
+    criteria: list[SlateCriterion]
     body: str
     line: int
 
@@ -324,7 +354,36 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
                 started = True
                 key, value = field.group("key"), field.group("value").strip()
                 if key == "Criterion":
-                    current.criteria.append(value)
+                    current.criteria.append(SlateCriterion(text=value))
+                    last_field = key
+                    continue
+                if key in DISPOSITIONS:
+                    if not current.criteria:
+                        report.fail(
+                            "form",
+                            f"{path.name}:{number} {current.label}",
+                            f"a {key}: line with no Criterion: above it. A "
+                            "disposition says how one criterion is answered, "
+                            "and one with no criterion answers nothing while "
+                            "looking like an answer",
+                        )
+                        last_field = None
+                        continue
+                    criterion = current.criteria[-1]
+                    if criterion.kind is not None:
+                        report.fail(
+                            "form",
+                            f"{path.name}:{number} {current.label}",
+                            f"a criterion carrying both a {criterion.kind}: and "
+                            f"a {key}:. One disposition per criterion: with "
+                            "two, a reader cannot tell whether the criterion is "
+                            "run or stands aside, and the harness would report "
+                            "only one of them",
+                        )
+                        last_field = None
+                        continue
+                    criterion.kind = key
+                    criterion.value = value
                     last_field = key
                     continue
                 if key in current.fields and key not in REPEATABLE_BRIEF_FIELDS:
@@ -342,8 +401,12 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
                 # A wrapped value. Indentation is what says so, which is
                 # why prose beginning with a capitalised word and a
                 # colon can never be mistaken for a field.
-                if last_field == "Criterion":
-                    current.criteria[-1] = f"{current.criteria[-1]} {line.strip()}"
+                if last_field == "Criterion" and current.criteria:
+                    criterion = current.criteria[-1]
+                    criterion.text = f"{criterion.text} {line.strip()}"
+                elif last_field in DISPOSITIONS and current.criteria:
+                    criterion = current.criteria[-1]
+                    criterion.value = f"{criterion.value} {line.strip()}".strip()
                 else:
                     current.fields[last_field] = (
                         f"{current.fields[last_field]} {line.strip()}".strip()
@@ -707,11 +770,29 @@ def check_obligations(slate: Slate, report: Report) -> None:
                 "that (docs/research/automated-approval.md)",
             )
         for index, criterion in enumerate(brief.criteria, start=1):
-            if not criterion.strip():
+            if not criterion.text.strip():
                 report.fail(
                     "obligations",
                     where,
                     f"Criterion {index} is empty",
+                )
+            if criterion.kind is None:
+                report.fail(
+                    "obligations",
+                    where,
+                    f"Criterion {index} carries no Check: or Manual:. A "
+                    "criterion that compiles to an executable check names the "
+                    "command; one that cannot says so and names the manual "
+                    "step that stands in its place. Blank is not an answer, "
+                    "and a criterion nothing can run and nobody was asked to "
+                    "take is how a verification plan passes review and then "
+                    "verifies nothing (tools/accept/accept)",
+                )
+            elif not criterion.value.strip():
+                report.fail(
+                    "obligations",
+                    where,
+                    f"Criterion {index} has an empty {criterion.kind}:",
                 )
 
 
@@ -1053,6 +1134,12 @@ Traces: <clause keys from the requirements document>
 Criterion: <what demonstrates the traced requirement working in its real
     invocation path — not that the code runs, that the thing the clause
     asks for is reachable.>
+Check: <the command that exercises it, run from the repository root. The
+    path it names need not exist yet: a check that could already run is a
+    check that demonstrates nothing new.>
+Manual: <instead of Check:, when no command can stand in: the step a
+    person takes and what they would see. One disposition per criterion,
+    and neither may be blank.>
 
 The brief's body: the spec and reasoning an implementing agent reads
 cold, including what was considered and rejected.

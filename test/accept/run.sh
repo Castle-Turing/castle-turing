@@ -403,17 +403,16 @@ D="$(freeze_repo noref)"
 expect_die "a base ref that does not resolve" "no merge base" -- \
     "$ACCEPT" run "$D/brief.md" --base no-such-ref --root "$D"
 
-mkdir -p "$WORKDIR/nogit"
-cp "$WORKDIR/git-untouched/brief.md" "$WORKDIR/nogit/brief.md" 2>/dev/null \
-    || cp "$ORACLE/brief.md" "$WORKDIR/nogit/brief.md"
-if [ -n "$(git -C "$WORKDIR/nogit" rev-parse --show-toplevel 2>/dev/null)" ]; then
+B="$(brief nogit "Title: a brief nowhere near a checkout" \
+    "Criterion: the thing works" "Check: true")"
+if [ -n "$(git -C "$(dirname "$B")" rev-parse --show-toplevel 2>/dev/null)" ]; then
     # The scratch directory is itself inside a checkout (TMPDIR under a
     # repository), so this one case cannot be built here. Said out loud
     # rather than skipped silently.
     echo "  --   a brief outside any checkout: not testable with TMPDIR inside a repository"
 else
     expect_die "--base outside a git checkout" "not inside a git checkout" -- \
-        "$ACCEPT" run "$WORKDIR/nogit/brief.md" --base main
+        "$ACCEPT" run "$B" --base main
 fi
 
 echo "== the vocabulary has one home =="
