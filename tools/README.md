@@ -289,6 +289,17 @@ Two rules, both mechanical:
   what it checks, and the citation is verified: the entrypoint must
   exist and the cited document must actually carry the marker.
 
+A tool built to be run interactively at a terminal can declare itself
+exempt, in its own leading comment block:
+`# reachability: interactive — <reason>` (no caller required), or
+`# reachability: test-only — <reason>` (a caller under `test/` is
+required and verified). The reason is mandatory — a bare marker is an
+error — and every exemption honored is printed and counted on every
+run, so a suppressed check never reads as a passing one. There is no
+category exemption by directory, file type, or subcommand shape;
+structure does not encode intent. The lint's own header carries the
+full rule.
+
 It catches this shape of defect, not its cause: a feature can satisfy
 its implementer's reading of a requirement and not the resident's,
 which is acceptance — `docs/backlog/passing-tests-are-not-acceptance.md`

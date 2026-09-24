@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# reachability: interactive — the operator compares fonts by eye on the live panel.
 # tools/font-sweep.sh — compare fonts side by side on the actual panel.
 #
 # WHY THIS EXISTS (read this before touching the script)

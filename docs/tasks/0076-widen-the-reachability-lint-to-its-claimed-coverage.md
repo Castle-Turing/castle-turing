@@ -128,6 +128,43 @@ runbook for one that is not (and mark it there), or accept the gap and
 adjust the lint's own scope. `reachability-check.yml` will report red
 on this branch and on `main` after merge until one of those happens.
 
+### The resident's ruling (2026-09-23), and how the branch implements it
+
+The resident ruled on the five flagged tools: a tool designed to be
+run interactively at a terminal does not owe the lint an operational
+caller. The load-bearing part of the ruling is what was **rejected** —
+a silent category exemption, by directory, file type, or subcommand
+structure, because structure does not encode intent: `outcomes` is an
+agent tool that must run automatically, the sweep tools are agent
+tools run interactively, and a subcommand tree can be either. What was
+accepted instead is an explicit per-tool declaration that stays
+visible every time it is used.
+
+So the lint now reads a declaration from a tool's own leading comment
+block — `# reachability: interactive — <reason>` (no caller required
+anywhere) or `# reachability: test-only — <reason>` (at least one
+caller under `test/` is required, and verified: a declared tool that
+no test invokes is still flagged, so the marker cannot decay into a
+plain ignore; an *undeclared* tool with only a test caller stays
+flagged exactly as before). Both markers require a non-empty reason
+after the dash — a bare marker is a lint error, not an exemption, the
+same non-emptiness rule as `Model-because:`. On every run the lint
+prints each exemption it honors before the summary, and the summary
+counts them; a run with exemptions never prints an undifferentiated
+"all reachable". That always-visible-when-used property is the
+design's kinship with `docs/backlog/suppressions-leave-no-record.md`:
+a suppression that leaves no record is the failure mode, so this one
+cannot be used without leaving one.
+
+Applied here: the three sweep tools and `tools/handover.sh` are
+declared interactive, each with its own reason; the lint itself is
+declared test-only (its one real caller is
+`test/reachability/run.sh`, which `reachability-check.yml` runs —
+rewiring the workflow to call the tool directly was considered and
+dropped in favour of the declaration). The real-tree assertion in
+`test/reachability/run.sh` is green again, with all five exemptions
+on the record in its output.
+
 ## Change 3 — standalone checker scripts are not recognized as gates
 
 The armed-gate/feeder rule only recognized a gate whose checker is an

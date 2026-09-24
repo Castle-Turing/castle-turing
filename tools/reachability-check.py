@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# reachability: test-only — invoked via test/reachability/run.sh, which .github/workflows/reachability-check.yml runs.
+# (Rewiring the workflow to call the lint directly was considered and
+# dropped in favour of declaring this here, on the record.)
 """tools/reachability-check.py — the detector task 0072 owes (an incident
 ships its detector, CLAUDE.md).
 
@@ -47,6 +50,32 @@ lists every command by construction, so accepting a mention there would
 accept everything. Nor does a tool's own prose: a docstring or comment
 that merely names an invocation is not a call to it. The explicit marker
 is what separates a step somebody owns from a line in a reference table.
+
+DECLARED EXEMPTIONS
+
+A tool built to be run interactively at a terminal owes nobody an
+operational caller — but no directory, file type, or subcommand
+structure encodes that intent (`outcomes` is an agent tool that must
+run automatically; the sweep tools are agent tools run interactively;
+a subcommand tree can be either), so there is no category exemption.
+A tool declares itself, in its own leading comment block, before the
+first line of code or docstring:
+
+    reachability: interactive — <reason>
+    reachability: test-only — <reason>
+
+written as a comment, with the reason required: a bare marker is an
+error, not an exemption — the same non-emptiness rule as a task's
+`Model-because:`. `interactive` drops the caller requirement for the
+tool entirely. `test-only` legalises test reachability for that one
+tool: at least one file under `test/` must actually invoke it, and a
+declared tool that no test invokes is still flagged — the declaration
+must not decay into a plain ignore. A test still rescues nothing
+undeclared. Every exemption honored is printed on every run and
+counted in the summary line, so a run with exemptions can never read
+as an undifferentiated "all reachable" — the always-visible-when-used
+property is the design, and what separates these markers from a
+lint-ignore comment (docs/backlog/suppressions-leave-no-record.md).
 
 WHAT THIS LINT IS NOT
 
@@ -97,6 +126,38 @@ INVOKES_RE = re.compile(r"<!--\s*invokes:\s*(.+?)\s*-->")
 # own mechanism.
 RECORD_DIRS = ("docs/tasks", "docs/backlog", "docs/research")
 FEEDER_RE = re.compile(r"#\s*feeder:\s*(.+?)\s*\((.+?)\)\s*$")
+
+# A tool's own exemption declaration; see DECLARED EXEMPTIONS in the
+# header. Both dash forms are accepted between kind and reason.
+DECLARATION_RE = re.compile(
+    r"^#\s*reachability:\s*(interactive|test-only)\s*(?:[—-]+\s*(.*))?$")
+
+
+def declaration(text):
+    """The tool's `# reachability:` declaration, as (kind, reason).
+
+    Read from the leading comment block only — the shebang and the
+    comment lines before the first line of code or docstring. Prose
+    lower down (a docstring quoting the marker as an example, a string
+    literal) must not declare anything, for the same reason a docstring
+    is not a call: a lint satisfiable by describing the mechanism is
+    not a lint.
+
+    (None, None) when nothing is declared; (kind, None) for a bare
+    marker with no reason, which the caller must treat as an error and
+    not as an exemption.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#!"):
+            continue
+        if not stripped.startswith("#"):
+            break
+        m = DECLARATION_RE.match(stripped)
+        if m:
+            reason = (m.group(2) or "").strip()
+            return m.group(1), (reason or None)
+    return None, None
 
 
 def is_executable_tool(path):
@@ -418,6 +479,21 @@ def caller_files(root):
                 yield path
 
 
+def test_caller_files(root):
+    """Files under `test/` that could invoke a tool.
+
+    Searched only for a tool declared `test-only` — the declaration is
+    what makes test reachability legal for that one tool. For every
+    other tool `test/` stays invisible, exactly as the header says.
+    """
+    base = root / "test"
+    if not base.is_dir():
+        return
+    for path in sorted(base.rglob("*")):
+        if path.is_file() and path.suffix in CALLER_SUFFIXES:
+            yield path
+
+
 def marked_invocations(root):
     """Every `invokes:` marker on an instruction surface, as {spec: [paths]}.
 
@@ -441,9 +517,20 @@ def main(argv=None):
     problems = []
 
     specs = {}
+    decls = {}
     for tool in find_tools(root):
         text = tool.read_text(encoding="utf-8")
         rel = str(tool.relative_to(root))
+        kind, reason = declaration(text)
+        if kind and reason is None:
+            problems.append(
+                f"{rel}: `# reachability: {kind}` carries no reason — a bare "
+                "marker is an error, not an exemption. Say what makes this "
+                "tool legal without an operational caller; the same "
+                "non-emptiness rule as a task's Model-because:."
+            )
+        elif kind:
+            decls[rel] = (kind, reason)
         for command in entrypoints(tool, text):
             specs[spec_key(rel, command)] = (tool, rel, command)
     if not specs:
@@ -474,7 +561,15 @@ def main(argv=None):
         except (UnicodeDecodeError, OSError):
             continue
         stripped[path] = code_only(path, text)
+    exemptions = {}       # rel -> the line printed for it, once per tool
+    stripped_tests = None  # test/ files, stripped — read only when needed
     for spec, (tool, rel, command) in sorted(specs.items()):
+        kind, reason = decls.get(rel, (None, None))
+        if kind == "interactive":
+            # No caller demanded, anywhere — but said out loud, every
+            # run, so the exemption can never read as reachability.
+            exemptions[rel] = f"ignored (declared interactive): {rel} — {reason}"
+            continue
         for path, code in stripped.items():
             if path == tool:
                 continue
@@ -482,15 +577,38 @@ def main(argv=None):
                 callers[spec].append(path)
         for path in markers.get(spec, []):
             callers[spec].append(path)
-        if not callers[spec]:
-            label = " ".join(command) if command else rel
-            noun = "subcommand" if command else "tool"
+        if callers[spec]:
+            continue
+        label = " ".join(command) if command else rel
+        noun = "subcommand" if command else "tool"
+        if kind == "test-only":
+            if stripped_tests is None:
+                stripped_tests = {}
+                for path in test_caller_files(root):
+                    try:
+                        text = path.read_text(encoding="utf-8")
+                    except (UnicodeDecodeError, OSError):
+                        continue
+                    stripped_tests[path] = code_only(path, text)
+            hits = [p for p, code in stripped_tests.items()
+                    if invokes(code, rel, tool.name, command)]
+            if hits:
+                exemptions[rel] = (
+                    f"ignored (declared test-only): {rel} — {reason} "
+                    f"(exercised by {hits[0].relative_to(root)})")
+                continue
             problems.append(
-                f"{rel}: `{label}` has no operational caller — no "
-                "workflow, no other tool, and no documented step declaring "
-                f"`<!-- invokes: {spec} -->`. A {noun} nothing invokes is "
-                "the shape of task 0070's miss; give it a caller or delete it."
+                f"{rel}: `{label}` is declared test-only, and no test "
+                "invokes it — the declaration is not an ignore. Give it a "
+                "test caller, an operational caller, or delete it."
             )
+            continue
+        problems.append(
+            f"{rel}: `{label}` has no operational caller — no "
+            "workflow, no other tool, and no documented step declaring "
+            f"`<!-- invokes: {spec} -->`. A {noun} nothing invokes is "
+            "the shape of task 0070's miss; give it a caller or delete it."
+        )
 
     # The second rule: a gate that runs a checker must name what feeds it.
     # A checker is either an argparse subcommand named `check` (the
@@ -544,13 +662,22 @@ def main(argv=None):
                     "has to resolve to the step, not merely to a document"
                 )
 
+    # Every exemption honored, before the summary, on every run — a run
+    # with exemptions must never print an undifferentiated "all
+    # reachable" (docs/backlog/suppressions-leave-no-record.md).
+    for rel in sorted(exemptions):
+        print(exemptions[rel])
     if problems:
         for p in problems:
             print(p, file=sys.stderr)
         print(f"\n{len(problems)} problem(s). tools/reachability-check.py's "
               "header says what each rule is for.", file=sys.stderr)
         return 1
-    print(f"ok: {len(specs)} entrypoints, every one of them reachable")
+    if exemptions:
+        print(f"ok: {len(specs)} entrypoints, every one reachable or exempt; "
+              f"{len(exemptions)} tool(s) exempt by declaration")
+    else:
+        print(f"ok: {len(specs)} entrypoints, every one of them reachable")
     return 0
 
 

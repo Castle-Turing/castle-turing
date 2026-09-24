@@ -29,10 +29,13 @@ pass() { printf '    ok: %s\n' "$*"; }
 # --- the real tree -------------------------------------------------------
 
 log "this repository's own entrypoints are all reachable"
-if python3 "$LINT" "$REPO_ROOT" >/dev/null; then
+if REAL_OUT=$(python3 "$LINT" "$REPO_ROOT" 2>&1); then
+  # The lint prints every exemption it honors; keep that visible here
+  # too — a suppressed check must never look like a passing one.
+  printf '%s\n' "$REAL_OUT" | sed 's/^/    /'
   pass "every tool subcommand has an operational caller, every gate a feeder"
 else
-  python3 "$LINT" "$REPO_ROOT" || true
+  printf '%s\n' "$REAL_OUT"
   fail "the repository does not pass its own reachability lint"
 fi
 
@@ -376,6 +379,107 @@ jobs:
       - run: tools/widget-check.sh
 YML
 accept "a feeder line citing a marked document makes a standalone checker clean"
+
+log "declared exemptions (the resident's ruling on task 0076)"
+
+# A helper for the exemption cases: the tree must be accepted AND the
+# lint's own output must say, visibly, what it ignored — the
+# always-visible-when-used property is the design, not a nicety.
+accept_saying() { # accept_saying <name> <expected substring>
+  local name=$1 expect=$2 out
+  if ! out=$(lint); then
+    fail "$name: rejected — $(printf '%s' "$out" | head -1)"
+  elif printf '%s' "$out" | grep -qF -- "$expect"; then
+    pass "$name"
+  else
+    fail "$name: accepted, but the output does not say so: expected '$expect'"
+  fi
+}
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/bespoke.sh" <<'SH'
+#!/usr/bin/env bash
+# reachability: interactive — compared by eye on a live panel.
+echo bespoke
+SH
+accept_saying "an interactive-declared tool with no caller is clean, and says so" \
+  "ignored (declared interactive): tools/bespoke.sh — compared by eye"
+
+accept_saying "a run with exemptions never prints an undifferentiated all-reachable" \
+  "exempt by declaration"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/bespoke.sh" <<'SH'
+#!/usr/bin/env bash
+# reachability: interactive
+echo bespoke
+SH
+reject "a bare marker with no reason is an error, not an exemption" \
+  "carries no reason"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/selfcheck.sh" <<'SH'
+#!/usr/bin/env bash
+# reachability: test-only - run by test/selfcheck/run.sh, which CI runs.
+echo selfcheck
+SH
+mkdir -p "$SANDBOX/test/selfcheck"
+cat > "$SANDBOX/test/selfcheck/run.sh" <<'SH'
+#!/usr/bin/env bash
+tools/selfcheck.sh
+SH
+accept_saying "a test-only tool with a real test caller is clean, and says so" \
+  "ignored (declared test-only): tools/selfcheck.sh"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/selfcheck.sh" <<'SH'
+#!/usr/bin/env bash
+# reachability: test-only - run by test/selfcheck/run.sh, which CI runs.
+echo selfcheck
+SH
+reject "a test-only tool that no test invokes is still an orphan" \
+  "declared test-only, and no test invokes it"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/lonely.sh" <<'SH'
+#!/usr/bin/env bash
+echo lonely
+SH
+mkdir -p "$SANDBOX/test/lonely"
+cat > "$SANDBOX/test/lonely/run.sh" <<'SH'
+#!/usr/bin/env bash
+tools/lonely.sh
+SH
+reject "an undeclared tool with only a test caller is still flagged" \
+  "\`tools/lonely.sh\` has no operational caller"
+
+fresh; baseline_callers
+cat > "$SANDBOX/docs/how.md" <<'MD'
+<!-- invokes: tools/thing/thing write -->
+MD
+cat > "$SANDBOX/tools/prosaic.sh" <<'SH'
+#!/usr/bin/env bash
+echo prosaic
+# Discussed below the first code line, this does not declare anything:
+# reachability: interactive — prose, not a leading-block declaration.
+SH
+reject "a marker below the first line of code does not declare anything" \
+  "\`tools/prosaic.sh\` has no operational caller"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
