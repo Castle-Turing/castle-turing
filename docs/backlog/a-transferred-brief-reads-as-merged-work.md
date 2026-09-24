@@ -33,6 +33,20 @@ do not correspond to their work; whether those came from this path or
 another is worth establishing before deciding what, if anything, can
 honestly be done about them.
 
+**Observed again on task 0082, and wider than first written.** The
+defect does not need the derive to be *for* the row it damages. Run on
+0082's branch, `derive --fill` wrote `landed`, `outcome: merged` and a
+pull-request number into **0081's** row — the previous task of the same
+sprint, still unmerged — because a sprint's tasks share one harness
+journal and `--fill` rewrites every pending cell it can reach, not only
+the branch's own. So one session running the prescribed step
+permanently mis-dates its neighbours. 0082's own row gained nothing: its
+write-once cells were already wrong from the transfer, and its cost and
+turns are not in the journal until the attempt ends. The step is
+therefore a no-op for the row it is meant to mature and harmful to the
+rows beside it, which is why 0082 left the log untouched exactly as 0081
+did.
+
 **What the fix probably is.** Ask the question the cell actually means.
 The work landing is a merge whose branch names the task — which is what
 `merges_by_task` already answers — and the brief's own commit says
@@ -44,7 +58,9 @@ commit deletes a backlog file and adds a brief in the same commit).
 
 **How this would have been caught sooner.** A property test: `derive
 --fill`, run on a branch with no merge, must not write `outcome:
-merged` for the task that branch is for. That is one fixture repository
+merged` for the task that branch is for — nor for any other task whose
+branch has not merged either, which is the half the first statement of
+this missed. That is one fixture repository
 and one assertion in `test/outcomes/run.sh`, and it is exactly the
 shape of check `docs/state/README.md`'s rule 2 asks for — the guard's
 correctness depended on a convention outside the tool, and nothing
