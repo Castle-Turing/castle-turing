@@ -72,6 +72,10 @@ schema	task	attempt	queued	landed	outcome	tier	model	milestone	pr	cost_usd	turns
 1	0071-the-delivery-seats-record-shim	1	2026-09-10	2026-09-16	merged	deep	-	m2-now	122	-	-	0	0.0	-	-	-	-	-	-	-	e1	live	brief only, no code; harness usage ledger not reachable from this worktree
 1	0075-the-nvme-apst-workaround	1	2026-09-16	2026-09-16	merged	cheap	claude-haiku-4-5-20251001	none-hygiene	132	-	-	-	-	-	-	-	1	1	-	-	e2	live	cheap-tier impl by Haiku subagent; codex CLI gate 1 finding fixed (7c60972); code-review low 4 fixed (1dc8760)
 1	0072-wire-the-outcome-log-and-its-redirects	1	2026-09-18	2026-09-21	merged	deep	-	m2-constraints	137	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
-1	0076-widen-the-reachability-lint-to-its-claimed-coverage	1	2026-09-22	-	-	deep	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
-1	0077-cross-review-the-unreviewed-merged-prs	1	2026-09-22	-	-	deep	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
-1	0078-allow-github-actions-through-the-review-bot-guard	1	2026-09-23	-	-	standard	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0076-widen-the-reachability-lint-to-its-claimed-coverage	1	2026-09-22	2026-09-23	merged	deep	-	none-hygiene	139	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
+1	0077-cross-review-the-unreviewed-merged-prs	1	2026-09-22	2026-09-23	merged	deep	-	none-hygiene	140	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
+1	0078-allow-github-actions-through-the-review-bot-guard	1	2026-09-23	2026-09-23	merged	standard	-	none-hygiene	142	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0079-the-planner-seat	1	2026-09-07	2026-09-07	merged	deep	-	m2-done	109	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0080-the-acceptance-harness	1	2026-09-10	2026-09-16	merged	deep	-	m2-done	123	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0081-implement-the-delivery-record-shim	1	2026-09-23	-	-	deep	-	m2-done	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0082-an-answered-delivery-question-resumes-the-errand	1	2026-09-09	2026-09-09	merged	deep	-	m2-done	114	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
