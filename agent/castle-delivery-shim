@@ -327,8 +327,10 @@ def read_tenant_journal(run_dir: pathlib.Path) -> list[dict]:
         try:
             out.append(json.loads(line))
         except ValueError as exc:
-            if last:
-                break
+            # A newline-terminated line was a completed write, so an
+            # invalid one is corruption, not a torn tail, regardless of
+            # position — the newline check above is what earns the
+            # "torn" reading, and it has already passed by this point.
             raise Refused(f"{path}: line {i} is not valid JSON: {exc}") from exc
     return out
 
@@ -347,6 +349,35 @@ def errand_of(record: dict) -> str | None:
     `task` everywhere else — the tenant's own two spellings."""
     value = record.get("step") or record.get("task")
     return str(value) if value else None
+
+
+def errand_only_journal(run_dir: pathlib.Path, errand: str) -> pathlib.Path:
+    """A copy of the tenant journal holding only this errand's own lines.
+
+    `outcomes derive --fill` walks the whole outcome log and fills
+    every row it finds facts for in the journal it is given — right for
+    a sprint backfill, wrong for a seat maturing one errand's row on
+    that errand's own branch: a run journal spanning several tasks
+    would let this branch write another task's receipt cells, against
+    the stated invariant that a row belongs on its own errand branch.
+    Filtering to the errand before handing the journal to `derive`
+    keeps this call's reach to the one row it was asked to mature.
+    """
+    path = run_dir / JOURNAL_NAME
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if errand_of(rec) == errand:
+            lines.append(line)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", prefix="castle-delivery-shim-row-",
+        delete=False, encoding="utf-8")
+    with handle:
+        handle.writelines(lines)
+    return pathlib.Path(handle.name)
 
 
 # --- sourcing the facts a record may not invent ------------------------------
@@ -520,19 +551,20 @@ class Fold:
         if rec.get("session"):
             fields["tenant-session"] = str(rec["session"])
         asked = rec.get("question_file")
-        text, note = "", ""
+        text = ""
         if asked:
             try:
                 text = pathlib.Path(asked).read_text(encoding="utf-8").strip()
             except OSError as exc:
-                note = (
-                    f"The tenant's question file could not be read ({exc.__class__.__name__}). "
-                    "Its path, as the tenant's log recorded it, is below; the question "
-                    "itself is there and not here."
-                )
+                raise Refused(
+                    f"{errand}: the tenant's question file {asked!r} could not be read "
+                    f"({exc.__class__.__name__}), so the resident's actual question "
+                    "cannot be sourced. A placeholder here would be answered as if it "
+                    "were the real question and the errand would stay parked forever. "
+                    "Nothing was written for this event; it is retried on the next pass."
+                ) from exc
         paragraphs = [
             text or "The delivery seat blocked on a judgment only the resident can supply.",
-            note,
             self.brief_line(errand),
             "Answering this resumes the errand: the answer is handed to the tenant "
             "verbatim and the errand is re-run from it, once, chained by the `claim` "
@@ -1601,17 +1633,21 @@ def cmd_row(args: argparse.Namespace) -> int:
               "to mature.", file=sys.stderr)
         return 2
 
-    derive = subprocess.run(
-        [sys.executable, str(outcomes), "derive", "--repo-root", str(checkout),
-         "--harness-journal", str(run_dir / JOURNAL_NAME), "--env", args.env, "--fill"],
-        capture_output=True, text=True)
+    filtered_journal = errand_only_journal(run_dir, errand)
+    try:
+        derive = subprocess.run(
+            [sys.executable, str(outcomes), "--repo-root", str(checkout), "derive",
+             "--harness-journal", str(filtered_journal), "--env", args.env, "--fill"],
+            capture_output=True, text=True)
+    finally:
+        filtered_journal.unlink(missing_ok=True)
     sys.stdout.write(derive.stdout)
     sys.stderr.write(derive.stderr)
     if derive.returncode != 0:
         return derive.returncode
 
     check = subprocess.run(
-        [sys.executable, str(outcomes), "check", "--repo-root", str(checkout)],
+        [sys.executable, str(outcomes), "--repo-root", str(checkout), "check"],
         capture_output=True, text=True)
     sys.stdout.write(check.stdout)
     sys.stderr.write(check.stderr)

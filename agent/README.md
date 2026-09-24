@@ -997,11 +997,16 @@ which is that entry's own stated discipline.
 ### The outcome-log row
 
 `row` matures this errand's row in `docs/log/task-outcomes.tsv` by
-running `tools/outcomes/outcomes derive --fill` against the tenant's
-journal — running the existing derivation rather than re-deriving the
-same numbers a second way. It refuses unless the checkout it is given
-is on the errand's own branch, because that is where the row belongs
-and when it is still accurate, and it never commits and never pushes:
+running `tools/outcomes/outcomes derive --fill` against the errand's
+own records in the tenant's journal — running the existing derivation
+rather than re-deriving the same numbers a second way. The journal is
+filtered to this errand before `derive` sees it: a run's journal can
+span several tasks, and `derive --fill` matures every row it finds
+facts for, so an unfiltered journal would let this errand's branch
+write another task's receipt cells. It refuses unless the checkout it
+is given is on the errand's own branch, because that is where the row
+belongs and when it is still accurate, and it never commits and never
+pushes:
 the seat proposes and does not deploy, and a log it filled that fails
 `check` is reported and left in the working tree for a human to read as
 a diff.
