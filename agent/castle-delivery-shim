@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""castle-delivery-shim — the delivery seat's record shim, outbound.
+"""castle-delivery-shim — the delivery seat's record shim, both directions.
 
 WHAT THIS IS
 
@@ -13,11 +13,24 @@ translator turns them into the records above. This is that translator,
 specced by task 0071 and pinned against the tenant's real schema by
 task 0081.
 
+The seat owes the journal a fourth thing, and it is not a record: an
+answer to one of those questions must resume the errand it parked, under
+the bound task 0023 established for the worker — one answer producing
+exactly one resumption, chained by the `claim` that names it. Task
+0023's machinery cannot do it, being worker-shaped at both ends (its
+eligibility fold reads `request` records and its resumed turn re-invokes
+the worker's tenant), so the inbound direction is the second half of
+this translator, specced by task 0082. `resume` is that half and
+`stranded` is the detector it ships with.
+
 The dependency runs downward on purpose. Nothing here imports emcee.
 The tenant's journal is read as the plain JSON-lines file it is, so a
 tenant that changes nothing but its own internals changes nothing here,
 and a tenant that changes its *record shape* fails loudly below rather
-than silently producing wrong receipts.
+than silently producing wrong receipts. The one place this shim hands
+the tenant something rather than reading from it — the resume verb, and
+the question file that verb reads an answer out of — is pinned from the
+same source and stated in the same place.
 
 THE PINNED SCHEMA
 
@@ -34,6 +47,16 @@ and two it reads for facts without writing a record of their own:
 
     pr             {task, branch, url}
     session_settings {task, provider?, model?, adapter?/harness?}
+
+The inbound direction pins two more things from the same reading, both
+in `src/emcee/parking.py`. A park's question is a file at
+`<run>/parked/<errand>.md`: a `Key: value` header — `Task:`, `Status:`,
+`Answered-by:` — over `## Question` and `## Answer` sections, where the
+tenant reads a park as answered when the `## Answer` section is
+non-empty and `Answered-by:` is not, and as still awaiting its
+resumption while `Status:` reads `open`. And `emcee resume --run DIR` is
+the verb that re-runs every answered park in a run: a fresh run of the
+task with the answer injected, never a resumed session.
 
 `model` and `model_source` became required on `step_started` in emcee's
 own task 0045; journals written before that carry neither, which is why
@@ -118,25 +141,94 @@ paragraph exists to prevent. The brief is named in each record's body
 instead, by task number and slug — the same "history is a name" rule
 `docs/state/README.md` applies to citations.
 
+THE INBOUND HALF, IN ONE PARAGRAPH — `cmd_resume` carries the rest
+
+Eligibility is a total function of the castle journal: an `answer`
+record closing a delivery `question`, minus the answers a resumption
+`claim` already names as spent. The claim is written before the tenant's
+resume verb runs, and its `refs` name the answer — so the chaining
+promise task 0069 made is kept literally here, where the upstream is a
+real journal record rather than the file that leaves `refs` empty on
+everything the outbound half writes. There is no policy about *which*
+eligible answer and no say in *whether*: this is dispatch-shaped
+plumbing, and giving it either would make it a reasoning seat, which is
+precisely what task 0082's own paragraph exists to stop a later agent
+from "completing" it into.
+
 Subcommands:
-  fold  translate one run's tenant journal into castle records.
-  row   mature this errand's row in the task-outcome log, on its branch.
+  fold      translate one run's tenant journal into castle records.
+  resume    spend an answered delivery question on one resumption.
+  stranded  report delivery questions with no resumption path.
+  row       mature this errand's row in the task-outcome log, on its branch.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import importlib.machinery
 import importlib.util
 import json
 import os
 import pathlib
+import re
+import shlex
 import subprocess
 import sys
 
 SEAT = "delivery"
 TENANT = "emcee"
 JOURNAL_NAME = "journal.jsonl"
+
+# --- the tenant's parked-question file (pinned, src/emcee/parking.py) -------
+#
+# Where the tenant keeps a park's question, and how it reads one back. The
+# inbound half writes into this file, so the pin has to be exact in a way
+# the outbound half's read-only pins do not: a header spelling this shim
+# gets wrong is not a fold that refuses, it is an answer the tenant cannot
+# see, and a park that stays parked while the journal says it was resumed.
+PARKED_DIR = "parked"
+# Horizontal whitespace only. The tenant's own comment on this regex says
+# why, and it is a defect that was found rather than a precaution: `\s`
+# spans the newline, so an empty `Answered-by:` swallowed the line after it
+# and a question with no provenance parsed as answered by "## Question".
+_HSPACE = r"[^\S\n]"
+# The section the tenant injects into a resumed attempt's prompt, and the
+# header that says who gave it. Both are required: `parking.resolvable`
+# raises on an answer with no `Answered-by:` rather than assuming one,
+# because a park exists precisely because no agent may answer it.
+PARKED_ANSWER_SECTION = "Answer"
+PARKED_QUESTION_SECTION = "Question"
+
+# How the resumption verb is invoked. The *mechanism* is "invoke the
+# tenant's resume verb"; *which command that is* is private configuration,
+# the same split `CASTLE_WORKER_COMMAND` already makes for the worker seat's
+# tenant (Principle 01). The default is the console script the tenant
+# declares, so a host that has the tenant on `PATH` needs no configuration;
+# a host running it out of a virtual environment names the path here.
+RESUME_COMMAND_ENV = "CASTLE_DELIVERY_RESUME_COMMAND"
+DEFAULT_RESUME_COMMAND = f"{TENANT} resume"
+
+# Fields the inbound half stamps on its `claim`.
+RESUMES_FIELD = "resumes"          # the answer id this claim spends
+RESUMED_QUESTION_FIELD = "resumes-question"
+RESUMED_BY_FIELD = "resumed-by"
+RESUMED_BY_SHIM = "shim"           # this mechanism invoked the verb
+RESUMED_BY_OPERATOR = "operator"   # the tenant was already resumed by hand
+
+# How long a resumption claim may sit with the tenant still showing the
+# errand parked before re-invoking is judged legal. The real protection
+# against a re-invocation landing on a live sprint is not this interval —
+# it is the tenant's own per-repository sprint lock, which refuses a second
+# sprint before journaling anything. This exists only to keep a poll from
+# thrashing the verb while the tenant is starting up, and it is a knob
+# rather than a constant because the honest value depends on how long that
+# takes on the host.
+DEFAULT_GRACE_SECONDS = 600
+
+# The age at which a delivery question with no resumption path is reported
+# as a defect rather than as work in progress. See `cmd_stranded`.
+DEFAULT_STRANDED_DAYS = 3
 
 # The tenant version this shim's mapping was read from. Recorded rather
 # than enforced: the shim folds history written by older tenants too,
@@ -440,9 +532,11 @@ class Fold:
             text or "The delivery seat blocked on a judgment only the resident can supply.",
             note,
             self.brief_line(errand),
-            "Answering this does not resume the errand on its own: the inbound "
-            "mechanism is a separate piece of work and until it exists an answered "
-            "delivery question resumes nothing automatically (docs/architecture.md).",
+            "Answering this resumes the errand: the answer is handed to the tenant "
+            "verbatim and the errand is re-run from it, once, chained by the `claim` "
+            "that names the answer (`castle-delivery-shim resume`, task 0082). What "
+            "is not yet wired is the interval that notices — see "
+            "`docs/backlog/nothing-polls-the-delivery-shim.md`.",
         ]
         body = "\n\n".join(part for part in paragraphs if part)
         return fields, body
@@ -622,6 +716,677 @@ def cmd_fold(args: argparse.Namespace) -> int:
     return 1 if refused else 0
 
 
+# --- the tenant's side of a park ---------------------------------------------
+
+
+def _header(text: str, key: str) -> str:
+    match = re.search(rf"^{key}:{_HSPACE}*(.*)$", text, re.M)
+    return match.group(1).strip() if match else ""
+
+
+def _section(text: str, name: str) -> str:
+    pattern = rf"^##{_HSPACE}+{name}{_HSPACE}*$(.*?)(?=^##{_HSPACE}+|\Z)"
+    match = re.search(pattern, text, re.M | re.S)
+    if not match:
+        return ""
+    return re.sub(r"<!--.*?-->", "", match.group(1), flags=re.S).strip()
+
+
+class Parked:
+    """One tenant question file, read by the tenant's own rules.
+
+    Re-read rather than imported, for the reason the whole shim is written
+    this way: nothing here imports the tenant, so the rules are pinned
+    above and proven against the tenant's real verb rather than trusted.
+    The two properties that matter are the tenant's, not this shim's —
+    `open` is what makes a park still resumable, and an answer the tenant
+    will act on is a non-empty `## Answer` section *and* a non-empty
+    `Answered-by:`.
+    """
+
+    def __init__(self, path: pathlib.Path, text: str):
+        self.path = path
+        self.task = _header(text, "Task")
+        self.status = _header(text, "Status") or "open"
+        self.answered_by = _header(text, "Answered-by")
+        self.answer = _section(text, PARKED_ANSWER_SECTION)
+        self.question = _section(text, PARKED_QUESTION_SECTION)
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == "open"
+
+    @property
+    def is_answered(self) -> bool:
+        return bool(self.answer) and bool(self.answered_by)
+
+
+def parked_path(run_dir: pathlib.Path, errand: str) -> pathlib.Path:
+    return run_dir / PARKED_DIR / f"{errand}.md"
+
+
+def read_parked(path: pathlib.Path) -> "Parked | None":
+    try:
+        return Parked(path, path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+def answered_by_line(answer_id: str) -> str:
+    """Who the tenant is told answered, in the tenant's own convention.
+
+    The tenant's template asks for a name, or `agent:<name> for <human>`
+    when an agent is transcribing for a person — which is exactly this
+    shim's position. The record id is the citable half: it is what a reader
+    follows to the resident's own words, and it is the same id the `claim`
+    names, so the tenant's file and the castle journal cannot disagree
+    about which answer bought this attempt.
+    """
+    return f"agent:castle-delivery-shim for the resident (castle record {answer_id})"
+
+
+def write_answer_into(parked: Parked, body: str, answer_id: str) -> None:
+    """Put the resident's answer in the tenant's file, verbatim.
+
+    Verbatim is the whole requirement. No seat paraphrases the resident, at
+    spend time or ever, and this is the one place in the inbound path where
+    a paraphrase could be introduced with nothing to catch it — the tenant
+    injects this section into the resumed attempt's prompt, and the attempt
+    has no other copy of the resident's words to compare it against. So the
+    section is *replaced* by the answer record's body and nothing is added
+    to it.
+
+    The citation goes in an HTML comment, which the tenant's own section
+    parser strips before it reads the answer (see `_section`) and which a
+    human opening the file still sees. That is the point of putting it
+    there: the answer the tenant acts on stays byte-identical to the
+    record, and a reader of the file still has a way back to it.
+
+    Idempotent by construction — the file is rewritten from the same inputs,
+    so a second pass over an answer whose claim was written but whose
+    invocation died produces the same bytes.
+    """
+    text = parked.path.read_text(encoding="utf-8")
+    line = answered_by_line(answer_id)
+    text, count = re.subn(rf"^Answered-by:{_HSPACE}*.*$", f"Answered-by: {line}",
+                          text, count=1, flags=re.M)
+    if not count:
+        raise Refused(
+            f"{parked.path}: no `Answered-by:` header to fill, so the tenant would "
+            "refuse this answer for having no provenance. Nothing was handed over.")
+    heading = re.search(rf"^##{_HSPACE}+{PARKED_ANSWER_SECTION}{_HSPACE}*$",
+                        text, re.M)
+    if not heading:
+        raise Refused(
+            f"{parked.path}: no `## {PARKED_ANSWER_SECTION}` section, so there is "
+            "nowhere the tenant would read an answer from. Nothing was handed over.")
+    parked.path.write_text(
+        text[:heading.end()]
+        + "\n\n"
+        + body.strip()
+        + f"\n\n<!-- Transcribed from the castle journal: {answer_id}. The resident's\n"
+          "     own words, verbatim; this comment is not part of them. -->\n",
+        encoding="utf-8")
+
+
+# --- the inbound fold --------------------------------------------------------
+
+
+def parse_source_event(value: str) -> "tuple[str, str, str] | None":
+    """`errand@repo/run#seq` back into its three parts, or None.
+
+    The outbound half's key, read the other way round. It is what makes a
+    delivery `question` locatable at all: the record carries no `refs` (see
+    the module docstring), so the errand and the run it parked in are
+    recoverable from this field and from nothing else.
+    """
+    errand, _, rest = value.partition("@")
+    key, _, seq = rest.rpartition("#")
+    if not errand or not key or not seq:
+        return None
+    return errand, key, seq
+
+
+def record_age(castle, rec) -> "dt.datetime | None":
+    """A record's own timestamp, falling back to the one in its id.
+
+    The field first, because it is the record's own statement about itself;
+    the id's stamp second, because every id carries one by construction and
+    a record whose `created` was mangled should still be datable. Neither is
+    evidence of *order* — `order_records` is, and nothing here uses this for
+    order. This answers one question only: how long something has waited.
+    """
+    for raw, fmt in ((rec.fields.get("created", ""), castle.CREATED_FMT),
+                     (castle.stamp_of(rec.id), castle.ID_TIMESTAMP_FMT)):
+        try:
+            return dt.datetime.strptime(raw, fmt).replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+class Candidate:
+    """One answer, the question it closes, and what this pass owes it."""
+
+    NEW = "new"                # unspent: claim it, hand it over, invoke
+    RECOVER = "recover"        # claimed, tenant still parked: invoke again
+    OBSERVED = "observed"      # spent by the operator's own relaunch
+
+    def __init__(self, *, answer, question, errand: str, parked: Parked,
+                 state: str, note: str = ""):
+        self.answer = answer
+        self.question = question
+        self.errand = errand
+        self.parked = parked
+        self.state = state
+        self.note = note
+
+    def __str__(self) -> str:
+        return f"{self.state} {self.errand} {self.answer.id}"
+
+
+class Resumption:
+    """The inbound fold: which answers are eligible, and nothing else.
+
+    Total over the castle journal and scoped to one tenant run, exactly as
+    `Fold` is — the caller says which run, the same way it says which run to
+    fold, and this has no say in it. The scoping is a property of the
+    records rather than a policy: a delivery question names its run in
+    `source-event`, and an answer to a question in another run is another
+    invocation's business.
+    """
+
+    def __init__(self, castle, run_dir: pathlib.Path):
+        self.castle = castle
+        self.run_dir = run_dir
+        self.key = run_key(run_dir)
+        self.records = castle.load_all(castle.journal_dir())
+
+    # -- eligibility ------------------------------------------------------
+
+    def questions(self) -> dict:
+        """This run's blocking delivery questions, by id, with their errand.
+
+        `_is_blocking` rather than a non-blank test on the field, and the
+        delivery seat rather than any seat: castle's own fold makes exactly
+        these two tests for exactly these reasons — an unrecognised
+        `blocking` spelling must fail towards *not* resuming — and two folds
+        that disagreed about what a blocking question is would resume an
+        errand on one surface that the other calls unresumable.
+        """
+        out: dict = {}
+        for rec in self.records.values():
+            if rec.type != "question" or rec.fields.get("seat") != SEAT:
+                continue
+            if not self.castle._is_blocking(rec):
+                continue
+            parsed = parse_source_event(rec.fields.get("source-event", ""))
+            if parsed is None:
+                continue
+            errand, key, _ = parsed
+            if key != self.key:
+                continue
+            # A record that contradicts itself is not a record to act on.
+            # Both halves are written by `Fold.common` out of one tenant
+            # event, so a disagreement means the journal was hand-written or
+            # edited — and resuming whichever errand a guess prefers is the
+            # confident wrong act this seat's whole design refuses.
+            if rec.fields.get("errand", errand) != errand:
+                continue
+            out[rec.id] = (rec, errand)
+        return out
+
+    def spent(self) -> set:
+        """Every answer id named by ANY claim in the journal.
+
+        Global rather than scoped to the delivery seat or to this run, and
+        the reason is `_resumable_answers`' word for word: the bound is a
+        property of the *answer*, not of the errand reading it. An answer
+        naming questions on two errands is spent the moment either one's
+        claim names it, and keying this per-errand would quietly make "one
+        answer, one resumption, ever" false while looking correct.
+        """
+        out: set = set()
+        for rec in self.records.values():
+            if rec.type == "claim":
+                out.update(rec.refs)
+        return out
+
+    def claims_naming(self, answer_id: str) -> list:
+        return [rec for rec in self.records.values()
+                if rec.type == "claim" and answer_id in rec.refs]
+
+    def answers(self) -> list:
+        """Every answer closing one of this run's delivery questions, oldest
+        first.
+
+        **Only an answer that looks like the resident's own.**
+        `file_answer` — the one path a resident's answer takes, from the CLI
+        or the modal — always writes `provenance: requested` and `seat:
+        intake`. The same filter castle's worker fold applies, for the same
+        reason and with the same limit: it is a filter, not a boundary, and
+        what it buys is that when the write guard forbidding a tenant to
+        answer at all is defeated, the *spend* half stays closed unless the
+        record also impersonates intake.
+
+        More than one answer to one question is tolerated rather than
+        assumed away. `file_answer` refuses a second, but `castle record
+        --type answer` is an unguarded back door onto the same journal, and
+        each answer is spent independently: an earlier one already consumed
+        does not consume a later one.
+        """
+        questions = self.questions()
+        found = [
+            rec for rec in self.records.values()
+            if rec.type == "answer"
+            and rec.fields.get("provenance") == "requested"
+            and rec.fields.get("seat") == "intake"
+            and any(ref in questions for ref in rec.refs)
+        ]
+        return self.castle.order_records(found)
+
+    def plan(self, *, grace_seconds: int) -> tuple:
+        """What this pass owes, and what it refuses. Writes nothing.
+
+        Separated from doing it so that a dry run is the same fold rather
+        than a second code path, and so everything checkable before the
+        journal is appended to is checked there: the journal is append-only,
+        so a claim written against a park that turns out not to exist is a
+        permanent receipt for a resumption that never happened.
+        """
+        questions = self.questions()
+        spent = self.spent()
+        now = dt.datetime.now(dt.timezone.utc)
+        plan: list = []
+        refused: list = []
+        for answer in self.answers():
+            question, errand = next(
+                questions[ref] for ref in answer.refs if ref in questions)
+            path = parked_path(self.run_dir, errand)
+            parked = read_parked(path)
+            if answer.id in spent:
+                # Already paid for. The only question left is whether the
+                # invocation it paid for actually reached the tenant.
+                if parked is None or not parked.is_open:
+                    continue
+                written = [when for when in
+                           (record_age(self.castle, c)
+                            for c in self.claims_naming(answer.id)) if when]
+                age = min(((now - when).total_seconds() for when in written),
+                          default=None)
+                if age is not None and age < grace_seconds:
+                    continue
+                plan.append(Candidate(
+                    answer=answer, question=question, errand=errand, parked=parked,
+                    state=Candidate.RECOVER,
+                    note=f"claimed {int(age) if age is not None else '?'}s ago and the "
+                         "tenant still shows this errand parked"))
+                continue
+            if parked is None:
+                refused.append(
+                    f"{errand}: answer {answer.id} closes a delivery question from run "
+                    f"{self.key} and the tenant has no question file at {path}. Nothing "
+                    "was claimed and nothing was invoked — a claim written here would "
+                    "be a permanent receipt for a resumption that cannot happen.")
+                continue
+            if parked.task and parked.task != errand:
+                refused.append(
+                    f"{errand}: the tenant's question file at {path} says "
+                    f"`Task: {parked.task}`. Resuming an errand that file does not name "
+                    "would spend this answer on the wrong park. Nothing was written.")
+                continue
+            if not parked.is_open:
+                # The errand resumed without this mechanism: the operator
+                # relaunched the tenant by hand, which was the only path
+                # before this existed and stays legal after it. The answer
+                # bought its one resumption; what is missing is the receipt.
+                # Writing it is an observation of the tenant's own durable
+                # state rather than a verdict — and the alternative is
+                # refusing, on every poll, forever, over something that is
+                # not wrong.
+                plan.append(Candidate(
+                    answer=answer, question=question, errand=errand, parked=parked,
+                    state=Candidate.OBSERVED,
+                    note="the tenant's question file already reads "
+                         f"`Status: {parked.status}`"))
+                continue
+            plan.append(Candidate(
+                answer=answer, question=question, errand=errand, parked=parked,
+                state=Candidate.NEW))
+        return plan, refused
+
+    # -- spending it ------------------------------------------------------
+
+    def brief_line(self, errand: str) -> str:
+        return (
+            f"Errand `{errand}` — the numbered brief of that name, named here rather "
+            "than referenced because a brief is a file and has no record id to cite "
+            "(task 0071, friction 2)."
+        )
+
+    def claim_body(self, candidate: Candidate) -> str:
+        lines = [
+            "The delivery seat's errand resumes on an answer the resident gave. "
+            + self.brief_line(candidate.errand),
+            "",
+            f"Answer `{candidate.answer.id}`, closing question "
+            f"`{candidate.question.id}`. This claim is what spends it: the bound task "
+            "0069 took from task 0023 is one answer producing exactly one resumption, "
+            "and `refs` naming the answer is the whole of that accounting — a second "
+            "claim on this answer cannot be written, because this one makes it spent.",
+            "",
+            f"Tenant `{TENANT}`, run `{self.key}`, park "
+            f"`{PARKED_DIR}/{candidate.errand}.md`.",
+        ]
+        if candidate.state == Candidate.OBSERVED:
+            lines += [
+                "",
+                "**The resumption was not this mechanism's.** " + candidate.note
+                + ", so the tenant had already been relaunched by hand when this pass "
+                "read it. The answer bought its one resumption and this record is the "
+                "receipt that was missing, not a second spend: nothing was invoked.",
+            ]
+        elif candidate.state == Candidate.RECOVER:
+            lines += [
+                "",
+                "Written by an earlier pass; this one re-invoked the verb and wrote "
+                "nothing (" + candidate.note + "). Re-invoking is safe for the same "
+                "reason the write-ahead ordering relies on: a resume against a park "
+                "the tenant no longer shows as open dispatches nothing.",
+            ]
+        return "\n".join(lines)
+
+    def write_claim(self, candidate: Candidate) -> str:
+        """The claim, written before anything at all reaches the tenant.
+
+        `refs[0]` is the answer and `refs[1]` is the question, by the "first
+        ref is lineage, later refs are context" convention claims and
+        results already use: what bought this resumption is the answer, and
+        the question is what the answer was about. That is also the first
+        non-empty `refs` any record of this seat has carried — the outbound
+        half leaves it empty because a brief is a file, and the answer is a
+        record, which is exactly why task 0069's chaining promise is
+        keepable here and not there.
+
+        `provenance: requested` is sourced by the answer itself — the
+        resident's own word through `file_answer`, which is the strictest
+        source any record in this shim has. The outbound half sources the
+        same value from a brief file because that is the strongest thing a
+        tenant *event* traces back to; `provenance-source` names which of
+        the two this record used.
+        """
+        return self.castle.write_record(
+            self.castle.journal_dir(),
+            type="claim",
+            provenance="requested",
+            seat=SEAT,
+            refs=[candidate.answer.id, candidate.question.id],
+            body=self.claim_body(candidate),
+            extra={
+                "errand": candidate.errand,
+                RESUMES_FIELD: candidate.answer.id,
+                RESUMED_QUESTION_FIELD: candidate.question.id,
+                RESUMED_BY_FIELD: (RESUMED_BY_OPERATOR
+                                   if candidate.state == Candidate.OBSERVED
+                                   else RESUMED_BY_SHIM),
+                "provenance-source": candidate.answer.id,
+                "tenant": TENANT,
+                "tenant-run": self.key,
+                # Relative to the run directory, deliberately: the run's own
+                # path is the operator's business and never this
+                # repository's, the same rule `run_key` applies.
+                "tenant-question-file": f"{PARKED_DIR}/{candidate.errand}.md",
+            },
+        )
+
+
+def resume_argv(run_dir: pathlib.Path, repo: pathlib.Path,
+                tasks_dir: "pathlib.Path | None") -> list:
+    """The tenant's resume verb, with the three arguments this shim owns.
+
+    The configured value is an argv prefix including the verb, so a resident
+    who needs a budget or a hook on the resumption writes it there
+    (`CASTLE_DELIVERY_RESUME_COMMAND="emcee resume --budget 25"`). The three
+    appended here are not negotiable and come last on purpose: they say
+    *which* park is being resumed, the tenant's own flags take the last
+    occurrence, and a configuration that tried to pin them would be
+    overriding the one thing the accounting depends on.
+    """
+    argv = shlex.split(os.environ.get(RESUME_COMMAND_ENV, "").strip()
+                       or DEFAULT_RESUME_COMMAND)
+    argv += ["--run", str(run_dir), "--repo", str(repo)]
+    if tasks_dir is not None:
+        argv += ["--tasks", str(tasks_dir)]
+    return argv
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """Spend every eligible answer on this run's parked errands, once each.
+
+    WHAT MAKES THIS PLUMBING RATHER THAN A SEAT
+
+    Eligibility is a total function of the journal (`Resumption.plan`), and
+    this command has no policy about which eligible answer to spend and no
+    say in whether to spend one. Every answer the fold returns is spent, in
+    the journal's own order, on this pass. That constraint is the paragraph
+    task 0082 wrote, and it is the thing a later agent is most likely to
+    "complete" into a reasoning seat by adding a judgment about priority,
+    readiness or worth.
+
+    WRITE-AHEAD, THEN INVOKE
+
+    In order: check everything checkable, write the `claim` naming the
+    answer, hand the answer to the tenant, invoke the verb. The claim comes
+    first because it is the spend record, and it must precede every
+    observable effect on the tenant rather than follow them — a crash
+    between the two must leave an over-recorded resumption that a later pass
+    can recognise, never an unrecorded one it would spend a second time.
+
+    That leaves a real crash window — claim written, invocation dead — and
+    it is handled at the tenant boundary rather than by a checkpoint here.
+    The property relied on, verified against the tenant's real verb rather
+    than assumed (task 0082 required exactly that, and
+    `test/delivery-shim/run.sh` is where it is demonstrated): **a resume
+    against a park the tenant no longer shows as open dispatches nothing.**
+    The tenant flips its question file to `Status: resolved` strictly before
+    it selects the task, so an errand that was resumed is not selectable on
+    that answer again, and an unanswered park makes the verb refuse before
+    it journals anything at all. So when a claim exists and the tenant still
+    shows the errand parked after the grace interval, re-invoking is legal
+    and safe, and `Candidate.RECOVER` is that path.
+
+    ONE INVOCATION PER PASS, NOT ONE PER ANSWER
+
+    The tenant's verb is run-scoped, not errand-scoped: it re-runs every
+    answered park in the run it is pointed at. So a pass that claimed two
+    answers invokes once and the tenant resumes both errands. The per-answer
+    accounting is the claim, which is what the bound is about; the
+    invocation is the tenant coalescing its own work. Invoking once per
+    answer instead would race the tenant's per-repository sprint lock and
+    report its refusal of the second invocation as a failure, which is the
+    opposite of true.
+
+    LIVENESS BY POLLING, AND WHAT IS NEVER INFERRED
+
+    Nothing here is triggered by a notification, and nothing is inferred
+    from one's absence. This is the same command whether a doorbell rang or
+    a timer fired, so a missed notice delays a resumption and can never
+    corrupt the accounting — the outbound half's rule, verbatim, for the
+    same reason. What is *not* yet wired is the timer:
+    `docs/backlog/nothing-polls-the-delivery-shim.md` carries both halves of
+    that gap, and `stranded` is what makes an unwired poll loud rather than
+    quiet.
+    """
+    run_dir = args.run_dir or os.environ.get("EMCEE_RUN_DIR")
+    if not run_dir:
+        print("castle-delivery-shim resume: no run directory. Pass --run-dir, or let "
+              "the tenant's journal hook supply EMCEE_RUN_DIR.", file=sys.stderr)
+        return 2
+    run_dir = pathlib.Path(run_dir)
+    repo = pathlib.Path(args.repo) if args.repo else None
+    if repo is None:
+        print("castle-delivery-shim resume: no --repo. The tenant's resume verb works "
+              "against a repository, and which repository this run's errands belong to "
+              "is configuration this command cannot derive: the record names the run by "
+              "its last two path components, never a checkout.", file=sys.stderr)
+        return 2
+    tasks_dir = args.tasks_dir or os.environ.get("CASTLE_DELIVERY_TASKS_DIR")
+    tasks_dir = pathlib.Path(tasks_dir) if tasks_dir else None
+
+    castle = load_castle()
+    # The same lock `fold` takes, and held over the same span for the same
+    # reason: two passes would otherwise both read an answer as unspent and
+    # both claim it, which is the one failure the claim exists to make
+    # impossible. Released before the verb is invoked, deliberately — the
+    # invocation runs a whole errand and can last hours, and holding a lock
+    # across it would make one parked errand block every other run's
+    # resumption. Concurrency past this point is the tenant's own sprint
+    # lock's business, which refuses a second sprint before journaling.
+    lock = castle.acquire_lock_blocking(castle.runtime_dir() / "delivery-shim.lock")
+    claimed: list = []
+    refused: list = []
+    try:
+        fold = Resumption(castle, run_dir)
+        plan, refused = fold.plan(grace_seconds=args.grace_seconds)
+        for candidate in plan:
+            if args.dry_run:
+                claimed.append(f"{candidate} (dry run, nothing written or invoked)")
+                continue
+            try:
+                if candidate.state is Candidate.RECOVER:
+                    record_id = "(claimed by an earlier pass)"
+                else:
+                    record_id = fold.write_claim(candidate)
+                if candidate.state is not Candidate.OBSERVED:
+                    write_answer_into(candidate.parked, candidate.answer.body,
+                                      candidate.answer.id)
+            except Refused as exc:
+                refused.append(str(exc))
+                continue
+            claimed.append(f"{record_id} {candidate}")
+    except Refused as exc:
+        print(f"castle-delivery-shim resume: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        lock.close()
+
+    for line in claimed:
+        print(line)
+    invoke = [c for c in plan if c.state is not Candidate.OBSERVED] \
+        if not args.dry_run else []
+    rc = 0
+    if invoke:
+        argv = resume_argv(run_dir, repo, tasks_dir)
+        print("invoking the tenant: " + shlex.join(argv))
+        # Not captured and not timed out. The verb runs the errand, so its
+        # output is the resumption's own account of itself and belongs
+        # wherever this command's output goes; a timeout here would kill a
+        # working attempt and leave the claim standing.
+        rc = subprocess.run(argv).returncode
+        print(f"the tenant's resume verb exited {rc}")
+    elif not claimed:
+        print("nothing to resume: no unspent answer closes a delivery question in "
+              f"run {fold.key}")
+    for line in refused:
+        print(f"refused: {line}", file=sys.stderr)
+    if refused:
+        return 1
+    # A non-zero tenant exit is reported as this command's own. The claim is
+    # already durable, so the resumption is accounted for either way; what a
+    # zero here would do is hide a verb that could not run behind a receipt
+    # saying it did, and the recovery path above is what picks the errand up
+    # on the next pass.
+    return 1 if rc else 0
+
+
+def cmd_stranded(args: argparse.Namespace) -> int:
+    """Report delivery questions old enough that having no resumption path is
+    a defect.
+
+    THE DETECTOR THIS MECHANISM OWES
+
+    A silently stranded park looks exactly like a quiet day: the errand is
+    not running, nothing failed, and no surface says anything. Task 0082
+    filed this rule against the invariant sweep
+    (`docs/backlog/nothing-sweeps-the-pipeline-invariants.md`) — a delivery
+    `question` older than N days with no resumption path is a defect the
+    sweep reports — and this is the rule's implementation, so that the sweep
+    calls it rather than deriving the same fold a second way. That entry's
+    own discipline applies: an artifact-state invariant, few and broad,
+    never a monitor per step.
+
+    "No resumption path" is one predicate with two ways of being true, and
+    the report distinguishes them because the remedies are different:
+
+      * **Unanswered.** The park reached the journal and the resident has
+        not closed it. After N days, either it never reached them or it was
+        dismissed — both are the router's business, and neither is visible
+        anywhere else.
+      * **Answered and unspent.** An answer closes it and no `claim` names
+        that answer. This is the one that indicts the machinery rather than
+        the person: `resume` should have spent it within a poll interval, so
+        an answer sitting here means nothing is polling, or every pass is
+        refusing.
+
+    Total over the journal and needing no tenant: this reads records only,
+    so it runs anywhere the journal does and says nothing about a run
+    directory it cannot see. The claim-written-but-tenant-still-parked case
+    is deliberately not here — checking it needs the tenant's own files, and
+    `resume` already handles it on every pass.
+    """
+    castle = load_castle()
+    records = castle.load_all(castle.journal_dir())
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = dt.timedelta(days=args.older_than_days)
+
+    spent: set = set()
+    for rec in records.values():
+        if rec.type == "claim":
+            spent.update(rec.refs)
+    answers_by_question: dict = {}
+    for rec in records.values():
+        if rec.type == "answer":
+            for ref in rec.refs:
+                answers_by_question.setdefault(ref, []).append(rec)
+
+    problems: list = []
+    counted = 0
+    for rec in castle.order_records(records.values()):
+        if rec.type != "question" or rec.fields.get("seat") != SEAT:
+            continue
+        if not castle._is_blocking(rec):
+            continue
+        counted += 1
+        when = record_age(castle, rec)
+        if when is None or now - when < cutoff:
+            continue
+        age = (now - when).days
+        errand = rec.fields.get("errand") or "(unnamed errand)"
+        answers = answers_by_question.get(rec.id, [])
+        if not answers:
+            problems.append(
+                f"{rec.id}: {errand} has been parked {age} day(s) with no answer. The "
+                "park is in the journal and nothing has closed it — no resumption can "
+                "happen until one does.")
+        elif not any(a.id in spent for a in answers):
+            problems.append(
+                f"{rec.id}: {errand} was answered ({', '.join(a.id for a in answers)}) "
+                f"and no claim names that answer {age} day(s) later. The answer is "
+                "eligible and unspent, so either nothing is running "
+                "`castle-delivery-shim resume` over this run or every pass is refusing "
+                "— read its stderr.")
+
+    for line in problems:
+        print(f"stranded: {line}")
+    if problems:
+        print(f"\n{len(problems)} of {counted} delivery question(s) have no resumption "
+              f"path after {args.older_than_days} day(s).")
+        return 1
+    print(f"ok: {counted} delivery question(s), none stranded past "
+          f"{args.older_than_days} day(s)")
+    return 0
+
+
 # --- the outcome-log row -----------------------------------------------------
 
 
@@ -727,7 +1492,7 @@ def cmd_row(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="castle-delivery-shim",
-        description="the delivery seat's record shim, outbound (docs/tasks/0081)")
+        description="the delivery seat's record shim (docs/tasks/0081, 0082)")
     sub = ap.add_subparsers(dest="command", required=True)
 
     f = sub.add_parser("fold", help="translate one run's tenant journal into records")
@@ -738,6 +1503,30 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--dry-run", action="store_true",
                    help="name what would be written, write nothing")
     f.set_defaults(func=cmd_fold)
+
+    s = sub.add_parser("resume", help="spend an answered delivery question on one "
+                                      "resumption")
+    s.add_argument("--run-dir", help="the tenant's run directory (default: $EMCEE_RUN_DIR)")
+    s.add_argument("--repo", required=True,
+                   help="the repository this run's errands belong to, for the tenant's "
+                        "resume verb")
+    s.add_argument("--tasks-dir",
+                   help="the briefed repository's docs/tasks, passed to the tenant "
+                        "(default: $CASTLE_DELIVERY_TASKS_DIR, else the tenant's own "
+                        "default)")
+    s.add_argument("--grace-seconds", type=int, default=DEFAULT_GRACE_SECONDS,
+                   help="how long a claim may stand with the tenant still showing the "
+                        f"errand parked before re-invoking (default {DEFAULT_GRACE_SECONDS})")
+    s.add_argument("--dry-run", action="store_true",
+                   help="name what would be claimed and invoked, do neither")
+    s.set_defaults(func=cmd_resume)
+
+    d = sub.add_parser("stranded",
+                       help="report delivery questions with no resumption path")
+    d.add_argument("--older-than-days", type=int, default=DEFAULT_STRANDED_DAYS,
+                   help="how old a question must be for having no resumption path to "
+                        f"count as a defect (default {DEFAULT_STRANDED_DAYS})")
+    d.set_defaults(func=cmd_stranded)
 
     r = sub.add_parser("row", help="mature this errand's task-outcome row, on its branch")
     r.add_argument("--run-dir", help="the tenant's run directory (default: $EMCEE_RUN_DIR)")
