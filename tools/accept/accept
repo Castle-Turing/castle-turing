@@ -1,0 +1,1121 @@
+#!/usr/bin/env python3
+"""accept — the acceptance harness's mechanical half
+(docs/tasks/0080-the-acceptance-harness.md; the run's format and rules
+are written out in docs/planning.md, beside the planner seat that
+authors the criteria).
+
+Stdlib only, one file, no third-party anything — the same reasoning
+`plan`, `clarify` and `castle` give: a check that outlives the harness
+fashionable when it was written has to need nothing installed to run.
+
+WHAT THIS IS FOR
+
+The pipeline's named failure mode is an implementer reporting work
+complete while holding a different definition of complete than the
+resident. Task 0070 is the worked specimen: every test green, the gate
+armed, and the resident's actual reading unmet — caught by a person
+reading the pull request. Unit tests passing is not "works the way the
+resident expects", and the scarce resource this whole project conserves
+is exactly the manual acceptance testing that closes the gap.
+
+So a brief's criteria are authored at spec time, before the
+implementation exists (the planner seat, docs/planning.md), and this
+tool runs them against what got built, in the real invocation path the
+criterion names. The ordering is the load-bearing defence rather than a
+convenience: a judge that commits its assessment before seeing the
+candidate cuts false positives from 0.72 to 0.01
+(docs/research/automated-approval.md), and the documented failure in the
+other direction is a verifier weakening its own assertions until they
+pass.
+
+WHAT A RUN MAY CLAIM, AND WHAT IT MAY NOT
+
+The output is a **receipt**: these commands ran, in this invocation
+path, at this commit, and exited this way. It is never a verdict
+(Proposal 06). An agent exercising a criterion is solid evidence a
+mechanism fired and weak evidence a person is satisfied, so every
+receipt carries the standing limit below, `check` refuses a receipt that
+has dropped it, and the completion-assertion vocabulary is a blocking
+lint on the receipt's own prose — the register is a trained default with
+a measurable signature that model judges talk themselves out of, so an
+instruction not to use it is not a control.
+
+WHAT IT IS A PURE FUNCTION OF
+
+(the brief's criteria, the repository at the tested commit). It reads
+the brief and it runs the commands. It does not read the implementer's
+diff, transcript or reasoning, and it has no way to: the inputs are the
+whole of its isolation claim. Whether the agent reading the receipt is
+in a separate context from the implementer, and on a different model
+family where the stakes warrant, is the caller's discipline and is
+written down in docs/planning.md — no tool can check it.
+
+Subcommands:
+  run        run one brief's criteria and write the receipt.
+  check      lint a receipt: its form, its grounding, its vocabulary.
+
+Exit status is 0 when nothing blocking was found and 1 otherwise.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import pathlib
+import re
+import subprocess
+import sys
+
+# ---------------------------------------------------------------------------
+# The brief's acceptance fields
+# ---------------------------------------------------------------------------
+
+# A criterion and its disposition. `Criterion:` is the prose authored at
+# spec time; exactly one `Check:` or `Manual:` follows it and says how
+# the criterion is answered. The disposition is mandatory and non-empty
+# for the reason that binds a falsifier, a `Model-because:` and a
+# deferral reason: blank is not an answer. A criterion that cannot
+# compile to an executable check is legal — a screenshot, a person's
+# eyes, a deployed host — and has to say so where the slate review reads
+# it, rather than arriving as a criterion nobody can run and nobody
+# noticed was unrunnable.
+CRITERION = "Criterion"
+DISPOSITIONS = ("Check", "Manual")
+ACCEPTANCE_FIELDS = (CRITERION,) + DISPOSITIONS
+
+FIELD_RE = re.compile(r"^(?P<key>[A-Z][A-Za-z-]*):\s*(?P<value>.*)$")
+
+# ---------------------------------------------------------------------------
+# The claim lint's vocabulary
+# ---------------------------------------------------------------------------
+
+# Completion-assertion vocabulary. This list has a first home —
+# `tools/handover-check.py`, where the same ban is enforced on the
+# operator handover — and this is a second copy of it rather than an
+# import, on purpose: every tool here is one stdlib file that runs on
+# its own, and reaching into another tool's source to borrow a constant
+# would trade that for a coupling the reachability lint would then read
+# as one tool invoking the other, which is not what an import is.
+#
+# The cost of a copy is drift, and drift in a lint is silent, so it is
+# closed by a check rather than by hope: `test/accept/run.sh` extracts
+# both lists and fails if they differ. Add a word in one place and the
+# test says so.
+BANNED = [
+    "done", "complete", "completed", "completes", "completing", "completion",
+    "finish", "finished", "finishes", "success", "successful", "successfully",
+    "delivered", "shipped", "achieved", "accomplished", "fully", "all set",
+    "ready to ship", "wrapped up",
+]
+BANNED_RE = re.compile(
+    r"(?<![\w-])(" + "|".join(re.escape(w) for w in BANNED) + r")(?![\w-])",
+    re.I,
+)
+
+CODE_SPAN = re.compile(r"`[^`]*`")
+
+# ---------------------------------------------------------------------------
+# The receipt's grammar
+# ---------------------------------------------------------------------------
+
+TITLE_RE = re.compile(r"^# Acceptance run — (?P<brief>.+)$")
+RECEIPT_HEADER_KEYS = ("Brief", "Commit", "Base", "Cycle", "Criteria")
+CRITERION_HEADING_RE = re.compile(
+    r"^## Criterion (?P<number>\d+) — (?P<phrase>.+?)\s*$"
+)
+NOT_CHECKED_HEADING = "## What this run did not check"
+COMMAND_RE = re.compile(r"^\s{4}\$ (?P<command>.+?)\s*$")
+EXIT_RE = re.compile(r"^\s{4}exit: (?P<status>-?\d+|timed out)\s*$")
+MANUAL_RE = re.compile(r"^\s{4}manual: (?P<step>.*)$")
+
+# The closed set of outcome phrases a criterion's heading may carry. A
+# closed set rather than free text, and `check` holds a receipt to it,
+# because the whole hazard this file exists for is a report that reads
+# as a verdict: an agent handing in "criterion satisfied" or "acceptance
+# passed" would have promoted a receipt in the one place a reader looks
+# first.
+OBSERVED = "observed as the criterion states"
+DIVERGED = "observed differently from what the criterion states"
+ESCALATED = "could not be exercised; escalated to the resident"
+MANUAL = "not exercised here; a named manual step stands in its place"
+PHRASES = (OBSERVED, DIVERGED, ESCALATED, MANUAL)
+
+# Printed in every receipt and required verbatim by `check`. A receipt
+# that had quietly lost this paragraph would be the promotion Proposal 06
+# forbids, arriving through the surface most likely to be read as a
+# verdict.
+LIMIT = """
+What this run observed is that the commands named above exited the way
+the criteria said they would, in the invocation path each criterion
+names, at one commit. That is a receipt: evidence that a mechanism
+fired. It is not a judgment that the work is what the resident asked
+for, and no run of this tool can be one — an agent exercising a
+criterion is solid evidence the mechanism fired and weak evidence a
+person is satisfied. The resident's verdict stays the only verdict
+(Proposal 06), and this run exists so that it is spent on work that has
+already survived its stated criteria.
+""".strip()
+
+# How much of a command's output the receipt carries. A transcript is
+# evidence and a wall of it is not read, so the tail is kept — the end
+# is where a check says why it failed — and what was dropped is stated
+# rather than trimmed silently.
+OUTPUT_LINES = 20
+OUTPUT_WIDTH = 200
+
+
+# ---------------------------------------------------------------------------
+# Findings
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Finding:
+    rule: str
+    where: str
+    message: str
+
+    def render(self) -> str:
+        return f"  FAIL  [{self.rule}] {self.where}: {self.message}"
+
+
+class Report:
+    def __init__(self) -> None:
+        self.findings: list[Finding] = []
+        self.notes: list[str] = []
+
+    def fail(self, rule: str, where: str, message: str) -> None:
+        self.findings.append(Finding(rule, where, message))
+
+    def note(self, text: str) -> None:
+        self.notes.append(text)
+
+
+def emit(report: Report, what: str) -> int:
+    for note in report.notes:
+        print(note)
+    if report.findings:
+        print()
+        for finding in report.findings:
+            print(finding.render())
+    print()
+    print(f"{len(report.findings)} blocking.")
+    if report.findings:
+        return 1
+    print(f"{what}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# The brief
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Criterion:
+    index: int
+    text: str
+    kind: str | None
+    value: str
+    line: int
+
+    @property
+    def runnable(self) -> bool:
+        return self.kind == "Check"
+
+
+def parse_criteria(
+    path: pathlib.Path, text: str, report: Report, label: str | None = None
+) -> list[Criterion]:
+    """A brief's criteria, read out of its field block.
+
+    The field block is the one `docs/planning.md` fixes for a brief in a
+    slate and a transfer copies into `docs/tasks/` unchanged: fields
+    contiguous from the first non-blank line, a wrapped value continuing
+    on an indented line, the block ending at the first blank line.
+    RFC-822 style, and the reason it is that rather than "runs to the
+    next blank line" is the gap `tools/outcomes/outcomes` names in its
+    own header — a wrapped value that swallows the field after it.
+
+    Fields this tool has no business in — `Title`, `Model`, `Milestone`,
+    everything `plan check` owns — are read past without comment. The
+    two things refused by name are an acceptance field *below* the
+    block, which would be read by nothing at all, and a disposition with
+    no criterion above it, which answers a question nobody asked.
+    """
+    where = label or path.name
+    criteria: list[Criterion] = []
+    in_fields = False
+    started = False
+    closed = False
+    # What an indented continuation line extends: a criterion's prose, a
+    # disposition's value, or some other field whose wrapping is not
+    # ours to read.
+    target: str | None = None
+
+    for number, line in enumerate(text.splitlines(), start=1):
+        if closed:
+            field = FIELD_RE.match(line)
+            if field and field.group("key") in ACCEPTANCE_FIELDS:
+                report.fail(
+                    "form",
+                    f"{where}:{number}",
+                    f"a {field.group('key')}: line below the brief's field "
+                    "block. Fields are contiguous from the top of the brief "
+                    "and wrap on indented lines, so this one is outside the "
+                    "block and would be read by nothing — including by this "
+                    "tool, which is how a criterion nobody runs looks exactly "
+                    "like a criterion that passed",
+                )
+            continue
+
+        if not in_fields:
+            if not line.strip():
+                continue
+            in_fields = True
+
+        if not line.strip():
+            if started:
+                in_fields = False
+                closed = True
+                target = None
+            continue
+
+        field = FIELD_RE.match(line)
+        if field:
+            started = True
+            key, value = field.group("key"), field.group("value").strip()
+            if key == CRITERION:
+                criteria.append(
+                    Criterion(
+                        index=len(criteria) + 1,
+                        text=value,
+                        kind=None,
+                        value="",
+                        line=number,
+                    )
+                )
+                target = CRITERION
+                continue
+            if key in DISPOSITIONS:
+                if not criteria:
+                    report.fail(
+                        "form",
+                        f"{where}:{number}",
+                        f"a {key}: line with no Criterion: above it. A "
+                        "disposition says how one criterion is answered, and "
+                        "one with no criterion answers nothing while looking "
+                        "like an answer",
+                    )
+                    target = None
+                    continue
+                current = criteria[-1]
+                if current.kind is not None:
+                    report.fail(
+                        "form",
+                        f"{where}:{number}",
+                        f"criterion {current.index} carries both a "
+                        f"{current.kind}: and a {key}:. One disposition per "
+                        "criterion: with two, a reader cannot tell whether the "
+                        "criterion was run or stood aside, and this tool would "
+                        "report only one of them",
+                    )
+                    target = None
+                    continue
+                current.kind = key
+                current.value = value
+                target = key
+                continue
+            target = "other"
+            continue
+
+        if line[:1].isspace() and target is not None:
+            if target == CRITERION and criteria:
+                criteria[-1].text = f"{criteria[-1].text} {line.strip()}".strip()
+            elif target in DISPOSITIONS and criteria:
+                criteria[-1].value = f"{criteria[-1].value} {line.strip()}".strip()
+            continue
+
+        # An unindented line that is not a field ends the block, exactly
+        # as a blank line does.
+        in_fields = False
+        closed = True
+        target = None
+
+    return criteria
+
+
+def check_criteria(criteria: list[Criterion], where: str, report: Report) -> None:
+    """Every criterion has prose and exactly one non-empty disposition.
+
+    The empty cases are refused rather than passed over, which is the
+    whole of what "refuse rather than pass vacuously" means here: a run
+    over a brief with no criteria would exit zero having exercised
+    nothing, and a green exit that means nothing is worse than a red one.
+    """
+    if not criteria:
+        report.fail(
+            "criteria",
+            where,
+            "no Criterion: field in the brief's field block. A brief's "
+            "criteria are authored at spec time, before the implementation "
+            "exists, and a run over a brief that has none would exit zero "
+            "having exercised nothing — which is the vacuous pass this tool "
+            "refuses rather than prints",
+        )
+        return
+
+    for criterion in criteria:
+        label = f"{where}:{criterion.line} criterion {criterion.index}"
+        if not criterion.text.strip():
+            report.fail("criteria", label, "the criterion's prose is empty")
+        if criterion.kind is None:
+            report.fail(
+                "criteria",
+                label,
+                "no Check: or Manual: disposition. A criterion that cannot "
+                "compile to an executable check must say so and name the "
+                "manual step that stands in its place — blank is not an "
+                "answer, the same non-emptiness rule that binds a falsifier "
+                "and a Model-because:",
+            )
+        elif not criterion.value.strip():
+            report.fail(
+                "criteria",
+                label,
+                f"an empty {criterion.kind}:. "
+                + (
+                    "A check with no command exercises nothing"
+                    if criterion.kind == "Check"
+                    else "A manual disposition with no step named is a "
+                    "criterion quietly set aside"
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
+# git, for the one rule that needs it
+# ---------------------------------------------------------------------------
+
+
+def git(root: pathlib.Path, *args: str) -> tuple[int, str]:
+    proc = subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, proc.stdout
+
+
+def toplevel(path: pathlib.Path) -> pathlib.Path | None:
+    start = path if path.is_dir() else path.parent
+    status, out = git(start, "rev-parse", "--show-toplevel")
+    return pathlib.Path(out.strip()) if status == 0 and out.strip() else None
+
+
+def check_frozen(
+    brief: pathlib.Path, criteria: list[Criterion], base: str, report: Report
+) -> str:
+    """The criteria as they stand against the criteria as they were committed.
+
+    The mechanical half of "frozen against the implementer": a criterion
+    may change by a commit the resident reviews, and never by the branch
+    doing the work widening its own gate. The documented failure this
+    resists is a verifier weakening assertions and deleting failing
+    checks to manufacture a pass, and the same edit is also a change to
+    what this tool executes as a shell command — two reasons the
+    comparison is against a ref the implementer does not control.
+
+    An *added* criterion is flagged too. A criterion written after the
+    artifact exists is not the pre-commitment the ordering buys, however
+    honest the addition; the flag asks for a reviewed commit, it does not
+    accuse anybody.
+
+    Returns the line the receipt prints for its `Base:` header, so that a
+    rule that did not run says so where the receipt is read.
+    """
+    root = toplevel(brief)
+    if root is None:
+        raise SystemExit(
+            f"--base {base}: {brief} is not inside a git checkout, so there is "
+            "nothing to compare the criteria against. Drop --base and the "
+            "receipt will say the frozen rule did not run"
+        )
+    status, out = git(root, "merge-base", "HEAD", base)
+    if status != 0 or not out.strip():
+        raise SystemExit(
+            f"--base {base}: no merge base with HEAD — is the ref fetched? "
+            "A frozen check against a ref that does not resolve would pass "
+            "for the wrong reason"
+        )
+    merge_base = out.strip()
+    try:
+        relative = brief.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        raise SystemExit(f"{brief}: not inside {root}")
+
+    status, prior = git(root, "show", f"{merge_base}:{relative}")
+    if status != 0:
+        report.fail(
+            "frozen",
+            f"{brief.name} at {merge_base[:12]}",
+            f"the brief does not exist at the merge base with {base}, so its "
+            "criteria were never committed before this branch. The ordering is "
+            "the defence: criteria written where the artifact is already "
+            "visible are not the pre-commitment that makes a pass mean "
+            "anything (docs/research/automated-approval.md)",
+        )
+        return f"{base} (the brief does not exist at {merge_base[:12]})"
+
+    before = parse_criteria(brief, prior, Report(), label=f"{brief.name}@{base}")
+    was = [(c.text, c.kind, c.value) for c in before]
+    now = [(c.text, c.kind, c.value) for c in criteria]
+    if was != now:
+        for index in range(max(len(was), len(now))):
+            old = was[index] if index < len(was) else None
+            new = now[index] if index < len(now) else None
+            if old == new:
+                continue
+            number = index + 1
+            if old is None:
+                detail = f"criterion {number} is new on this branch"
+            elif new is None:
+                detail = f"criterion {number} was removed on this branch"
+            else:
+                detail = f"criterion {number} was edited on this branch"
+            report.fail(
+                "frozen",
+                f"{brief.name} vs {base}",
+                f"{detail}. A criterion changes by a commit the resident "
+                "reviews, never by the branch being measured against it — "
+                f"was: {_short(old)}; now: {_short(new)}",
+            )
+    return f"{base} ({merge_base[:12]})"
+
+
+def _short(entry: tuple[str, str | None, str] | None) -> str:
+    if entry is None:
+        return "(absent)"
+    text, kind, value = entry
+    head = text if len(text) <= 60 else text[:57] + "..."
+    return f"{head!r} [{kind or 'no disposition'}: {value[:40]}]"
+
+
+# ---------------------------------------------------------------------------
+# Running a criterion
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Observation:
+    criterion: Criterion
+    phrase: str
+    status: int | None = None
+    output: str = ""
+    dropped: int = 0
+
+
+def exercise(
+    criterion: Criterion, root: pathlib.Path, timeout: int, report: Report
+) -> Observation:
+    """Run one criterion's check where the criterion says to run it.
+
+    Through `/bin/sh -c`, because a criterion's check is a documented
+    shell command and the invocation path it names is the point — a
+    pipeline, a negation, a build and then a query. Output streams are
+    merged so that the transcript reads in the order a person at a
+    terminal would have seen it.
+
+    Two results are *escalations* rather than failures, and the
+    difference matters more than it looks: a command that could not be
+    run at all (no such command) or that never finished (a timeout) is a
+    failure the criteria did not anticipate, and this tool cannot tell a
+    missing artifact from a broken check. Interpreting it is the
+    resident's, immediately — a loop that guessed would be a loop
+    rationalising, which is the whole thing the isolation rules exist to
+    prevent.
+    """
+    if not criterion.runnable:
+        return Observation(criterion=criterion, phrase=MANUAL)
+
+    try:
+        proc = subprocess.run(
+            ["/bin/sh", "-c", criterion.value],
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        report.fail(
+            "escalate",
+            f"criterion {criterion.index}",
+            f"the check did not finish within {timeout}s. A criterion that "
+            "cannot be observed is not a criterion that failed, and this run "
+            "will not guess which it was — that is the resident's, now",
+        )
+        return Observation(criterion=criterion, phrase=ESCALATED, status=None)
+    except OSError as exc:  # no shell, or the cwd is gone
+        raise SystemExit(f"criterion {criterion.index}: {exc}")
+
+    output, dropped = _tail(proc.stdout)
+    observation = Observation(
+        criterion=criterion,
+        phrase=OBSERVED,
+        status=proc.returncode,
+        output=output,
+        dropped=dropped,
+    )
+    if proc.returncode == 127:
+        observation.phrase = ESCALATED
+        report.fail(
+            "escalate",
+            f"criterion {criterion.index}",
+            "the check's command was not found (exit 127). That is either an "
+            "artifact that is not there or a check that was never runnable, "
+            "and nothing here can tell the two apart — the criteria did not "
+            "anticipate this, so it goes to the resident rather than into a "
+            "repair cycle",
+        )
+    elif proc.returncode != 0:
+        observation.phrase = DIVERGED
+        report.fail(
+            "criterion",
+            f"criterion {criterion.index}",
+            f"the check exited {proc.returncode}. The criterion states what "
+            "the invocation path would show, and it showed something else — "
+            "the receipt carries the transcript",
+        )
+    return observation
+
+
+def _tail(text: str) -> tuple[str, int]:
+    lines = [
+        line[:OUTPUT_WIDTH] + (" …" if len(line) > OUTPUT_WIDTH else "")
+        for line in text.replace("\r\n", "\n").rstrip("\n").split("\n")
+    ]
+    if lines == [""]:
+        return "", 0
+    if len(lines) <= OUTPUT_LINES:
+        return "\n".join(lines), 0
+    return "\n".join(lines[-OUTPUT_LINES:]), len(lines) - OUTPUT_LINES
+
+
+# ---------------------------------------------------------------------------
+# The receipt
+# ---------------------------------------------------------------------------
+
+
+def wrap_quote(text: str, width: int = 72) -> list[str]:
+    """The criterion's own prose, as blockquote lines.
+
+    A blockquote because the claim lint reads past one: this is the
+    spec-time author's sentence, quoted, not something the run is
+    asserting — the same exemption `tools/handover-check.py` makes for
+    the resident's own words. A criterion that says "the feature is
+    complete when …" is then legible in the receipt instead of
+    unquotable by it.
+    """
+    words, lines, current = text.split(), [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > width and current:
+            lines.append(f"> {current}")
+            current = word
+        else:
+            current = candidate
+    lines.append(f"> {current}")
+    return lines
+
+
+def render(
+    brief: pathlib.Path,
+    brief_as_given: str,
+    observations: list[Observation],
+    commit: str,
+    base_line: str,
+    cycle: int,
+    cap: int,
+) -> str:
+    runnable = [o for o in observations if o.criterion.runnable]
+    manual = [o for o in observations if not o.criterion.runnable]
+    out = [
+        f"# Acceptance run — {brief.stem}",
+        "",
+        f"Brief: {brief_as_given}",
+        f"Commit: {commit}",
+        f"Base: {base_line}",
+        f"Cycle: {cycle} of {cap}",
+        f"Criteria: {len(observations)} — {len(runnable)} with an executable "
+        f"check, {len(manual)} standing as a named manual step",
+        "",
+    ]
+    for observation in observations:
+        criterion = observation.criterion
+        out.append(f"## Criterion {criterion.index} — {observation.phrase}")
+        out.append("")
+        out.extend(wrap_quote(criterion.text))
+        out.append("")
+        if criterion.runnable:
+            out.append(f"    $ {criterion.value}")
+            out.append(
+                "    exit: "
+                + ("timed out" if observation.status is None else str(observation.status))
+            )
+            if observation.output:
+                out.append("    output:")
+                for line in observation.output.split("\n"):
+                    out.append(f"    | {line}")
+                if observation.dropped:
+                    out.append(
+                        f"    | ({observation.dropped} earlier line(s) not "
+                        "carried here; the tail is what a check says why with)"
+                    )
+            else:
+                out.append("    output: (none)")
+        else:
+            out.append(f"    manual: {criterion.value}")
+        out.append("")
+
+    out.append(NOT_CHECKED_HEADING)
+    out.append("")
+    for line in not_checked(observations, base_line, cycle, cap):
+        out.append(f"- {line}")
+    out.append("")
+    out.append(LIMIT)
+    out.append("")
+    return "\n".join(out)
+
+
+def not_checked(
+    observations: list[Observation], base_line: str, cycle: int, cap: int
+) -> list[str]:
+    """The dynamic half of the standing limit: what this particular run
+    left alone, stated where the receipt is read rather than in prose
+    about the receipt somewhere else.
+    """
+    lines: list[str] = []
+    manual = [o.criterion.index for o in observations if not o.criterion.runnable]
+    if manual:
+        numbers = ", ".join(str(i) for i in manual)
+        lines.append(
+            f"criterion {numbers}: not exercised here. The manual step named "
+            "in the brief is what answers it, and a person has to take it — "
+            "this run neither took it nor stands in for it"
+        )
+    if base_line.startswith("(none"):
+        lines.append(
+            "the criteria were not compared against any earlier commit: no "
+            "--base was declared, so nothing here would notice a criterion "
+            "edited on the branch being measured against it"
+        )
+    lines.append(
+        "whether each criterion would demonstrate the requirement it traces, "
+        "rather than merely exercise code — item 2 of the slate-review "
+        "checklist in docs/planning.md, and the resident's"
+    )
+    lines.append(
+        "anything the criteria did not name. This run read the brief and ran "
+        "its commands; it read no diff, no transcript and no reasoning, which "
+        "is its isolation and also its blind spot"
+    )
+    lines.append(
+        f"repair cycles past {cap}: this is cycle {cycle}, and the cap is a "
+        "backstop rather than the design — the stopping rule the "
+        "self-correction literature measures is error-introduction catching "
+        "error-correction, which needs per-model rates this slice does not "
+        "have (docs/research/decomposition-and-iteration-caps.md)"
+    )
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# The receipt's lint
+# ---------------------------------------------------------------------------
+
+
+def prose_lines(text: str) -> list[tuple[int, str]]:
+    """The lines of a receipt the claim lint reads.
+
+    Three spans are invisible to it, each for a stated reason. A
+    blockquote carries the criterion's own spec-time prose, quoted. An
+    indented block carries a command and the transcript it produced,
+    which is evidence and not an assertion — a test named
+    `test_completes_cleanly` in captured output is not the run claiming
+    anything. A fenced block is the same case. What is left is the
+    receipt's own sentences, which are generated, and a violation in
+    them is a generator bug rather than a style note.
+    """
+    out = []
+    fenced = False
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or line.startswith(">") or line.startswith("    "):
+            continue
+        out.append((number, CODE_SPAN.sub(lambda m: " " * len(m.group(0)), line)))
+    return out
+
+
+def check_receipt(text: str, where: str, report: Report) -> None:
+    """A receipt against its own format: form, grounding, vocabulary.
+
+    Run over what `run` has just produced — the generator controls its
+    own output, so a violation there is a bug in this file — and over a
+    receipt that arrives from somewhere else, which is the case that
+    needs a checker at all: an acceptance agent's own report is prose
+    somebody wrote, and the register it is not allowed to use is exactly
+    the register a model reaches for when asked whether work is done.
+    """
+    lines = text.splitlines()
+
+    if not lines or not TITLE_RE.match(lines[0]):
+        report.fail(
+            "form",
+            f"{where}:1",
+            "no `# Acceptance run — <brief>` title line. The receipt says "
+            "which brief it is a receipt for on its first line or it is a "
+            "document nobody can file",
+        )
+
+    header: dict[str, str] = {}
+    order: list[str] = []
+    for number, line in enumerate(lines, start=1):
+        if line.startswith("## "):
+            break
+        field = FIELD_RE.match(line)
+        if field and field.group("key") in RECEIPT_HEADER_KEYS:
+            header[field.group("key")] = field.group("value").strip()
+            order.append(field.group("key"))
+    for key in RECEIPT_HEADER_KEYS:
+        if not header.get(key):
+            report.fail(
+                "form",
+                where,
+                f"no {key}: header, or an empty one. The five headers are "
+                f"{', '.join(RECEIPT_HEADER_KEYS)}: which brief, at which "
+                "commit, against which base, on which repair cycle, over how "
+                "many criteria. A receipt missing one of them cannot be "
+                "checked against anything",
+            )
+    if order and order != [k for k in RECEIPT_HEADER_KEYS if k in order]:
+        report.fail(
+            "form",
+            where,
+            f"the headers are out of order ({', '.join(order)}); the format "
+            f"fixes them as {', '.join(RECEIPT_HEADER_KEYS)}",
+        )
+
+    sections = _sections(lines)
+    if not sections:
+        report.fail(
+            "form",
+            where,
+            "no `## Criterion N — <outcome>` section. A receipt reports each "
+            "criterion one at a time; one that reports them in aggregate has "
+            "hidden exactly the criterion a reader needs to find",
+        )
+    for position, (number, line_no, phrase, body) in enumerate(sections, start=1):
+        if number != position:
+            report.fail(
+                "form",
+                f"{where}:{line_no}",
+                f"criterion sections are numbered {number} where {position} "
+                "was expected. They run 1..N in the brief's own order, so that "
+                "a missing one cannot read as a criterion that was never there",
+            )
+        if phrase not in PHRASES:
+            report.fail(
+                "form",
+                f"{where}:{line_no}",
+                f"outcome {phrase!r} is not one of the four the format has: "
+                + "; ".join(repr(p) for p in PHRASES)
+                + ". The set is closed because a receipt's heading is where a "
+                "verdict would be smuggled in",
+            )
+        _check_section(number, line_no, phrase, body, where, report)
+
+    if NOT_CHECKED_HEADING not in lines:
+        report.fail(
+            "form",
+            where,
+            f"no `{NOT_CHECKED_HEADING}` section. Every run states what it "
+            "left alone in the same document as what it exercised; stated "
+            "elsewhere, it is not read",
+        )
+    if _normalise(LIMIT) not in _normalise(text):
+        report.fail(
+            "form",
+            where,
+            "the standing limit is missing or altered. It is required "
+            "verbatim: a receipt that has lost the sentence saying it is not "
+            "a verdict is the promotion Proposal 06 forbids, arriving through "
+            "the surface most likely to be read as one",
+        )
+
+    for number, line in prose_lines(text):
+        for match in BANNED_RE.finditer(line):
+            report.fail(
+                "claim",
+                f"{where}:{number}",
+                f"completion-assertion vocabulary {match.group(0)!r}. A run "
+                "reports what it observed, with the command and the exit "
+                "status beside it; this register asserts that work is finished "
+                "and no observation can ground it. Quote the criterion (a "
+                "blockquote is read past) or show the transcript (an indented "
+                "block is read past) instead",
+            )
+
+
+def _sections(lines: list[str]) -> list[tuple[int, int, str, list[str]]]:
+    out: list[tuple[int, int, str, list[str]]] = []
+    current: tuple[int, int, str, list[str]] | None = None
+    for number, line in enumerate(lines, start=1):
+        heading = CRITERION_HEADING_RE.match(line)
+        if heading:
+            if current:
+                out.append(current)
+            current = (int(heading.group("number")), number,
+                       heading.group("phrase").strip(), [])
+            continue
+        if line.startswith("## "):
+            if current:
+                out.append(current)
+                current = None
+            continue
+        if current:
+            current[3].append(line)
+    if current:
+        out.append(current)
+    return out
+
+
+def _check_section(
+    number: int,
+    line_no: int,
+    phrase: str,
+    body: list[str],
+    where: str,
+    report: Report,
+) -> None:
+    quoted = [b for b in body if b.startswith(">") and b.strip("> ").strip()]
+    commands = [b for b in body if COMMAND_RE.match(b)]
+    exits = [b for b in body if EXIT_RE.match(b)]
+    manual = [m for m in (MANUAL_RE.match(b) for b in body) if m]
+
+    if not quoted:
+        report.fail(
+            "grounding",
+            f"{where}:{line_no}",
+            f"criterion {number} is reported without quoting the criterion "
+            "itself. The reader has to be able to see what was asked for "
+            "beside what was observed, in one document",
+        )
+    if phrase == MANUAL:
+        if not manual or not manual[0].group("step").strip():
+            report.fail(
+                "grounding",
+                f"{where}:{line_no}",
+                f"criterion {number} is reported as standing on a manual step "
+                "and names none. The step is what the brief said stands in "
+                "place of a check, and an unnamed one is a criterion quietly "
+                "set aside",
+            )
+        if commands:
+            report.fail(
+                "grounding",
+                f"{where}:{line_no}",
+                f"criterion {number} is reported as not exercised and carries "
+                "a command anyway; a reader cannot tell which of the two the "
+                "receipt means",
+            )
+        return
+    if not commands or not exits:
+        report.fail(
+            "grounding",
+            f"{where}:{line_no}",
+            f"criterion {number} is reported as exercised without both the "
+            "command (`    $ …`) and its exit status (`    exit: …`). Those "
+            "two lines are the whole of the evidence — a claim about a run "
+            "with neither is the assertion this format exists to refuse",
+        )
+    if manual:
+        report.fail(
+            "grounding",
+            f"{where}:{line_no}",
+            f"criterion {number} is reported as exercised and also as standing "
+            "on a manual step; one disposition per criterion",
+        )
+
+
+def _normalise(text: str) -> str:
+    return " ".join(text.split())
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    brief = pathlib.Path(args.brief)
+    if not brief.is_file():
+        raise SystemExit(f"{brief}: no such file")
+    root = pathlib.Path(args.root)
+    if not root.is_dir():
+        raise SystemExit(f"--root {root}: not a directory")
+
+    report = Report()
+    criteria = parse_criteria(brief, brief.read_text(encoding="utf-8"), report)
+    check_criteria(criteria, brief.name, report)
+    if report.findings:
+        # Nothing is run and no receipt is written. A receipt over
+        # criteria this tool could not read would be a document that
+        # looks like evidence and rests on a misreading.
+        return emit(report, "")
+
+    if args.cycle > args.cap:
+        report.fail(
+            "cycles",
+            brief.name,
+            f"this is repair cycle {args.cycle} against a cap of {args.cap}. "
+            "The cap is a backstop, and reaching it is an escalation rather "
+            "than a retry: a loop that keeps going past it is a loop "
+            "introducing errors as fast as it corrects them, which is the "
+            "measured shape the cap stands in for "
+            "(docs/research/decomposition-and-iteration-caps.md)",
+        )
+        return emit(report, "")
+
+    base_line = "(none declared — the frozen rule did not run)"
+    if args.base:
+        base_line = check_frozen(brief, criteria, args.base, report)
+
+    observations = [exercise(c, root, args.timeout, report) for c in criteria]
+    if not any(o.criterion.runnable for o in observations):
+        report.fail(
+            "vacuous",
+            brief.name,
+            "no criterion carries an executable check, so this run exercised "
+            "nothing. That is not a defect in the brief — a criterion may "
+            "legally stand on a manual step — it is this tool declining to "
+            "emit a passing receipt for work it did not exercise. The receipt "
+            "below names the steps that stand in its place, and a person "
+            "takes them",
+        )
+
+    commit = "(not a git checkout — no commit recorded)"
+    root_git = toplevel(brief)
+    if root_git is not None:
+        status, out = git(root_git, "rev-parse", "--short", "HEAD")
+        if status == 0 and out.strip():
+            dirty = git(root_git, "status", "--porcelain")[1].strip()
+            commit = out.strip() + (" (working tree modified)" if dirty else "")
+
+    receipt = render(
+        brief=brief,
+        brief_as_given=args.brief,
+        observations=observations,
+        commit=commit,
+        base_line=base_line,
+        cycle=args.cycle,
+        cap=args.cap,
+    )
+
+    # The generator's own output, held to the receipt lint before anybody
+    # reads it. A violation here is a bug in this file, which is why it
+    # is checked rather than asserted in a comment.
+    self_report = Report()
+    check_receipt(receipt, "the receipt this run generated", self_report)
+    for finding in self_report.findings:
+        report.fail(f"receipt-{finding.rule}", finding.where, finding.message)
+
+    if args.out:
+        out_path = pathlib.Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(receipt, encoding="utf-8")
+        report.note(f"receipt written to {out_path}")
+    else:
+        print(receipt)
+
+    report.note(
+        f"{len(criteria)} criterion(a) read from {brief.name}: "
+        f"{sum(1 for c in criteria if c.runnable)} exercised here, "
+        f"{sum(1 for c in criteria if not c.runnable)} standing on a named "
+        "manual step"
+    )
+    return emit(
+        report,
+        "every criterion with an executable check was exercised and observed "
+        "as the criterion states. That is a receipt, not a verdict — the "
+        "receipt's own closing paragraph says what it does not cover.",
+    )
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.receipt)
+    if not path.is_file():
+        raise SystemExit(f"{path}: no such file")
+    report = Report()
+    check_receipt(path.read_text(encoding="utf-8"), path.name, report)
+    return emit(
+        report,
+        f"{path.name} is a receipt in the format docs/planning.md fixes: each "
+        "criterion reported one at a time with its evidence, the standing "
+        "limit intact, and no completion-assertion vocabulary in its own "
+        "prose. What it reports is still evidence, never a verdict.",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="accept",
+        description="Run a brief's acceptance criteria and check the receipt "
+        "(docs/planning.md).",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run", help="run one brief's criteria")
+    run.add_argument("brief")
+    run.add_argument(
+        "--base",
+        help="the ref the criteria were committed on before this branch; "
+        "without it the frozen rule does not run and the receipt says so",
+    )
+    run.add_argument(
+        "--root",
+        default=".",
+        help="where a criterion's check is run (default: the working "
+        "directory, which is the repository root in the documented step)",
+    )
+    run.add_argument(
+        "--cycle", type=int, default=1, help="which repair cycle this is"
+    )
+    run.add_argument(
+        "--cap",
+        type=int,
+        default=3,
+        help="the backstop on repair cycles; reaching it escalates rather "
+        "than retries",
+    )
+    run.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="seconds a single check may take before the run escalates",
+    )
+    run.add_argument("-o", "--out", help="write the receipt here")
+    run.set_defaults(func=cmd_run)
+
+    check = sub.add_parser("check", help="lint a receipt")
+    check.add_argument("receipt")
+    check.set_defaults(func=cmd_check)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
