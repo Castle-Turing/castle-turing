@@ -1,0 +1,72 @@
+name: accept-check
+
+# The acceptance harness's checks, and the worked example it is armed over
+# (task 0080). Three steps, and they are not the same thing: the second
+# runs `accept run` over a committed brief in this checkout's own
+# invocation paths, and the third runs `accept check` directly on a
+# committed receipt — which is what makes this gate armed rather than a
+# test wrapper. `tools/reachability-check.py` sees that shape and requires
+# the feeder line below.
+#
+# feeder: tools/accept/accept run (docs/planning.md)
+#
+# That feeder is honest in a way the planner seat's cannot be: a receipt
+# really is produced by a tool, so the thing that feeds this gate is the
+# step above it rather than the mechanical half of something a seat does.
+# What no lint can check is the half that matters — whether the agent
+# reading the receipt ran in a separate context from the implementer.
+#
+# The worked example's criteria run against this repository's own outcome
+# log, on purpose: a criterion satisfied only by a fixture is a row the
+# pipeline never wrote. The cost is a duplicate signal — a log
+# `outcomes-check` would already reject also fails here — and that is
+# accepted rather than papered over, because the alternative empties the
+# example out.
+#
+# Its own workflow rather than a job in check.yml, for the reason
+# clarify-check.yml gives: check.yml carries `paths-ignore: docs/**` on
+# purpose (docs/tasks/done/0018-docs-only-ci-skip.md), and
+# docs/planning.md is prose by that filter's reckoning while being exactly
+# the document this check exists beside.
+#
+# Paths are duplicated between the two triggers rather than shared via a
+# YAML anchor: GitHub Actions does not expand anchors in workflow files.
+on:
+  pull_request:
+    paths:
+      - "tools/accept/**"
+      - "test/accept/**"
+      - "docs/planning.md"
+      - ".github/workflows/accept-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/accept/**"
+      - "test/accept/**"
+      - "docs/planning.md"
+      - ".github/workflows/accept-check.yml"
+  # Same escape hatch every other workflow here carries: a branch that
+  # isn't on a PR yet can still get a real run via `gh workflow run`.
+  workflow_dispatch: {}
+
+jobs:
+  accept-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nix, deliberately, for the same reason clarify-check gives:
+      # tools/accept/accept is a single stdlib Python script and
+      # test/accept/run.sh is plain bash, so the stock runner's own
+      # toolchain is the whole dependency list.
+      - name: every rule watched failing
+        run: test/accept/run.sh
+      # The worked example, run rather than replayed. `--base` is left off
+      # here and the receipt says the frozen rule did not run: this brief's
+      # criteria are post-hoc by construction, so comparing them against a
+      # base would flag the pull request that introduced them and say
+      # nothing true about anything.
+      - name: the worked example's criteria, against this checkout
+        run: tools/accept/accept run tools/accept/oracle/brief.md
+      - name: the committed receipt is still a receipt
+        run: tools/accept/accept check tools/accept/oracle/receipt.md

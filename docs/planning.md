@@ -13,6 +13,13 @@ checker, `test/plan/run.sh` is the proof that the checker can fail, and
 this procedure over a requirements document the repository already
 ships.
 
+It also carries **the acceptance run** — the format and rules for
+executing a brief's criteria against what got built
+(`tools/accept/accept`). That belongs here rather than in a document of
+its own because the criteria are written by this seat: rules and the
+thing that enforces them drift apart when they land separately, and a
+criterion is written once and read by both halves.
+
 ## The seat
 
 **Planner** — a reasoning seat, the fourth, after worker, router and
@@ -126,6 +133,12 @@ numbers can never fail CI for a reason that is not the pull request's.
     Criterion: after a rebuild and a switch on the host, the compositor's
         pointer on the internal panel at default scale is the size chosen
         in 0002, shown in a screenshot of the running session.
+    Manual: rebuild and switch on the host, then photograph the pointer
+        beside the candidate the sweep chose.
+    Criterion: the value lives in that host's own module and nothing
+        changes for a second host with a different panel.
+    Check: ! nix eval --json ".#nixosConfigurations.<the other
+        host>.config.environment.sessionVariables" | grep -q XCURSOR_SIZE
 
     The brief's body: the spec and reasoning an implementing agent reads
     cold, including what was considered and rejected.
@@ -142,8 +155,14 @@ where an edge is real — plus two the slate adds:
 - **`Criterion:`** repeatable, and together the brief's verification
   plan. Each one says what would demonstrate the traced requirement
   working **in its real invocation path** — not that the code runs, that
-  the thing the clause asks for is reachable. That is the acceptance
-  doctrine, whose harness is task 0080's work and not this seat's.
+  the thing the clause asks for is reachable.
+- **`Check:` or `Manual:`** one per criterion, immediately below it, and
+  never blank. `Check:` carries the command that exercises the criterion;
+  `Manual:` carries the step a person takes where no command can stand in
+  — which is legal and has to be said out loud, because a criterion
+  nothing can run and nobody was asked to take is a verification plan
+  that verifies nothing. The acceptance run below is what executes these,
+  and it is the reason the pair is the unit rather than the prose alone.
 
 The criteria are authored here, at spec time, before any implementation
 exists. That ordering is the point rather than a convenience: writing
@@ -151,8 +170,9 @@ them afterwards means writing them having seen what got built, and
 pre-commitment is the best-measured defence against a verifier
 rationalising toward the artifact in front of it — false positives fell
 from 0.72 to 0.01 in the review `docs/research/automated-approval.md`
-records. Until the acceptance harness runs them, the criteria are what
-the slate review and the pull-request reviews read against.
+records. The acceptance run below is what executes them; the slate review
+and the pull-request reviews read them either way, because no run of
+anything decides whether a criterion was the right one.
 
 **Fields are contiguous from the top of the brief, and a wrapped value
 continues on an indented line.** RFC-822 style, and chosen rather than
@@ -218,7 +238,8 @@ cannot see: a brief can cite the right clause and then do more than the
 clause asked.
 
 **`obligations` — what every brief owes.** `Model`, a non-empty
-`Model-because`, `Milestone`, and at least one non-empty `Criterion`.
+`Model-because`, `Milestone`, and at least one non-empty `Criterion`,
+each carrying exactly one non-empty `Check:` or `Manual:`.
 *Checked:* presence only. A `Model-because:` that would have supported
 the opposite tier equally well passes, and so does a `Criterion:` that
 exercises code without demonstrating anything. CLAUDE.md's argument for
@@ -248,8 +269,9 @@ work lands between a slate's writing and its transfer. That is why a
 slate's numbers are proposals, re-checked at transfer — see below.
 
 **`form` — what the format would otherwise drop silently.** One
-disposition per field, fields where the format reads them, and a number
-on every `###` heading. *Checked:* fully. Every failure here is a thing
+disposition per field, one `Check:` or `Manual:` per criterion and none
+stranded above every criterion, fields where the format reads them, and a
+number on every `###` heading. *Checked:* fully. Every failure here is a thing
 the parser could have swallowed instead: a second `Milestone:`
 overwriting the first, a field below the blank line that closes the
 block, a `Deferred:` buried inside a brief, a heading whose brief has no
@@ -334,6 +356,261 @@ Nothing in `tools/plan/` writes to `docs/tasks/`, and the `numbers` rule
 checks only that a proposed number is not already taken — re-checked at
 transfer, because between a slate's writing and its transfer other work
 lands.
+
+## The acceptance run
+
+A brief's criteria are authored here, at spec time. `tools/accept/accept`
+is what later runs them against what got built, and this section is that
+run's format and rules — the second half of the same discipline, kept in
+this document because the criteria and the thing that executes them drift
+apart when they are written down separately.
+
+The failure it closes is the pipeline's named one: an implementer reports
+work complete while holding a different definition of complete than the
+resident. Task 0070 is the worked specimen. Every test passed, the gate
+was armed, and the resident's actual reading — rows get written as work
+happens — was unmet, which a person found by reading the pull request.
+Unit tests passing is not "works the way the resident expects", and the
+resident's own acceptance testing is the scarce resource everything else
+here conserves. What this run changes is not who decides: it is that the
+resident's verdict gets spent on work that has already survived its
+stated criteria.
+
+### Frozen against the implementer
+
+The criteria are committed with the brief, before the implementation
+exists. That ordering is the load-bearing defence and not a convenience:
+a judge that commits its assessment before seeing the candidate cuts
+false positives from 0.72 to 0.01
+(`docs/research/automated-approval.md`), and the documented failure in
+the other direction is a verifier weakening its own assertions and
+deleting failing checks until a run passes.
+
+The mechanical half is the `frozen` rule: `accept run --base <ref>`
+compares the criteria as they stand against the criteria as they were
+committed on a ref the implementing branch does not control, and flags
+every difference. Editing one is flagged, deleting one is flagged, and
+*adding* one is flagged too — a criterion written where the artifact is
+already visible is not the pre-commitment that makes a pass mean
+anything, however honest the addition. The flag asks for a commit the
+resident reviews; it accuses nobody. A criterion also *is* a shell
+command this tool executes, which is a second reason the comparison is
+against a ref the branch under measurement cannot move.
+
+Without `--base` the rule does not run, and the receipt says so on its
+`Base:` line and again in what the run did not check. A rule that can be
+skipped silently is not a rule.
+
+### Isolated from the implementer
+
+Two rules, each independently evidenced in
+`docs/research/decomposition-and-iteration-caps.md`. The acceptance agent
+runs in a **separate context** — sharing the generator's context
+measurably worsens reward hacking over repeated cycles — and where the
+stakes warrant, on a **different model family**, which is the sentinel
+argument. It receives the criteria, the built artifact and the invocation
+path. It does not receive the implementer's transcript, reasoning or diff
+narrative.
+
+What the tool can be held to is its inputs: `accept run` reads the brief
+and runs the commands, and there is nothing in it that reads a diff or a
+transcript. *Not checked:* whether the agent reading the receipt was in a
+separate context at all, and whether it was a different family. No tool
+can see that. It is the caller's discipline, stated here so that a caller
+who skips it has departed from something written down rather than from
+nothing.
+
+### A pass is a receipt, never a verdict
+
+The run's output is a **receipt**: these commands ran, in this invocation
+path, at this commit, and exited this way. Proposal 06 forbids the
+promotion of that into a verdict, and the receipt is built so the
+promotion cannot happen quietly:
+
+- Every criterion is reported **one at a time**, with the criterion
+  quoted, the command shown, its exit status, and the tail of its
+  transcript. A report that aggregates has hidden exactly the criterion a
+  reader needs.
+- A criterion's outcome is one of **four phrases** and the set is closed
+  — observed as the criterion states, observed differently, could not be
+  exercised, not exercised here. A heading is where "acceptance passed"
+  would be smuggled in.
+- The **standing limit** — the paragraph saying this is evidence a
+  mechanism fired and not a judgment that the work is what the resident
+  asked for — is printed on every run and required verbatim by
+  `accept check`. A receipt that has lost it is refused.
+- **Completion-assertion vocabulary is a blocking lint** on the receipt's
+  own prose: the register is a trained default with a measurable
+  signature that model judges talk themselves out of, so an instruction
+  not to use it is not a control. The vocabulary's first home is
+  `tools/handover-check.py`, which bans it in the operator handover;
+  `accept` carries a second copy because each tool here is one stdlib
+  file that runs on its own, and `test/accept/run.sh` fails if the two
+  copies ever differ.
+
+A quoted criterion and a captured transcript are read past by that lint.
+A criterion whose own prose says "complete" is the spec-time author's
+sentence, and a test named `test_completes_cleanly` in captured output is
+evidence rather than a claim; masking both is what lets the lint be
+blocking without making the receipt unable to quote its own inputs.
+
+An agent-as-user pass is solid evidence a mechanism fired and weak
+evidence a person is satisfied. That is what the simulated-user research
+finds and what this architecture already committed to, and it is why the
+sampled reads below stay the resident's.
+
+### A criterion that cannot be run says so
+
+Each criterion carries exactly one disposition, and neither may be blank:
+
+    Criterion: <what demonstrates the requirement in its real invocation path>
+    Check: <the command that exercises it, from the repository root>
+
+or
+
+    Criterion: <…>
+    Manual: <the step a person takes, and what they would see>
+
+Blank is not a third option — the same non-emptiness rule that binds a
+falsifier, a `Model-because:` and a deferral reason. A criterion nothing
+can run and nobody was asked to take is a verification plan that passes
+review and then verifies nothing, which is the detector this harness owes
+its own source incident. `plan check` enforces the disposition at spec
+time, where the slate review reads it, and `accept run` refuses a brief
+whose criteria are missing or dispositionless rather than exercising
+nothing and exiting zero.
+
+A `Check:` written at spec time names an invocation path that does not
+exist yet. That is expected: a check that could already run is a check
+that demonstrates nothing new.
+
+A brief whose criteria are *all* manual gets a receipt naming every step
+that stands in place of a check, and a non-zero exit under the `vacuous`
+rule. That is not a defect in the brief — a criterion may legally stand
+on a person's eyes — it is this tool declining to emit a passing receipt
+for work it did not exercise. A green exit over nothing exercised is the
+promotion again, wearing an exit status.
+
+### Repair cycles, bounded by a condition this slice does not have
+
+When a run fails and the implementer retries, the stopping rule the
+self-correction literature measures is error-introduction catching
+error-correction. That needs per-model correction and introduction rates,
+which nothing here measures yet, so this slice ships the backstop and
+names the successor rather than mistaking one for the other: `accept run
+--cycle <n> --cap <n>` refuses to run past the cap, and reaching it is an
+escalation rather than a retry.
+
+Two results are escalations rather than failures, and the difference is
+the point. A command that could not be run at all, and a command that
+never finished, are failures the criteria did not anticipate — and
+nothing here can tell a missing artifact from a broken check. The run
+says so and stops; interpreting it is the resident's, immediately. A loop
+that guessed would be a loop rationalising toward the artifact in front
+of it, which is the whole thing the isolation rules exist to prevent.
+
+### What the runner checks, and what it cannot
+
+`tools/accept/accept run <brief>` — mechanical, stdlib only, no network,
+no model. Every finding blocks, for the reason `plan check` gives about
+its own: each is a presence, an exit status or a comparison against
+history, with no precision to lose.
+
+**`criteria` — the vacuous pass, refused.** A brief with no `Criterion:`
+in its field block, a criterion with no prose, a criterion with no
+disposition, a disposition with nothing after it. *Checked:* fully.
+*Not checked:* whether a criterion is worth running, which is item 2 of
+the slate-review checklist above.
+
+**`form` — what the format would otherwise drop silently.** A
+disposition with no criterion above it, two dispositions on one
+criterion, an acceptance field below the field block that closes it.
+*Checked:* fully. Each of these is a criterion the tool would read
+differently from the way a person reads it, which is the one failure a
+format check exists for.
+
+**`frozen` — the ordering, held.** Every difference between the criteria
+on the branch and the criteria at the merge base, including a brief that
+does not exist there at all. *Checked:* fully when `--base` is given.
+*Not checked:* anything at all when it is not, which the receipt states
+rather than passing over.
+
+**`criterion` — what was observed.** A check that exited non-zero is
+reported as observed differently from what the criterion states, with its
+transcript. *Checked:* the exit status. *Not checked:* whether the
+criterion's own wording captures what the resident meant — the receipt
+carries the evidence, and the reading stays a person's.
+
+**`escalate` — the failures the criteria did not anticipate.** A command
+that was not found, and a check that outlasted `--timeout`. *Checked:*
+fully, and deliberately not interpreted.
+
+**`vacuous` — nothing exercised.** No criterion carried an executable
+check. *Checked:* fully.
+
+**`cycles` — the backstop.** The repair cycle against the cap; nothing is
+run and no receipt is written past it. *Checked:* the count. *Not
+checked:* the measured condition the cap stands in for, which is named
+above as the successor.
+
+`tools/accept/accept check <receipt>` reads a receipt on its own, which is
+the case that needs a checker at all: a receipt that arrives from an
+acceptance agent is prose somebody wrote, in exactly the register a model
+reaches for when asked whether work is done. Three rules — `form` (the
+title, the five headers in order, criteria numbered 1..N, an outcome
+phrase from the closed set, the standing limit verbatim), `grounding`
+(each criterion quoted, and either a command with its exit status or a
+named manual step, never both), and `claim` (the vocabulary). The run
+lints its own output through the same three before anybody reads it: the
+generator controls its output, so a violation there is a bug in the tool
+rather than a style note.
+
+*Not checked, stated out loud:* whether the criteria were the right
+criteria. Every judgment item is on the slate-review checklist above or
+its omission is a defect in this document.
+
+### Running it
+
+<!-- invokes: tools/accept/accept run -->
+<!-- invokes: tools/accept/accept check -->
+
+    tools/accept/accept run <brief> --base origin/main -o <receipt>
+    tools/accept/accept check <receipt>
+
+Run from the repository root, which is where a criterion's check is run
+unless `--root` says otherwise. `--base` is what arms the frozen rule;
+`--cycle` and `--cap` carry the repair loop's position. Exit status is
+zero when every criterion with an executable check was exercised and
+observed as the criterion states, and when nothing else above blocked.
+
+The worked example is `tools/accept/oracle/brief.md`, whose criteria are
+task 0072's read back post-hoc — "a row appears when a task lands", the
+exact criterion whose absence let task 0070 through — with the receipt of
+a real run committed beside it. The receipt is a specimen rather than a
+golden file: it carries the commit it ran at, so a byte comparison would
+pin a sha and rot. What CI holds it to is that it still passes
+`accept check`.
+
+### What the acceptance run does not do
+
+It is not wired to anything. No harness runs it on a pull request, no
+brief in `docs/tasks/` yet carries the disposition fields it reads, and
+nothing hands its receipt to a second agent. That is the same order the
+clarifying-questions phase and this seat were built in, and for the same
+reason: a phase that only works through a harness cannot be checked, and
+a phase that cannot be checked is what these documents exist to avoid.
+
+It never approves. A receipt is not a merge, a passing run is not a
+verdict, and neither this tool nor the agent reading its output decides
+that work is acceptable. The resident does.
+
+Its falsifier is a sampled read: the resident reads real receipts against
+their own judgment of the same work, and if the two diverge, the
+compilation from criterion to check is wrong — and the receipt says which
+criterion diverged, which is what makes the divergence diagnosable rather
+than merely disappointing. That read is unrun. Until it happens this
+section is a design, exactly as the slate review is, and for the same
+reason.
 
 ## Where a slate lives — open
 
