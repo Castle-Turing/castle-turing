@@ -825,6 +825,15 @@ to, never from a checkpoint it never saved. The run is named by its
 last two path components, so the identity is the same on any machine
 and no operator path enters a record.
 
+One fold runs at a time, under an `flock` in the runtime directory
+beside the ones `castle dispatch` and `castle route` take. That is not
+belt-and-braces: the tenant fires its hook on a thread per record and
+serialises nothing, a task's last records land milliseconds apart, so
+two folds at once is the ordinary case rather than the edge — and two
+folds both find the same event unwritten and both write it. Eight
+racing folds over one journal produced fifteen records where one fold
+produces four, before the lock existed.
+
 If a tenant journal ever arrives without a distinct `seq` on every
 record, the shim refuses the whole pass. That is task 0071's stated
 blocker rather than a case to work around: without a stable identity

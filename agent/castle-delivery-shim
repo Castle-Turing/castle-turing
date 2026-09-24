@@ -590,12 +590,26 @@ def cmd_fold(args: argparse.Namespace) -> int:
         return 2
 
     castle = load_castle()
+    # One fold at a time, per the same reasoning `route_journal` takes
+    # its lock for, and with more reason. The tenant fires its hook on a
+    # thread per record with no serialisation of its own, and a task's
+    # last few records land milliseconds apart — so two folds running at
+    # once is the ordinary case here, not the edge. Both would read the
+    # journal, both would find the same event unwritten, and both would
+    # write it: a duplicate record in an append-only log, produced by the
+    # idempotence check itself. Blocking rather than skipping, because a
+    # fold that declines has silently dropped the firing that woke it,
+    # and the fold is fast.
+    lock = castle.acquire_lock_blocking(castle.runtime_dir() / "delivery-shim.lock")
     try:
-        fold = Fold(castle, pathlib.Path(run_dir), pathlib.Path(tasks_dir))
-    except Refused as exc:
-        print(f"castle-delivery-shim fold: {exc}", file=sys.stderr)
-        return 2
-    written, refused = fold.run(dry_run=args.dry_run)
+        try:
+            fold = Fold(castle, pathlib.Path(run_dir), pathlib.Path(tasks_dir))
+        except Refused as exc:
+            print(f"castle-delivery-shim fold: {exc}", file=sys.stderr)
+            return 2
+        written, refused = fold.run(dry_run=args.dry_run)
+    finally:
+        lock.close()
 
     for line in written:
         print(line)

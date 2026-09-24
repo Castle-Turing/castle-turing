@@ -255,7 +255,24 @@ grep -q ' claim ' "$WORK/stdin.out" || die "the fold wrote nothing with a pipe a
 ok "an stdin nobody closes does not stop the fold"
 
 # ---------------------------------------------------------------------
-echo "11. a journal with no event identity refuses the whole pass"
+echo "11. concurrent folds do not both write the same event"
+# The tenant fires its hook on a thread per record and serialises
+# nothing, and a task's last records land milliseconds apart — so two
+# folds at once is the ordinary case. Eight are started against one
+# fresh journal here; the count must be what one fold produces.
+STATE_C="$(new_journal concurrent)"
+for _ in 1 2 3 4 5 6 7 8; do
+  CASTLE_STATE_DIR="$STATE_C" "$SHIM" fold \
+    --run-dir "$FIX/castle-turing/2026-09-22T09-09-47" \
+    --tasks-dir "$REPO_ROOT/docs/tasks" > /dev/null 2>&1 &
+done
+wait
+[ "$(records_of "$STATE_C")" = "$after" ] \
+  || die "eight concurrent folds wrote $(records_of "$STATE_C") records, not $after"
+ok "eight folds racing over one journal write what one fold writes"
+
+# ---------------------------------------------------------------------
+echo "12. a journal with no event identity refuses the whole pass"
 STATE_N="$(new_journal noident)"
 set +e
 CASTLE_STATE_DIR="$STATE_N" "$SHIM" fold --run-dir "$FIX/no-identity" \
@@ -269,7 +286,7 @@ grep -q 'no stable per-event identity' "$WORK/noident.err" \
 ok "no stable identity, no fold — the blocker surfaces instead of being papered"
 
 # ---------------------------------------------------------------------
-echo "12. everything written validates as a castle journal"
+echo "13. everything written validates as a castle journal"
 CASTLE_STATE_DIR="$STATE" python3 "$CASTLE" validate > "$WORK/validate.out" 2>&1 \
   || { cat "$WORK/validate.out"; die "the shim wrote records castle validate condemns"; }
 CASTLE_STATE_DIR="$STATE_Q" python3 "$CASTLE" validate > /dev/null 2>&1 \
@@ -277,7 +294,7 @@ CASTLE_STATE_DIR="$STATE_Q" python3 "$CASTLE" validate > /dev/null 2>&1 \
 ok "castle validate accepts the shim's records, including the blocking question"
 
 # ---------------------------------------------------------------------
-echo "13. the router can read them"
+echo "14. the router can read them"
 # The delivery seat's whole reason for writing records is that something
 # downstream acts on them. notify-send is stubbed, as test/agent-loop
 # stubs it, so the router's notify channel does not need a desktop.
@@ -291,7 +308,7 @@ grep -q 'notify' "$WORK/route.out" \
 ok "a sourced provenance routes the seat's blocking question to an interruption"
 
 # ---------------------------------------------------------------------
-echo "14. the outcome row refuses a checkout that is not the errand's branch"
+echo "15. the outcome row refuses a checkout that is not the errand's branch"
 set +e
 "$SHIM" row --run-dir "$FIX/castle-turing/2026-09-22T09-09-47" \
   --task 0076-widen-the-reachability-lint-to-its-claimed-coverage \

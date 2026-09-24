@@ -145,6 +145,18 @@ nothing. `castle validate` accepts everything written, and `castle
 route` routes it — the seat's records are usable by the surface they
 exist for, not merely well-formed.
 
+Three of those checks pin defects found in self-review of this branch
+rather than properties the plan anticipated, and each has a confirmed
+falsifier — the pre-fix behaviour was restored and the check observed
+to fail. An attempt's facts were collected per errand, so a retried
+errand's first result would have named the second attempt's model.
+Draining the doorbell's payload hung the fold whenever stdin was an
+inherited descriptor nobody closes, which is precisely the interval
+poll. And the fold took no lock, while the tenant fires its hook on a
+thread per record: eight racing folds over one journal wrote fifteen
+records where one fold writes four — a duplicate in an append-only log,
+produced by the idempotence check itself.
+
 **Where the end-to-end run landed.** `castle-turing/2026-09-22T09-09-47`
 is this repository's own sprint on tasks 0076 and 0077, folded against
 this repository's own `docs/tasks/`, and committed as a fixture. That
