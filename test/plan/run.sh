@@ -206,6 +206,36 @@ append_coverage "$DIR/slate.md" \
 expect_catch "a clause both traced and deferred" coverage -- \
     "$PLAN" check "$DIR/slate.md"
 
+# A `Deferred:` outside `## Coverage` — under `## Questions`, in this
+# case — must not silently satisfy coverage. `docs/planning.md` reads
+# deferrals only from `## Coverage`; anywhere else, the coverage rule
+# would never look and the reader of that section would never see it.
+DIR="$(mutate coverage-deferred-outside-coverage)"
+sed -i 's/^Traces: cursor-visible-size, cursor-target-host$/Traces: cursor-visible-size/' "$DIR/slate.md"
+sed -i '/^## Coverage$/i Deferred: cursor-target-host — this line lives under ## Questions, not ## Coverage.' \
+    "$DIR/slate.md"
+expect_catch "a Deferred: line outside ## Coverage" form -- \
+    "$PLAN" check "$DIR/slate.md"
+
+DIR="$(mutate coverage-duplicate-deferral)"
+sed -i 's/^Traces: cursor-visible-size, cursor-target-host$/Traces: cursor-visible-size/' "$DIR/slate.md"
+append_coverage "$DIR/slate.md" "Deferred: cursor-target-host — first reason."
+append_coverage "$DIR/slate.md" "Deferred: cursor-target-host — a conflicting second reason."
+expect_catch "two Deferred: lines for the same clause, the first silently collapsed" form -- \
+    "$PLAN" check "$DIR/slate.md"
+
+# A clause key's own internal double hyphen, valid under
+# CLAUSE_HEADER_RE, must not be read as the Deferred: reason separator.
+DIR="$(mutate deferred-key-double-hyphen)"
+sed -e 's|^### How the value is picked \[cursor-value-by-sweep\]$|### How the value is picked [cursor-value--by-sweep]|' \
+    "$REQUIREMENTS" >"$DIR/requirements.md"
+sed -i "s|^Requirements: .*$|Requirements: $DIR/requirements.md|" "$DIR/slate.md"
+sed -i 's/^Traces: cursor-surface, cursor-value-by-sweep$/Traces: cursor-surface/' "$DIR/slate.md"
+append_coverage "$DIR/slate.md" \
+    "Deferred: cursor-value--by-sweep — the key's own hyphens must survive the split."
+expect_pass "a Deferred: clause key with an internal double hyphen parses whole" \
+    "$PLAN" check "$DIR/slate.md"
+
 echo
 echo "== grounding: a brief serves a clause that exists, or it is invented scope =="
 
@@ -301,6 +331,20 @@ sed -e 's|^### How the value is picked \[cursor-value-by-sweep\]$|### How the va
     "$REQUIREMENTS" >"$DIR/requirements.md"
 sed -i "s|^Requirements: .*$|Requirements: $DIR/requirements.md|" "$DIR/slate.md"
 expect_catch "a requirements clause with no key to trace" form -- \
+    "$PLAN" check "$DIR/slate.md"
+
+# Neither `Tasks:` nor `--tasks`: without a directory to resolve against,
+# `numbers` and the edges rule's outside-the-slate check would otherwise
+# be silently skipped rather than run, and a colliding or dangling number
+# would pass.
+DIR="$(mutate header-no-tasks-anywhere)"
+sed -i '/^Tasks: /d' "$DIR/slate.md"
+expect_catch "a slate naming no tasks directory and given no --tasks" header -- \
+    "$PLAN" check "$DIR/slate.md"
+
+DIR="$(mutate header-duplicate-requirements)"
+sed -i '0,/^Requirements: /s//Requirements: nowhere.md\nRequirements: /' "$DIR/slate.md"
+expect_catch "a second Requirements: line, the first silently overwritten" form -- \
     "$PLAN" check "$DIR/slate.md"
 
 echo

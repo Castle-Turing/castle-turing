@@ -196,14 +196,17 @@ that resolves, or a graph property, so unlike that tool's style lint
 there is no precision to lose by blocking.
 
 **`header` — the knobs, before anything computed from them.**
-`Requirements:` names a file that exists and `Brief-budget:` is a whole
-number of at least one. *Checked:* fully, and it cannot be narrowed
+`Requirements:` names a file that exists, `Brief-budget:` is a whole
+number of at least one, and a tasks directory is resolvable from either
+`Tasks:` or `--tasks`. *Checked:* fully, and it cannot be narrowed
 away, for the reason `docs/clarifying-questions.md` gives about its own
 knobs — a knob out of range does not weaken the rule computed from it,
 it empties the rule out. A missing `Requirements:` makes coverage and
-grounding unrunnable, and a requirements document with no keyed clauses
-makes coverage vacuous, since every possible slate covers it; both fail
-rather than pass.
+grounding unrunnable, a requirements document with no keyed clauses
+makes coverage vacuous, since every possible slate covers it, and a
+slate with neither `Tasks:` nor `--tasks` would otherwise leave
+`numbers` and the edges rule's outside-the-slate check silently
+skipped rather than run; all three fail rather than pass.
 
 **`coverage` — omission.** Every clause is traced by some brief or
 deferred with a non-empty reason, and never both at once. *Checked:*

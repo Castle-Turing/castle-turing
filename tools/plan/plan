@@ -108,8 +108,11 @@ AMBIGUITY_STATE_RE = re.compile(r"^Ambiguity:.*\bstate=(?P<state>[a-z]+)\b")
 
 # Both dashes, for the same reason clarify accepts both: a reason typed
 # on a keyboard that makes em dashes hard must not fail a form check for
-# a reason that has nothing to do with the form.
-DASH_RE = re.compile(r"(?:—|--)")
+# a reason that has nothing to do with the form. Whitespace-bounded on
+# both sides, so a clause key's own internal `--` (valid under
+# CLAUSE_HEADER_RE) is never mistaken for the separator — only the dash
+# that stands alone between the key and the reason is.
+DASH_RE = re.compile(r"\s(?:—|--)(?:\s|$)")
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +226,7 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
     last_field: str | None = None
     body: list[str] = []
     in_preamble = True
+    section: str | None = None
 
     def close() -> None:
         nonlocal current, body, in_fields, started, last_field
@@ -271,6 +275,10 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
             # A `##` section heading closes the brief it follows. `#` is
             # the title. Either way the field block is over.
             close()
+            if line.startswith("## "):
+                section = line[3:].strip()
+            elif line.startswith("# "):
+                section = None
             if not line.startswith("# "):
                 in_preamble = False
             continue
@@ -278,7 +286,16 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
         if in_preamble:
             field = FIELD_RE.match(line)
             if field and field.group("key") in HEADER_KEYS:
-                header[field.group("key")] = field.group("value").strip()
+                key = field.group("key")
+                if key in header:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number}",
+                        f"a second {key}: line in the slate's header; the first "
+                        "would be overwritten and disappear, leaving a slate "
+                        f"whose recorded {key} is not the one anyone wrote",
+                    )
+                header[key] = field.group("value").strip()
             elif field and field.group("key") in SLATE_FIELDS + BRIEF_FIELDS:
                 # Above the first section heading, where the header's
                 # keys live. A `Deferred:` or a brief's field up here
@@ -296,9 +313,25 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
 
         if current is None:
             # Outside a brief: the slate's own fields live here, which
-            # today means `Deferred:` under `## Coverage`.
+            # today means `Deferred:` under `## Coverage`, and nowhere
+            # else — a deferral under `## Questions` or any other section
+            # would still make an otherwise-uncovered clause pass, and a
+            # reader reading `## Coverage` for the slate's dispositions
+            # would never see it.
             if field and field.group("key") in SLATE_FIELDS:
-                deferrals.append(_deferral(field.group("value"), number, report, path))
+                if section == "Coverage":
+                    deferrals.append(
+                        _deferral(field.group("value"), number, report, path)
+                    )
+                else:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number}",
+                        f"a {field.group('key')}: line outside ## Coverage; "
+                        "deferrals are read only from that section, and one "
+                        "elsewhere would decide a clause's coverage in a place "
+                        "the coverage rule never looks",
+                    )
             elif field and field.group("key") in BRIEF_FIELDS:
                 report.fail(
                     "form",
@@ -398,6 +431,21 @@ def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
                 f"{seen[brief.number]})",
             )
         seen[brief.number] = brief.line
+
+    seen_deferrals: dict[str, int] = {}
+    for deferral in deferrals:
+        if not deferral.key:
+            continue
+        if deferral.key in seen_deferrals:
+            report.fail(
+                "form",
+                f"{path.name}:{deferral.line}",
+                f"a second Deferred: for [{deferral.key}] (first seen at line "
+                f"{seen_deferrals[deferral.key]}); one clause carries one "
+                "disposition, and a second deferral hides whichever reason "
+                "would not survive being collapsed into a map",
+            )
+        seen_deferrals[deferral.key] = deferral.line
 
     return Slate(path=path, header=header, briefs=briefs, deferrals=deferrals), report
 
@@ -1000,6 +1048,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         tasks = pathlib.Path(args.tasks).resolve()
     elif slate.header.get("Tasks", "").strip():
         tasks = (path.parent / slate.header["Tasks"].strip()).resolve()
+    else:
+        report.fail(
+            "header",
+            slate.path.name,
+            "no Tasks: header and no --tasks flag; the numbers rule and the "
+            "edges rule's check for a target outside the slate both need a "
+            "directory to resolve against, and without one they are skipped "
+            "rather than run — a colliding or dangling number would pass",
+        )
 
     if requirements is None:
         return emit(report)
