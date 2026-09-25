@@ -371,8 +371,11 @@ conversation over files, which is the order the design demands: a phase
 that only works through a UI cannot be checked, and a phase that cannot
 be checked is the thing this document exists to avoid.
 
-It also does not decompose a milestone into task briefs. That is the
-next unspecced piece and a different problem.
+It also does not decompose its own output into task briefs. That is the
+planner seat's work, a different problem, and specced separately in
+`docs/planning.md` — which consumes a requirements document this phase
+produced and never edits it, because a seat that edited the document it
+is checked against would be grading its own coverage.
 
 ## Where the judgment still lives
 

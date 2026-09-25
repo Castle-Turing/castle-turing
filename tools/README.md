@@ -360,3 +360,45 @@ questions. When that wiring lands, the checks belong wherever the phase
 does. Parked here deliberately, with the tension recorded rather than
 papered over — the same call, and the same reasoning, as the sweep
 scripts.
+
+## `plan/` — check a planner seat's slate
+
+```
+tools/plan/plan scaffold <requirements> --out <slate> --budget <n>
+tools/plan/plan check tools/plan/oracle/slate.md
+```
+
+The mechanical half of the seat specced in task 0079 and written out in
+`docs/planning.md`. It does not *decompose* anything — a seat does that,
+reading a requirements document and deciding where the seams go, and the
+judgment stays there. `check` reads the slate the seat produced and says
+whether the discipline was followed: every requirements clause is
+carried by some brief or deferred with a reason, every clause a brief
+claims to serve exists, every brief carries the tier and the reason for
+the tier and at least one verification criterion, the brief count is
+within the budget declared before the run, the dependency graph is
+acyclic with a reason on every edge, and no proposed number is already
+taken.
+
+`scaffold` is the other half of what a tool can honestly do: the header,
+every clause listed to be placed, and the next free number allocated
+against the live directory. It pre-fills no deferral and its own output
+does not pass `check`, both deliberately — a scaffold whose output
+passed would be a slate that looks complete while deciding nothing.
+
+Read `docs/planning.md` before the script. Every rule is a presence, a
+name that resolves, or a graph property; the six judgment items are on
+the slate-review checklist there, and a passing run prints what it did
+not check rather than letting a green exit read as a verdict.
+
+`oracle/slate.md` is a worked example — the `clarify` probe's
+requirements document decomposed for real, not an invented one — and
+`test/plan/run.sh` runs the whole thing in CI and is mostly its negative
+half: fifty-odd checks over that example, all but a few of them
+mutations, each asserted to be caught by the rule that owns it.
+
+Same boundary as `clarify/` above, and the same answer: this never
+touches a journal and never runs as a seat, the artifacts it reads are
+files in this repository, and the sessions running it are sessions
+editing this repository. When the phase it serves is wired into the
+product, the checks belong wherever the seat does.
