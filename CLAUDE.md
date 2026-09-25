@@ -56,7 +56,10 @@ decisions.
   editorial judgment out of that act: approval happens where the spec
   lives, the transfer is mechanical, and what was approved is what
   runs. This is the one commit class an agent session makes directly
-  on `main`.
+  on `main`. The implementing branch then starts from a main that
+  already carries the brief, so spec and implementation still meet in
+  review — the reviewer reads the diff against a brief that is already
+  the record.
 - Prefer plain text and standard formats everywhere: they are the point of
   the project. If a tool choice trades AI-legibility for features, flag it.
 - Keep the flake evaluating (`nix flake check`) once it is non-trivial.
