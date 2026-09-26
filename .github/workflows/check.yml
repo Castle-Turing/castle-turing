@@ -127,6 +127,20 @@ jobs:
       # journal, no git, no network and no model at all. The generating
       # half needs `gh` and a model and is deliberately not run here.
       - run: test/handover/run.sh
+      # The delivery seat's record shim
+      # (docs/tasks/0081-implement-the-delivery-record-shim.md): the
+      # fold from emcee's own journal into `claim`, `result` and
+      # `question`, run against four journals captured from real
+      # sprints rather than written by hand. Pins the properties the
+      # shim's correctness rests on — a replay writes nothing, a second
+      # attempt writes a second record, a lying hook payload changes
+      # nothing, and an unsourceable provenance or an unidentifiable
+      # journal refuses out loud. In this job rather than a new one for
+      # record-order.sh's reason: `castle-delivery-shim` is stdlib
+      # Python reading JSON lines and writing records, so it needs
+      # nothing the stock runner does not already have, and it drives
+      # `castle validate` and `castle route` over what it wrote.
+      - run: test/delivery-shim/run.sh
 
   # Automatic dispatch (docs/tasks/0021-auto-dispatch.md): the sweep a
   # systemd path unit and timer trigger on a real host, driven directly

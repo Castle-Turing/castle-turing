@@ -1,0 +1,793 @@
+#!/usr/bin/env python3
+"""castle-delivery-shim — the delivery seat's record shim, outbound.
+
+WHAT THIS IS
+
+`docs/architecture.md` names a **delivery** seat (task 0069) and owes it
+three journal records: a `claim` when a brief is taken, a `result`
+carrying `outcome` and which tenant, model and provider implemented it,
+and a `question` when the seat blocks on a judgment only the resident
+can supply. The seat is held by a tenant — emcee — that never learns
+this project's record format. It emits its own events; a castle-side
+translator turns them into the records above. This is that translator,
+specced by task 0071 and pinned against the tenant's real schema by
+task 0081.
+
+The dependency runs downward on purpose. Nothing here imports emcee.
+The tenant's journal is read as the plain JSON-lines file it is, so a
+tenant that changes nothing but its own internals changes nothing here,
+and a tenant that changes its *record shape* fails loudly below rather
+than silently producing wrong receipts.
+
+THE PINNED SCHEMA
+
+Read from emcee 0.1.0 (`src/emcee/journal.py`, `src/emcee/runner.py`,
+`src/emcee/parking.py`). Every record in `journal.jsonl` carries `seq`,
+`ts`, `type` and `emcee_version`, stamped by the tenant's `append()`.
+The three this shim folds:
+
+    step_started   {step, args_digest, model, model_source, adapter?}
+    step_finished  {step, result: {outcome, branch} | error: "<Type>: ..."}
+    parked         {task, question_file, session}
+
+and two it reads for facts without writing a record of their own:
+
+    pr             {task, branch, url}
+    session_settings {task, provider?, model?, adapter?/harness?}
+
+`model` and `model_source` became required on `step_started` in emcee's
+own task 0045; journals written before that carry neither, which is why
+the result's implementer fields have a refusal rather than a default
+(see REFUSALS).
+
+THE HOOK IS A DOORBELL, NOT THE MAIL
+
+emcee's `--journal-hook CMD` runs CMD once per appended record, with the
+record on stdin and `EMCEE_RUN_DIR` in the environment. This shim reads
+`EMCEE_RUN_DIR` and *never reads stdin at all*: the payload says when to
+look and never what happened. That is not a stylistic choice — it is
+what makes a missed firing a liveness problem rather than a correctness
+one. The consequence is that the doorbell and the interval poll are the
+same command with the same arguments: wire `fold` to `--journal-hook`,
+and wire `fold` to a timer, and neither can produce a record the other
+would not. A doorbell that never rings delays a read; it never changes
+what the read finds.
+
+THE FOLD IS IDEMPOTENT AND TOTAL
+
+Every pass reads the whole tenant journal and writes only what is not
+already in the castle journal. "Already there" is recognised by a
+durable per-event identity the tenant supplies — the errand, the run,
+and that journal's own `seq` — stamped on each record as `source-event`
+and matched on the next pass:
+
+    source-event: 0076-widen-the-lint@castle-turing/2026-09-22T09-09-47#3
+
+It cannot be the record's content: one errand legitimately produces two
+`result` records across two attempts, and one park legitimately
+produces two `question` records if the resident is asked twice. `seq`
+distinguishes them, and it is stable for anything a reader can see —
+the tenant assigns it under an exclusive lock and fsyncs before
+returning, and a torn final line is truncated rather than completed, so
+a `seq` a reader has observed is never reused.
+
+Crash-safety falls out of the same key: a shim that wrote a record and
+died re-derives "already written" from the journal it already appended
+to, never from a checkpoint it never saved.
+
+REFUSALS — the fold surfaces gaps, it never papers them
+
+Per-errand, loud, and non-fatal to the rest of the pass (the command
+exits non-zero having named every refusal):
+
+  * **No brief for the errand.** `provenance` is `cmd_route`'s primary
+    input, not a deferrable citation: a delivery `question` whose
+    provenance is guessed routes to the digest instead of an
+    interruption, and the errand parks until the resident happens to
+    read a digest they may already have dismissed. So provenance is
+    sourced or nothing is written. The source is the brief's presence
+    in the tasks directory: a file arrives there only by the resident's
+    `Status: ready` mark and the mechanical transfer that follows it
+    (CLAUDE.md), which makes it the resident's own act — `requested`.
+    No brief file, no record, and the refusal names the errand.
+
+  * **No implementer on a result.** Task 0069 requires the result to
+    name tenant, model and provider "at the moment it is known, not
+    reconstructed later from a commit trailer, a provider mapping that
+    has since changed, or a guess from prose style". A journal that
+    does not carry the model cannot be folded into a result that names
+    one, and `model: unknown` would be a receipt that says nothing in
+    an append-only record. Refused instead.
+
+  * **An outcome this shim has never been taught.** The tenant's
+    outcome vocabulary is an allowlist below, not a default. A new
+    tenant outcome halts its errand and says so, rather than arriving
+    as `completed` because that was the fallback.
+
+WHAT IS DELIBERATELY LEFT OPEN
+
+`refs` is empty on every record written here. A delivery errand's
+upstream is a numbered brief — a file in `docs/tasks/`, not a journal
+record — and the seat that would give a brief a citable id does not
+exist (`docs/backlog/the-speccing-step-is-an-unnamed-seat.md`). Task
+0071 fixed this as friction 2 and task 0082 restates it: the resumption
+mechanism chains on the *answer*, which is a real record, not on the
+question's own refs. Inventing a ref here, or reusing an unrelated id
+to satisfy a schema, would be the confident wrong record the delivery
+paragraph exists to prevent. The brief is named in each record's body
+instead, by task number and slug — the same "history is a name" rule
+`docs/state/README.md` applies to citations.
+
+Subcommands:
+  fold  translate one run's tenant journal into castle records.
+  row   mature this errand's row in the task-outcome log, on its branch.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+SEAT = "delivery"
+TENANT = "emcee"
+JOURNAL_NAME = "journal.jsonl"
+
+# The tenant version this shim's mapping was read from. Recorded rather
+# than enforced: the shim folds history written by older tenants too,
+# and the honest statement is which version the table below was pinned
+# against, not a refusal to read anything else.
+PINNED_TENANT_VERSION = "0.1.0"
+
+# The tenant's terminal outcomes, mapped onto the closed vocabulary of
+# `outcome` on a castle `result` record (agent/castle's OUTCOME_VALUES).
+#
+# `outcome` describes the *turn*, not the errand — architecture.md is
+# explicit that the worker contract "describes one turn rather than
+# necessarily a whole errand" since task 0023, and the delivery seat
+# inherits that reading. So a tenant that parked, found the task
+# infeasible, or declined to touch a held branch still *finished its
+# turn*: `completed`, with the tenant's own word preserved verbatim in
+# `tenant-outcome` beside it. Nothing is lost and nothing is invented.
+#
+# An allowlist rather than a mapping with a default, because a default
+# is how a tenant outcome nobody has read yet becomes a confident
+# castle record. Anything absent here refuses (see REFUSALS).
+TENANT_OUTCOMES = {
+    # the tenant ran a session and it ended
+    "success": "completed",
+    "pr_opened": "completed",
+    "no_changes": "completed",
+    "parked": "completed",
+    "infeasible": "completed",
+    "refused": "completed",
+    "failed": "failed",
+    # the tenant's own word for a session killed by its idle watchdog:
+    # castle's `timeout` means exactly this, and nothing else does
+    "stalled": "timeout",
+    # holds: the turn finished having deliberately done nothing. Not
+    # failures — the tenant made a judgment and recorded it.
+    "branch_held": "completed",
+    "remote_branch_held": "completed",
+    "quota_parked": "completed",
+    "excluded": "completed",
+    "interrupted": "interrupted",
+}
+
+
+class Refused(Exception):
+    """A gap in what the tenant's log can source. Reported, never papered."""
+
+
+def load_castle():
+    """Import agent/castle (extensionless, colocated) as a library.
+
+    Same loader dance and same reason as castle-modal's: this shim and
+    `castle` are one tool wearing two hats, and re-implementing the
+    record writer here is how the two would diverge. Writing through
+    `write_record` rather than shelling out to `castle record` is
+    deliberate — see the module docstring's note on `refs`, and
+    `agent/README.md`'s delivery-shim section for why the CLI's
+    blocking-question guard is worker-shaped and does not fit this seat.
+    """
+    path = pathlib.Path(__file__).resolve().parent / "castle"
+    loader = importlib.machinery.SourceFileLoader("castle_lib", str(path))
+    spec = importlib.util.spec_from_file_location("castle_lib", path, loader=loader)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path} as a module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# --- reading the tenant's journal -------------------------------------------
+
+
+def read_tenant_journal(run_dir: pathlib.Path) -> list[dict]:
+    """The tenant's own durable log, read fresh, with its own tear rule.
+
+    A final line with no newline is a write that did not finish and is
+    dropped — the tenant's `read()` drops it too, and its `append()`
+    truncates it, so a record that ends that way was never visible to
+    anyone. A torn line anywhere *earlier* is a corrupt file and is
+    fatal: silently skipping it would fold an incomplete history while
+    reporting success, which is the one failure shape a fold must not
+    have.
+    """
+    path = run_dir / JOURNAL_NAME
+    if not path.is_file():
+        raise Refused(f"no tenant journal at {path}")
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    out = []
+    for i, line in enumerate(lines):
+        last = i == len(lines) - 1
+        if not line.endswith("\n"):
+            if last:
+                break
+            raise Refused(f"{path}: line {i} is truncated but not last")
+        try:
+            out.append(json.loads(line))
+        except ValueError as exc:
+            # A newline-terminated line was a completed write, so an
+            # invalid one is corruption, not a torn tail, regardless of
+            # position — the newline check above is what earns the
+            # "torn" reading, and it has already passed by this point.
+            raise Refused(f"{path}: line {i} is not valid JSON: {exc}") from exc
+    return out
+
+
+def run_key(run_dir: pathlib.Path) -> str:
+    """`<repo>/<run>` — the tenant's run directory named without the
+    operator's path. emcee lays runs out as `<base>/<repo>/<stamp>`, so
+    the last two components identify the run on any machine, and the
+    prefix is the operator's business and never this repository's."""
+    run_dir = run_dir.resolve()
+    return f"{run_dir.parent.name}/{run_dir.name}"
+
+
+def errand_of(record: dict) -> str | None:
+    """Which errand a tenant record is about. `step` on the step pair,
+    `task` everywhere else — the tenant's own two spellings."""
+    value = record.get("step") or record.get("task")
+    return str(value) if value else None
+
+
+def errand_only_journal(run_dir: pathlib.Path, errand: str) -> pathlib.Path:
+    """A copy of the tenant journal holding only this errand's own lines.
+
+    `outcomes derive --fill` walks the whole outcome log and fills
+    every row it finds facts for in the journal it is given — right for
+    a sprint backfill, wrong for a seat maturing one errand's row on
+    that errand's own branch: a run journal spanning several tasks
+    would let this branch write another task's receipt cells, against
+    the stated invariant that a row belongs on its own errand branch.
+    Filtering to the errand before handing the journal to `derive`
+    keeps this call's reach to the one row it was asked to mature.
+    """
+    path = run_dir / JOURNAL_NAME
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if errand_of(rec) == errand:
+            lines.append(line)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", prefix="castle-delivery-shim-row-",
+        delete=False, encoding="utf-8")
+    with handle:
+        handle.writelines(lines)
+    return pathlib.Path(handle.name)
+
+
+# --- sourcing the facts a record may not invent ------------------------------
+
+
+def find_brief(tasks_dir: pathlib.Path, errand: str) -> pathlib.Path:
+    """The brief whose presence sources `provenance: requested`.
+
+    Checked in the live directory and in the `done/` file-away the same
+    convention keeps, so an old run folds as truthfully as a live one.
+    """
+    for candidate in (tasks_dir / f"{errand}.md", tasks_dir / "done" / f"{errand}.md"):
+        if candidate.is_file():
+            return candidate
+    raise Refused(
+        f"{errand}: no brief at {tasks_dir}/{errand}.md or {tasks_dir}/done/{errand}.md, "
+        "so `provenance` cannot be sourced. It is the router's primary input, not a "
+        "citation that can wait: a guessed value routes a blocking question to the "
+        "digest instead of an interruption. Nothing was written for this errand."
+    )
+
+
+def provider_of(model_id: str, settings: dict | None) -> tuple[str, str]:
+    """(provider, how it was sourced).
+
+    Two rules, in order, both the tenant's own. A session the tenant
+    drove through OpenCode records `provider` on `session_settings`
+    verbatim; everything else is identified by the vendor prefix of the
+    model id, which is exactly how the tenant's own `sentinel.family()`
+    decides whether a reviewer shares a family with the author it is
+    reviewing. Coarse on purpose, and named as coarse: it is the
+    strongest signal an id carries, and task 0069 wants the *vendor*
+    because that is what the independence invariant turns on.
+    """
+    if settings and settings.get("provider"):
+        return str(settings["provider"]), "tenant session_settings.provider"
+    ident = (model_id or "").strip().lower()
+    if not ident:
+        raise Refused("no model id to derive a provider from")
+    if "/" in ident:
+        return ident.split("/", 1)[0], "provider/model form of the tenant's model id"
+    return ident.split("-", 1)[0], "vendor prefix of the tenant's model id"
+
+
+# --- the fold ----------------------------------------------------------------
+
+
+class Fold:
+    def __init__(self, castle, run_dir: pathlib.Path, tasks_dir: pathlib.Path):
+        self.castle = castle
+        self.run_dir = run_dir
+        self.tasks_dir = tasks_dir
+        self.key = run_key(run_dir)
+        self.records = read_tenant_journal(run_dir)
+        self.check_identity()
+        self.attempts = self.index_attempts()
+
+    def index_attempts(self) -> dict[int, dict]:
+        """Facts scoped to the attempt they belong to, keyed by the `seq`
+        of the `step_finished` that closes it.
+
+        Scoped rather than collected per errand, because one errand can
+        be attempted twice inside one run — the tenant retries, and a
+        park the resident answers is re-run from the same journal. A
+        per-errand collection would attribute the second attempt's model
+        and pull request to the first attempt's result, which is the
+        quiet kind of wrong: every field present, every field plausible,
+        one of them belonging to a different session. The tenant's own
+        records are already in order and `step_started` opens exactly
+        one attempt, so the interval between a start and its finish is
+        all the scoping this needs.
+        """
+        by_finish: dict[int, dict] = {}
+        open_attempt: dict[str, dict] = {}
+        for rec in self.records:
+            errand = errand_of(rec)
+            if not errand:
+                continue
+            kind = rec.get("type")
+            if kind == "step_started":
+                open_attempt[errand] = {"started": rec, "settings": None, "pr": None}
+            elif kind == "step_finished":
+                # A finish with no start is not something the tenant
+                # writes, but a journal read from a run that began before
+                # the hook was configured could be truncated into one.
+                # An empty attempt refuses downstream rather than
+                # borrowing another attempt's facts.
+                attempt = open_attempt.pop(errand, {"started": None, "settings": None, "pr": None})
+                by_finish[rec["seq"]] = attempt
+            elif errand in open_attempt:
+                if kind == "session_settings":
+                    open_attempt[errand]["settings"] = rec
+                elif kind == "pr" and rec.get("url"):
+                    open_attempt[errand]["pr"] = str(rec["url"])
+        return by_finish
+
+    def check_identity(self) -> None:
+        """Refuse the whole pass unless every record carries a distinct `seq`.
+
+        The fold's idempotence is not a property of this shim; it is
+        borrowed from the tenant, and `seq` is the whole loan. Without a
+        stable per-event identity a replay of one event and a second
+        distinct event are indistinguishable, so the choice is between
+        losing a legitimate second attempt and duplicating a replayed
+        one — and both are silent. Task 0071 named this as the blocker
+        to surface rather than the case to paper over, so it is checked
+        once, up front, against the journal as a whole rather than
+        per-record where a single gap could slip through as a skipped
+        event.
+        """
+        seqs = []
+        for rec in self.records:
+            seq = rec.get("seq")
+            if not isinstance(seq, int):
+                raise Refused(
+                    f"{self.run_dir / JOURNAL_NAME}: a record of type "
+                    f"{rec.get('type')!r} carries no integer `seq`, so this journal "
+                    "has no stable per-event identity. Idempotence across attempts is "
+                    "not achievable without one, and a fold that guessed would either "
+                    "drop a real second attempt or duplicate a replay — silently, "
+                    "either way. Nothing was written for this run."
+                )
+            seqs.append(seq)
+        duplicates = sorted({s for s in seqs if seqs.count(s) > 1})
+        if duplicates:
+            raise Refused(
+                f"{self.run_dir / JOURNAL_NAME}: `seq` repeats at {duplicates}, so it "
+                "does not identify an event. See above: without a distinct identity "
+                "the fold cannot tell a replay from a second attempt. Nothing was "
+                "written for this run."
+            )
+
+    def source_event(self, errand: str, rec: dict) -> str:
+        return f"{errand}@{self.key}#{rec.get('seq')}"
+
+    def common(self, errand: str, rec: dict) -> dict:
+        brief = find_brief(self.tasks_dir, errand)
+        return {
+            "errand": errand,
+            "source-event": self.source_event(errand, rec),
+            "provenance-source": brief.name,
+            "tenant": TENANT,
+            "tenant-version": str(rec.get("emcee_version", "")),
+        }
+
+    def brief_line(self, errand: str) -> str:
+        return (
+            f"Errand `{errand}` — the numbered brief of that name, named here rather "
+            "than referenced because a brief is a file and has no record id to cite "
+            "(task 0071, friction 2)."
+        )
+
+    # -- the three record types ------------------------------------------
+
+    def claim(self, errand: str, rec: dict) -> tuple[dict, str]:
+        fields = self.common(errand, rec)
+        body = "\n".join([
+            f"The delivery seat took a brief. {self.brief_line(errand)}",
+            "",
+            f"Tenant: `{TENANT}`, run `{self.key}`, event {rec.get('seq')}.",
+            "",
+            "Written by the record shim after the fact, not at the instant of the "
+            "act — an external translator cannot close that gap to zero, only "
+            "narrow it (task 0071, friction 1).",
+        ])
+        return fields, body
+
+    def question(self, errand: str, rec: dict) -> tuple[dict, str]:
+        fields = self.common(errand, rec)
+        fields["blocking"] = "true"
+        if rec.get("session"):
+            fields["tenant-session"] = str(rec["session"])
+        asked = rec.get("question_file")
+        text = ""
+        if asked:
+            try:
+                text = pathlib.Path(asked).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise Refused(
+                    f"{errand}: the tenant's question file {asked!r} could not be read "
+                    f"({exc.__class__.__name__}), so the resident's actual question "
+                    "cannot be sourced. A placeholder here would be answered as if it "
+                    "were the real question and the errand would stay parked forever. "
+                    "Nothing was written for this event; it is retried on the next pass."
+                ) from exc
+        paragraphs = [
+            text or "The delivery seat blocked on a judgment only the resident can supply.",
+            self.brief_line(errand),
+            "Answering this does not resume the errand on its own: the inbound "
+            "mechanism is a separate piece of work and until it exists an answered "
+            "delivery question resumes nothing automatically (docs/architecture.md).",
+        ]
+        body = "\n\n".join(part for part in paragraphs if part)
+        return fields, body
+
+    def result(self, errand: str, rec: dict) -> tuple[dict, str]:
+        fields = self.common(errand, rec)
+        result = rec.get("result")
+        if "error" in rec:
+            fields["outcome"] = "failed"
+            fields["tenant-outcome"] = "error"
+            fields["tenant-error"] = " ".join(str(rec["error"]).split())[:400]
+        elif isinstance(result, dict):
+            tenant_outcome = str(result.get("outcome", ""))
+            if tenant_outcome not in TENANT_OUTCOMES:
+                raise Refused(
+                    f"{errand}: tenant outcome {tenant_outcome!r} is not in this "
+                    "shim's allowlist, so there is no castle `outcome` it maps to. "
+                    "Teach TENANT_OUTCOMES the new value deliberately; a default "
+                    "here would write a confident wrong receipt. Nothing was "
+                    "written for this event."
+                )
+            fields["outcome"] = TENANT_OUTCOMES[tenant_outcome]
+            fields["tenant-outcome"] = tenant_outcome
+        else:
+            raise Refused(
+                f"{errand}: the tenant's step_finished carries neither a result "
+                "object nor an error, so what happened cannot be sourced."
+            )
+
+        attempt = self.attempts.get(rec["seq"], {})
+        started = attempt.get("started")
+        if not started or not started.get("model"):
+            raise Refused(
+                f"{errand}: the tenant's log names no model for this attempt, so the "
+                "result cannot name its implementer — which task 0069 requires it to "
+                "do at the moment it is known rather than reconstruct later. This "
+                "journal predates the tenant making `model` a required field. "
+                "Nothing was written for this event."
+            )
+        model = str(started["model"])
+        provider, provider_source = provider_of(model, attempt.get("settings"))
+        fields["model"] = model
+        fields["model-source"] = str(started.get("model_source", ""))
+        fields["provider"] = provider
+        fields["provider-source"] = provider_source
+        url = attempt.get("pr")
+        if url:
+            fields["pull-request"] = url
+
+        lines = [
+            f"The delivery seat's turn on this errand ended. {self.brief_line(errand)}",
+            "",
+            f"Tenant `{TENANT}` reported `{fields['tenant-outcome']}`; implemented by "
+            f"`{model}` from provider `{provider}` ({provider_source}).",
+        ]
+        if url:
+            lines += ["", f"Pull request: {url}. The seat opened it and stopped — it "
+                          "never merges, never approves, and never deploys."]
+        if "tenant-error" in fields:
+            lines += ["", "The tenant's own account of the failure is in "
+                          "`tenant-error`, verbatim and unparsed."]
+        lines += ["", f"Run `{self.key}`, event {rec.get('seq')}."]
+        return fields, "\n".join(lines)
+
+    # -- the pass ---------------------------------------------------------
+
+    def events(self):
+        """Every tenant record that owes a castle record, in journal order."""
+        for rec in self.records:
+            kind = rec.get("type")
+            errand = errand_of(rec)
+            if not errand:
+                continue
+            if kind == "step_started":
+                yield "claim", errand, rec
+            elif kind == "parked":
+                yield "question", errand, rec
+            elif kind == "step_finished":
+                yield "result", errand, rec
+
+    def run(self, *, dry_run: bool = False) -> tuple[list[str], list[str]]:
+        journal = self.castle.journal_dir()
+        seen = {
+            rec.fields.get("source-event")
+            for rec in self.castle.load_all(journal).values()
+            if rec.fields.get("source-event")
+        }
+        written, refused = [], []
+        for kind, errand, rec in self.events():
+            identity = self.source_event(errand, rec)
+            if identity in seen:
+                continue
+            try:
+                fields, body = getattr(self, kind)(errand, rec)
+            except Refused as exc:
+                refused.append(str(exc))
+                continue
+            if dry_run:
+                written.append(f"{kind} {identity} (dry run, not written)")
+                seen.add(identity)
+                continue
+            record_id = self.castle.write_record(
+                journal,
+                type=kind,
+                # The one value, and `common()` above is where it was
+                # earned: nothing reaches this line without a brief file
+                # having been found, and a brief is in the tasks
+                # directory only by the resident's own act.
+                provenance="requested",
+                seat=SEAT,
+                refs=[],
+                body=body,
+                extra=fields,
+            )
+            seen.add(identity)
+            written.append(f"{record_id} {kind} {identity}")
+        return written, refused
+
+
+def cmd_fold(args: argparse.Namespace) -> int:
+    # stdin is never read. Not "read and discarded" — never opened. The
+    # doorbell's payload is the one input this command must not have,
+    # and the strongest way to say so is for there to be no code that
+    # could come to read it later.
+    #
+    # An earlier version drained it, on the theory that leaving a pipe
+    # unread could block the tenant's hook thread. It cannot: the tenant
+    # caps a record at 16 KiB and a pipe buffer holds 64 KiB, so the
+    # write completes into the buffer whether anything reads it or not,
+    # and the tenant reaps a hook that outlives ten seconds regardless.
+    # What draining *did* do was hang this command outright whenever
+    # stdin was an inherited descriptor nobody would ever close — which
+    # is exactly the interval poll, running under a timer with the
+    # journal hook nowhere in sight. The liveness half would have
+    # blocked forever on the payload it exists not to need.
+    run_dir = args.run_dir or os.environ.get("EMCEE_RUN_DIR")
+    if not run_dir:
+        print("castle-delivery-shim fold: no run directory. Pass --run-dir, or let the "
+              "tenant's journal hook supply EMCEE_RUN_DIR.", file=sys.stderr)
+        return 2
+    tasks_dir = args.tasks_dir or os.environ.get("CASTLE_DELIVERY_TASKS_DIR")
+    if not tasks_dir:
+        print("castle-delivery-shim fold: no tasks directory. Pass --tasks-dir (or set "
+              "CASTLE_DELIVERY_TASKS_DIR) naming the `docs/tasks/` of the repository "
+              "this run's errands were briefed in. It is what sources `provenance`, "
+              "and provenance is never defaulted.", file=sys.stderr)
+        return 2
+
+    castle = load_castle()
+    # One fold at a time, per the same reasoning `route_journal` takes
+    # its lock for, and with more reason. The tenant fires its hook on a
+    # thread per record with no serialisation of its own, and a task's
+    # last few records land milliseconds apart — so two folds running at
+    # once is the ordinary case here, not the edge. Both would read the
+    # journal, both would find the same event unwritten, and both would
+    # write it: a duplicate record in an append-only log, produced by the
+    # idempotence check itself. Blocking rather than skipping, because a
+    # fold that declines has silently dropped the firing that woke it,
+    # and the fold is fast.
+    lock = castle.acquire_lock_blocking(castle.runtime_dir() / "delivery-shim.lock")
+    try:
+        try:
+            fold = Fold(castle, pathlib.Path(run_dir), pathlib.Path(tasks_dir))
+        except Refused as exc:
+            print(f"castle-delivery-shim fold: {exc}", file=sys.stderr)
+            return 2
+        written, refused = fold.run(dry_run=args.dry_run)
+    finally:
+        lock.close()
+
+    for line in written:
+        print(line)
+    if not written:
+        print("nothing new: every event in this run is already in the journal")
+    for line in refused:
+        print(f"refused: {line}", file=sys.stderr)
+    return 1 if refused else 0
+
+
+# --- the outcome-log row -----------------------------------------------------
+
+
+def cmd_row(args: argparse.Namespace) -> int:
+    """Mature this errand's row in the task-outcome log, on its own branch.
+
+    THE THREE QUESTIONS `docs/backlog/the-outcome-row-is-written-by-hand.md`
+    LEFT OPEN, AND WHAT THIS ANSWERS
+
+    *Does the seat write the row, or run `derive`?* It runs `derive`.
+    The cells the seat holds — model, cost, turns, the pull request —
+    are exactly the cells `harness_facts` already reads out of this same
+    journal, and a second derivation of the same numbers is the drift
+    `check` exists to catch. One derivation, called by the seat instead
+    of by a human who remembered.
+
+    *Is a seat-written row still `provenance: live`?* Yes. The column
+    says *when* the row was written — as the attempt happened, or
+    reconstructed from history afterwards — not *who* wrote it, and a
+    seat maturing a row while the attempt is still warm is `live` by
+    that definition. A third value would make one column answer two
+    questions, and `env` plus the seat's own `claim` record already
+    answer the second. It is also immutable and already written: the row
+    is appended when the brief is transferred, so a third value could
+    only arrive by rewriting history.
+
+    *What if `check` fails on the branch the seat just wrote?* It says
+    so and exits non-zero, leaving the filled log in the working tree
+    for a human to read as a diff — which is `derive --fill`'s own
+    stated contract. The seat cannot push an unloggable row because the
+    seat does not push: it writes the file and stops, exactly as it
+    proposes a diff and never deploys.
+
+    THE BRANCH CHECK, AND WHY IT REFUSES RATHER THAN WARNS
+
+    The row belongs on the errand's own branch, before the pull request
+    opens — `docs/backlog/the-outcome-row-is-written-by-hand.md` is
+    precise that the cheap moment and the accurate moment are the same
+    moment. A checkout sitting on `main` is the wrong branch, and a row
+    matured there is a change to the trunk nobody reviewed. So this
+    refuses unless HEAD is the errand's branch. A journal hook firing
+    against the operator's primary checkout hits that refusal by
+    construction, loudly, which is the point: the shortfall is a
+    mechanical failure rather than a sentence in a document.
+    """
+    run_dir = pathlib.Path(args.run_dir or os.environ.get("EMCEE_RUN_DIR") or "")
+    if not run_dir.name:
+        print("castle-delivery-shim row: no run directory (--run-dir or EMCEE_RUN_DIR).",
+              file=sys.stderr)
+        return 2
+    errand = args.task or os.environ.get("EMCEE_TASK")
+    if not errand:
+        print("castle-delivery-shim row: no errand (--task or EMCEE_TASK).", file=sys.stderr)
+        return 2
+    checkout = pathlib.Path(args.checkout)
+
+    head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True)
+    if head.returncode != 0:
+        print(f"castle-delivery-shim row: {checkout} is not a git checkout: "
+              f"{head.stderr.strip()}", file=sys.stderr)
+        return 2
+    branch = head.stdout.strip()
+    if not branch.endswith(f"/{errand}") and branch != errand:
+        print(
+            f"castle-delivery-shim row: refusing to mature {errand}'s row in a checkout "
+            f"on branch {branch!r}. The row belongs on the errand's own branch, before "
+            "the pull request opens — that is both the cheap moment and the only moment "
+            "`queued` is still accurate — and maturing it anywhere else writes a change "
+            "to the wrong branch. Point --checkout at the errand's worktree.",
+            file=sys.stderr,
+        )
+        return 2
+
+    outcomes = checkout / "tools" / "outcomes" / "outcomes"
+    if not outcomes.is_file():
+        print(f"castle-delivery-shim row: no {outcomes}; this checkout has no outcome log "
+              "to mature.", file=sys.stderr)
+        return 2
+
+    filtered_journal = errand_only_journal(run_dir, errand)
+    try:
+        derive = subprocess.run(
+            [sys.executable, str(outcomes), "--repo-root", str(checkout), "derive",
+             "--harness-journal", str(filtered_journal), "--env", args.env, "--fill"],
+            capture_output=True, text=True)
+    finally:
+        filtered_journal.unlink(missing_ok=True)
+    sys.stdout.write(derive.stdout)
+    sys.stderr.write(derive.stderr)
+    if derive.returncode != 0:
+        return derive.returncode
+
+    check = subprocess.run(
+        [sys.executable, str(outcomes), "--repo-root", str(checkout), "check"],
+        capture_output=True, text=True)
+    sys.stdout.write(check.stdout)
+    sys.stderr.write(check.stderr)
+    if check.returncode != 0:
+        print("castle-delivery-shim row: the log's own check fails on this branch. The "
+              "filled log is in the working tree for a human to read as a diff; nothing "
+              "was committed and nothing was pushed.", file=sys.stderr)
+        return check.returncode
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="castle-delivery-shim",
+        description="the delivery seat's record shim, outbound (docs/tasks/0081)")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    f = sub.add_parser("fold", help="translate one run's tenant journal into records")
+    f.add_argument("--run-dir", help="the tenant's run directory (default: $EMCEE_RUN_DIR)")
+    f.add_argument("--tasks-dir",
+                   help="the briefed repository's docs/tasks (default: "
+                        "$CASTLE_DELIVERY_TASKS_DIR)")
+    f.add_argument("--dry-run", action="store_true",
+                   help="name what would be written, write nothing")
+    f.set_defaults(func=cmd_fold)
+
+    r = sub.add_parser("row", help="mature this errand's task-outcome row, on its branch")
+    r.add_argument("--run-dir", help="the tenant's run directory (default: $EMCEE_RUN_DIR)")
+    r.add_argument("--task", help="the errand (default: $EMCEE_TASK)")
+    r.add_argument("--checkout", required=True,
+                   help="the errand's own worktree, checked out on its branch")
+    r.add_argument("--env", required=True,
+                   help="the environment key for the row (docs/measurement.md)")
+    r.set_defaults(func=cmd_row)
+
+    args = ap.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

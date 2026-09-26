@@ -286,3 +286,65 @@ key (friction 3) rather than leave either open. If the schema does not in fact e
 or is not reachable from that session's worktree either, that is the
 backlog entry's original blocking condition recurring — stop and say
 so rather than guess at it a second time.
+
+## Follow-up: what the real schema changed, written at implementation
+
+This section is what this brief's implementation prompt asked for, and
+is the only part of this file written after the fact. Task 0081
+implemented the fold from a worktree that could reach emcee's checkout,
+and read its `journal.jsonl` schema from the source rather than
+guessing at it. Three of the things left open above turned out to have
+answers in the tenant's own log; one did not, and one changed shape.
+
+**Friction 3, provenance, closed — and not by the tenant.** The
+tenant's log carries nothing about how a brief entered the seat. The
+fact turned out to be recoverable one step further out: a brief is in
+`docs/tasks/` only by the resident's `Status: ready` mark and the
+mechanical transfer that follows it, which CLAUDE.md fixes as the
+resident's own act and never an inferred one. So the shim sources
+`provenance: requested` from the brief file's presence, records which
+file it read in `provenance-source`, and refuses to write anything at
+all for an errand whose brief it cannot find. That is the answer this
+brief demanded — sourced, never defaulted — reached through the
+repository's own convention rather than through a field the tenant
+would have had to add.
+
+**Friction 2, `refs`, unchanged and now corroborated.** The tenant has
+no errand-identity concept that would give a brief a citable record id,
+so `refs` stays empty exactly as specced. Task 0082, written since,
+independently reaches the same place from the other direction: its
+resumption chains on the *answer*, which is a real record, "unlike the
+shim's outbound records, whose upstream is a file". Two briefs agreeing
+is not proof, but it is better evidence than one.
+
+**The dedup key exists, and it is `seq`.** The tenant stamps every
+record with a monotonic `seq` under an exclusive lock and fsyncs before
+returning, and truncates a torn tail rather than completing it — so a
+`seq` any reader has observed is never reused. Errand plus run plus
+`seq` is the durable per-event identity point 3 needed, and the shim
+stamps it as `source-event` and matches on it. The blocking condition
+point 3 named did not fire; the shim still refuses a journal that lacks
+it, because the condition can recur with a different tenant.
+
+**Point 2's "brief's terminal state" needed a distinction this brief
+did not draw.** A tenant step can finish *parked*, which is terminal
+for the turn and not for the errand. The implementation follows
+architecture.md's own reading — the contract "describes one turn rather
+than necessarily a whole errand" since task 0023 — so every finished
+step produces a `result` describing that turn, a park additionally
+produces its `question`, and the tenant's own word is preserved in
+`tenant-outcome` beside the castle `outcome` so nothing is collapsed.
+
+**Friction 1 is unchanged and now has a name.** The shim writes its
+`claim` after the tenant took the brief, and nothing closes that to
+zero. What the implementation adds is that the doorbell and the
+interval poll are the same command, so narrowing the window is purely a
+question of how often the timer fires — and that nothing fires it yet
+(`docs/backlog/nothing-polls-the-delivery-shim.md`).
+
+**One thing this brief could not have known.** `castle record
+--blocking` refuses a question whose first ref does not reach a
+`request`, which no delivery question can satisfy. The shim writes
+through `write_record`, the same choke point every other seat's hands
+use; the gap that leaves for a human holding the seat by hand is filed
+at `docs/backlog/castle-record-cannot-write-a-delivery-question.md`.
