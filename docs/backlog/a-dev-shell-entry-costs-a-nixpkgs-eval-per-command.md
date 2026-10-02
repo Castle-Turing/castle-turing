@@ -45,9 +45,19 @@ revert.
 **What we already know.** direnv with nix-direnv caches the evaluated
 environment per project, re-evaluates only when `flake.nix` or
 `flake.lock` change (source edits are ignored — exactly the hole the
-loop fell into), loads in milliseconds in every fresh shell including
-each agent Bash call, and pins the dev shell against garbage
-collection. The mechanism split per Principle 01 is clean: enabling
+loop fell into), loads the cache in milliseconds, and pins the dev
+shell against garbage collection. One claim an earlier draft of this
+entry got wrong, caught by cross-model review on its PR: the standard
+direnv bash hook fires via `PROMPT_COMMAND`, which interactive shells
+evaluate and non-interactive ones — including an agent's Bash calls —
+do not. Enabling direnv host-wide therefore does not, by itself, load
+the environment in the exact shells this entry is about. The cache is
+still the fix; the delivery into non-interactive shells is a design
+decision the spec must make: `direnv exec <dir> <cmd>` as the stated
+invocation, an `eval "$(direnv export bash)"` line in shell init that
+non-interactive agent shells actually source, or whatever direnv
+integration the agent harness itself offers — verified against a real
+agent Bash call, not assumed. The mechanism split per Principle 01 is clean: enabling
 direnv + nix-direnv (package plus shell hook) is public `modules/dev`
 material with no hardware assumptions and nothing per-person; a
 project opts in with a one-line `.envrc` (`use flake`) in its own
@@ -59,9 +69,12 @@ to "the environment loads via direnv; never invoke
 `an-agent-workload-can-thrash-the-host.md`'s problem; this entry is
 only about removing the per-command evaluation default.
 
-**Open questions.** Whether the shell hook belongs in `modules/dev` or
-`modules/home` (direnv's hook is per-shell, and git identity precedent
-puts per-person config in home — but this is mechanism, not identity);
+**Open questions.** How the cached environment reaches non-interactive
+agent shells (see the cross-model finding above) — the one question the
+spec cannot leave open, since it is the incident's exact shape; whether
+the shell hook belongs in `modules/dev` or `modules/home` (direnv's
+hook is per-shell, and git identity precedent puts per-person config in
+home — but this is mechanism, not identity);
 whether `nix-direnv`'s cache location needs stating or the default is
 fine; whether the eval-storm detector is worth building now or noted
 as the recurrence check and deferred; and where the guidance for
