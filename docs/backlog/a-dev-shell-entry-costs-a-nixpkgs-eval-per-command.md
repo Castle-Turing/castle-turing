@@ -57,7 +57,20 @@ decision the spec must make: `direnv exec <dir> <cmd>` as the stated
 invocation, an `eval "$(direnv export bash)"` line in shell init that
 non-interactive agent shells actually source, or whatever direnv
 integration the agent harness itself offers — verified against a real
-agent Bash call, not assumed. The mechanism split per Principle 01 is clean: enabling
+agent Bash call, not assumed. A second gap the same review round
+surfaced: direnv has a mandatory authorization step — on a fresh clone,
+and again whenever `.envrc` changes, nothing loads until someone runs
+`direnv allow`; neither the shell hook nor `direnv exec` bypasses it.
+So a checked-in `.envrc` does not by itself opt a project in, and the
+failure it leaves is silent in exactly the dangerous direction: an
+agent in an unauthorized project falls back to whatever it would have
+done anyway, which is the per-command evaluation this entry exists to
+end. The spec must treat the authorization lifecycle as a constraint
+with its own test — whether via `direnv allow` as a stated bootstrap
+step, direnv's `whitelist` configuration for the resident's project
+roots (a trust decision that belongs to the resident, per Principle
+01), or something else verified to cover fresh clones and `.envrc`
+edits. The mechanism split per Principle 01 is clean: enabling
 direnv + nix-direnv (package plus shell hook) is public `modules/dev`
 material with no hardware assumptions and nothing per-person; a
 project opts in with a one-line `.envrc` (`use flake`) in its own
@@ -76,7 +89,11 @@ the shell hook belongs in `modules/dev` or `modules/home` (direnv's
 hook is per-shell, and git identity precedent puts per-person config in
 home — but this is mechanism, not identity);
 whether `nix-direnv`'s cache location needs stating or the default is
-fine; whether the eval-storm detector is worth building now or noted
-as the recurrence check and deferred; and where the guidance for
+fine; which detector the fixing brief lands — not whether: the
+eval-storm check is mechanically possible, so under this repo's
+incident-ships-its-detector rule the brief lands it or a detector at
+least as strong, and the static direnv assertion alone does not
+qualify, since it cannot see the storm recurring when delivery or
+guidance fails; and where the guidance for
 *other* repos' `.envrc` + CLAUDE.md changes gets tracked, since this
 repo can fix the host default but not the projects that sit on it.
