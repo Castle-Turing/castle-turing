@@ -13,7 +13,7 @@ the host — stated or enforced a resource bound. The same shape recurred
 on 2026-10-02 under a different spelling — `nix develop --command` per
 iteration against a flake worktree being edited — ending in an oomd
 session kill; that incident, and the host-default fix it motivates, are
-`a-dev-shell-entry-costs-a-nixpkgs-eval-per-command.md`'s.
+`a-dev-shell-entry-costs-a-nixpkgs-eval-per-command.md`'s to carry.
 
 **Why it matters.** The project's direction is *more* fan-out, not
 less: parallel sessions, research dives, an emcee queue keeping

@@ -22,17 +22,21 @@ power button, which is why 0073 is right to land anyway — but the
 kill-target risk task 0063 accepted ("the expectation is that the
 runaway session's cgroup, not the compositor's, is what dies") turns
 out to be optimistic in the concrete: there is no separate cgroup for
-the expectation to be about. On 2026-10-02 this stopped being a
-prediction: oomd's first live kill on this host took `session-3.scope`
-whole — 634 processes, the compositor, two running Claude sessions and
-their in-flight work — over a memory storm a single project session
-caused (see `a-dev-shell-entry-costs-a-nixpkgs-eval-per-command.md`).
-The kill worked exactly as wired and the blast radius was exactly this
-entry's worst case. This is the same genus as the oomd
+the expectation to be about. This is the same genus as the oomd
 finding itself — an upstream default (minimal compositors do not wrap
 app launches; GNOME and KDE do, via per-app `app-*.scope` units under
 the user manager) that was never chosen, recorded, or tested against
 this failure mode.
+
+On 2026-10-02 the blast radius stopped being a prediction: oomd's first
+live kill on this host took `session-N.scope` whole — 634 processes,
+the compositor, two running Claude sessions and their in-flight work.
+The storm was driven by one session's per-command flake evaluation loop
+(`a-dev-shell-entry-costs-a-nixpkgs-eval-per-command.md`); the second
+session was a casualty, contributing only ordinary load. Note what the
+trigger was not: a browser. It was an agent in a terminal, which bears
+directly on the wrapping-reach question below — launcher-only wrapping
+would not have contained it.
 
 **How it would have been caught sooner.** The memory-exhaustion drill
 already proposed in `the-kernel-oom-killer-has-no-swap-headroom.md` is
