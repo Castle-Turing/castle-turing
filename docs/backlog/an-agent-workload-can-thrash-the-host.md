@@ -1,5 +1,7 @@
 Title: Per-scope memory bounds for wrapped app launches
 Model: standard
+Requires: 0084-an-oomd-kill-takes-the-whole-desktop
+Milestone: none — hygiene
 Model-because: the design decisions are made in this brief (the option
 surface, the zram caveat, the delegation trap), and the one assumption
 that could sink a smaller implementer — whether memory properties
@@ -7,7 +9,6 @@ actually land on user scopes — is guarded by a VM assertion that reads
 the cgroup file and fails loudly, so a wrong assumption cannot ship
 silently; deep would spend judgment where the test already supplies the
 verdict.
-Requires: 0084-an-oomd-kill-takes-the-whole-desktop
 Requires-because: the bounds this task exposes are properties on the
 per-app transient scopes that task creates; without the wrapper there
 is no unit to bound — every desktop process shares one session scope
@@ -86,9 +87,12 @@ the host reaches crisis, instead of sprinting unimpeded from healthy to
 oomd's 90% line.
 
 **Mechanism (public, Principle 01).** Task 0084 wraps app launches in
-per-class transient scopes via `systemd-run --user --scope`. This task
-extends each launch class's configuration with three optional resource
-properties:
+per-class transient scopes via `systemd-run --user --scope`, and
+defines the class interface this task extends: a launch class is a
+named entry (`terminal`, `menu`, `modal`) with an `extraProperties`
+list of `systemd-run --property=` strings, which `castle-launch
+<class> -- <cmd>` renders onto the scope. This task adds three optional
+typed resource options per class, which render into that list:
 
 - `memoryHigh` — rendered as `--property=MemoryHigh=<value>` on the
   wrapped scope. Per systemd.resource-control(5), this is the

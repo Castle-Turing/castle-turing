@@ -1,5 +1,6 @@
 Title: Wrap desktop app launches in per-app transient scopes
 Model: deep
+Milestone: none — hygiene
 Model-because: the diff is small but the terrain is documented-treacherous
 and every failure is silent — home-manager's sway keybinding priority
 dance (modules/home/default.nix's own comments around mkOptionDefault),
@@ -114,7 +115,11 @@ to every app-launch path the modules define:
 
 - sway's `terminal` setting (home-manager
   `wayland.windowManager.sway.config.terminal`, today `foot`);
-- sway's `menu`/launcher setting (today `wmenu`-based);
+- sway's `menu`/launcher setting. With the pinned home-manager and no
+  `config.menu` override in `modules/home`, the live launcher is
+  home-manager's default `dmenu_path | dmenu | xargs swaymsg exec --`
+  pipeline, not a wmenu one (wmenu is installed by `modules/desktop`
+  but nothing selects it); verify against the pinned source;
 - the castle-modal chord at
   `keybindings."Mod4+Shift+Return"` in `modules/home` (~line 320).
 
@@ -135,9 +140,10 @@ practice.
   attrset; do not add a second definition. For home-manager-owned
   launches (the `terminal` default), override the option rather than
   re-declaring the binding, so the default set is not disturbed.
-- *wmenu's stdin.* `wmenu` reads candidate items on stdin and writes the
-  pick to stdout; it runs in a shell pipeline (`… | wmenu | …`), not as
-  a standalone app. Do not wrap the menu *filter* as a scope — that
+- *The menu's stdin.* The launcher (`dmenu` today, `wmenu` if ever
+  selected) reads candidate items on stdin and writes the pick to
+  stdout; it runs in a shell pipeline (`… | dmenu | …`), not as a
+  standalone app. Do not wrap the menu *filter* as a scope — that
   would break the pipe. Wrap the *program the pick launches*, not the
   filter. If the launcher is a single command that both picks and execs,
   wrap only the exec half; if in doubt, leave the filter unscoped and
@@ -159,8 +165,13 @@ the mechanism holds for any sway host, it lives in `modules/home`
 alongside the existing sway config, not in `hosts/xps9370`.
 
 1. Define the `castle-launch` wrapper once (a `pkgs.writeShellScript` or
-   `home.packages` shim) so the flag set lives in one place and a future
-   `--property=MemoryHigh=` is a one-line change.
+   `home.packages` shim) so the flag set lives in one place, with the
+   class interface a follow-up extends: usage
+   `castle-launch <class> -- <cmd…>`, and an option set with one entry
+   per class (`terminal`, `menu`, `modal`), each carrying
+   `extraProperties` (list of str, default `[]`) rendered as
+   `--property=<p>` flags. No bounds are set here; a future
+   `MemoryHigh=` is then a list entry, not a refactor.
 2. Route the three app-launching paths (terminal, menu, castle-modal
    chord) through it, clearing the two hazards above.
 3. Land the static VM regression probe (below) in the same PR.
@@ -175,9 +186,12 @@ Automated, no human hands:
   `oomd-liveness-test`). Boot the real desktop stack in a NixOS VM (the
   `test/desktop-loop/` harness already logs in through the real
   greetd+tuigreet and presses real chords — extend or mirror it), launch
-  an app through a wrapped path, and assert its cgroup path is a
-  `run-*.scope` under `user.slice` and is **not** equal to the
-  compositor's cgroup. This is the detector the incident ships: it turns
+  an app through *each* wrapped path (the terminal, the menu's exec
+  half and the castle-modal chord), and assert each one's cgroup path
+  is a distinct `run-*.scope` under `user.slice` and **not** equal to
+  the compositor's cgroup. The terminal path is mandatory: it is the
+  incident's workload, and a probe that passes with only the modal
+  chord wrapped detects nothing. This is the detector the incident ships: it turns
   "a GUI app's cgroup differs from the compositor's" from a hope into a
   check that fails if a future edit collapses the layout back.
 - **`nix flake check`** stays green — the module still evaluates and the

@@ -1,5 +1,6 @@
 Title: direnv as the fleet default, with an eval-storm detector
 Model: standard
+Milestone: none — hygiene
 Model-because: the design is settled in this brief down to verified
 option names (the pinned nixpkgs' `programs.direnv` module was read,
 not recalled), so deep-tier judgment would mostly re-derive decisions
