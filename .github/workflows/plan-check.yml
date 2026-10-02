@@ -1,0 +1,63 @@
+name: plan-check
+
+# The planner seat's checker, and the worked example it is armed over
+# (task 0079). Two steps, and they are not the same thing: the second
+# runs `plan check` directly on a committed slate, which is what makes
+# this gate armed rather than a test wrapper — `tools/reachability-check.py`
+# sees that shape and requires the feeder line below.
+#
+# feeder: tools/plan/plan scaffold (docs/planning.md)
+#
+# What that feeder is, honestly: the *mechanical* half of producing a
+# slate — the header, the clause inventory, the next free number. The
+# other half is the planner seat reading the requirements document and
+# deciding where the seams go, and no lint can check that a seat ran.
+# The citation names what a tool can be held to.
+#
+# Its own workflow rather than a job in check.yml, for the reason
+# clarify-check.yml gives: check.yml carries `paths-ignore: docs/**` on
+# purpose (docs/tasks/done/0018-docs-only-ci-skip.md), and
+# docs/planning.md is prose by that filter's reckoning while being
+# exactly the document this check exists beside.
+#
+# Paths are duplicated between the two triggers rather than shared via a
+# YAML anchor: GitHub Actions does not expand anchors in workflow files.
+on:
+  pull_request:
+    paths:
+      - "tools/plan/**"
+      - "test/plan/**"
+      - "tools/clarify/probes/**"
+      - "docs/planning.md"
+      - ".github/workflows/plan-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/plan/**"
+      - "test/plan/**"
+      - "tools/clarify/probes/**"
+      - "docs/planning.md"
+      - ".github/workflows/plan-check.yml"
+  # Same escape hatch every other workflow here carries: a branch that
+  # isn't on a PR yet can still get a real run via `gh workflow run`.
+  workflow_dispatch: {}
+
+jobs:
+  plan-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nix, deliberately, for the same reason clarify-check gives:
+      # tools/plan/plan is a single stdlib Python script and
+      # test/plan/run.sh is plain bash, so the stock runner's own
+      # toolchain is the whole dependency list.
+      - name: every rule watched failing
+        run: test/plan/run.sh
+      # The committed worked example, checked as an artifact rather than
+      # as a fixture. `tools/clarify/probes/` is in the trigger paths
+      # above because this slate decomposes a requirements document that
+      # lives there: an edit to that document can uncover a clause, and
+      # the gate has to fire on the pull request that does it.
+      - name: the worked example still passes as an artifact
+        run: tools/plan/plan check tools/plan/oracle/slate.md

@@ -168,3 +168,94 @@ Needs the resident: one real slate review against the checklist
 above — the first requirements document decomposed for real. That
 review is this seat's falsifier, exactly as one real intake is the
 clarifying phase's, and both remain unrun until scheduled.
+
+## What implementation settled that this brief left open
+
+Added in the implementing pull request, per the convention that the same
+PR updates a brief the work has overtaken. Each of these was a judgment
+call where the brief was silent or where following it literally would
+have produced something worse; none changes the seat's contract.
+
+**A `scaffold` subcommand exists, and it is what feeds the gate.** The
+brief's item 4 requires the checker to have a CI workflow with a feeder
+line, and `tools/reachability-check.py` requires a feeder to name a tool
+entrypoint that *produces* what the gate checks. A slate is produced by
+the seat, and no lint can check that a seat ran — so the only honest
+options were to hide the gate behind the test wrapper (where the feeder
+rule does not fire, which is the gap that lint's own header names) or to
+give `plan` the mechanical half of slate production. The second is
+better on its own merits: `scaffold` enumerates every clause so that
+none is missed by never having been looked at, which is the same
+structural-rather-than-hoped-for argument as clarifying-questions
+rule 1, and allocates the next number so parallel writers do not each
+invent one. It pre-fills no deferral and its own output fails `check`,
+both asserted in `test/plan/run.sh`. The workflow's comment says out
+loud that the feeder is the mechanical half only.
+
+**"Edges" became two rules, `edges` and `numbers`.** The brief groups
+number allocation under edges. They are separated because
+`test/plan/run.sh` asserts on the rule name that owns each mutation — a
+defect caught by the wrong check has to be a failure — and a colliding
+task number is not a graph defect. Both are in `docs/planning.md` and
+both are checked.
+
+**The slate declares `Tasks:`, and the worked example points it at a
+frozen fixture directory.** Numbers have to be checked against a live
+directory, but the oracle slate is committed and CI-checked, so checking
+it against `docs/tasks/` would make it fail the day a real task reached
+one of its numbers — an armed gate failing for a reason that is not the
+pull request's, which is the exact incident class task 0072's detector
+exists for. The header makes the directory configuration in Principle
+01's sense: the rule is identical, the path is not.
+
+**A brief's verification plan is repeatable `Criterion:` field lines,
+not a subsection.** The brief says "a verification-plan section present
+and non-empty". Flat fields keep the parser free of nested headings, and
+they make each criterion an individually addressable unit — which is
+what the acceptance harness will need, and what item 2 of the checklist
+reads one at a time.
+
+**Fields are contiguous from the top of a brief and wrap on indented
+lines.** RFC-822 style, adopted rather than copying the existing brief
+header parser: `tools/outcomes/outcomes` names exactly this format
+change as the real fix for its own named gap, where a wrapped value
+swallows the header after it. The cost — a field below the blank line is
+outside the block — is refused by name rather than silently ignored.
+
+**The slate index is derived and printed, never authored.** The brief
+describes "a slate index that maps every requirements clause to the
+briefs that carry it". That map is computable from the briefs' own
+`Traces:` lines plus the `Deferred:` lines, so asking a planner to write
+it as well would put two copies of one fact in one file, and the copy
+nobody computes is the one that goes stale silently. `plan check` prints
+it on every run.
+
+**The worked example defers nothing.** All four clauses of the clarify
+probe's requirements document are carried by two briefs against a
+declared budget of three. Deferring a clause the decomposition can
+perfectly well carry would have demonstrated the syntax by teaching the
+wrong thing; the `Deferred:` rules are exercised by mutations in
+`test/plan/run.sh` instead, including a positive control where a
+deferral with a real reason passes.
+
+**Where a real slate lives is left open, on the record.**
+`docs/state/README.md` admits requirements documents to that directory
+by an explicit act of its own, and admitting a third kind of document is
+not this task's to decide. `docs/planning.md` states the candidates and
+what the choice turns on — whether anything re-reads a slate after its
+briefs land — rather than recording an unmade decision as settled.
+
+**The delivery seat's paragraph was corrected, not extended.** It cited
+the backlog entry "the-speccing-step-is-an-unnamed-seat", which this
+task's transfer deleted, and called the arrow into delivery unnamed.
+Both are now false. What delivery may read of a slate beyond the brief
+itself is stated as unsettled rather than closed, because no decision
+record settles it and this brief is not about delivery.
+
+**One defect found and not fixed here.** `tools/outcomes/outcomes
+derive` logs a transferred brief as already merged, dating it to the pull
+request that filed its backlog entry —
+`docs/backlog/a-transferred-brief-is-logged-as-already-merged.md` is the
+record, including the detector it owes. This task's own row is one of
+the three affected. The cells are immutable, so the entry names the
+repair options rather than choosing one.

@@ -1,0 +1,1229 @@
+#!/usr/bin/env python3
+"""plan — the planner seat's mechanical half
+(docs/tasks/0079-the-planner-seat.md; the seat itself is written out in
+docs/planning.md).
+
+Stdlib only, one file, no third-party anything — the same reasoning
+`clarify` and `castle` give: a check that outlives the harness
+fashionable when it was written has to need nothing installed to run.
+
+What this is NOT: it does not decompose anything. A seat does that — it
+reads a requirements document, the milestone state and the existing
+briefs, and writes a slate. This tool reads what that seat produced and
+says whether the discipline was followed. Every judgment about whether
+the decomposition is any *good* stays with the resident, on the
+slate-review checklist in docs/planning.md, and this tool says so on
+every run rather than letting a green exit imply otherwise.
+
+The vocabulary, because two of these words are already taken elsewhere
+in the repo and a third nearly was:
+
+  slate       the artifact: a set of numbered briefs, their dependency
+              edges, and the coverage of the requirements document they
+              decompose. Reviewed and approved as one thing.
+  brief       one entry in the slate. The same word docs/tasks/ uses,
+              deliberately: a slate entry becomes a numbered brief
+              unchanged, so calling it anything else would invent a
+              second name for one object.
+  clause      a keyed requirement in the requirements document. The
+              clarifying-questions phase's word (docs/clarifying-questions.md),
+              unchanged here so a `Traces:` key and a clause key are
+              the same string on both sides.
+
+`index` is deliberately not a section anybody writes: the map from
+clause to briefs is derived from the briefs' own `Traces:` lines and
+printed, never authored. Two authored copies of one mapping drift, and
+the drift is silent.
+
+Subcommands:
+  check      run the rules over a slate.
+  scaffold   write a slate skeleton from a requirements document.
+
+Exit status is 0 when every blocking check passed and 1 otherwise.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import os
+import pathlib
+import re
+import sys
+
+# ---------------------------------------------------------------------------
+# The format's closed sets. Closed for the same reason clarify's are: an
+# open set here lets a seat invent a field to file an awkward obligation
+# under, which is an obligation dodged while the run still prints zero.
+# ---------------------------------------------------------------------------
+
+# The fields a brief in a slate carries. `Title` is not among them — it
+# is the heading — and every other name here is either a header key
+# docs/tasks/ briefs already carry (the work-layout contract) or one the
+# slate adds. The two the slate adds are `Traces:`, which is what makes
+# coverage and grounding computable at all, and `Criterion:`, which is
+# the verification plan authored before the implementation exists.
+BRIEF_FIELDS = (
+    "Model",
+    "Model-because",
+    "Milestone",
+    "Requires",
+    "Requires-because",
+    "Traces",
+    "Criterion",
+    "Deliverable",
+)
+
+# Fields that may appear more than once in one brief. Everything else is
+# refused on a second occurrence rather than allowed to overwrite the
+# first silently — a brief whose recorded Model is not the Model anyone
+# wrote is the shape of defect this whole file exists for.
+REPEATABLE_BRIEF_FIELDS = ("Criterion",)
+
+# Fields that belong to the slate rather than to a brief. `Deferred:` is
+# the only one, and it is the half of coverage that makes a clause's
+# absence a decision instead of a silence.
+SLATE_FIELDS = ("Deferred",)
+
+# The header knobs, declared before the run. `Tasks:` is where task
+# numbers are allocated against; it is configuration rather than
+# mechanism (Principle 01) because a worked example is checked against
+# its own frozen directory and a real slate against `docs/tasks/`, and
+# the rule computed from it is identical either way.
+HEADER_KEYS = ("Requirements", "Brief-budget", "Tasks")
+
+BRIEF_HEADER_RE = re.compile(r"^###\s+(?P<title>.+?)\s*\[(?P<number>\d{4})\]\s*$")
+CLAUSE_HEADER_RE = re.compile(
+    r"^###\s+(?P<title>.+?)\s*\[(?P<key>[a-z0-9][a-z0-9-]*)\]\s*$"
+)
+HEADING_RE = re.compile(r"^#{1,3}\s")
+FIELD_RE = re.compile(r"^(?P<key>[A-Z][A-Za-z-]*):\s*(?P<value>.*)$")
+NUMBER_RE = re.compile(r"^(\d{4})-")
+
+# An `Ambiguity:` line in the requirements document, read only far
+# enough to know a clause carries an unresolved one. `plan` does not
+# re-check the clarifying-questions phase's rules — `clarify check` owns
+# that document — it only needs the state.
+AMBIGUITY_STATE_RE = re.compile(r"^Ambiguity:.*\bstate=(?P<state>[a-z]+)\b")
+
+# Both dashes, for the same reason clarify accepts both: a reason typed
+# on a keyboard that makes em dashes hard must not fail a form check for
+# a reason that has nothing to do with the form. Whitespace-bounded on
+# both sides, so a clause key's own internal `--` (valid under
+# CLAUSE_HEADER_RE) is never mistaken for the separator — only the dash
+# that stands alone between the key and the reason is.
+DASH_RE = re.compile(r"\s(?:—|--)(?:\s|$)")
+
+
+# ---------------------------------------------------------------------------
+# Findings
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Finding:
+    """One thing the rules noticed.
+
+    Every finding this tool produces is blocking. That is a difference
+    from `clarify`, which warns on its style lint, and the difference is
+    the point: clarify's low-precision indicators would train a seat to
+    stop asking, whereas every rule here is a presence or a graph
+    property with no precision to lose. The judgment that *could* only
+    be warned about is not implemented as a warning — it is on the
+    slate-review checklist, unautomated and said so.
+    """
+
+    rule: str
+    where: str
+    message: str
+
+    def render(self) -> str:
+        return f"  FAIL  [{self.rule}] {self.where}: {self.message}"
+
+
+class Report:
+    def __init__(self) -> None:
+        self.findings: list[Finding] = []
+        self.notes: list[str] = []
+
+    def fail(self, rule: str, where: str, message: str) -> None:
+        self.findings.append(Finding(rule, where, message))
+
+    def note(self, text: str) -> None:
+        self.notes.append(text)
+
+
+# ---------------------------------------------------------------------------
+# The slate
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Brief:
+    number: str
+    title: str
+    fields: dict[str, str]
+    criteria: list[str]
+    body: str
+    line: int
+
+    @property
+    def label(self) -> str:
+        return f"[{self.number}]"
+
+    def traces(self) -> list[str]:
+        value = self.fields.get("Traces", "")
+        return [t.strip() for t in value.split(",") if t.strip()]
+
+    def requires(self) -> list[str]:
+        value = self.fields.get("Requires", "")
+        return [r.strip() for r in value.split(",") if r.strip()]
+
+
+@dataclasses.dataclass
+class Deferral:
+    key: str
+    reason: str
+    line: int
+
+
+@dataclasses.dataclass
+class Slate:
+    path: pathlib.Path
+    header: dict[str, str]
+    briefs: list[Brief]
+    deferrals: list[Deferral]
+
+
+def parse_slate(path: pathlib.Path) -> tuple[Slate, Report]:
+    """Parse a slate into its header, its briefs and its deferrals.
+
+    One rule about field placement decides most of the parser, and it is
+    the format change `tools/outcomes/outcomes` names as the real fix
+    for its own named gap (`brief_headers`, task 0076): **a brief's
+    fields are contiguous from the first non-blank line under its
+    heading, and a wrapped value continues on an indented line.**
+    RFC-822 style. The block ends at the first blank line, and prose
+    follows.
+
+    What that buys: a `Model:` line inside the prose cannot be swallowed
+    into the value above it, and a wrapped `Model-because:` paragraph
+    cannot lose the header that follows it. What it costs: a field
+    written below the blank line is outside the block, so it is refused
+    by name rather than read — see the `form` failure below. Silently
+    ignoring it would leave a brief whose stated Milestone nobody reads.
+    """
+    report = Report()
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    header: dict[str, str] = {}
+    briefs: list[Brief] = []
+    deferrals: list[Deferral] = []
+
+    current: Brief | None = None
+    in_fields = False
+    started = False
+    last_field: str | None = None
+    body: list[str] = []
+    in_preamble = True
+    section: str | None = None
+
+    def close() -> None:
+        nonlocal current, body, in_fields, started, last_field
+        if current is not None:
+            current.body = "\n".join(body).strip()
+            briefs.append(current)
+        current = None
+        body = []
+        in_fields = False
+        started = False
+        last_field = None
+
+    for number, line in enumerate(lines, start=1):
+        brief_header = BRIEF_HEADER_RE.match(line)
+        if brief_header:
+            close()
+            in_preamble = False
+            current = Brief(
+                number=brief_header.group("number"),
+                title=brief_header.group("title").strip(),
+                fields={},
+                criteria=[],
+                body="",
+                line=number,
+            )
+            in_fields = True
+            started = False
+            continue
+        if line.startswith("### "):
+            # Every `###` heading in a slate is a brief. One with no
+            # four-digit number is not a heading this format has a
+            # meaning for, and left unreported its fields would be read
+            # as the previous brief's — two briefs' obligations merged
+            # into one while the run still passes.
+            close()
+            in_preamble = False
+            report.fail(
+                "form",
+                f"{path.name}:{number}",
+                "a ### heading with no [NNNN] number; every heading at this "
+                "level is a brief, and a brief with no number can be required "
+                "by nothing and transferred as nothing",
+            )
+            continue
+        if HEADING_RE.match(line):
+            # A `##` section heading closes the brief it follows. `#` is
+            # the title. Either way the field block is over.
+            close()
+            if line.startswith("## "):
+                section = line[3:].strip()
+            elif line.startswith("# "):
+                section = None
+            if not line.startswith("# "):
+                in_preamble = False
+            continue
+
+        if in_preamble:
+            field = FIELD_RE.match(line)
+            if field and field.group("key") in HEADER_KEYS:
+                key = field.group("key")
+                if key in header:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number}",
+                        f"a second {key}: line in the slate's header; the first "
+                        "would be overwritten and disappear, leaving a slate "
+                        f"whose recorded {key} is not the one anyone wrote",
+                    )
+                header[key] = field.group("value").strip()
+            elif field and field.group("key") in SLATE_FIELDS + BRIEF_FIELDS:
+                # Above the first section heading, where the header's
+                # keys live. A `Deferred:` or a brief's field up here
+                # would be read by nothing at all, and a deferral read
+                # by nothing is a clause silently uncovered.
+                report.fail(
+                    "form",
+                    f"{path.name}:{number}",
+                    f"a {field.group('key')}: line in the slate's header block, "
+                    f"where only {', '.join(HEADER_KEYS)} are read",
+                )
+            continue
+
+        field = FIELD_RE.match(line)
+
+        if current is None:
+            # Outside a brief: the slate's own fields live here, which
+            # today means `Deferred:` under `## Coverage`, and nowhere
+            # else — a deferral under `## Questions` or any other section
+            # would still make an otherwise-uncovered clause pass, and a
+            # reader reading `## Coverage` for the slate's dispositions
+            # would never see it.
+            if field and field.group("key") in SLATE_FIELDS:
+                if section == "Coverage":
+                    deferrals.append(
+                        _deferral(field.group("value"), number, report, path)
+                    )
+                else:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number}",
+                        f"a {field.group('key')}: line outside ## Coverage; "
+                        "deferrals are read only from that section, and one "
+                        "elsewhere would decide a clause's coverage in a place "
+                        "the coverage rule never looks",
+                    )
+            elif field and field.group("key") in BRIEF_FIELDS:
+                report.fail(
+                    "form",
+                    f"{path.name}:{number}",
+                    f"a {field.group('key')}: line outside any brief; a brief's "
+                    "fields belong under its own ### heading, and one stranded "
+                    "here belongs to no brief and is read by nothing",
+                )
+            continue
+
+        if in_fields:
+            if not line.strip():
+                # A blank line between the heading and the first field is
+                # the repo's house style for every keyed artifact it has
+                # (a clause, a transcript block, a brief header). The
+                # block opens at the first non-blank line; once open, a
+                # blank line closes it.
+                if started:
+                    in_fields = False
+                    last_field = None
+                continue
+            if field and field.group("key") in BRIEF_FIELDS:
+                started = True
+                key, value = field.group("key"), field.group("value").strip()
+                if key == "Criterion":
+                    current.criteria.append(value)
+                    last_field = key
+                    continue
+                if key in current.fields and key not in REPEATABLE_BRIEF_FIELDS:
+                    report.fail(
+                        "form",
+                        f"{path.name}:{number} {current.label}",
+                        f"a second {key}: line in one brief; the first would be "
+                        "overwritten and disappear, leaving a brief whose "
+                        f"recorded {key} is not the one anyone wrote",
+                    )
+                current.fields[key] = value
+                last_field = key
+                continue
+            if line[:1].isspace() and last_field is not None:
+                # A wrapped value. Indentation is what says so, which is
+                # why prose beginning with a capitalised word and a
+                # colon can never be mistaken for a field.
+                if last_field == "Criterion":
+                    current.criteria[-1] = f"{current.criteria[-1]} {line.strip()}"
+                else:
+                    current.fields[last_field] = (
+                        f"{current.fields[last_field]} {line.strip()}".strip()
+                    )
+                continue
+            if field:
+                report.fail(
+                    "form",
+                    f"{path.name}:{number} {current.label}",
+                    f"{field.group('key')}: is not a field a brief carries; the "
+                    f"names are {', '.join(BRIEF_FIELDS)}",
+                )
+                in_fields = False
+                last_field = None
+                continue
+            # An unindented line that is not a field ends the block.
+            in_fields = False
+            last_field = None
+            body.append(line)
+            continue
+
+        if field and field.group("key") in BRIEF_FIELDS:
+            report.fail(
+                "form",
+                f"{path.name}:{number} {current.label}",
+                f"a {field.group('key')}: line below the field block; fields are "
+                "contiguous from the top of the brief and wrap on indented "
+                "lines, so this one is outside the block and would be read by "
+                "nothing",
+            )
+            continue
+        if field and field.group("key") in SLATE_FIELDS:
+            report.fail(
+                "form",
+                f"{path.name}:{number} {current.label}",
+                f"a {field.group('key')}: line inside a brief; coverage is the "
+                "slate's, not a brief's, and one buried here would leave the "
+                "clause silently uncovered",
+            )
+            continue
+        body.append(line)
+
+    close()
+
+    seen: dict[str, int] = {}
+    for brief in briefs:
+        if brief.number in seen:
+            report.fail(
+                "form",
+                f"{path.name}:{brief.line}",
+                f"duplicate brief number [{brief.number}] (first seen at line "
+                f"{seen[brief.number]})",
+            )
+        seen[brief.number] = brief.line
+
+    seen_deferrals: dict[str, int] = {}
+    for deferral in deferrals:
+        if not deferral.key:
+            continue
+        if deferral.key in seen_deferrals:
+            report.fail(
+                "form",
+                f"{path.name}:{deferral.line}",
+                f"a second Deferred: for [{deferral.key}] (first seen at line "
+                f"{seen_deferrals[deferral.key]}); one clause carries one "
+                "disposition, and a second deferral hides whichever reason "
+                "would not survive being collapsed into a map",
+            )
+        seen_deferrals[deferral.key] = deferral.line
+
+    return Slate(path=path, header=header, briefs=briefs, deferrals=deferrals), report
+
+
+def _deferral(value: str, line: int, report: Report, path: pathlib.Path) -> Deferral:
+    """One `Deferred: <clause-key> — <reason>` line.
+
+    The dash is required rather than optional. A deferral is legal and a
+    silence is not (docs/planning.md, the coverage rule), so the reason
+    has to be a field the format cannot express the absence of: with the
+    dash optional, `Deferred: cursor-target-host` parses as a deferral
+    with an empty reason and reads as a decision nobody made.
+    """
+    text = value.strip()
+    parts = DASH_RE.split(text, maxsplit=1)
+    key = parts[0].strip()
+    reason = parts[1].strip() if len(parts) > 1 else ""
+    if not key:
+        report.fail(
+            "form",
+            f"{path.name}:{line}",
+            "a Deferred: line naming no clause; expected "
+            "'Deferred: <clause-key> — <why deferring is acceptable>'",
+        )
+    return Deferral(key=key, reason=reason, line=line)
+
+
+# ---------------------------------------------------------------------------
+# The requirements document, read only for its clause keys
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Clause:
+    key: str
+    title: str
+    level: str | None
+    open_ambiguities: int
+
+
+def read_clauses(path: pathlib.Path, report: Report) -> list[Clause]:
+    """The clause keys of a requirements document, in document order.
+
+    `clarify check` owns that document's form and this does not re-check
+    it. Two things are checked anyway, because without them coverage
+    cannot be computed honestly rather than merely computed: a `###`
+    heading with no key (a clause the slate has no name for) and a
+    document with no clauses at all.
+    """
+    clauses: list[Clause] = []
+    current: Clause | None = None
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        clause_header = CLAUSE_HEADER_RE.match(line)
+        if clause_header:
+            current = Clause(
+                key=clause_header.group("key"),
+                title=clause_header.group("title").strip(),
+                level=None,
+                open_ambiguities=0,
+            )
+            clauses.append(current)
+            continue
+        if line.startswith("### "):
+            current = None
+            report.fail(
+                "form",
+                f"{path.name}:{number}",
+                "a ### heading with no [clause-key] in the requirements "
+                "document; coverage cannot be computed over a clause that has "
+                "no name to trace. Run `clarify check` on it — that tool owns "
+                "this document's form",
+            )
+            continue
+        if current is None:
+            continue
+        if line.startswith("Level:"):
+            current.level = line.split(":", 1)[1].strip()
+        state = AMBIGUITY_STATE_RE.match(line)
+        if state and state.group("state") == "open":
+            current.open_ambiguities += 1
+
+    if not clauses:
+        # The rule that can be emptied out rather than weakened, which is
+        # clarify's argument for checking knob ranges before anything
+        # else: coverage over zero clauses is satisfied by a slate that
+        # decomposes nothing, and the run still prints zero failures.
+        report.fail(
+            "coverage",
+            path.name,
+            "the requirements document carries no keyed clauses, so coverage "
+            "is vacuous: every possible slate covers it. A slate is checked "
+            "against a document with clauses in it or it is not checked",
+        )
+    return clauses
+
+
+# ---------------------------------------------------------------------------
+# The rules
+# ---------------------------------------------------------------------------
+
+
+def check_header(slate: Slate, report: Report) -> tuple[pathlib.Path | None, int | None]:
+    """The knobs, before anything computed from them.
+
+    Checked first and never narrowable with `--only`, for the reason
+    docs/clarifying-questions.md gives about its own header: a knob out
+    of range does not weaken the rule computed from it, it empties the
+    rule out. A missing `Requirements:` makes coverage and grounding
+    unrunnable; a `Brief-budget:` of nothing makes the budget rule
+    unfalsifiable while the run still prints a zero.
+    """
+    requirements: pathlib.Path | None = None
+    budget: int | None = None
+
+    declared = slate.header.get("Requirements", "").strip()
+    if not declared:
+        report.fail(
+            "header",
+            slate.path.name,
+            "no Requirements: header; a slate declares the document it "
+            "decomposes before the run, and without it coverage and grounding "
+            "are not checks but guesses",
+        )
+    else:
+        requirements = (slate.path.parent / declared).resolve()
+        if not requirements.is_file():
+            report.fail(
+                "header",
+                slate.path.name,
+                f"Requirements: {declared} resolves to {requirements}, which is "
+                "not a file here",
+            )
+            requirements = None
+
+    declared_budget = slate.header.get("Brief-budget", "").strip()
+    if not declared_budget:
+        report.fail(
+            "header",
+            slate.path.name,
+            "no Brief-budget: header. The budget is the bound on the cheap "
+            "error — automated splitting over-generates (5.4 tasks per story "
+            "against 3.2 manual, 59% of them implemented against 100%; "
+            "docs/research/decomposition-and-iteration-caps.md) — and a "
+            "budget declared after the count is not a budget",
+        )
+    else:
+        try:
+            budget = int(declared_budget)
+        except ValueError:
+            report.fail(
+                "header",
+                slate.path.name,
+                f"Brief-budget: {declared_budget!r} is not a whole number",
+            )
+        else:
+            if budget < 1:
+                report.fail(
+                    "header",
+                    slate.path.name,
+                    f"Brief-budget: {budget} admits no briefs at all, which "
+                    "makes the budget rule refuse every slate rather than "
+                    "bound one",
+                )
+                budget = None
+
+    return requirements, budget
+
+
+def check_coverage(slate: Slate, clauses: list[Clause], report: Report) -> None:
+    """Every clause traced by some brief, or deferred with a reason.
+
+    There is no third state. That is the same no-third-state rule
+    docs/clarifying-questions.md rule 1 applies to a nocuous ambiguity,
+    and it is here for the same reason: a clause nobody mentioned is
+    indistinguishable, from the outside, from a clause somebody decided
+    against, and only one of those is a decision.
+    """
+    traced: dict[str, list[str]] = {}
+    for brief in slate.briefs:
+        for key in brief.traces():
+            traced.setdefault(key, []).append(brief.number)
+
+    deferred = {d.key: d for d in slate.deferrals}
+
+    for clause in clauses:
+        if clause.key in traced:
+            if clause.key in deferred:
+                report.fail(
+                    "coverage",
+                    f"{slate.path.name}:{deferred[clause.key].line}",
+                    f"[{clause.key}] is both traced (by "
+                    f"{', '.join(traced[clause.key])}) and deferred. One clause, "
+                    "one disposition: a reader cannot tell which of the two the "
+                    "slate means",
+                )
+            continue
+        if clause.key in deferred:
+            if not deferred[clause.key].reason:
+                report.fail(
+                    "coverage",
+                    f"{slate.path.name}:{deferred[clause.key].line}",
+                    f"[{clause.key}] is deferred with no reason. Deferring is "
+                    "legal; deferring silently is not — the reason is what "
+                    "makes this a decision a reader can disagree with rather "
+                    "than a clause that fell out",
+                )
+            continue
+        report.fail(
+            "coverage",
+            f"{slate.path.name} [{clause.key}]",
+            f"clause [{clause.key}] ({clause.title}) is carried by no brief's "
+            "Traces: and is not Deferred: with a reason. This is the expensive "
+            "error the coverage rule exists for: a requirement that was "
+            "clarified, written down, and then quietly not built",
+        )
+
+    for deferral in slate.deferrals:
+        if deferral.key and deferral.key not in {c.key for c in clauses}:
+            report.fail(
+                "grounding",
+                f"{slate.path.name}:{deferral.line}",
+                f"Deferred: [{deferral.key}] is not a clause in "
+                f"{slate.header.get('Requirements', 'the requirements document')} "
+                "— a deferral of something nobody required",
+            )
+
+
+def check_grounding(slate: Slate, clauses: list[Clause], report: Report) -> None:
+    """Every `Traces:` key is a clause that exists.
+
+    Catches invention, which is the other direction of the same failure
+    coverage catches: a brief serving no stated requirement. The slate
+    is a decomposition of one document, so work that document does not
+    ask for is either a clause somebody forgot to clarify — in which
+    case it belongs in the requirements document first, and the planner
+    never edits the documents it is checked against — or scope the
+    planner invented.
+    """
+    keys = {c.key for c in clauses}
+    for brief in slate.briefs:
+        traces = brief.traces()
+        if not traces:
+            report.fail(
+                "grounding",
+                f"{slate.path.name}:{brief.line} {brief.label}",
+                "no Traces: line. A brief in a slate serves at least one "
+                "clause of the document being decomposed, or it is scope "
+                "arriving from somewhere nobody can audit",
+            )
+            continue
+        for key in traces:
+            if key not in keys:
+                report.fail(
+                    "grounding",
+                    f"{slate.path.name}:{brief.line} {brief.label}",
+                    f"Traces: [{key}] is not a clause in "
+                    f"{slate.header.get('Requirements', 'the requirements document')}",
+                )
+
+
+def check_obligations(slate: Slate, report: Report) -> None:
+    """What every brief owes, checked for presence only.
+
+    Presence only, and the summary says so on every run. A
+    `Model-because:` that would have supported the opposite tier equally
+    well passes here and fails the resident's read; so does a criterion
+    that exercises code without demonstrating anything. CLAUDE.md's own
+    argument for why `Model-because:` is not a validator applies without
+    modification: a required free-text field with nothing reading it
+    produces ritual compliance rather than reasoning.
+    """
+    for brief in slate.briefs:
+        where = f"{slate.path.name}:{brief.line} {brief.label}"
+
+        if not brief.fields.get("Model"):
+            report.fail(
+                "obligations",
+                where,
+                "no Model:. Routing is not optional, so a missing tier is a "
+                "silent default rather than an absence — and the silent ones "
+                "are exactly the ones worth catching (CLAUDE.md)",
+            )
+        if not brief.fields.get("Model-because"):
+            report.fail(
+                "obligations",
+                where,
+                "no Model-because:, or an empty one. The tier without the "
+                "reason records an answer with no evidence anyone chose it, "
+                "which is the defect task 0051 is the scar from",
+            )
+        if not brief.fields.get("Milestone"):
+            report.fail(
+                "obligations",
+                where,
+                "no Milestone:. Off-milestone share is computed from this "
+                "column in docs/log/task-outcomes.tsv, and a brief that "
+                "reaches docs/tasks/ without it lands unmeasurable",
+            )
+        if not brief.criteria:
+            report.fail(
+                "obligations",
+                where,
+                "no Criterion: line. The verification plan is authored here, "
+                "before the implementation exists: a criterion written after "
+                "the fact is written by someone who has seen what got built, "
+                "and pre-commitment is the measured defence against exactly "
+                "that (docs/research/automated-approval.md)",
+            )
+        for index, criterion in enumerate(brief.criteria, start=1):
+            if not criterion.strip():
+                report.fail(
+                    "obligations",
+                    where,
+                    f"Criterion {index} is empty",
+                )
+
+
+def check_budget(slate: Slate, budget: int | None, report: Report) -> None:
+    """The brief count against the budget declared before the run.
+
+    This bounds the cheap error and nothing else. It cannot tell a
+    generous budget from a right one — `Brief-budget: 99` passes this
+    rule and empties it out — which is why the count and the budget are
+    both printed on every run, where a reader can see the slack, and why
+    right-sizing is item 1 on the slate-review checklist rather than a
+    rule here.
+    """
+    if budget is None:
+        return
+    if len(slate.briefs) > budget:
+        report.fail(
+            "budget",
+            slate.path.name,
+            f"{len(slate.briefs)} briefs against a Brief-budget of {budget}. "
+            "Raising the budget is a decision somebody makes on the record, "
+            "before the run — a budget edited to fit the count it was meant "
+            "to bound is not a budget",
+        )
+
+
+def check_edges(slate: Slate, report: Report) -> None:
+    """Every `Requires:` has a reason, names something real, and the
+    graph is acyclic.
+
+    A false edge is the quiet failure here: it does not break anything,
+    it serialises a sprint that could have run in parallel, and nothing
+    downstream ever reports the cost. So the reason is mandatory — the
+    same non-emptiness rule as `Model-because:` — and edge truthfulness
+    is item 4 on the resident's checklist, because only a reader can
+    tell a real constraint from a guessed one.
+
+    An edge may point outside the slate: a brief legitimately requires
+    work that has already landed. Those targets are resolved against the
+    `Tasks:` directory by `check_numbers`, and only in-slate edges can
+    form a cycle.
+    """
+    in_slate = {b.number for b in slate.briefs}
+    for brief in slate.briefs:
+        requires = brief.requires()
+        if requires and not brief.fields.get("Requires-because"):
+            report.fail(
+                "edges",
+                f"{slate.path.name}:{brief.line} {brief.label}",
+                f"Requires: {', '.join(requires)} with no Requires-because:. "
+                "An edge is a claim that one brief cannot start until another "
+                "finishes, and an unjustified one serialises a sprint for free",
+            )
+        if brief.fields.get("Requires-because") and not requires:
+            report.fail(
+                "edges",
+                f"{slate.path.name}:{brief.line} {brief.label}",
+                "Requires-because: with no Requires:. The reason for an edge "
+                "that is not declared reads as an edge to a reader and as "
+                "nothing to the graph",
+            )
+        for target in requires:
+            if target == brief.number:
+                report.fail(
+                    "edges",
+                    f"{slate.path.name}:{brief.line} {brief.label}",
+                    "requires itself",
+                )
+
+    # Cycles, over in-slate edges only. Reported once per cycle, naming
+    # the ring, because a per-node report on a three-brief cycle prints
+    # three findings for one defect.
+    graph = {
+        b.number: [t for t in b.requires() if t in in_slate and t != b.number]
+        for b in slate.briefs
+    }
+    for cycle in find_cycles(graph):
+        report.fail(
+            "edges",
+            slate.path.name,
+            f"dependency cycle: {' -> '.join(cycle)}. No order satisfies it, so "
+            "no sprint can run this slate",
+        )
+
+
+def find_cycles(graph: dict[str, list[str]]) -> list[list[str]]:
+    """Every distinct cycle in the dependency graph, as node rings.
+
+    Iterative depth-first search with an explicit stack: the recursive
+    form is shorter and would blow the interpreter's stack on a slate
+    large enough, which is a failure mode that looks like the tool
+    crashing rather than like a finding. Each cycle is reported once,
+    keyed by its node set, since one ring is one defect however many of
+    its nodes the search happens to enter from.
+    """
+    cycles: list[list[str]] = []
+    seen_rings: set[frozenset[str]] = set()
+    done: set[str] = set()
+
+    for root in sorted(graph):
+        if root in done:
+            continue
+        stack: list[tuple[str, int]] = [(root, 0)]
+        path: list[str] = [root]
+        on_path = {root}
+        while stack:
+            node, index = stack[-1]
+            edges = graph.get(node, [])
+            if index >= len(edges):
+                stack.pop()
+                done.add(node)
+                on_path.discard(node)
+                path.pop()
+                continue
+            stack[-1] = (node, index + 1)
+            target = edges[index]
+            if target in on_path:
+                ring = path[path.index(target):]
+                if frozenset(ring) not in seen_rings:
+                    seen_rings.add(frozenset(ring))
+                    cycles.append(ring + [target])
+                continue
+            if target in done:
+                continue
+            stack.append((target, 0))
+            path.append(target)
+            on_path.add(target)
+    return cycles
+
+
+def check_numbers(
+    slate: Slate, tasks: pathlib.Path | None, report: Report
+) -> None:
+    """Numbers allocated against the live directory.
+
+    A slate's numbers are proposals, not reservations — nothing here
+    writes to `docs/tasks/`, and the transfer that puts a brief there
+    allocates against the directory again at that moment (CLAUDE.md's
+    tasks convention). What this rule catches is a slate proposing a
+    number that is already taken, which is how two briefs end up
+    claiming one name while every parallel writer computed the same
+    "next" number honestly.
+    """
+    if tasks is None:
+        return
+    if not tasks.is_dir():
+        report.fail(
+            "numbers",
+            slate.path.name,
+            f"Tasks: {tasks} is not a directory, so no number can be checked "
+            "against anything. A slate whose numbers are checked against "
+            "nothing is a slate whose numbers are guesses",
+        )
+        return
+
+    taken: dict[str, str] = {}
+    for path in sorted(tasks.rglob("*.md")):
+        match = NUMBER_RE.match(path.name)
+        if match:
+            taken.setdefault(match.group(1), str(path.relative_to(tasks)))
+
+    for brief in slate.briefs:
+        if brief.number in taken:
+            report.fail(
+                "numbers",
+                f"{slate.path.name}:{brief.line} {brief.label}",
+                f"number {brief.number} is already {taken[brief.number]} under "
+                f"{tasks}. Allocate against the live directory, never from a "
+                "listing that has gone stale",
+            )
+
+    in_slate = {b.number for b in slate.briefs}
+    for brief in slate.briefs:
+        for target in brief.requires():
+            if target in in_slate or target in taken:
+                continue
+            report.fail(
+                "edges",
+                f"{slate.path.name}:{brief.line} {brief.label}",
+                f"Requires: {target} names neither a brief in this slate nor "
+                f"an existing one under {tasks} — an edge to nothing",
+            )
+
+
+# ---------------------------------------------------------------------------
+# The derived index, and the standing limit
+# ---------------------------------------------------------------------------
+
+
+def index_notes(slate: Slate, clauses: list[Clause], budget: int | None) -> list[str]:
+    """The clause-to-brief map, derived and printed rather than authored.
+
+    The slate carries `Traces:` on each brief and `Deferred:` on the
+    clauses no brief carries. The map between them is computable from
+    those two, so asking a planner to write it as well would put two
+    copies of one fact in one file, and the copy nobody computes is the
+    one that goes stale without saying so.
+    """
+    traced: dict[str, list[str]] = {}
+    for brief in slate.briefs:
+        for key in brief.traces():
+            traced.setdefault(key, []).append(brief.number)
+    deferred = {d.key: d.reason for d in slate.deferrals}
+
+    width = max((len(c.key) for c in clauses), default=0)
+    notes = [f"index — {slate.path.name} against {slate.header.get('Requirements', '?')}"]
+    for clause in clauses:
+        if clause.key in traced:
+            carried = ", ".join(traced[clause.key])
+        elif clause.key in deferred:
+            carried = f"deferred — {deferred[clause.key] or '(no reason)'}"
+        else:
+            carried = "NOT CARRIED"
+        # Printed, never checked: an open ambiguity is not a defect in
+        # the slate — the clarifying-questions phase carries it forward
+        # on purpose — but a brief implementing a clause that still has
+        # one must not quietly settle it, and the reader of a slate
+        # review needs to see which clauses those are.
+        open_mark = (
+            f"  ({clause.open_ambiguities} open "
+            f"{'ambiguity' if clause.open_ambiguities == 1 else 'ambiguities'})"
+            if clause.open_ambiguities
+            else ""
+        )
+        notes.append(f"  {clause.key.ljust(width)}  {carried}{open_mark}")
+
+    count = len(slate.briefs)
+    if budget is not None:
+        notes.append(
+            f"{count} brief(s) against a budget of {budget}"
+            + (f", {budget - count} unspent" if budget > count else "")
+        )
+    else:
+        notes.append(f"{count} brief(s)")
+    return notes
+
+
+LIMIT = """
+What passed here is the form, not the decomposition. Every rule above is
+a presence, a name that resolves, or a graph property; none of them can
+tell whether a Criterion: would demonstrate anything, whether a
+Model-because: could have argued the opposite tier just as well, whether
+a Requires: is a real constraint, or whether a brief is the right size.
+Those are the six items on the slate-review checklist in
+docs/planning.md, and the resident runs them. A green exit here says the
+discipline was followed; it is a receipt, never a verdict (Proposal 06).
+""".strip()
+
+
+def emit(report: Report) -> int:
+    for note in report.notes:
+        print(note)
+    if report.findings:
+        print()
+        for finding in report.findings:
+            print(finding.render())
+    print()
+    print(f"{len(report.findings)} blocking.")
+    if not report.findings:
+        print()
+        print(LIMIT)
+        return 0
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.slate)
+    if not path.is_file():
+        raise SystemExit(f"{path}: no such file")
+
+    slate, report = parse_slate(path)
+    requirements, budget = check_header(slate, report)
+
+    # A header travels with the file, so `Tasks:` resolves against the
+    # slate's own directory — that is what lets a slate be moved or
+    # copied without its rules quietly changing meaning. A flag is typed
+    # at a shell, so `--tasks` resolves against the working directory,
+    # which is the only reading a shell's tab-completion agrees with.
+    tasks: pathlib.Path | None = None
+    if args.tasks:
+        tasks = pathlib.Path(args.tasks).resolve()
+    elif slate.header.get("Tasks", "").strip():
+        tasks = (path.parent / slate.header["Tasks"].strip()).resolve()
+    else:
+        report.fail(
+            "header",
+            slate.path.name,
+            "no Tasks: header and no --tasks flag; the numbers rule and the "
+            "edges rule's check for a target outside the slate both need a "
+            "directory to resolve against, and without one they are skipped "
+            "rather than run — a colliding or dangling number would pass",
+        )
+
+    if requirements is None:
+        return emit(report)
+
+    clauses = read_clauses(requirements, report)
+
+    check_coverage(slate, clauses, report)
+    check_grounding(slate, clauses, report)
+    check_obligations(slate, report)
+    check_budget(slate, budget, report)
+    check_edges(slate, report)
+    check_numbers(slate, tasks, report)
+
+    for note in index_notes(slate, clauses, budget):
+        report.note(note)
+    return emit(report)
+
+
+SCAFFOLD = """# Slate — {title}
+
+Requirements: {requirements}
+Brief-budget: {budget}
+Tasks: {tasks}
+
+What this slate is, and why it is decomposed the way it is. The
+slate-review checklist in docs/planning.md is what this prose has to
+survive.
+
+## The briefs
+
+<!-- Every clause of the requirements document is listed below. Each one
+     must end up in some brief's Traces:, or in a Deferred: line under
+     ## Coverage with a real reason. Neither is pre-filled here: a
+     scaffold that pre-filled deferrals would let a clause nobody
+     considered pass as a clause somebody declined.
+
+{inventory}
+
+     The next free number under {tasks} is {next_number}.
+     Numbers here are proposals; the transfer into docs/tasks/ allocates
+     against the live directory again at that moment. -->
+
+### <what this brief makes true> [{next_number}]
+
+Model: <tier>
+Model-because: <what about this task makes that tier right, phrased
+    against the tier you did not choose. A reason that would have
+    supported the opposite choice equally well is not a reason.>
+Milestone: <clause key from docs/state/MILESTONE.md>
+Traces: <clause keys from the requirements document>
+Criterion: <what demonstrates the traced requirement working in its real
+    invocation path — not that the code runs, that the thing the clause
+    asks for is reachable.>
+
+The brief's body: the spec and reasoning an implementing agent reads
+cold, including what was considered and rejected.
+
+## Coverage
+
+<!-- Deferred: <clause-key> — <why deferring it is acceptable> -->
+"""
+
+
+def cmd_scaffold(args: argparse.Namespace) -> int:
+    """Write a slate skeleton from a requirements document.
+
+    This is the mechanical half of producing a slate, and the whole of
+    what a tool can honestly do: it enumerates the clauses so that no
+    clause can be missed by never having been looked at, and it computes
+    the next free number so parallel writers do not each invent one. The
+    decomposition itself — how many briefs, where the seams are, what
+    each one has to demonstrate — is the seat's, and nothing here
+    attempts it.
+
+    The output does not pass `plan check`, deliberately: it traces
+    nothing and covers nothing. A scaffold whose own output passed would
+    be a slate that looks complete while deciding nothing.
+    """
+    requirements = pathlib.Path(args.requirements)
+    if not requirements.is_file():
+        raise SystemExit(f"{requirements}: no such file")
+
+    report = Report()
+    clauses = read_clauses(requirements, report)
+    if report.findings:
+        return emit(report)
+
+    tasks = pathlib.Path(args.tasks)
+    if not tasks.is_dir():
+        raise SystemExit(f"{tasks}: not a directory — nothing to allocate against")
+    taken = {
+        int(m.group(1))
+        for m in (NUMBER_RE.match(p.name) for p in tasks.rglob("*.md"))
+        if m
+    }
+    next_number = f"{(max(taken) + 1) if taken else 1:04d}"
+
+    out = pathlib.Path(args.out)
+    if out.exists() and not args.force:
+        raise SystemExit(f"{out}: exists (pass --force to overwrite)")
+
+    inventory = "\n".join(
+        f"       clause: {c.key}"
+        + (f" ({c.level})" if c.level else "")
+        + (f" — {c.open_ambiguities} open ambiguity" if c.open_ambiguities else "")
+        for c in clauses
+    )
+    text = SCAFFOLD.format(
+        title=args.title or requirements.stem,
+        requirements=os.path.relpath(requirements.resolve(), out.resolve().parent),
+        budget=args.budget,
+        tasks=os.path.relpath(tasks.resolve(), out.resolve().parent),
+        inventory=inventory,
+        next_number=next_number,
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    print(f"scaffolded {out} from {requirements}")
+    print(f"  {len(clauses)} clause(s) to place, budget {args.budget}, "
+          f"next free number {next_number}")
+    print("  it does not pass `plan check` yet, and should not: it traces "
+          "nothing.")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="plan",
+        description="Check a planner seat's slate (docs/planning.md).",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    check = sub.add_parser("check", help="run the rules over a slate")
+    check.add_argument("slate")
+    check.add_argument(
+        "--tasks",
+        help="where task numbers are allocated against; defaults to the "
+        "slate's Tasks: header",
+    )
+    check.set_defaults(func=cmd_check)
+
+    scaffold = sub.add_parser(
+        "scaffold", help="write a slate skeleton from a requirements document"
+    )
+    scaffold.add_argument("requirements")
+    scaffold.add_argument("--out", required=True)
+    scaffold.add_argument(
+        "--budget",
+        required=True,
+        type=int,
+        help="the brief budget, declared before the run: a budget chosen "
+        "after seeing the count is not a budget",
+    )
+    scaffold.add_argument(
+        "--tasks",
+        default="docs/tasks",
+        help="where task numbers are allocated against (default: docs/tasks)",
+    )
+    scaffold.add_argument("--title", help="the slate's title")
+    scaffold.add_argument(
+        "--force", action="store_true", help="overwrite an existing --out"
+    )
+    scaffold.set_defaults(func=cmd_scaffold)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -83,8 +83,23 @@ it explicitly.
   either recognises or experiences as an interrogation. "Intake" is
   deliberately no longer the name: it was already the agent layer's
   word for the seat that files a `request` record.
-- Decomposition of a milestone into task briefs: not designed.
-  [inferred] the largest unspecced piece of [m2-done].
+- Decomposition into task briefs: the artifact and the discipline are
+  built (task 0079). The seat is named **planner** in
+  `docs/architecture.md`, the mechanism is written out in
+  `docs/planning.md`, and `tools/plan/plan` checks a decomposition
+  against it. What it consumes is a requirements document — the
+  clarifying-questions phase's artifact — rather than this file
+  directly, which is why the wording here changed: a milestone reaches
+  a slate through a requirements document, and naming this file as the
+  input would skip the phase that turns a complaint into clauses. What
+  it produces is a **slate**, and the resident's approval gates the
+  slate as one artifact rather than each brief singly. One worked
+  example ships (`tools/plan/oracle/slate.md`, over the clarify
+  probe's requirements document). It works over plain files only: not
+  wired to the modal, nothing watches for a slate, and no requirements
+  document has been decomposed for real yet. The falsifier is unrun —
+  one real slate review against the checklist, whose six judgment
+  items no checker can carry.
 - Question routing to the resident: product plumbing exists (the
   answer chord, task 0022); pipeline wiring not designed.
 - emcee dispatch: operating (sprints through task 0060 and PRs
