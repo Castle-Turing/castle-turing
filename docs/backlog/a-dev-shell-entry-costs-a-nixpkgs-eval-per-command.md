@@ -126,13 +126,24 @@ confirming the delivery gap.
   this entry documents), and harness-native direnv integration (not
   verifiable or deliverable from this repo). `direnv exec` remains
   the documented explicit form for non-bash contexts.
-- **Detector: `castle-eval-storm-check`, in `modules/dev`.** A
-  systemd timer (every 2 minutes) runs a oneshot that counts
-  nix-daemon "accepted connection" lines in the last window via
-  `journalctl -u nix-daemon --since`; over threshold, it notifies
-  through the existing `castle.agent.notify.command` channel
-  (modules/agent; defaults to `notify-send`) and exits nonzero so the
-  failed unit is visible to anything watching units. Spelling-agnostic
+- **Detector: `castle-eval-storm-check`, a user-manager timer in
+  `modules/dev`.** Cross-model review on this spec's PR (#150) caught
+  the first draft routing notification from a *system* oneshot through
+  `castle.agent.notify.command` — that option defaults to `null`, its
+  `notify-send` fallback belongs to the user-session notify-waiter, and
+  a system service has no session D-Bus anyway, so the threshold would
+  trip and notify no one. The detector therefore runs in the user
+  manager (`systemd.user.timers`/`.services`, every 2 minutes — the
+  same home as castle's own timers), where the session notification
+  path exists; over threshold it notifies through that path and exits
+  nonzero so the failed unit is visible to anything watching units. It
+  counts nix-daemon "accepted connection" lines in the last window via
+  `journalctl -u nix-daemon --since`. One constraint to verify, not
+  assume: a user unit reads the system journal only if the resident's
+  user is journal-privileged (e.g. the `systemd-journal` group — check
+  the pin's journald ACLs); the VM test asserts actual notification
+  delivery, not merely unit success, so a missing grant fails loudly,
+  and granting read access is in scope if absent. Spelling-agnostic
   by construction: it counts daemon connections, not subcommands.
   Public options `castle.evalStorm.{enable,threshold,windowMinutes}`,
   defaults `true`/`6`/`10` — calibration values: the 2026-10-02 storm
@@ -157,8 +168,9 @@ confirming the delivery gap.
    layer declare their own prefixes; add one comment line saying
    exactly that and why (Principle 01).
 2. `modules/dev/default.nix` (or a sibling `eval-storm.nix` imported
-   by it, if the file is getting long): the
-   `castle.evalStorm.*` options, the timer, and the oneshot script.
+   by it, if the file is getting long): the `castle.evalStorm.*`
+   options, the user-manager timer, the oneshot script, and the
+   journal-read grant if the pin does not already provide it.
 3. `test/direnv-delivery/test.nix`: VM test, oomd-liveness pattern
    (inject the real generated artifacts, do not re-type them). One
    node, a sample flake project with a devShell exporting a marker

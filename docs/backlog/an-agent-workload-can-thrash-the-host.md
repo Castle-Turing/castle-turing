@@ -87,7 +87,7 @@ oomd's 90% line.
 
 **Mechanism (public, Principle 01).** Task 0084 wraps app launches in
 per-class transient scopes via `systemd-run --user --scope`. This task
-extends each launch class's configuration with two optional resource
+extends each launch class's configuration with three optional resource
 properties:
 
 - `memoryHigh` — rendered as `--property=MemoryHigh=<value>` on the
@@ -101,10 +101,17 @@ properties:
   must say why in present tense: MemoryHigh relieves pressure by
   pushing pages to swap, and on a host whose swap is zram, swap *is*
   RAM — reclaim converts a runaway's footprint at roughly the
-  compression ratio rather than evicting it. A host that wants an
-  aggregate bound sets both.
+  compression ratio rather than evicting it.
+- `memoryMax` — rendered as `--property=MemoryMax=<value>`: the hard
+  cap, above which the kernel OOM-kills within the scope. Cross-model
+  review on this spec's PR (#150) caught the first draft calling
+  `memoryHigh` + `memorySwapMax` an "aggregate bound" — they are not
+  one: MemoryHigh is a throttle that usage may exceed indefinitely,
+  and MemorySwapMax caps swap only. The module comment states the
+  throttle-versus-cap distinction so nobody reads `memoryHigh` as a
+  ceiling; a host that wants a hard ceiling sets `memoryMax`.
 
-Both options are `nullOr str` (systemd size strings — "6G", "512M"),
+All three options are `nullOr str` (systemd size strings — "6G", "512M"),
 default `null`, meaning: no property passed, exactly today's behavior.
 The option surface follows wherever 0084 lands its per-class scope
 config (`modules/home`, alongside the sway config, per that brief's
@@ -149,16 +156,17 @@ next runaway.
 
 ## Plan
 
-1. Extend 0084's per-class scope options with `memoryHigh` and
-   `memorySwapMax` (`nullOr str`, default `null`); thread them into the
-   wrapper's `systemd-run` invocation as `--property=` arguments, only
-   when set.
+1. Extend 0084's per-class scope options with `memoryHigh`,
+   `memorySwapMax`, and `memoryMax` (`nullOr str`, default `null`);
+   thread them into the wrapper's `systemd-run` invocation as
+   `--property=` arguments, only when set.
 2. Write the module comment carrying the zram caveat and the
    delegation requirement, present tense, no incident narrative.
-3. Extend 0084's VM test: configure a class with both bounds, launch a
-   wrapped scope, read `memory.high` and `memory.swap.max` from the
-   scope's cgroup directory, assert the configured values; assert a
-   class left at `null` produces a scope with `max` in both files.
+3. Extend 0084's VM test: configure a class with all three bounds,
+   launch a wrapped scope, read `memory.high`, `memory.swap.max`, and
+   `memory.max` from the scope's cgroup directory, assert the
+   configured values; assert a class left at `null` produces a scope
+   with `max` in all three files.
 4. If the VM shows the memory controller is not delegated to the user
    manager, add the delegation setting to the same module and note it
    in the brief's PR (design shift lands in the brief, per convention).
