@@ -28,6 +28,16 @@ app launches; GNOME and KDE do, via per-app `app-*.scope` units under
 the user manager) that was never chosen, recorded, or tested against
 this failure mode.
 
+On 2026-10-02 the blast radius stopped being a prediction: oomd's first
+live kill on this host took `session-N.scope` whole — 634 processes,
+the compositor, two running Claude sessions and their in-flight work.
+The storm was driven by one session's per-command flake evaluation loop
+(`a-dev-shell-entry-costs-a-nixpkgs-eval-per-command.md`); the second
+session was a casualty, contributing only ordinary load. Note what the
+trigger was not: a browser. It was an agent in a terminal, which bears
+directly on the wrapping-reach question below — launcher-only wrapping
+would not have contained it.
+
 **How it would have been caught sooner.** The memory-exhaustion drill
 already proposed in `the-kernel-oom-killer-has-no-swap-headroom.md` is
 the honest detector: it measures which cgroup actually dies when a
