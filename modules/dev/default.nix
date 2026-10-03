@@ -23,7 +23,6 @@
 # this answers. The eval-storm detector it also specifies lives in
 # ./eval-storm.nix, imported below.
 {
-  config,
   lib,
   pkgs,
   ...
@@ -65,12 +64,25 @@ let
   # before direnv forks the nested one — so the nested bash inherits it
   # already set and skips straight through. Confirmed empirically
   # (hook invocation log across the recursion): exactly two invocations
-  # per cold-cache load — this process, then the one nested nested
-  # bash's own BASH_ENV sourcing — not an unbounded chain.
+  # per cold-cache load — this process, then the one nested bash's own
+  # BASH_ENV sourcing — not an unbounded chain.
   #
   # CASTLE_DIRENV_DISABLE is the opt-out docs/tasks/0083 asks for: any
   # script that must see the ambient environment exactly as it is
   # (a deploy script, a git hook) sets it and this hook is a no-op.
+  #
+  # Known limitation, inherent to BASH_ENV rather than fixable here:
+  # it is read once, at a shell's own startup, before any of that
+  # shell's own commands run. `bash -c 'cd other-project && nix
+  # develop --command X'` sees the environment for whatever directory
+  # the shell *started* in, never `other-project` — the hook has
+  # already run and returned by the time `cd` executes. This is why
+  # every probe in test/direnv-delivery/test.nix is already sitting in
+  # its target directory before spawning the bash that reads the
+  # result (see that file's own probeScript), and it is the same
+  # reason direnv's *interactive* hook exists as a PROMPT_COMMAND
+  # re-run on every prompt instead of a one-shot: there is no
+  # non-interactive equivalent of "re-run on every cd" to borrow here.
   direnvBashEnv = pkgs.writeShellScript "castle-direnv-bash-env" ''
     if [ -n "$CASTLE_DIRENV_DISABLE" ] || [ -n "$CASTLE_DIRENV_BASH_ENV_GUARD" ]; then
       return 0 2>/dev/null || exit 0
