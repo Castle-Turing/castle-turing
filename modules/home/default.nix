@@ -14,7 +14,12 @@
 # defaulted or invented here; a private layer that leaves them unset
 # fails this module's assertions instead of silently committing as
 # nobody or as a name we made up.
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   cfg = config.castle.person;
@@ -28,18 +33,19 @@ let
   # from the merged config (not a thrown value), `or` catches it safely
   # without forcing anything. That is what keeps this module importable
   # on a host that skips modules/desktop entirely.
-  displayCfg = config.castle.display or {
-    scale = null;
-    cursorTheme = null;
-    cursorSize = null;
-    terminalFont = null;
-    terminalFontSize = null;
-    uiFont = null;
-    uiFontSize = null;
-    consoleFont = null;
-    idleBlankSeconds = null;
-    wallpaper = null;
-  };
+  displayCfg =
+    config.castle.display or {
+      scale = null;
+      cursorTheme = null;
+      cursorSize = null;
+      terminalFont = null;
+      terminalFontSize = null;
+      uiFont = null;
+      uiFontSize = null;
+      consoleFont = null;
+      idleBlankSeconds = null;
+      wallpaper = null;
+    };
 
   # The UI font is consumed three times below (GTK, Sway chrome, the
   # bar) and every consumer wants both halves, so both being non-null is
@@ -66,15 +72,17 @@ let
   # modules/desktop; castle.hardware lives in modules/base (see its
   # comment there for why), so its fallback only fires on a host
   # assembled without modules/base at all.
-  inputCfg = config.castle.input or {
-    touchpad = {
-      naturalScroll = null;
-      tapToClick = null;
+  inputCfg =
+    config.castle.input or {
+      touchpad = {
+        naturalScroll = null;
+        tapToClick = null;
+      };
     };
-  };
-  hardwareCfg = config.castle.hardware or {
-    hasEthernet = true;
-  };
+  hardwareCfg =
+    config.castle.hardware or {
+      hasEthernet = true;
+    };
 
   # Sway's input options take the words enabled/disabled, but a bool is
   # what these settings *are* — the castle.input options take a bool
@@ -255,75 +263,133 @@ in
   # framework sets no numbers anywhere in this repo (Principle 01): a
   # host that wants a bound supplies its own value from the private
   # layer — see docs/private-layer.md.
-  options.castle.launch = lib.mapAttrs (_class: what: {
-    extraProperties = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      example = [ "TasksMax=256" ];
-      description = ''
-        Extra systemd unit properties for the transient scope holding
-        ${what}, each rendered as one `--property=` flag to
-        `systemd-run --user --scope`. See systemd.resource-control(5)
-        for the full vocabulary. The three properties a resident is
-        most likely to want — MemoryHigh=, MemorySwapMax=, MemoryMax=
-        — have their own typed options below; use this list for
-        anything else. Framework default is the empty list — a scope
-        with no bounds, which is still its own oomd-eligible leaf.
-      '';
-    };
+  options.castle.launch =
+    (lib.mapAttrs (_class: what: {
+      extraProperties = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "TasksMax=256" ];
+        description = ''
+          Extra systemd unit properties for the transient scope holding
+          ${what}, each rendered as one `--property=` flag to
+          `systemd-run --user --scope`. See systemd.resource-control(5)
+          for the full vocabulary. The three properties a resident is
+          most likely to want — MemoryHigh=, MemorySwapMax=, MemoryMax=
+          — have their own typed options below; use this list for
+          anything else. Framework default is the empty list — a scope
+          with no bounds, which is still its own oomd-eligible leaf.
+        '';
+      };
 
-    # docs/tasks/0085. All three are `nullOr str` (a systemd size
-    # string: "6G", "512M") and default to `null`, meaning: no
-    # property passed, exactly the behavior before this task. Values
-    # are private-layer configuration (Principle 01) — the repo ships
-    # no numbers, because what a given scope deserves depends on the
-    # host's RAM and workload, not on the framework.
-    memoryHigh = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "6G";
-      description = ''
-        `MemoryHigh=` for the transient scope holding ${what} — a
-        throttle, not a ceiling (systemd.resource-control(5)): usage
-        above this value is slowed and reclaimed aggressively, but may
-        still exceed it if unavoidable. Rendered as
-        `--property=MemoryHigh=<value>` when set. On a host whose swap
-        is zram, pair this with memorySwapMax — reclaim here pushes
-        pages into compressed RAM, not off it. For a hard cap, see
-        memoryMax. Default `null`: no property passed.
-      '';
-    };
+      # docs/tasks/0085. All three are `nullOr str` (a systemd size
+      # string: "6G", "512M") and default to `null`, meaning: no
+      # property passed, exactly the behavior before this task. Values
+      # are private-layer configuration (Principle 01) — the repo ships
+      # no numbers, because what a given scope deserves depends on the
+      # host's RAM and workload, not on the framework.
+      memoryHigh = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "6G";
+        description = ''
+          `MemoryHigh=` for the transient scope holding ${what} — a
+          throttle, not a ceiling (systemd.resource-control(5)): usage
+          above this value is slowed and reclaimed aggressively, but may
+          still exceed it if unavoidable. Rendered as
+          `--property=MemoryHigh=<value>` when set. On a host whose swap
+          is zram, pair this with memorySwapMax — reclaim here pushes
+          pages into compressed RAM, not off it. For a hard cap, see
+          memoryMax. Default `null`: no property passed.
+        '';
+      };
 
-    memorySwapMax = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "2G";
-      description = ''
-        `MemorySwapMax=` for the transient scope holding ${what},
-        capping how much swap it may use. Rendered as
-        `--property=MemorySwapMax=<value>` when set. Matters most
-        alongside memoryHigh on a zram-only host: MemoryHigh relieves
-        pressure by pushing pages to swap, and when swap is zram, swap
-        *is* RAM, so reclaim converts the scope's footprint at roughly
-        the compression ratio rather than evicting it anywhere — this
-        option bounds that conversion. Default `null`: no property
-        passed.
-      '';
-    };
+      memorySwapMax = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "2G";
+        description = ''
+          `MemorySwapMax=` for the transient scope holding ${what},
+          capping how much swap it may use. Rendered as
+          `--property=MemorySwapMax=<value>` when set. Matters most
+          alongside memoryHigh on a zram-only host: MemoryHigh relieves
+          pressure by pushing pages to swap, and when swap is zram, swap
+          *is* RAM, so reclaim converts the scope's footprint at roughly
+          the compression ratio rather than evicting it anywhere — this
+          option bounds that conversion. Default `null`: no property
+          passed.
+        '';
+      };
 
-    memoryMax = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "8G";
-      description = ''
-        `MemoryMax=` for the transient scope holding ${what} — the
-        hard cap (systemd.resource-control(5)): unlike memoryHigh,
-        usage cannot exceed this, and the kernel OOM-kills within the
-        scope once it does. Rendered as `--property=MemoryMax=<value>`
-        when set. Default `null`: no property passed.
-      '';
+      memoryMax = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "8G";
+        description = ''
+          `MemoryMax=` for the transient scope holding ${what} — the
+          hard cap (systemd.resource-control(5)): unlike memoryHigh,
+          usage cannot exceed this, and the kernel OOM-kills within the
+          scope once it does. Rendered as `--property=MemoryMax=<value>`
+          when set. Default `null`: no property passed.
+        '';
+      };
+    }) launchClasses)
+    # `wrapper` and `requireMenuScoping` (docs/tasks/0087) are merged
+    # in with `//`, not folded into the mapAttrs above, because they
+    # are not a launch class: mapAttrs would otherwise hand them the
+    # three per-class bounds options (memoryHigh, memorySwapMax,
+    # extraProperties, ...) that make no sense for either — there is
+    # no transient scope called "wrapper" or "requireMenuScoping" for
+    # a resident to bound.
+    // {
+      # Read-only: this is the module's own wrapper derivation, not
+      # something a private layer supplies or points elsewhere. A
+      # resident's private layer reads this option; nothing ever
+      # writes it. Exposing the path (rather than, say, adding the
+      # wrapper's package to home.packages) is docs/tasks/0087's own
+      # decision — see that brief's "Exposure" section for why a PATH
+      # route was considered and rejected.
+      wrapper = lib.mkOption {
+        type = lib.types.path;
+        readOnly = true;
+        default = castleLaunch;
+        defaultText = lib.literalMD "the module's own internal `castle-launch` wrapper derivation";
+        description = ''
+          The store path of `castle-launch`, the dispatcher this
+          module's own terminal/menu/modal launches already route
+          through so each lands in its own transient systemd scope
+          (docs/tasks/0084) rather than the compositor's cgroup. A
+          resident overriding one of those launches from their own
+          private layer — most commonly `menu`, see
+          docs/private-layer.md — interpolates this option into the
+          end of their own pipeline so the override keeps the same
+          per-launch scoping and bounds: usage is
+          `''${config.castle.launch.wrapper} <class> -- <command>
+          [args...]`, where `<class>` is one of
+          ${lib.concatStringsSep ", " (lib.attrNames launchClasses)}.
+        '';
+      };
+
+      requireMenuScoping = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether this module asserts, at eval time, that the merged
+          sway `menu` command routes through `castle.launch.wrapper`.
+          The assertion exists to catch a resident override that
+          first collides with this module's own `menu` definition and
+          then, after resolving that collision with `lib.mkForce`,
+          silently drops the per-launch scoping and the
+          `castle.launch.menu` bounds along with it
+          (docs/tasks/0087) — see docs/private-layer.md for the
+          routed-override snippet the assertion's message points at.
+          Set this to `false` only if menu picks genuinely should
+          launch unscoped, in the session cgroup, with none of
+          `castle.launch.menu`'s bounds applied: an assertion cannot
+          be overridden with `lib.mkForce`, so this option is the
+          explicit, loud way to opt out instead.
+        '';
+      };
     };
-  }) launchClasses;
 
   config = {
     assertions = [
@@ -341,6 +407,69 @@ in
         assertion = cfg.gitUserEmail != "";
         message = ''
           castle.person.gitUserEmail is unset — see docs/private-layer.md.
+        '';
+      }
+      {
+        # docs/tasks/0087. Gated on `swayEnabled` first, same condition
+        # the sway section's own `lib.mkIf` below uses and for the same
+        # reason: on a headless host that imports modules/home for git
+        # identity alone, `wayland.windowManager.sway` never merges
+        # into home-manager's config at all, so the attribute path the
+        # predicate reads would throw rather than evaluate to false.
+        # `||` is lazy in Nix, so with swayEnabled false the predicate
+        # itself is never forced and the throw never happens. Gated
+        # second on `requireMenuScoping` — the opt-out — for a resident
+        # who has deliberately decided menu picks should run unscoped.
+        #
+        # The predicate reads the MERGED home-manager value, not this
+        # module's own `menu` definition: that is the whole point. This
+        # module's definition is only ever one contributor to that
+        # value once `menu` is `lib.mkDefault` (see the comment above
+        # `terminal` below) — a resident's own override, once it wins
+        # by priority, is what `config...sway.config.menu` resolves to,
+        # and that is exactly what a collision-free override could
+        # silently drop the wrapper from.
+        assertion =
+          !swayEnabled
+          || !launchCfg.requireMenuScoping
+          ||
+            lib.hasInfix
+              # `lib.hasInfix` builds its regex pattern from this needle
+              # (nixpkgs lib/strings.nix), and `builtins.match` refuses a
+              # pattern argument that carries string context — which
+              # `castleLaunch`'s store path always does, being a
+              # derivation. `unsafeDiscardStringContext` here only drops
+              # that context from the literal text used for a substring
+              # match; it creates no new build dependency and removes
+              # none either, since the module already depends on
+              # `castleLaunch` directly (`terminal`, `menu`,
+              # `castle.launch.wrapper`'s default). Confirmed by
+              # reproducing the throw without this (`nix eval`,
+              # docs/tasks/0087's PR) — the brief's predicate as written
+              # throws unconditionally, on both a routed and an unrouted
+              # `menu`, which is not the silent-miss risk the brief
+              # flagged but a harder failure that would have broken this
+              # module's `assertions` for every sway-enabled host.
+              (builtins.unsafeDiscardStringContext "${castleLaunch}")
+              config.home-manager.users.${adminCfg.username}.wayland.windowManager.sway.config.menu;
+        message = ''
+          The merged sway `menu` command does not route through castle-launch
+          (${castleLaunch}). Menu picks would launch
+          unscoped in the session cgroup instead of their own
+          transient scope (docs/tasks/0084), and
+          castle.launch.menu's memory bounds (docs/tasks/0085) would
+          silently not apply.
+
+          If you overrode `menu` from your own private layer, end its
+          pipeline in `swaymsg exec -- ''${config.castle.launch.wrapper}
+          menu --` instead of calling your command directly — see
+          docs/private-layer.md's "Per-application memory bounds"
+          section for a worked example.
+
+          If menu picks should genuinely run unscoped, say so
+          explicitly with `castle.launch.requireMenuScoping = false`:
+          an assertion cannot be forced away with `lib.mkForce`, so
+          this option is the loud opt-out instead.
         '';
       }
     ];
@@ -456,14 +585,46 @@ in
           # followed here, and CI's sway-config-check prints the
           # generated config so the difference is at least visible.
           #
-          # Normal priority, not `lib.mkDefault`: a private layer that
-          # sets its own terminal or launcher should get the module
-          # system's conflicting-definition error, which is the prompt
-          # to route the replacement through `castle-launch` too. The
-          # alternative — a silent mkDefault override — hands back the
-          # single-leaf cgroup with no diagnostic, which is the failure
-          # this whole task is about. `lib.mkForce` is still the escape
-          # hatch for a resident who means it.
+          # `terminal` stays at normal priority; `menu` below is
+          # `lib.mkDefault` instead (docs/tasks/0087). They differ now
+          # because each is guarded differently against the same
+          # mistake — a resident override that collides with this
+          # module's own definition, gets resolved with `lib.mkForce`,
+          # and silently drops the wrapper along with it:
+          #
+          # `terminal`: nothing yet asserts that the merged `terminal`
+          # command still routes through `castle-launch`, so the
+          # module system's conflicting-definition error remains the
+          # ONLY guard a resident override gets. Demoting this one to
+          # `lib.mkDefault` would remove that guard outright and hand
+          # back the single-leaf cgroup with no diagnostic at all —
+          # the failure docs/tasks/0084 exists to prevent. `lib.mkForce`
+          # is still the escape hatch for a resident who means it; they
+          # just get no help staying scoped once they reach for it.
+          #
+          # `menu`: docs/tasks/0087 added an eval-time assertion (this
+          # module's `assertions`, above) that reads the MERGED `menu`
+          # value — the resident's override, not this definition — and
+          # fails the build if it does not route through
+          # `castle.launch.wrapper`. That assertion is what makes
+          # `lib.mkDefault` safe here: a resident who overrides `menu`
+          # now gets a priority merge instead of a collision (no
+          # diagnostic needed, because there is nothing to diagnose),
+          # and one whose override is unrouted gets the assertion's
+          # build failure in its place — one failure mode instead of
+          # two. `castle.launch.requireMenuScoping = false` is the
+          # loud, explicit way to opt out of that assertion; plain
+          # `lib.mkForce` no longer needs to be, and no longer silently
+          # succeeds at it the way it did before this assertion
+          # existed.
+          #
+          # If `terminal` later gets its own assertion, it can be
+          # demoted the same way — but not before, for the same reason
+          # `defaultWorkspace`'s comment above gives for not
+          # harmonising a different pair of options: the two priority
+          # choices here answer to different guards, not to a style
+          # preference, and "simplifying" them to match would remove
+          # the guard that makes one of them safe.
           terminal = "${castleLaunch} terminal -- ${pkgs.foot}/bin/foot";
 
           # The launcher is a shell pipeline, not a single program:
@@ -482,7 +643,14 @@ in
           # second reaches the wrapper. Verified against the real
           # swaymsg over a stub IPC socket, not assumed, and asserted
           # end to end by test/app-scopes.
-          menu = "${pkgs.dmenu}/bin/dmenu_path | ${pkgs.dmenu}/bin/dmenu | ${pkgs.findutils}/bin/xargs swaymsg exec -- ${castleLaunch} menu --";
+          #
+          # `lib.mkDefault`, unlike `terminal` above — see the priority
+          # comment above `terminal` for why the two now differ. A
+          # resident override of `menu` merges in by priority instead
+          # of colliding, and the eval-time assertion in this module's
+          # `assertions` (above) is what catches an override that
+          # drops the wrapper once it does.
+          menu = lib.mkDefault "${pkgs.dmenu}/bin/dmenu_path | ${pkgs.dmenu}/bin/dmenu | ${pkgs.findutils}/bin/xargs swaymsg exec -- ${castleLaunch} menu --";
 
           # Mod4+Shift+Return opens the ambient intake: a floating foot
           # terminal running castle-modal in compose mode
@@ -580,7 +748,8 @@ in
             # least important of the three: the modal is a short-lived
             # text prompt, while the terminal above is where the
             # workloads that actually exhaust memory run.
-            "Mod4+Shift+Return" = "exec ${castleLaunch} modal -- foot --app-id=castle-modal -e castle-modal --mode inbox";
+            "Mod4+Shift+Return" =
+              "exec ${castleLaunch} modal -- foot --app-id=castle-modal -e castle-modal --mode inbox";
 
             # There is deliberately NO second Castle chord
             # (docs/tasks/0034-inbox-modal.md). Mod4+Shift+a used to
@@ -753,11 +922,11 @@ in
         # family with no size, would produce a malformed pattern. Either
         # being null means "don't manage foot's font at all", leaving
         # foot's own default in place.
-        settings = lib.optionalAttrs
-          (displayCfg.terminalFont != null && displayCfg.terminalFontSize != null)
-          {
-            main.font = "${displayCfg.terminalFont}:size=${toString displayCfg.terminalFontSize}";
-          };
+        settings =
+          lib.optionalAttrs (displayCfg.terminalFont != null && displayCfg.terminalFontSize != null)
+            {
+              main.font = "${displayCfg.terminalFont}:size=${toString displayCfg.terminalFontSize}";
+            };
       };
 
       # GTK applications — which on a stock desktop means Firefox's
