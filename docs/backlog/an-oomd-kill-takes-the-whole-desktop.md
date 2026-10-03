@@ -247,10 +247,13 @@ is right, which is all this brief changes.
 > around `systemd-run --user --scope --collect --quiet --`, route the
 > terminal, menu, and castle-modal launches through it without
 > disturbing home-manager's default keybinding set or breaking the wmenu
-> pipeline, and land the static VM regression probe in the same PR wired
-> into `nix flake check`. sway itself stays in the session scope.
-> Everything is public mechanism — no host value belongs in these files.
-> Verify with `nix flake check`: the new probe passes and the
+> pipeline, and land the static VM regression probe in the same PR as a
+> `packages.x86_64-linux.*` output with its own path-filtered workflow
+> (the `oomd-liveness-test.yml` mold — not under `checks.*`). sway
+> itself stays in the session scope. Everything is public mechanism —
+> no host value belongs in these files. Verify with `nix flake check`
+> (evaluation) plus `nix build .#<probe> -L` and
+> `nix build .#desktop-loop-test -L`: the new probe passes and the
 > desktop-loop test still does. Report any point where the keybinding
 > wiring or the pinned systemd/home-manager behaviour forced a judgment
 > call the spec did not cover — the priority behaviour in this module is

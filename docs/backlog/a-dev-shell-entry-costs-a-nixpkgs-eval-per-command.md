@@ -60,8 +60,10 @@ indifferent to which spelling raises the storm.
 **How it would have been caught sooner.** The signal existed and
 nothing read it: nix-daemon logged a fresh client connection roughly
 every ninety seconds for seventeen minutes while memory pressure
-climbed. An eval-storm check — more than N nix-daemon client
-connections within M minutes — would have named the pattern before
+climbed. An eval-storm check — N or more nix-daemon client
+connections within M minutes, at-or-above on purpose: the 2026-09-06
+incident logged exactly six, and a threshold its own incident can
+equal but not trip is off by one — would have named the pattern before
 exhaustion, and is the honest detector for recurrence under whatever
 spelling comes next. The static regression check is a VM test in the
 mold of `test/oomd-liveness`: assert that a host importing the dev
@@ -201,13 +203,17 @@ confirming the delivery gap.
   by construction: it counts daemon connections, not subcommands.
   Public options
   `castle.evalStorm.{enable,threshold,windowMinutes,notifyCommand}`,
-  defaults `true`/`6`/`10`/`null` — calibration values: the 2026-10-02
+  defaults `true`/`6`/`10`/`null`, with the threshold tripping at
+  `count >= threshold` (see the detector section above for why the
+  boundary matters) — calibration values: the 2026-10-02
   storm ran ~0.8 connections/min (would trip ~7 in 10), the 2026-09-06
   one 2/min; an ordinary `nixos-rebuild` makes a handful. The
   implementer measures a rebuild and a quiet hour and records both in
   the PR, under one invariant review added after the first calibration
-  rule proved self-defeating: **both founding storms must stay above
-  the shipped threshold after calibration** — a detector its own
+  rule proved self-defeating: **both founding storms must stay at or
+  above the shipped threshold after calibration** (at-or-above to
+  match the `count >= threshold` semantics — the 2026-09-06 storm
+  equals the default exactly) — a detector its own
   incidents cannot trip is not a detector. If rebuild noise and storm
   rates cannot be separated by count alone, scope the counting
   (exclude the rebuild path's connection pattern) rather than raising
@@ -264,7 +270,9 @@ confirming the delivery gap.
    delivery decision.
 4. `test/eval-storm/test.nix`: VM test. Drive N synthetic nix-daemon
    connections (trivial `nix store ping`-class calls) above threshold
-   within the window; assert the unit fails and the notify command
+   within the window, and separately exactly at it — the boundary case
+   is the 2026-09-06 incident's shape and must fire; assert the unit
+   fails and the notify command
    fired (stub `castle.evalStorm.notifyCommand` with a file-touching
    script, the repo's existing stub pattern). Below threshold: assert
    quiet. One more case, the shipped default: with `notifyCommand`
@@ -294,7 +302,10 @@ false positives are a redirect, not a code defect.
 ## Implementation prompt
 
 Read this file end to end, then `modules/dev/default.nix`,
-`modules/agent/default.nix` (the notify option), and
+`modules/agent/default.nix` (for the `environment.sessionVariables`
+precedent only — the detector's notification is
+`castle.evalStorm.notifyCommand` in `modules/dev`; do not wire the
+agent module's option), and
 `test/oomd-liveness/test.nix` (the test pattern to follow, including
 its header's reasoning about not importing `hosts/*`). Implement the
 Plan above exactly; where reality contradicts this brief (an option
