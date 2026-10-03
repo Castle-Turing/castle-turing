@@ -83,8 +83,47 @@ it explicitly.
   either recognises or experiences as an interrogation. "Intake" is
   deliberately no longer the name: it was already the agent layer's
   word for the seat that files a `request` record.
-- Decomposition of a milestone into task briefs: not designed.
-  [inferred] the largest unspecced piece of [m2-done].
+- Decomposition into task briefs: the artifact and the discipline are
+  built (task 0079). The seat is named **planner** in
+  `docs/architecture.md`, the mechanism is written out in
+  `docs/planning.md`, and `tools/plan/plan` checks a decomposition
+  against it. What it consumes is a requirements document — the
+  clarifying-questions phase's artifact — rather than this file
+  directly, which is why the wording here changed: a milestone reaches
+  a slate through a requirements document, and naming this file as the
+  input would skip the phase that turns a complaint into clauses. What
+  it produces is a **slate**, and the resident's approval gates the
+  slate as one artifact rather than each brief singly. One worked
+  example ships (`tools/plan/oracle/slate.md`, over the clarify
+  probe's requirements document). It works over plain files only: not
+  wired to the modal, nothing watches for a slate, and no requirements
+  document has been decomposed for real yet. The falsifier is unrun —
+  one real slate review against the checklist, whose six judgment
+  items no checker can carry.
+- Acceptance of finished work: the artifact and the discipline are
+  built (task 0080). The acceptance run is written out in
+  `docs/planning.md` beside the seat that authors the criteria, and
+  `tools/accept/accept` runs one brief's criteria against what got
+  built and reports the run as a **receipt** — each criterion with its
+  command, its exit status and its transcript, never a verdict. A
+  criterion now carries the disposition that answers it: `Check:` with a
+  command, or `Manual:` with the step a person takes instead, checked at
+  spec time by `plan check` so that a criterion nothing can run and
+  nobody was asked to take cannot reach an implementer. The frozen rule
+  flags any criterion changed on the branch being measured against it,
+  and repair cycles stop at a cap that names the measured stopping rule
+  it stands in for. One worked example ships
+  (`tools/accept/oracle/`, task 0072's criteria read back post-hoc, with
+  the receipt of a real run committed beside it). It works over plain
+  files only: nothing runs it on a pull request, no brief in
+  `docs/tasks/` yet carries the disposition fields, and no second agent
+  reads a receipt. The falsifier is unrun — the resident's sampled reads
+  of real receipts against their own judgment, which is also the only
+  thing that can tell whether the compilation from criterion to check is
+  right. [inferred] the second clause of [m2-constraints] binds this
+  surface hardest and is met mechanically: the receipt's completion
+  vocabulary is a blocking lint and its standing limit is required
+  verbatim.
 - Question routing to the resident: product plumbing exists (the
   answer chord, task 0022); pipeline wiring not designed.
 - emcee dispatch: operating (sprints through task 0060 and PRs

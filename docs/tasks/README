@@ -1,9 +1,10 @@
 # docs/tasks — numbered briefs, and the queue an agentic harness reads
 
-Implementation work is specced as numbered briefs (`0001-`, `0002-`, …),
-each the spec and reasoning for one piece of work, committed on the
-branch that implements it. That convention is unchanged and lives in
-`CLAUDE.md`; this README documents the directory layout around it.
+Implementation work is dispatched as numbered briefs (`0001-`, `0002-`, …),
+each the spec and reasoning for one piece of work. A brief arrives
+here only by verbatim transfer of a `Status: ready` backlog item —
+the convention lives in `CLAUDE.md`; this README documents the
+directory layout around it.
 
 ## Layout
 
@@ -27,10 +28,14 @@ branch that implements it. That convention is unchanged and lives in
   stops reading headers at the first wrapped line, so a key below
   one silently does not exist.
 
-  A task file is a *prompt*, not the brief itself — it names the authoritative sources (usually a
-  `docs/backlog/` entry) and instructs the implementer to author the
-  numbered brief here on its own branch, deleting any promoted backlog
-  entry in the same commit.
+  A task file here **is the approved brief** — the verbatim transfer
+  of a backlog item the resident marked `Status: ready`, already on
+  `main` before any implementing branch starts. The implementer does
+  not author it, restate it, or improve it: the file is the record of
+  what was approved, and the body is the working agent's brief as
+  written. The one legal edit is the standing same-PR rule from
+  CLAUDE.md's spec workflow: if the design shifts during
+  implementation, the implementing PR updates the brief to match.
 - **`done/`** holds completed briefs, moved here once their work has
   merged. Tidying is the operator's act, not the harness's; a brief in
   `done/` is exactly as authoritative a historical record as it was at

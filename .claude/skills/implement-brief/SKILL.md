@@ -131,12 +131,15 @@ just exit status.
 
 ## Conventions worth knowing before you trip on them
 
-- **Briefs ride their branch.** A brief is committed on the branch that
-  implements it, never separately, so spec and implementation are
-  audited together.
-- **Promoting a backlog entry deletes it** in the same commit that adds
-  the brief. Check whether anything cites the deleted file by path —
-  `docs/architecture.md` has done so before.
+- **The brief is already on main.** Its verbatim transfer from a ready
+  backlog entry is its own commit on the default branch, pushed, before
+  an implementing branch exists. The implementing session does not
+  commit the brief — it finds it already there and reads the diff
+  against it, so spec and implementation still meet in review.
+- **A backlog entry is promoted only once it carries `Status: ready`**,
+  and the transfer — verbatim, same commit — deletes the entry as it
+  adds the brief. Check whether anything cites the deleted file by
+  path — `docs/architecture.md` has done so before.
 - **Records are append-only.** A bad reference written into the journal
   can never be validated clean again, so resolve every ref *before*
   writing anything. Reuse the existing pre-check pattern in
