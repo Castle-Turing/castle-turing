@@ -399,6 +399,11 @@ The values this repo may never contain:
   non-null framework default of their own — see "The display-preference
   slot" below for which is which and why `null` no longer means the
   same thing everywhere in this set.
+- `castle.launch.{terminal,menu,modal}.extraProperties` — resource
+  limits for the transient scope each kind of application launch runs
+  in. Empty everywhere by default, and a working desktop needs none of
+  them; see "Per-application memory bounds" below for what the scopes
+  are for and why the framework sets no number.
 
 ## The display-preference slot
 
@@ -549,6 +554,47 @@ module does:
   asserts against that combination on a machine with no swap rather
   than letting it fail at the moment the battery dies. On a
   zram-only host, `"PowerOff"` is the honest answer.
+
+## Per-application memory bounds (optional)
+
+`nixosModules.home` launches every application the desktop starts —
+your terminal, whatever the launcher picks, and the Castle chord's
+window — inside its own transient systemd scope. There is nothing to
+opt into and nothing to configure for that part; it is how the desktop
+starts programs.
+
+It matters because `systemd-oomd` kills a *cgroup*, and a compositor
+that starts everything as a plain child of itself puts the whole
+desktop in one. The eligible victim is then the entire session —
+compositor, terminals, and anything running inside them — rather than
+the one program that misbehaved. A scope per application makes each
+one killable on its own. The compositor deliberately stays outside
+this, in the login session's own scope, so a kill leaves something
+running that can show you what happened.
+
+One option per launch class exists for the resource limits those
+scopes carry, and all three are empty by default:
+
+```nix
+  # Stop one runaway terminal from taking the machine with it. Unset
+  # means a scope with no limits — still separately killable, just
+  # unbounded.
+  castle.launch.terminal.extraProperties = [ "MemoryHigh=8G" ];
+```
+
+- `castle.launch.terminal.extraProperties`,
+  `castle.launch.menu.extraProperties`,
+  `castle.launch.modal.extraProperties` — lists of strings, each
+  passed to `systemd-run` as one `--property=` flag. See
+  `systemd.resource-control(5)` for the full vocabulary;
+  `MemoryHigh=` (throttle and reclaim) and `MemoryMax=` (hard kill)
+  are the two most residents want.
+
+**The framework sets no limit anywhere**, and that is a decision
+rather than an omission: a number that is right for your machine
+depends on how much memory it has and what you run, and a wrong one
+turns "slow under pressure" into "killed at random". Setting one is
+worth doing deliberately, after watching a real workload.
 
 ## The agent's state
 

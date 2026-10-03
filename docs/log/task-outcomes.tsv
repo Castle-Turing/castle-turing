@@ -79,3 +79,4 @@ schema	task	attempt	queued	landed	outcome	tier	model	milestone	pr	cost_usd	turns
 1	0080-the-acceptance-harness	1	2026-09-10	2026-09-16	merged	deep	-	m2-done	123	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
 1	0081-implement-the-delivery-record-shim	1	2026-09-23	-	-	deep	-	m2-done	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
 1	0082-an-answered-delivery-question-resumes-the-errand	1	2026-09-09	2026-09-09	merged	deep	-	m2-done	114	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0084-an-oomd-kill-takes-the-whole-desktop	1	2026-10-02	-	-	deep	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e1	live	-

@@ -257,3 +257,82 @@ is right, which is all this brief changes.
 > wiring or the pinned systemd/home-manager behaviour forced a judgment
 > call the spec did not cover — the priority behaviour in this module is
 > subtle and the spec may have under-described your actual call site.
+
+## Judgment calls made during implementation
+
+Recorded here rather than only in the pull request, per the
+conventions: the brief is what a later agent reads cold.
+
+**Priority of the two option overrides.** The spec said to set
+`terminal`/`menu` through the wrapper but not at what priority. They
+are set at normal priority, not `lib.mkDefault`. A private layer that
+sets its own terminal therefore gets the module system's
+conflicting-definition error, which is the prompt to route the
+replacement through `castle-launch` too; `mkDefault` would have let
+the override win silently and hand back the single-leaf cgroup with no
+diagnostic — the failure this task is about. `lib.mkForce` remains the
+escape hatch. This follows the same loud-over-silent reasoning the
+module's own keybinding comments already argue at length.
+
+**No fallback when `systemd-run` fails.** The wrapper does not fall
+back to running the command unscoped. A fallback would make an
+unreachable user manager look exactly like success while reproducing
+the one-leaf layout, and the VM probe would stay green. A logged-in
+user always has a `user@UID.service`; if that stops being true, a
+terminal that visibly refuses to open is the better symptom.
+
+**`config.systemd.package`, not `pkgs.systemd`.** systemd-run is a
+client of the user manager this system actually runs, so it is
+resolved off the configured package — the same reasoning the module
+already applies to `wpctl` and the configured wireplumber.
+
+**`swaymsg` left bare on `$PATH` inside the menu pipeline.** The
+restated `menu` default deviates from home-manager's own in exactly
+one place (the wrapper) and nowhere else. `swaymsg` is installed by
+`programs.sway` itself and the pipeline only ever runs inside the Sway
+session, so the "no option pointing at nothing" rule is not in play
+the way it is for the media keys.
+
+**A cheap second half of the detector, in the fast gate.** The spec
+asked only for the VM probe. `check.yml`'s `sway-config-check` now
+also regex-asserts that all three generated bindings still route
+through `castle-launch`, and the fixed-string entry for the modal
+chord moved into that step because a store-path hash cannot be spelled
+as a fixed string. Neither half replaces the other: the fast-gate grep
+would stay green if `systemd-run` stopped producing scopes, and the VM
+probe is far too slow to run on every push. `flake.nix`'s
+`example-mod4` assertion was split into a prefix plus an infix test
+for the same hash reason.
+
+**The probe mirrors `test/desktop-loop/` rather than extending it.**
+The spec allowed either. A detector folded into a seventy-five-minute
+test that already carries five other tasks answers slowly and goes
+silent whenever that test is red for an unrelated reason. The new test
+copies its login sequence and headless-Sway departures and drops its
+closure (no `modules/dev`).
+
+**Two things the first probe runs taught**, both now in the test's own
+comments. The launcher's payload reports its own pid into a file
+instead of being found with `pgrep`: every process in the launch chain
+carries the app's name on its command line — the `swaymsg exec` that
+sends the pick, Sway's `sh -c`, `castle-launch`, `systemd-run` — so
+`pgrep -f` reliably matched one of those transients instead. And the
+launcher is driven *first*, before any other window exists: with a
+`foot` window already focused, the typed pick went to that terminal's
+shell rather than to dmenu, which still started the probe app — in the
+terminal's own scope, reading as two launch paths sharing one cgroup.
+
+**The live launcher is dmenu, as the spec predicted.** Confirmed
+against the pinned home-manager source: `menu`'s sway default is
+`dmenu_path | dmenu | xargs swaymsg exec --`, and nothing in
+`modules/home` selects wmenu. The pick reaches the wrapper as
+`exec <castle-launch> menu -- <pick>` — swaymsg's own option parsing
+consumes the first `--` and the second survives, verified against the
+real `swaymsg` over a stub IPC socket before the VM test existed.
+
+**`docs/state/` is deliberately not patched.** No document there
+records the desktop's cgroup topology, and `docs/state/README.md`
+rule 4 reserves adding a section to the resident. Task 0073's oomd
+work set the same precedent. The new option slot is documented in
+`docs/private-layer.md` instead, which is where every other
+`castle.*` option is described.

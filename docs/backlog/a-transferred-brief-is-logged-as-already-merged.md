@@ -87,6 +87,45 @@ Whichever lands, the check belongs in `tools/outcomes/outcomes check` so
 that the next transfer fails CI instead of quietly writing the next batch of
 wrong rows.
 
+## Seen again at the next transfer, and `queued` is wrong too
+
+The 2026-10-02 transfer of tasks 0083 to 0085 reproduced this exactly
+as predicted, and the "fourth one keystroke away" landed: `derive --env
+e1 --fill`, run on 0084's branch, wanted to write
+
+    0083-a-dev-shell-entry-...  queued 2026-10-02  landed 2026-10-02  merged  pr 149
+    0084-an-oomd-kill-...       queued 2026-09-15  landed 2026-09-16  merged  pr 128
+    0085-an-agent-workload-...  queued 2026-09-06  landed 2026-09-06  merged  pr 103
+
+and to flip 0081's row to `2026-10-02 merged pr 146`. PR 128 is
+`backlog/an-oomd-kill-takes-the-whole-desktop`, PR 103 is
+`castle/0063-oomd-watches-user-slices`, PR 149 is
+`dev-shell-eval-cost`. None implemented the task whose row cites it.
+The work for 0084 was, at that moment, uncommitted on a branch.
+
+**A fourth immutable cell is wrong, and this entry had not named it:
+`queued`.** `docs/measurement.md` defines it as "the date a file with
+this number first appeared under `docs/tasks/`", but `brief_added`
+reads it with `git log --diff-filter=A --follow`, and `--follow`
+traces the brief straight through the transfer rename into the backlog
+file's own first commit. For 0084 that is 2026-09-15 — the day the
+*problem was filed*, three weeks before anything was dispatched. A
+backlog file has no number, so by the column's own definition it
+cannot be what `queued` reads. Any fix to `landing()` leaves this one
+standing: `brief_added` has to stop following the rename, or ask for
+the first commit that placed the file under `docs/tasks/`.
+
+The consequence is that lead time, computed as `landed - queued`, is
+wrong at both ends for every brief the speccing-in-place convention
+produces — and the error in `queued` runs in the opposite direction to
+the error in `landed`, so the two do not cancel, they compound.
+
+0084's session wrote its row by hand instead (`queued 2026-10-02`,
+`landed -`, `outcome -`, `pr -`) and left 0083's and 0085's to the
+sessions that own them, so no new wrong cell was committed. That is
+not a fix: it depends on a session reading the diff, which is the
+thing a detector exists to stop depending on.
+
 ## What this entry does not do
 
 It does not correct the four rows. They are immutable cells and the
