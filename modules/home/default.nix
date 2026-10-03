@@ -100,6 +100,100 @@ let
   # concretely (docs/tasks/0009 item 2) — a headless host that imports
   # modules/home for git identity alone gets none of this.
   swayEnabled = config.programs.sway.enable or false;
+
+  # Per-app transient scopes (docs/tasks/0084). Everything Sway launches
+  # inherits the compositor's cgroup by fork, so logind's session scope
+  # holds the whole desktop as one undifferentiated leaf — and
+  # systemd-oomd kills leaf cgroups. With one leaf, the only eligible
+  # victim is the entire session: compositor, terminals, and whatever
+  # was running inside them. GNOME and KDE avoid this by launching every
+  # app into its own `app-*.scope` under the user manager; a bare
+  # compositor does not, and nothing here had ever chosen otherwise.
+  #
+  # The three launch classes this module routes through the wrapper.
+  # A fixed set rather than a free-form attrsOf: the wrapper's own
+  # dispatch has to know them, and a class name that is not one of
+  # these is a typo that should fail at eval rather than at keypress.
+  # The value is what the class covers, used in each option's
+  # description so the three cannot drift from their call sites.
+  launchClasses = {
+    terminal = "the terminal home-manager's own modifier+Return binding opens";
+    menu = "whatever the launcher's pick executes";
+    modal = "the castle-modal window the Castle chord opens";
+  };
+
+  launchCfg = config.castle.launch;
+
+  # The configured systemd, not a bare `pkgs.systemd`: systemd-run is a
+  # client of the user manager this system actually runs, and the same
+  # reasoning that picks `wpctl` off the configured wireplumber above
+  # applies — a private layer overriding systemd should not end up
+  # driving it with a mismatched client. Absolute store path, not a
+  # bare name, per the media-key bindings' own rule below.
+  systemdRun = "${config.systemd.package}/bin/systemd-run";
+
+  # `--scope`, not `--service`, and the distinction is the whole design:
+  # a scope's command is exec'd by systemd-run itself, so it keeps the
+  # Wayland/session environment Sway handed it, while its cgroup is
+  # registered under the user manager and becomes an oomd-eligible leaf
+  # of its own. A service would be started by the user manager instead
+  # and would have to have that environment rebuilt for it.
+  #
+  # `--collect` so a launch that fails leaves no dead scope behind;
+  # `--quiet` so a successful launch prints nothing into whatever
+  # Sway's stdout happens to be.
+  scopeFlags = [
+    "--user"
+    "--scope"
+    "--collect"
+    "--quiet"
+  ];
+
+  # escapeShellArgs, not bare interpolation: these words are generated
+  # into a shell script, and a property value a private layer wrote
+  # with a space or a quote in it must stay one argument.
+  runCommand =
+    class:
+    lib.escapeShellArgs (
+      scopeFlags ++ map (p: "--property=${p}") launchCfg.${class}.extraProperties
+    );
+
+  # Usage: castle-launch <class> -- <command> [args...]
+  #
+  # One wrapper rather than three inline `systemd-run` invocations, so
+  # the flag set lives in one place and a future bound is a list entry
+  # in castle.launch.<class>.extraProperties rather than a refactor of
+  # three call sites.
+  #
+  # There is deliberately NO fall-back to running the command unscoped
+  # when systemd-run fails. A fallback would make a user manager this
+  # wrapper cannot reach look exactly like success while silently
+  # reproducing the one-leaf layout this exists to break up — and the
+  # VM probe (test/app-scopes) would still be green. A logged-in user
+  # always has a `user@UID.service` manager; if that stops being true,
+  # a terminal that visibly refuses to open is the right symptom.
+  castleLaunch = pkgs.writeShellScript "castle-launch" ''
+    set -eu
+
+    if [ "$#" -lt 3 ] || [ "$2" != "--" ]; then
+      echo "castle-launch: usage: castle-launch <class> -- <command> [args...]" >&2
+      exit 64
+    fi
+    class="$1"
+    shift 2
+
+    case "$class" in
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (
+        class: _: "  ${class}) exec ${systemdRun} ${runCommand class} -- \"$@\" ;;"
+      ) launchClasses
+    )}
+      *)
+        echo "castle-launch: unknown launch class '$class'" >&2
+        exit 64
+        ;;
+    esac
+  '';
 in
 {
   options.castle.person = {
@@ -122,6 +216,30 @@ in
       '';
     };
   };
+
+  # docs/tasks/0084. One entry per launch class, each carrying the
+  # systemd unit properties that class's transient scope is created
+  # with. Nothing here sets a bound: this task is only about the
+  # *topology* (one cgroup per app instead of one for the desktop), and
+  # what a sensible MemoryHigh= would be is a separate question with a
+  # separate backlog entry behind it. The slot exists so that answer
+  # lands as a list entry rather than as a reshaping of the wrapper.
+  options.castle.launch = lib.mapAttrs (_class: what: {
+    extraProperties = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "MemoryHigh=4G" ];
+      description = ''
+        Extra systemd unit properties for the transient scope holding
+        ${what}, each rendered as one `--property=` flag to
+        `systemd-run --user --scope`. See systemd.resource-control(5)
+        for what can be set; `MemoryHigh=`/`MemoryMax=` are the ones a
+        resident is most likely to want. Framework default is the empty
+        list — a scope with no bounds, which is still its own
+        oomd-eligible leaf.
+      '';
+    };
+  }) launchClasses;
 
   config = {
     assertions = [
@@ -233,6 +351,55 @@ in
           # two.
           defaultWorkspace = lib.mkDefault "workspace number 1";
 
+          # The two app-launch paths home-manager owns, routed through
+          # castle-launch so each app lands in its own transient scope
+          # instead of the compositor's cgroup (docs/tasks/0084; see
+          # castleLaunch's own comment above for the mechanism).
+          #
+          # Overriding these two *options* rather than re-declaring the
+          # bindings they feed is deliberate and load-bearing:
+          # home-manager builds `modifier+Return` and `modifier+d` out
+          # of these values, so the default keybinding set is never
+          # touched. A second `keybindings` definition would discard
+          # that whole set silently — see the long comment on the
+          # keybindings option below for exactly how.
+          #
+          # Both values restate home-manager's own defaults for these
+          # options verbatim, checked against this flake's pinned
+          # source, with the wrapper inserted and nothing else changed.
+          # Same pin cost the `bars` block below already carries: a
+          # home-manager bump that changes either default will not be
+          # followed here, and CI's sway-config-check prints the
+          # generated config so the difference is at least visible.
+          #
+          # Normal priority, not `lib.mkDefault`: a private layer that
+          # sets its own terminal or launcher should get the module
+          # system's conflicting-definition error, which is the prompt
+          # to route the replacement through `castle-launch` too. The
+          # alternative — a silent mkDefault override — hands back the
+          # single-leaf cgroup with no diagnostic, which is the failure
+          # this whole task is about. `lib.mkForce` is still the escape
+          # hatch for a resident who means it.
+          terminal = "${castleLaunch} terminal -- ${pkgs.foot}/bin/foot";
+
+          # The launcher is a shell pipeline, not a single program:
+          # `dmenu_path` lists the candidates, `dmenu` filters them on
+          # stdin and prints the pick on stdout, and `swaymsg exec`
+          # runs it. Only that last half is wrapped — scoping the
+          # *filter* would put systemd-run between the two pipes and
+          # break the pick. `swaymsg` is left bare on $PATH exactly as
+          # home-manager's default has it: it is installed by
+          # programs.sway itself, and the pipeline only ever runs
+          # inside the Sway session that guarantees it.
+          #
+          # `xargs` appends the pick after the trailing `--`, so sway
+          # is sent `exec <castle-launch> menu -- <pick>`; the first
+          # `--` is consumed by swaymsg's own option parsing and the
+          # second reaches the wrapper. Verified against the real
+          # swaymsg over a stub IPC socket, not assumed, and asserted
+          # end to end by test/app-scopes.
+          menu = "${pkgs.dmenu}/bin/dmenu_path | ${pkgs.dmenu}/bin/dmenu | ${pkgs.findutils}/bin/xargs swaymsg exec -- ${castleLaunch} menu --";
+
           # Mod4+Shift+Return opens the ambient intake: a floating foot
           # terminal running castle-modal in compose mode
           # (docs/tasks/0009 item 3 — "press a key, describe a problem
@@ -241,7 +408,10 @@ in
           # deliberately, so this module stays decoupled from
           # modules/agent at the Nix level — the binding does nothing
           # useful without it, but building this module never requires
-          # it.
+          # it. `castle-launch` in front of them is a store path rather
+          # than a bare name for the opposite reason: it is defined in
+          # this very file, so there is no coupling to avoid and the
+          # "no option pointing at nothing" rule applies in full.
           #
           # The chord is fixed rather than $mod-relative on purpose: this is the door
           # into the agent layer, not a window-management command, and
@@ -317,7 +487,16 @@ in
           # (Mod1+Return, Mod1+Shift+q, Mod1+Shift+e, workspace bindings,
           # the `resize` mode) is present alongside this binding.
           keybindings = lib.mkOptionDefault {
-            "Mod4+Shift+Return" = "exec foot --app-id=castle-modal -e castle-modal --mode inbox";
+            # Wrapped in castle-launch (docs/tasks/0084) inside the
+            # existing mkOptionDefault attrset, NOT as a second
+            # `keybindings` definition — that would be the finding-1
+            # lockout the comment above describes. This is also the one
+            # launch path that has to be wrapped at the binding, since
+            # no home-manager option generates it. It is also the
+            # least important of the three: the modal is a short-lived
+            # text prompt, while the terminal above is where the
+            # workloads that actually exhaust memory run.
+            "Mod4+Shift+Return" = "exec ${castleLaunch} modal -- foot --app-id=castle-modal -e castle-modal --mode inbox";
 
             # There is deliberately NO second Castle chord
             # (docs/tasks/0034-inbox-modal.md). Mod4+Shift+a used to
