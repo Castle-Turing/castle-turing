@@ -745,10 +745,15 @@ owes the journal — a `claim` when a brief is taken, a `result` carrying
 `outcome`, tenant, model and provider, and a `question` when it blocks
 on a judgment only the resident can supply. This is that translator.
 Its castle-side contract is task 0071; the mapping below is task 0081,
-which pinned it against the tenant's real schema.
+which pinned it against the tenant's real schema. The seat owes one more
+thing and it is not a record: an answer to one of those questions has to
+resume the errand it parked. `resume` is that direction (task 0082) and
+`stranded` is the detector it ships with.
 
-    castle-delivery-shim fold --run-dir DIR --tasks-dir DIR
-    castle-delivery-shim row  --run-dir DIR --checkout DIR --env KEY
+    castle-delivery-shim fold      --run-dir DIR --tasks-dir DIR
+    castle-delivery-shim resume    --run-dir DIR --repo DIR [--tasks-dir DIR]
+    castle-delivery-shim stranded  [--older-than-days N]
+    castle-delivery-shim row       --run-dir DIR --checkout DIR --env KEY
 
 Nothing here imports the tenant. Its journal is read as the plain
 JSON-lines file it is, so the dependency runs downward exactly as the
@@ -885,6 +890,109 @@ matters here — rather than going through the CLI's argparse layer.
 The gap that leaves is real and named rather than quietly accepted: a
 human holding the delivery seat by hand cannot write one of these
 questions with `castle record` today. `docs/backlog/` carries it.
+
+### The inbound direction — an answered question resumes the errand
+
+The delivery paragraph in `docs/architecture.md` binds this seat to the
+bound task 0023 established for the worker: one answer producing exactly
+one resumption, chained by the `claim` that names it. `resume` is what
+makes that true.
+
+**Eligibility is a total function of the journal.** An `answer` record
+closing one of this run's blocking delivery `question` records, minus every
+answer a `claim` already names as spent. Two filters, both borrowed from
+castle's own worker fold rather than invented here: `blocking` is tested
+against the one spelling `castle record --blocking` writes, so an
+unrecognised value fails towards *not* resuming; and only an answer
+carrying `provenance: requested` and `seat: intake` — the pair
+`file_answer` writes and nothing else does — can buy a resumption. The
+second is a filter rather than a boundary, and what it buys is that a
+defeated write guard still cannot grant a turn unless the record also
+impersonates intake.
+
+"Spent" is global over every claim in the journal, not scoped to this seat
+or this run, for the reason `_resumable_answers` gives: the bound is a
+property of the *answer*, and keying it per-errand would make "one answer,
+one resumption, ever" false while looking correct.
+
+There is no policy here about which eligible answer to spend and no say in
+whether to spend one. That is the guard sentence the plumbing seats carry,
+and this is the paragraph a later agent is most likely to "complete" into a
+reasoning seat by adding a judgment about priority or readiness.
+
+**Write-ahead, then invoke.** The claim is written before anything reaches
+the tenant, and its `refs` name the answer then the question — the first
+non-empty `refs` any record of this seat carries, because an answer is a
+record where a brief is only a file. Then the answer is written into the
+tenant's own question file, and then the verb runs.
+
+That leaves a crash window — claim durable, invocation dead — and it closes
+at the tenant boundary rather than at a checkpoint on this side. The tenant
+flips its question file to `Status: resolved` strictly before it selects
+the task, so **a resume against a park the tenant no longer shows as open
+dispatches nothing**, and an unanswered park makes the verb refuse before
+journaling at all. Both were demonstrated against the real verb rather than
+assumed (`test/delivery-shim/tenant-boundary.sh`, and the capture it
+produced in `fixtures/resumed/`). So a claim standing while the tenant
+still shows the errand parked is re-invoked after a grace interval, writing
+no second claim. The grace interval is not the protection against a
+re-invocation landing on a live sprint — the tenant's own per-repository
+sprint lock is, and it refuses a second sprint before journaling anything.
+
+**One invocation per pass, not one per answer.** The tenant's verb is
+run-scoped: it re-runs every answered park in the run it is pointed at. A
+pass that claimed two answers invokes once and the tenant resumes both
+errands. The per-answer accounting is the claim; the coalescing is the
+tenant's.
+
+**The answer reaches the tenant verbatim.** The `## Answer` section is
+replaced by the answer record's body and nothing is added to it — no seat
+paraphrases the resident, and this is the one place in the path where a
+paraphrase would have nothing to catch it, since the resumed attempt has no
+other copy of those words. The record id goes in `Answered-by:`, in the
+tenant's own `agent:<name> for <human>` convention, and in an HTML comment
+the tenant's parser strips before it reads the answer. The test
+byte-compares the section against the record rather than grepping it for a
+phrase.
+
+**There is one case where a claim is written and nothing is invoked**: the
+tenant's question file already says it is resolved and no claim names the
+answer. That is the operator having relaunched the tenant by hand, which
+was the only path before this existed and stays legal after it. The answer
+bought its one resumption and what is missing is the receipt, so the claim
+is written with `resumed-by: operator`. That is an observation of the
+tenant's own durable state, not a verdict; the alternative is refusing, on
+every poll, forever, about something that is not wrong.
+
+**Which command the verb is** is configuration, not mechanism —
+`$CASTLE_DELIVERY_RESUME_COMMAND`, defaulting to `emcee resume`, the same
+split `CASTLE_WORKER_COMMAND` already makes for the worker seat's tenant.
+The three arguments the shim appends (`--run`, `--repo`, `--tasks`) are
+not configurable: they say which park is being resumed, and a
+configuration able to pin them could redirect the accounting.
+
+**Nothing polls it yet.** `resume` is the same command whether a doorbell
+rang or a timer fired, so a missed notice delays a resumption and can never
+corrupt the accounting — but the timer itself is unwired, and
+`docs/backlog/nothing-polls-the-delivery-shim.md` carries that gap for both
+directions at once.
+
+### The detector — `stranded`
+
+A silently stranded park looks exactly like a quiet day, so the mechanism
+ships the check that makes it loud. `stranded` reads the journal and
+nothing else, and reports every blocking delivery question older than the
+cutoff that has no resumption path, distinguishing the two ways that
+happens because the remedies differ: **unanswered** (the park reached the
+journal and nobody closed it — the router's business), and **answered and
+unspent** (a claim should have named that answer within a poll interval, so
+either nothing is running `resume` or every pass is refusing). It exits
+non-zero when it finds any.
+
+This is the rule `docs/backlog/nothing-sweeps-the-pipeline-invariants.md`
+gains, implemented here so the sweep calls it rather than deriving the same
+fold a second way — and it is an artifact-state invariant, few and broad,
+which is that entry's own stated discipline.
 
 ### The outcome-log row
 

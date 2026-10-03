@@ -43,6 +43,17 @@ exists to get built:
   (task 0062), built precisely so this class of news arrives before
   accomplishments.
 
+One invariant is already written and has a caller waiting for it. Task
+0082 owed a detector for the same failure class on the delivery seat — a
+park whose answer never resumes anything, which looks exactly like a
+quiet day — and it ships as `castle-delivery-shim stranded`: every
+blocking delivery `question` older than N days with no resumption path,
+distinguishing the unanswered ones (nobody closed it) from the answered
+ones no `claim` ever spent (nothing is polling, or every pass is
+refusing). It reads the journal and nothing else, and exits non-zero on
+any finding. The sweep should call it rather than deriving the same fold
+a second way, which is the drift a second derivation always becomes.
+
 A discipline to hold when speccing: checks accrete, and every check
 has maintenance cost and its own silent-failure mode. The answer is a
 small suite of artifact-state invariants plus one canary — few,

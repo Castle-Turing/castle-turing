@@ -346,15 +346,18 @@ because its brief is ambiguous has opened a question like any other
 seat — the router decides when and how it reaches a human, and the
 answer must resume the errand under the bound task 0023 established
 for the worker: one answer producing exactly one resumption, chained
-by the `claim` that names it. The bound is the commitment; the
-machinery is not yet the mechanism, because what task 0023 built
-reads `request` records and re-invokes the worker's tenant, and
-re-invoking a delivery tenant is its own unbuilt mechanism — captured
-as the backlog entry "an-answered-delivery-question-resumes-nothing",
-a sibling of the record shim named below — until it exists, an
-answered delivery question resumes nothing automatically, and saying
-otherwise here would be the false receipt this document exists to
-prevent. A harness whose
+by the `claim` that names it. The bound holds by its own mechanism
+rather than by task 0023's, which is worker-shaped at both ends — its
+eligibility fold reads `request` records and its resumed turn
+re-invokes the worker's tenant. The delivery seat's is the inbound
+half of the shim named below (task 0082): an answer closing a delivery
+question is spent by a `claim` written before the tenant's resume verb
+runs, so the chaining is literal here, where the answer is a real
+record rather than the file that leaves `refs` empty on everything the
+outbound half writes. What is not yet wired is the interval that
+notices — the mechanism is a total fold over the journal and safe on
+any trigger, and nothing calls it on one, so today the errand still
+resumes when something runs that fold. A harness whose
 parks, retries, model routing and budget aborts live only in its own
 logs holds a seat the weekly audit cannot read, which is the whole
 reason this paragraph exists. The guard sentence every plumbing seat above carries — do not
@@ -399,7 +402,8 @@ depends on nothing above it stays usable by anyone, and whoever
 integrates it pays for the integration — so this document fixes the
 records and leaves the translator to tooling built beside them rather
 than to the contract: `agent/castle-delivery-shim`, specced by task
-0071 and pinned against the tenant's own event schema by task 0081. **And the
+0071, pinned against the tenant's own event schema by task 0081, and
+carrying the resumption direction since task 0082. **And the
 arrow into this seat is still unnamed:** a filed backlog entry
 becomes a numbered brief today by the resident's hand or an ad-hoc
 session's, and naming that seat is its own work rather than a side

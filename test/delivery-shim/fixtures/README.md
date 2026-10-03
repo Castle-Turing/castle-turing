@@ -19,6 +19,7 @@ captures themselves, and both say so in their names: `no-identity/` and
 | resumed second attempt | `emcee/2026-08-20` | parked, `answered`, then a second `step_started` for the same errand |
 | an attempt's facts, per attempt | `synthetic-retry/` — **synthetic**, see below | two `step_started` records for one errand, with different models |
 | a replayed event | every fixture | a property of the fold, proven by running it twice over these same logs rather than by a shape in any of them |
+| an errand resumed by the inbound half | `resumed/` | the dovetail park, answered through `castle answer` and resumed by the tenant's own verb — see below |
 
 Two of them carry a second shape worth having on purpose. `emcee/2026-08-20`
 predates emcee making `model` a required field, so its results exercise
@@ -49,6 +50,47 @@ that attempt, not to the errand" (check 9). Every other criterion in
 real to synthetic, and it will stay that way until a run with a
 retry-and-a-model lands in history — at which point capture it and
 delete this.
+
+## `resumed/` — the inbound half's capture
+
+`resumed/` is what the live exercise produced: the dovetail park above,
+folded into a castle journal, answered through `castle answer`, and
+resumed by **emcee's own `resume` verb** with no relaunch by hand. It is a
+capture like every other directory here, from a real run of the real verb,
+and `../tenant-boundary.sh` is the script that produces it — run by hand on
+a host that has the tenant, because the stock CI runner does not.
+
+Three parts:
+
+- `dovetail/2026-09-05T01-45-45/journal.jsonl` — the tenant's journal after
+  the whole loop. It carries the original park, then the tenant's own
+  `answered` record naming the `Answered-by:` line the shim wrote, then the
+  errand's second `step_started`, and finally a re-invocation that
+  dispatched nothing and recorded `sentinel_held{reason: nothing_dispatched}`.
+  That last part is the property the write-ahead ordering depends on, in the
+  tenant's own words.
+- `dovetail/2026-09-05T01-45-45/parked/README.md` — the question file as the
+  shim filled it in and the tenant then resolved. `../run.sh` reads it with
+  the shim's own reader, so a drift in the pinned header spelling fails
+  there rather than silently making an answer invisible to the tenant.
+- `records/` — the nine castle records that run produced, including the
+  resumption `claim` whose `refs` name the answer. They validate as a
+  journal.
+
+**The answer in this capture is not the resident's.** It was written by the
+implementing session as a stand-in, through the real `castle answer`, so the
+record's `provenance: requested` and `seat: intake` are exactly what that
+path writes and the mechanism was exercised exactly as it will be in
+service. What has not happened is the falsifier task 0082 names: the
+resident's own answer, through the real surface, on a real parked errand.
+That step needs their hands and the brief says so; nothing here should be
+read as it having happened.
+
+The tenant ran with its dry-run adapter, so the second attempt called no
+model — `adapter: dry-run`, `cost_usd: 0` on the `usage` record say so on
+the page. Everything the resumption actually turns on is the real verb:
+the park's file, `resolvable`, the selection loop, and the `resolve` that
+happens strictly before dispatch.
 
 ## What was changed, and it is the only thing
 
