@@ -3,10 +3,9 @@
 **What.** `modules/home` routes its default sway `menu` through the
 `castle-launch` wrapper so menu picks land in their own transient
 scope — but the wrapper is a module-internal `writeShellScript` with
-no option exposing its path. A resident who overrides `menu` (a
-legitimate private-layer choice; the xps9370 pins a Wayland-native
-picker to its panel for recorded reasons) first collides with the
-framework's equal-priority definition, and after the natural fix
+no option exposing its path. A resident who overrides `menu` — a
+legitimate private-layer choice the option exists for — first collides
+with the framework's equal-priority definition, and after the natural fix
 (`lib.mkForce`) their launches run unscoped in the session cgroup:
 no per-launch oomd isolation, and the `castle.launch.menu` bounds
 silently do not apply. Found 2026-10-03 while setting the private
