@@ -64,6 +64,12 @@ decisions.
   the project. If a tool choice trades AI-legibility for features, flag it.
 - Keep the flake evaluating (`nix flake check`) once it is non-trivial.
   Rollbackability is a load-bearing promise.
+- VM tests (the `packages.*` test outputs) are built and run only on
+  CI, by their path-filtered workflows — never locally on a resident
+  host. A VM-test build evaluates the flake and boots a VM, several
+  gigabytes of memory per run, more than a bounded session scope has
+  to give. Push the branch and let CI carry it; `nix flake check`
+  stays the local fast gate.
 
 ## Multi-agent work
 
