@@ -210,8 +210,10 @@ confirming the delivery gap.
   one 2/min; an ordinary `nixos-rebuild` makes a handful. The
   implementer measures a rebuild and a quiet hour and records both in
   the PR, under one invariant review added after the first calibration
-  rule proved self-defeating: **both founding storms must stay above
-  the shipped threshold after calibration** — a detector its own
+  rule proved self-defeating: **both founding storms must stay at or
+  above the shipped threshold after calibration** (at-or-above to
+  match the `count >= threshold` semantics — the 2026-09-06 storm
+  equals the default exactly) — a detector its own
   incidents cannot trip is not a detector. If rebuild noise and storm
   rates cannot be separated by count alone, scope the counting
   (exclude the rebuild path's connection pattern) rather than raising
