@@ -126,6 +126,55 @@ sessions that own them, so no new wrong cell was committed. That is
 not a fix: it depends on a session reading the diff, which is the
 thing a detector exists to stop depending on.
 
+And the dependence failed on its first test. 0083's session ran
+`derive --fill` and committed the output unread, so PR 153 carries all
+three wrong landings exactly as written above, plus the flip of 0081's
+row. Two sessions, the same command, one diff read and one not — which
+is the measurement this entry needed and did not want.
+
+## The coverage gate makes the transfer commit red the trunk
+
+A second defect, visible only once a transfer puts more than one brief
+on `main` at a time, and it is not about wrong cells but about when a
+row is owed at all.
+
+`outcomes check`'s coverage rule is "every brief under `docs/tasks/`
+has a row", and `docs/measurement.md` says the row is appended when the
+brief's *pull request opens*. Between the transfer and that pull
+request there is a window where the rule is violated by design. For one
+brief the window is short and invisible. For the 2026-10-02 transfer of
+0083 to 0085 it was neither: `outcomes-check` on the transfer commit
+d52b629 failed, and every pull request cut from that commit inherited
+the failure, because no single session can close a gate that needs
+three sessions' rows.
+
+So the first branch to notice has to write rows for briefs it is not
+implementing — guessing `env` and reading `tier` out of someone else's
+header — which is the precise opposite of the rule that put `env` and
+`tier` in the writer's hands. `derive` already behaves this way (it
+appends a row for *every* brief that has none), so the tool and the
+column's stated ownership disagree, and the gate forces the tool's
+side.
+
+Three directions, none chosen:
+
+- **The row is owed at the transfer, not at the pull request.** Make
+  the transfer commit append rows for everything it moves, with
+  `landed`, `outcome` and `pr` pending. `env` and `tier` would then be
+  written by the transferring session, which knows `tier` (the brief's
+  `Model:` header) but is only guessing `env`.
+- **Grace until dispatch.** Coverage exempts a brief with no branch and
+  no pull request, so the gate fires when work starts rather than when
+  the brief lands. Cheapest, and it weakens the detector by exactly the
+  gap it opens.
+- **`env` stops being immutable-at-write for rows the writer did not
+  earn.** A third state between a value and `-`, so a placeholder row
+  can be opened by anyone and claimed by the session that runs it.
+
+Whichever is chosen, it belongs with the `derive` fixes above: both are
+the same mismatch between a log designed around one session per task
+and a convention that lands briefs in batches.
+
 ## What this entry does not do
 
 It does not correct the four rows. They are immutable cells and the
