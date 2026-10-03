@@ -148,6 +148,20 @@ in
         gitUserEmail = "resident@example.invalid";
       };
 
+      # docs/tasks/0085. The terminal class carries all three typed
+      # bounds so the test script below can read them back off the
+      # scope's real cgroup files; modal is left at the framework
+      # default (null) so the same assertions prove the *absence* of a
+      # property renders as "max", not as some stale leftover value.
+      # Values are arbitrary and distinct only so a mix-up between the
+      # three files is itself a visible failure — they carry no
+      # significance beyond that and are not a recommendation.
+      castle.launch.terminal = {
+        memoryHigh = "384M";
+        memorySwapMax = "128M";
+        memoryMax = "512M";
+      };
+
       # No `castle.agent.dispatch.enable` here: this test never files a
       # record, so nothing should be watching for one. castle-modal
       # only needs its state directory to exist to open its inbox.
@@ -332,5 +346,58 @@ in
 
     for path, cgroup in sorted(cgroups.items()):
         print(f"OK: the {path} launch has its own scope: {cgroup}")
+
+    # --- docs/tasks/0085: the typed bounds land on the real cgroup ----
+    # Reading systemd-run's exit status would not prove the memory
+    # controller is actually delegated to the user manager at this
+    # systemd pin — only the scope's own cgroup files do (the brief's
+    # "delegation trap" paragraph). A property that silently failed to
+    # render would otherwise look exactly like a quiet day until a
+    # runaway scope grew without limit.
+    def cgroup_fs_path(cgroup_line):
+        # "0::/user.slice/..." -> "/sys/fs/cgroup/user.slice/...", the
+        # same unified-hierarchy assumption compositor_cgroup's own
+        # regex above already makes.
+        return "/sys/fs/cgroup" + cgroup_line.split("0::", 1)[1]
+
+
+    def memory_control_file(cgroup_line, filename):
+        path = cgroup_fs_path(cgroup_line)
+        return machine.succeed(f"cat {path}/{filename}").strip()
+
+
+    # The terminal class is configured above with all three typed
+    # options; systemd's size suffixes are base-1024, so "384M" means
+    # exactly this many bytes in the cgroup file — not the string back.
+    expected_bytes = {
+        "memory.high": 384 * 1024 * 1024,
+        "memory.swap.max": 128 * 1024 * 1024,
+        "memory.max": 512 * 1024 * 1024,
+    }
+    terminal_cgroup = cgroups["terminal"]
+    for filename, expected in expected_bytes.items():
+        actual = memory_control_file(terminal_cgroup, filename)
+        assert actual == str(expected), (
+            f"the terminal scope's {filename} is {actual!r}, expected {expected} "
+            "(from castle.launch.terminal.memoryHigh/memorySwapMax/memoryMax) — "
+            "either the memory controller is not delegated to the user manager "
+            "at this systemd pin, or the property did not render. See "
+            "docs/tasks/0085-an-agent-workload-can-thrash-the-host.md's "
+            '"delegation trap" paragraph.'
+        )
+    print(f"OK: the terminal scope's cgroup carries the configured memory bounds: {expected_bytes}")
+
+    # modal is left at the framework default (null) throughout this
+    # test, so its scope must carry no bound at all — "max" is cgroup
+    # v2's spelling for unlimited, not a leftover from some other class.
+    modal_cgroup = cgroups["modal"]
+    for filename in expected_bytes:
+        actual = memory_control_file(modal_cgroup, filename)
+        assert actual == "max", (
+            f"the modal scope's {filename} is {actual!r}, expected \"max\" — "
+            "castle.launch.modal sets no memory bounds, so none should be "
+            "rendered onto its scope."
+        )
+    print('OK: a class left at null produces a scope with no memory bound ("max" in all three files)')
   '';
 }
