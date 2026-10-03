@@ -181,7 +181,12 @@
           self.nixosModules.agent
           self.nixosModules.secrets
           (
-            { config, options, lib, ... }:
+            {
+              config,
+              options,
+              lib,
+              ...
+            }:
             {
               castle.admin = {
                 username = "resident";
@@ -468,9 +473,7 @@
                   # on castle.journald.syncInterval alone would pass
                   # even if modules/base's extraConfig wiring silently
                   # broke.
-                  assertion =
-                    lib.hasInfix "SyncIntervalSec=30s"
-                      config.environment.etc."systemd/journald.conf".text;
+                  assertion = lib.hasInfix "SyncIntervalSec=30s" config.environment.etc."systemd/journald.conf".text;
                   message = ''
                     nixosConfigurations.example: /etc/systemd/journald.conf does
                     not carry SyncIntervalSec=30s. modules/base's
@@ -547,8 +550,7 @@
               # (castle.admin.username, set on `.example` and inherited
               # here), not a real person; see that job's own comment for
               # why the literal is spelled out rather than derived.
-              keybindings =
-                config.home-manager.users.resident.wayland.windowManager.sway.config.keybindings;
+              keybindings = config.home-manager.users.resident.wayland.windowManager.sway.config.keybindings;
             in
             {
               home-manager.users.resident.wayland.windowManager.sway.config.modifier = "Mod4";
@@ -754,10 +756,8 @@
                     && unit.wantedBy == [ ]
                     && config.systemd.user.paths.castle-dispatch.wantedBy == [ "default.target" ]
                     && config.systemd.user.timers.castle-dispatch.wantedBy == [ "default.target" ]
-                    && config.systemd.user.paths.castle-dispatch.unitConfig.ConditionUser
-                      == "!@system"
-                    && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser
-                      == "!@system"
+                    && config.systemd.user.paths.castle-dispatch.unitConfig.ConditionUser == "!@system"
+                    && config.systemd.user.timers.castle-dispatch.unitConfig.ConditionUser == "!@system"
                     && environment.CASTLE_STATE_DIR or null == dummyStateDir
                     # Without a PATH the default tenant (`claude -p`)
                     # and the notify channel (`notify-send`) are both
@@ -768,15 +768,13 @@
                     && environment.CASTLE_PRIVATE_ROOT or null == dummyRepoRoot
                     && environment.CASTLE_MECHANISM_ROOT or null == dummyMechanismRoot
                     && (environment.CASTLE_WORKER_COMMAND or "") != ""
-                    && config.systemd.user.paths.castle-dispatch.pathConfig.PathChanged
-                      == "${dummyStateDir}/journal"
+                    && config.systemd.user.paths.castle-dispatch.pathConfig.PathChanged == "${dummyStateDir}/journal"
                     # Asserted absent, not merely unset by accident: a
                     # MakeDirectory here would create the resident's
                     # state directory before their journal is restored
                     # into it (docs/tasks/0021 §1/§2.2).
                     && !(config.systemd.user.paths.castle-dispatch.pathConfig ? MakeDirectory)
-                    && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec
-                      == "1min"
+                    && config.systemd.user.timers.castle-dispatch.timerConfig.OnUnitActiveSec == "1min"
                     # The watermark unit, pinned to the three facts
                     # that make it work at all: it is IN default.target
                     # (unlike the sweep — it is cheap enough to sit in
@@ -793,8 +791,7 @@
                     && watermarkUnit.wantedBy == [ "default.target" ]
                     && watermarkUnit.unitConfig.ConditionUser == "!@system"
                     && watermarkUnit.serviceConfig.Type == "oneshot"
-                    && lib.hasSuffix "castle dispatch --watermark-only"
-                      watermarkUnit.serviceConfig.ExecStart
+                    && lib.hasSuffix "castle dispatch --watermark-only" watermarkUnit.serviceConfig.ExecStart
                     && watermarkUnit.environment.CASTLE_STATE_DIR or null == dummyStateDir;
                   message = ''
                     nixosConfigurations.example-dispatch: the castle-dispatch units
@@ -1137,10 +1134,9 @@
       # trigger, rather than folding into `nix flake check` — see this
       # test's own file header for what it does and does not change
       # about the mechanism under test.
-      packages.x86_64-linux.desktop-loop-test =
-        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
-          import ./test/desktop-loop/test.nix { inherit self; }
-        );
+      packages.x86_64-linux.desktop-loop-test = nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+        import ./test/desktop-loop/test.nix { inherit self; }
+      );
 
       # docs/tasks/0073: proves castle-oomd-liveness-check's actual
       # generated script (pulled from nixosConfigurations.example, not
@@ -1154,9 +1150,8 @@
       # desktop closure, no OCR, no graphical boot) but still a VM
       # boot, so the same division of labor applies.
       packages.x86_64-linux.oomd-liveness-test =
-        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
-          import ./test/oomd-liveness/test.nix { inherit self; }
-        );
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest
+          (import ./test/oomd-liveness/test.nix { inherit self; });
 
       # docs/tasks/0083: proves direnv's BASH_ENV delivery (both
       # ancestries — a real greetd/tuigreet login session, and a
@@ -1166,9 +1161,8 @@
       # a real VM (with a real graphical login), so it stays out of
       # bare `nix flake check`'s fast gate.
       packages.x86_64-linux.direnv-delivery-test =
-        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
-          import ./test/direnv-delivery/test.nix { inherit self; }
-        );
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest
+          (import ./test/direnv-delivery/test.nix { inherit self; });
 
       # docs/tasks/0083: proves castle-eval-storm-check
       # (modules/dev/eval-storm.nix) counts nix-daemon connections
@@ -1178,8 +1172,9 @@
       # other VM tests above — this one boots three minimal VMs, no
       # desktop, no login, lighter than either neighbor above but
       # still real boots.
-      packages.x86_64-linux.eval-storm-test =
-        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (import ./test/eval-storm/test.nix);
+      packages.x86_64-linux.eval-storm-test = nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+        import ./test/eval-storm/test.nix
+      );
 
       # docs/tasks/0084: boots the real desktop stack, logs in through
       # the real greetd+tuigreet, presses all three real app-launch
@@ -1192,10 +1187,9 @@
       # does run in that gate — check.yml's sway-config-check greps the
       # generated Sway config for the three wrapped bindings; see
       # test/app-scopes/test.nix's header for why both halves exist.
-      packages.x86_64-linux.app-scopes-test =
-        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
-          import ./test/app-scopes/test.nix { inherit self; }
-        );
+      packages.x86_64-linux.app-scopes-test = nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+        import ./test/app-scopes/test.nix { inherit self; }
+      );
 
       # docs/tasks/0036-reminder-banner-states.md: the password-reminder
       # state machine and its banner wording, table-tested against the
@@ -1205,13 +1199,109 @@
       # fixture files, cheap enough for the fast gate, so bare
       # `nix flake check` (and therefore check.yml's flake-check job)
       # runs it on every PR with no workflow change.
-      checks.x86_64-linux.password-reminder-states =
-        import ./test/password-reminder/check.nix {
+      checks.x86_64-linux.password-reminder-states = import ./test/password-reminder/check.nix {
+        pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        script =
+          self.nixosConfigurations.example.config.systemd.services.castle-password-reminder-check.script;
+        shellInit = self.nixosConfigurations.example.config.environment.interactiveShellInit;
+      };
+
+      # docs/tasks/0087's "detector's detector": the eval-time assertion
+      # modules/home/default.nix now carries exists to catch a resident
+      # override that silently drops castle-launch scoping from `menu`
+      # — but a check that only proves the FRAMEWORK's own `menu`
+      # satisfies the assertion says nothing about whether the
+      # assertion would actually fire on a BROKEN one. Without this,
+      # the predicate could be wired to the wrong attribute path, or
+      # stop firing entirely after a refactor, and `nix flake check`
+      # would stay green either way — looking exactly like coverage.
+      #
+      # This is deliberately NOT a `nixosConfigurations.*` output of
+      # its own, unlike example-mod4/example-dispatch above: those
+      # exist specifically so `nix flake check` forces their
+      # `config.system.build.toplevel` and therefore their assertions,
+      # which is exactly backwards for a configuration this check
+      # EXPECTS to carry a failed assertion — exposing it that way
+      # would make the expected failure fail `nix flake check` itself
+      # rather than let this check report on it. Instead,
+      # `extendModules` is called here, inline, on
+      # `self.nixosConfigurations.example`, and only `config.assertions`
+      # — plain data, a list of `{ assertion; message; }` — is read off
+      # the result. Reading that list never throws; only something
+      # that explicitly forces `config.system.build.toplevel` (as the
+      # module system's own top-level does) turns a failed entry into a
+      # throw, and nothing here does that.
+      checks.x86_64-linux.castle-launch-menu-scoping =
+        let
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
-          script =
-            self.nixosConfigurations.example.config.systemd.services.castle-password-reminder-check.script;
-          shellInit = self.nixosConfigurations.example.config.environment.interactiveShellInit;
-        };
+          lib = pkgs.lib;
+
+          # Same literal as nixosConfigurations.example-mod4's own
+          # comment above: the flake's own placeholder admin username
+          # (castle.admin.username on nixosConfigurations.example),
+          # spelled out because home-manager.users is keyed on it and
+          # there is no config to read it off before this evaluation
+          # exists.
+          username = "resident";
+
+          failedAssertions = sys: lib.filter (a: !a.assertion) sys.config.assertions;
+
+          # The positive case: the framework's own `menu` definition,
+          # untouched, already routes through the wrapper (test/app-
+          # scopes proves that end to end at runtime) — so no
+          # castle.launch assertion should be failing here at all.
+          exampleFailed = failedAssertions self.nixosConfigurations.example;
+
+          # The negative case: force `menu` to a wrapper-free value —
+          # the same shape as a resident override that collided with
+          # the framework's own definition and got resolved with
+          # `lib.mkForce`, which is exactly the loss docs/tasks/0087
+          # exists to catch. `fuzzel` is an arbitrary wrapper-free
+          # command, not a real recommendation either way.
+          unroutedMenu = self.nixosConfigurations.example.extendModules {
+            modules = [
+              {
+                home-manager.users.${username}.wayland.windowManager.sway.config.menu = lib.mkForce "fuzzel";
+              }
+            ];
+          };
+          unroutedFailed = failedAssertions unroutedMenu;
+
+          # Matched by substring against the assertion's own message
+          # (modules/home/default.nix), not by position in the list —
+          # robust to other assertions in `config.assertions` failing
+          # or not, and to this one moving within the list.
+          scopingNeedle = "does not route through castle-launch";
+          unroutedScopingFailure = lib.findFirst (
+            a: lib.hasInfix scopingNeedle a.message
+          ) null unroutedFailed;
+        in
+        if exampleFailed != [ ] then
+          throw ''
+            checks.castle-launch-menu-scoping: nixosConfigurations.example
+            has ${toString (lib.length exampleFailed)} failed assertion(s)
+            with `menu` untouched, where none were expected:
+            ${lib.concatStringsSep "\n\n" (map (a: a.message) exampleFailed)}
+          ''
+        else if unroutedScopingFailure == null then
+          throw ''
+            checks.castle-launch-menu-scoping: forcing `menu` to a
+            wrapper-free value ("fuzzel") did not produce the expected
+            castle.launch scoping assertion failure. Either
+            modules/home/default.nix's assertion is wired to the wrong
+            attribute path, its gate (swayEnabled /
+            requireMenuScoping) is wrong, or it has stopped firing —
+            this check exists so that break is loud instead of looking
+            like coverage.
+          ''
+        else
+          pkgs.runCommand "castle-launch-menu-scoping-check" { } ''
+            {
+              echo "nixosConfigurations.example: no failed castle.launch assertions."
+              echo "menu forced to a wrapper-free value: the scoping assertion fired, message:"
+              echo ${lib.escapeShellArg unroutedScopingFailure.message}
+            } >"$out"
+          '';
 
       formatter = nixpkgs.lib.genAttrs [
         "x86_64-linux"
