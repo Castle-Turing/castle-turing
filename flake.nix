@@ -1158,6 +1158,29 @@
           import ./test/oomd-liveness/test.nix { inherit self; }
         );
 
+      # docs/tasks/0083: proves direnv's BASH_ENV delivery (both
+      # ancestries — a real greetd/tuigreet login session, and a
+      # systemd user unit) and the re-entrancy guard against a real
+      # cold-cache nix evaluation. A `packages.*` output for the same
+      # reason as desktop-loop-test/oomd-liveness-test above: it boots
+      # a real VM (with a real graphical login), so it stays out of
+      # bare `nix flake check`'s fast gate.
+      packages.x86_64-linux.direnv-delivery-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+          import ./test/direnv-delivery/test.nix { inherit self; }
+        );
+
+      # docs/tasks/0083: proves castle-eval-storm-check
+      # (modules/dev/eval-storm.nix) counts nix-daemon connections
+      # correctly and trips at the inclusive `count >= threshold`
+      # boundary, against a real nix-daemon and a real systemd --user
+      # instance. A `packages.*` output for the same reason as the
+      # other VM tests above — this one boots three minimal VMs, no
+      # desktop, no login, lighter than either neighbor above but
+      # still real boots.
+      packages.x86_64-linux.eval-storm-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (import ./test/eval-storm/test.nix);
+
       # docs/tasks/0084: boots the real desktop stack, logs in through
       # the real greetd+tuigreet, presses all three real app-launch
       # chords, and asserts each launch lands in a transient scope
