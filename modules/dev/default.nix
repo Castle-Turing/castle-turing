@@ -84,7 +84,7 @@ let
   # re-run on every prompt instead of a one-shot: there is no
   # non-interactive equivalent of "re-run on every cd" to borrow here.
   direnvBashEnv = pkgs.writeShellScript "castle-direnv-bash-env" ''
-    if [ -n "$CASTLE_DIRENV_DISABLE" ] || [ -n "$CASTLE_DIRENV_BASH_ENV_GUARD" ]; then
+    if [ -n "''${CASTLE_DIRENV_DISABLE:-}" ] || [ -n "''${CASTLE_DIRENV_BASH_ENV_GUARD:-}" ]; then
       return 0 2>/dev/null || exit 0
     fi
 
