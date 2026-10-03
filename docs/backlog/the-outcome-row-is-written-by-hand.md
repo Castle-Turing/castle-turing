@@ -53,10 +53,35 @@ is a candidate signal) or whether it stays an acceptance-review
 judgment is the open question — but the late-row `queued`-drift check
 this entry first proposed is not the guard, and has been dropped.
 
-**Open questions.** Whether the seat writes the row or runs `derive`
-(the second keeps one derivation, the first keeps the seat's own
-knowledge). Whether a row written by the seat is still `provenance:
-live` or earns a third value naming who wrote it. What the seat does
-when the log's `check` fails on the branch it just wrote — the row is
-the thing the gate wants, and a seat that pushes an unloggable row has
-made the gate's failure its own.
+**The three open questions, answered.** Task 0081 answered them in
+`agent/castle-delivery-shim`'s `row` subcommand rather than leaving
+them to drift.
+
+*Does the seat write the row, or run `derive`?* It runs `derive`. The
+cells the seat holds — model, cost, turns, the pull request — are
+exactly the cells `harness_facts` already reads out of the same journal,
+and a second derivation of the same numbers is the drift `check` exists
+to catch.
+
+*Is a seat-written row still `provenance: live`?* Yes. The column says
+*when* the row was written, not *who* wrote it, and a seat maturing a
+row while the attempt is still warm is `live` by that definition. A
+third value would make one column answer two questions, where `env` and
+the seat's own `claim` record already answer the second. It is also
+immutable and written at transfer, so a third value could only arrive
+by rewriting history.
+
+*What if `check` fails on the branch the seat just wrote?* The seat says
+so, exits non-zero, and leaves the filled log in the working tree for a
+human to read as a diff — `derive --fill`'s own stated contract. It
+cannot push an unloggable row because it does not push at all.
+
+**What is still missing, and it is the whole remaining half.** Nothing
+calls `row`. It refuses any checkout that is not on the errand's own
+branch, which is the correct refusal and also means a journal hook
+firing against the operator's primary checkout can never satisfy it:
+the accurate moment is inside the seat, before the pull request opens,
+and the seat is emcee. That is the same sentence this entry opened with
+— "the work is in emcee, and it is small" — now with a castle-side
+command for it to call, and a mechanical failure rather than a
+convention standing in for the caller.

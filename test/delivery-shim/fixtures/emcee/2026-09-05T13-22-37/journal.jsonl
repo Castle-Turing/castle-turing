@@ -1,0 +1,6 @@
+{"base":"a6387a1dbe899c80c67d0cd5b29886ed2c7a82a9","emcee_version":"0.1.0","seq":0,"tasks":["0053-horse-race-stint-one-start-record"],"ts":1788628957.2621355,"type":"run_started"}
+{"budget":5.0,"budget_source":"flag","emcee_version":"0.1.0","pid":606169,"seq":1,"ts":1788628957.2913327,"type":"runner_started"}
+{"args_digest":"6014bf548ed111a7","emcee_version":"0.1.0","model":"deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731","model_source":"header","seq":2,"step":"0053-horse-race-stint-one-start-record","ts":1788628957.9575324,"type":"step_started"}
+{"emcee_version":"0.1.0","harness":"opencode","instructions":"AGENTS.md + opencode config (server-bound)","model":"deepseek-ai/DeepSeek-V4-Flash-0731","provider":"deepinfra","seq":3,"task":"0053-horse-race-stint-one-start-record","ts":1788628958.6581924,"type":"session_settings"}
+{"emcee_version":"0.1.0","error":"OpenCodeError: POST /permission/per_0729818dd001JyMqbhY8ZNDWm7/reply \u2192 HTTP 404: {\"_tag\":\"PermissionNotFoundError\",\"requestID\":\"per_0729818dd001JyMqbhY8ZNDWm7\",\"message\":\"Permission request not found: per_0729818dd001JyMqbhY8ZNDWm7\"}","seq":4,"step":"0053-horse-race-stint-one-start-record","ts":1788628965.8667126,"type":"step_finished"}
+{"emcee_version":"0.1.0","outcome":"backlog exhausted","seq":5,"ts":1788628965.86871,"type":"run_finished"}

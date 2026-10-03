@@ -736,6 +736,281 @@ Run any subcommand with no journal configured and it falls back to
 `~/.local/state/castle` — fine for poking at the tool by hand, but see
 "Where state lives" below for what a real deployment should set.
 
+## `agent/castle-delivery-shim` — the delivery seat's record shim
+
+The delivery seat (`docs/architecture.md`) is held by a tenant that
+never learns this project's record format. It emits its own events and
+a castle-side translator turns them into the three records that seat
+owes the journal — a `claim` when a brief is taken, a `result` carrying
+`outcome`, tenant, model and provider, and a `question` when it blocks
+on a judgment only the resident can supply. This is that translator.
+Its castle-side contract is task 0071; the mapping below is task 0081,
+which pinned it against the tenant's real schema. The seat owes one more
+thing and it is not a record: an answer to one of those questions has to
+resume the errand it parked. `resume` is that direction (task 0082) and
+`stranded` is the detector it ships with.
+
+    castle-delivery-shim fold      --run-dir DIR --tasks-dir DIR
+    castle-delivery-shim resume    --run-dir DIR --repo DIR [--tasks-dir DIR]
+    castle-delivery-shim stranded  [--older-than-days N]
+    castle-delivery-shim row       --run-dir DIR --checkout DIR --env KEY
+
+Nothing here imports the tenant. Its journal is read as the plain
+JSON-lines file it is, so the dependency runs downward exactly as the
+architecture says it must: the harness depends on nothing above it, and
+whoever integrates it pays for the integration.
+
+### The pinned schema
+
+Read from **emcee 0.1.0** — `src/emcee/journal.py`, `src/emcee/runner.py`,
+`src/emcee/parking.py`. Every record in a run's `journal.jsonl` carries
+`seq`, `ts`, `type` and `emcee_version`, stamped by the tenant's own
+`append()`. Five types matter:
+
+| tenant record | fields read | becomes |
+| --- | --- | --- |
+| `step_started` | `step`, `model`, `model_source` | a `claim` |
+| `step_finished` | `step`, `result.outcome` or `error` | a `result` |
+| `parked` | `task`, `question_file`, `session` | a blocking `question` |
+| `pr` | `task`, `url` | the `pull-request` field on that errand's result |
+| `session_settings` | `task`, `provider` | the result's provider, where the adapter declares one |
+
+The tenant's own outcome vocabulary maps onto the closed four values of
+`outcome` on a castle `result` through an allowlist in the shim, not a
+mapping with a default: an outcome nobody has read yet refuses rather
+than arriving as `completed` because that was the fallback. `outcome`
+describes the *turn* — architecture.md has said since task 0023 that
+the contract "describes one turn rather than necessarily a whole
+errand" — so a tenant that parked, found the task infeasible or
+declined to touch a held branch still finished its turn, and the
+tenant's own word is preserved verbatim beside it in `tenant-outcome`.
+Nothing is lost and nothing is invented.
+
+Recording the version is deliberate and is not a refusal to read
+anything else: the shim folds history written by older tenants too, and
+does so honestly — a journal from before the tenant made `model`
+required cannot name its implementer, and says so rather than guessing.
+
+### The hook is a doorbell, not the mail
+
+The tenant's `--journal-hook CMD` runs CMD once per appended record,
+with that record on stdin and `EMCEE_RUN_DIR` in the environment. The
+shim reads the environment variable and **never reads stdin at all** —
+not read-and-discarded, never opened. The payload says *when* to look
+and never *what happened*; what happened always comes from the tenant's
+log, read fresh. The tenant caps a record at 16 KiB against a 64 KiB
+pipe buffer, so nothing blocks on the unread end; a version that did
+drain it hung the interval poll, whose stdin is an inherited descriptor
+nobody closes.
+
+That is what makes a missed firing a liveness problem rather than a
+correctness one, and it has a consequence worth stating plainly: the
+doorbell and the interval poll are the same command with the same
+arguments. Wire `fold` to `--journal-hook`, wire `fold` to a timer, and
+neither can produce a record the other would not. There is no second
+code path to keep honest, which is why the test for a silent doorbell
+is a run with no payload at all rather than a simulation of one.
+
+### Idempotence, and what it borrows
+
+Every pass reads the whole tenant journal and writes only what is not
+already in the castle journal. "Already there" is matched on a durable
+per-event identity the tenant supplies — the errand, the run, and that
+journal's own `seq`:
+
+    source-event: 0076-widen-the-lint@castle-turing/2026-09-22T09-09-47#3
+
+It cannot be the record's content. One errand legitimately produces two
+`result` records across two attempts, and one park legitimately
+produces two `question` records if the resident is asked twice;
+distinguishing those from a replay is exactly what the key buys. It is
+also what makes the fold crash-safe: a shim that wrote a record and
+died re-derives "already written" from the journal it already appended
+to, never from a checkpoint it never saved. The run is named by its
+last two path components, so the identity is the same on any machine
+and no operator path enters a record.
+
+One fold runs at a time, under an `flock` in the runtime directory
+beside the ones `castle dispatch` and `castle route` take. That is not
+belt-and-braces: the tenant fires its hook on a thread per record and
+serialises nothing, a task's last records land milliseconds apart, so
+two folds at once is the ordinary case rather than the edge — and two
+folds both find the same event unwritten and both write it. Eight
+racing folds over one journal produced fifteen records where one fold
+produces four, before the lock existed.
+
+If a tenant journal ever arrives without a distinct `seq` on every
+record, the shim refuses the whole pass. That is task 0071's stated
+blocker rather than a case to work around: without a stable identity
+the fold must either drop a real second attempt or duplicate a replay,
+and both are silent.
+
+### Three fields, and why only one of them is left open
+
+**`refs` is empty, deliberately.** A delivery errand's upstream is a
+numbered brief — a file, not a journal record — and the seat that would
+give a brief a citable id does not exist yet. Task 0071 fixed this as
+friction 2 and task 0082 restates it: the resumption mechanism chains
+on the *answer*, which is a real record, not on the question's own
+refs. The brief is named in each record's body instead, by task number
+and slug.
+
+**`provenance` is sourced or nothing is written.** It looks like
+another deferrable citation and is not: it is `cmd_route`'s primary
+input, so a guessed value routes a blocking question to the digest
+instead of an interruption and the errand parks until the resident
+happens to read a digest they may already have dismissed. The source is
+the brief's presence in the tasks directory the shim is pointed at — a
+file arrives there only by the resident's `Status: ready` mark and the
+mechanical transfer that follows it, which makes it the resident's own
+act, and therefore `requested`. The record names the file it read in
+`provenance-source`. No brief, no record, and the refusal names the
+errand.
+
+**The result names its implementer, or there is no result.** Task 0069
+requires tenant, model and provider recorded at the moment they are
+known rather than reconstructed from a commit trailer or a guess at
+prose style. The provider comes from the adapter's declared `provider`
+where there is one, and otherwise from the vendor prefix of the model
+id — the tenant's own `sentinel.family()` rule, coarse on purpose — and
+which of the two answered is written into `provider-source`.
+
+### Why it writes through `write_record` rather than `castle record`
+
+`castle record --blocking` refuses a question whose first `refs` entry
+does not walk back to a `request` record, because for the worker seat
+an unattributable blocking question is a permanent silent dead end.
+That guard is worker-shaped: a delivery errand has no `request` record
+to point at, by friction 2, and its resumption is chained from the
+answer rather than from the question's refs. So the shim is a seat's
+hands calling the same choke point `file_answer`, `file_correction` and
+`route_journal` call — `write_record`, which keeps every refusal that
+matters here — rather than going through the CLI's argparse layer.
+
+The gap that leaves is real and named rather than quietly accepted: a
+human holding the delivery seat by hand cannot write one of these
+questions with `castle record` today. `docs/backlog/` carries it.
+
+### The inbound direction — an answered question resumes the errand
+
+The delivery paragraph in `docs/architecture.md` binds this seat to the
+bound task 0023 established for the worker: one answer producing exactly
+one resumption, chained by the `claim` that names it. `resume` is what
+makes that true.
+
+**Eligibility is a total function of the journal.** An `answer` record
+closing one of this run's blocking delivery `question` records, minus every
+answer a `claim` already names as spent. Two filters, both borrowed from
+castle's own worker fold rather than invented here: `blocking` is tested
+against the one spelling `castle record --blocking` writes, so an
+unrecognised value fails towards *not* resuming; and only an answer
+carrying `provenance: requested` and `seat: intake` — the pair
+`file_answer` writes and nothing else does — can buy a resumption. The
+second is a filter rather than a boundary, and what it buys is that a
+defeated write guard still cannot grant a turn unless the record also
+impersonates intake.
+
+"Spent" is global over every claim in the journal, not scoped to this seat
+or this run, for the reason `_resumable_answers` gives: the bound is a
+property of the *answer*, and keying it per-errand would make "one answer,
+one resumption, ever" false while looking correct.
+
+There is no policy here about which eligible answer to spend and no say in
+whether to spend one. That is the guard sentence the plumbing seats carry,
+and this is the paragraph a later agent is most likely to "complete" into a
+reasoning seat by adding a judgment about priority or readiness.
+
+**Write-ahead, then invoke.** The claim is written before anything reaches
+the tenant, and its `refs` name the answer then the question — the first
+non-empty `refs` any record of this seat carries, because an answer is a
+record where a brief is only a file. Then the answer is written into the
+tenant's own question file, and then the verb runs.
+
+That leaves a crash window — claim durable, invocation dead — and it closes
+at the tenant boundary rather than at a checkpoint on this side. The tenant
+flips its question file to `Status: resolved` strictly before it selects
+the task, so **a resume against a park the tenant no longer shows as open
+dispatches nothing**, and an unanswered park makes the verb refuse before
+journaling at all. Both were demonstrated against the real verb rather than
+assumed (`test/delivery-shim/tenant-boundary.sh`, and the capture it
+produced in `fixtures/resumed/`). So a claim standing while the tenant
+still shows the errand parked is re-invoked after a grace interval, writing
+no second claim. The grace interval is not the protection against a
+re-invocation landing on a live sprint — the tenant's own per-repository
+sprint lock is, and it refuses a second sprint before journaling anything.
+
+**One invocation per pass, not one per answer.** The tenant's verb is
+run-scoped: it re-runs every answered park in the run it is pointed at. A
+pass that claimed two answers invokes once and the tenant resumes both
+errands. The per-answer accounting is the claim; the coalescing is the
+tenant's.
+
+**The answer reaches the tenant verbatim.** The `## Answer` section is
+replaced by the answer record's body and nothing is added to it — no seat
+paraphrases the resident, and this is the one place in the path where a
+paraphrase would have nothing to catch it, since the resumed attempt has no
+other copy of those words. The record id goes in `Answered-by:`, in the
+tenant's own `agent:<name> for <human>` convention, and in an HTML comment
+the tenant's parser strips before it reads the answer. The test
+byte-compares the section against the record rather than grepping it for a
+phrase.
+
+**There is one case where a claim is written and nothing is invoked**: the
+tenant's question file already says it is resolved and no claim names the
+answer. That is the operator having relaunched the tenant by hand, which
+was the only path before this existed and stays legal after it. The answer
+bought its one resumption and what is missing is the receipt, so the claim
+is written with `resumed-by: operator`. That is an observation of the
+tenant's own durable state, not a verdict; the alternative is refusing, on
+every poll, forever, about something that is not wrong.
+
+**Which command the verb is** is configuration, not mechanism —
+`$CASTLE_DELIVERY_RESUME_COMMAND`, defaulting to `emcee resume`, the same
+split `CASTLE_WORKER_COMMAND` already makes for the worker seat's tenant.
+The three arguments the shim appends (`--run`, `--repo`, `--tasks`) are
+not configurable: they say which park is being resumed, and a
+configuration able to pin them could redirect the accounting.
+
+**Nothing polls it yet.** `resume` is the same command whether a doorbell
+rang or a timer fired, so a missed notice delays a resumption and can never
+corrupt the accounting — but the timer itself is unwired, and
+`docs/backlog/nothing-polls-the-delivery-shim.md` carries that gap for both
+directions at once.
+
+### The detector — `stranded`
+
+A silently stranded park looks exactly like a quiet day, so the mechanism
+ships the check that makes it loud. `stranded` reads the journal and
+nothing else, and reports every blocking delivery question older than the
+cutoff that has no resumption path, distinguishing the two ways that
+happens because the remedies differ: **unanswered** (the park reached the
+journal and nobody closed it — the router's business), and **answered and
+unspent** (a claim should have named that answer within a poll interval, so
+either nothing is running `resume` or every pass is refusing). It exits
+non-zero when it finds any.
+
+This is the rule `docs/backlog/nothing-sweeps-the-pipeline-invariants.md`
+gains, implemented here so the sweep calls it rather than deriving the same
+fold a second way — and it is an artifact-state invariant, few and broad,
+which is that entry's own stated discipline.
+
+### The outcome-log row
+
+`row` matures this errand's row in `docs/log/task-outcomes.tsv` by
+running `tools/outcomes/outcomes derive --fill` against the errand's
+own records in the tenant's journal — running the existing derivation
+rather than re-deriving the same numbers a second way. The journal is
+filtered to this errand before `derive` sees it: a run's journal can
+span several tasks, and `derive --fill` matures every row it finds
+facts for, so an unfiltered journal would let this errand's branch
+write another task's receipt cells. It refuses unless the checkout it
+is given is on the errand's own branch, because that is where the row
+belongs and when it is still accurate, and it never commits and never
+pushes:
+the seat proposes and does not deploy, and a log it filled that fails
+`check` is reported and left in the working tree for a human to read as
+a diff.
+
 ## The record format
 
 One file per record, named `<id>.md`, holding a strict, flat

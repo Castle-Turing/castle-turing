@@ -50,10 +50,19 @@ let
       install -Dm755 castle $out/libexec/castle
       install -Dm755 castle-modal $out/libexec/castle-modal
       install -Dm755 castle-worker-claude $out/bin/castle-worker-claude
+      install -Dm755 castle-delivery-shim $out/libexec/castle-delivery-shim
       makeWrapper ${pkgs.python3}/bin/python3 $out/bin/castle \
         --add-flags $out/libexec/castle
       makeWrapper ${pkgs.python3}/bin/python3 $out/bin/castle-modal \
         --add-flags $out/libexec/castle-modal
+      # On PATH like the other two, and for the same reason: the
+      # delivery tenant names its journal hook as a command string in
+      # the operator's own roster, so the shim has to be a name that
+      # resolves rather than a path into a store the roster would then
+      # have pinned. It loads `castle` as a library from alongside
+      # itself, which is why it is installed into libexec beside it.
+      makeWrapper ${pkgs.python3}/bin/python3 $out/bin/castle-delivery-shim \
+        --add-flags $out/libexec/castle-delivery-shim
     '';
     meta.description = "Castle Turing agent-layer CLI (record schema, router, digest, modal, worker wrapper)";
   };

@@ -1,0 +1,21 @@
+{"base":"f900e72177bc44a21f7571bcd013283f1f7cb2dd","emcee_version":"0.1.0","seq":0,"tasks":["0005-digest-cost","0006-run-per-sprint"],"ts":1787277451.8399498,"type":"run_started"}
+{"args_digest":"6014bf548ed111a7","emcee_version":"0.1.0","model":"claude-opus-5","model_source":"header","seq":1,"step":"0005-digest-cost","ts":1787277451.910008,"type":"step_started"}
+{"cost_usd":0.806363,"emcee_version":"0.1.0","seq":2,"task":"0005-digest-cost","ts":1787277589.3661292,"turns":15,"type":"usage"}
+{"branch":"emcee/0005-digest-cost","emcee_version":"0.1.0","seq":3,"task":"0005-digest-cost","ts":1787277592.8987176,"type":"pr","url":"https://github.com/Castle-Turing/emcee/pull/8"}
+{"emcee_version":"0.1.0","result":{"branch":"emcee/0005-digest-cost","outcome":"pr_opened"},"seq":4,"step":"0005-digest-cost","ts":1787277593.004932,"type":"step_finished"}
+{"args_digest":"6014bf548ed111a7","emcee_version":"0.1.0","model":"claude-opus-5","model_source":"header","seq":5,"step":"0006-run-per-sprint","ts":1787277593.0120926,"type":"step_started"}
+{"detail":"cd /tmp","emcee_version":"0.1.0","rule":"outside-worktree","seq":6,"task":"0006-run-per-sprint","tool":"Bash","ts":1787277700.970793,"type":"veto"}
+{"cost_usd":0.8640804999999999,"emcee_version":"0.1.0","seq":7,"task":"0006-run-per-sprint","ts":1787277748.0901763,"turns":19,"type":"usage"}
+{"branch":"emcee/0006-run-per-sprint","emcee_version":"0.1.0","seq":8,"task":"0006-run-per-sprint","ts":1787277751.3240595,"type":"pr","url":"https://github.com/Castle-Turing/emcee/pull/9"}
+{"emcee_version":"0.1.0","result":{"branch":"emcee/0006-run-per-sprint","outcome":"pr_opened"},"seq":9,"step":"0006-run-per-sprint","ts":1787277751.503506,"type":"step_finished"}
+{"emcee_version":"0.1.0","outcome":"backlog exhausted","seq":10,"ts":1787277751.536403,"type":"run_finished"}
+{"args_digest":"6014bf548ed111a7","emcee_version":"0.1.0","model":"claude-sonnet-5","model_source":"header","seq":11,"step":"0007-greeting","ts":1787279993.5528755,"type":"step_started"}
+{"cost_usd":0.216157,"emcee_version":"0.1.0","seq":12,"task":"0007-greeting","ts":1787280031.4463623,"turns":8,"type":"usage"}
+{"emcee_version":"0.1.0","question_file":"/home/operator/projects/emcee/runs/2026-08-20/parked/0007-greeting.md","seq":13,"session":"39d413e4-3417-4549-ae15-dfde66352b03","task":"0007-greeting","ts":1787280031.478997,"type":"parked"}
+{"emcee_version":"0.1.0","result":{"branch":null,"outcome":"parked"},"seq":14,"step":"0007-greeting","ts":1787280031.517321,"type":"step_finished"}
+{"emcee_version":"0.1.0","outcome":"backlog exhausted","seq":15,"ts":1787280031.5259347,"type":"run_finished"}
+{"answered_by":"operator","emcee_version":"0.1.0","note":"re-running the task with this answer","question_file":"/home/operator/projects/emcee/runs/2026-08-20/parked/0007-greeting.md","seq":16,"task":"0007-greeting","ts":1787280336.4383378,"type":"answered"}
+{"args_digest":"6014bf548ed111a7","emcee_version":"0.1.0","model":"claude-haiku-4-5","model_source":"header","seq":17,"step":"0007-greeting","ts":1787280336.4716134,"type":"step_started"}
+{"cost_usd":0.125964,"emcee_version":"0.1.0","seq":18,"task":"0007-greeting","ts":1787280369.4978359,"turns":5,"type":"usage"}
+{"emcee_version":"0.1.0","error":"CalledProcessError: Command '['gh', 'pr', 'create', '--head', 'emcee/0007-greeting', '--base', 'main', '--title', \"0007-greeting \u2014 Add a greeting file (the wording is the operator's call)\", '--body', 'Automated run of task `0007-greeting`.']' returned non-zero exit status 1.","seq":19,"step":"0007-greeting","ts":1787280375.2348034,"type":"step_finished"}
+{"emcee_version":"0.1.0","outcome":"backlog exhausted","seq":20,"ts":1787280375.2541955,"type":"run_finished"}
