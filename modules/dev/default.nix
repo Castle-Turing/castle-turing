@@ -79,6 +79,15 @@ let
     if command -v direnv >/dev/null 2>&1; then
       export CASTLE_DIRENV_BASH_ENV_GUARD=1
       eval "$(direnv export bash)"
+      # Exported variables are inherited by every later child this
+      # shell spawns, not just direnv's own nested one — left set,
+      # the guard would wrongly skip a second, unrelated non-
+      # interactive bash started later from the same shell (e.g. a
+      # script that `cd`s into a project only after already starting
+      # once in another directory). Unset once direnv's own nested
+      # evaluation has returned, so the guard only lives for the
+      # window it has to.
+      unset CASTLE_DIRENV_BASH_ENV_GUARD
     fi
   '';
 in
