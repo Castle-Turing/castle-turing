@@ -1,0 +1,136 @@
+name: direnv-delivery-test
+
+# docs/tasks/0083: boots the real base+home+desktop+dev stack in a
+# NixOS VM, logs in through the real greetd+tuigreet prompt, and
+# proves direnv's BASH_ENV delivery reaches a non-interactive bash
+# launched as a direct child of the greetd-launched Sway session (not
+# through any login shell) and a systemd --user unit, that the
+# whitelist authorizes two projects with no manual `direnv allow`, and
+# that a cold-cache `use flake` load evaluates exactly once — see
+# test/direnv-delivery/test.nix for the full design and why `su -`
+# alone would not be a faithful regression test here.
+#
+# Its own workflow, not folded into check.yml's flake-check job, same
+# reasoning as desktop-loop-test.yml and vm-install-test.yml: this
+# boots a real VM with a real graphical login under QEMU/KVM, which
+# bare `nix flake check` must never be made to do. Deliberately does
+# NOT filter on hosts/**: like desktop-loop-test.yml, this test imports
+# no hosts/* module at all (nixosTest supplies its own virtual hardware
+# profile).
+on:
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "modules/base/**"
+      - "modules/home/**"
+      - "modules/desktop/**"
+      - "modules/dev/**"
+      - "test/direnv-delivery/**"
+      - "test/ci/**"
+      - ".github/workflows/direnv-delivery-test.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "modules/base/**"
+      - "modules/home/**"
+      - "modules/desktop/**"
+      - "modules/dev/**"
+      - "test/direnv-delivery/**"
+      - "test/ci/**"
+      - ".github/workflows/direnv-delivery-test.yml"
+  # Lets a branch that isn't (yet) on a PR trigger this workflow by hand
+  # via `gh workflow run` — the only way to get a real CI result while
+  # iterating, since there is no `nix` on the development machine (see
+  # this repo's CLAUDE.md).
+  workflow_dispatch: {}
+
+jobs:
+  direnv-delivery-test:
+    runs-on: ubuntu-latest
+    # magic-nix-cache-action authenticates to the cache via OIDC.
+    permissions:
+      contents: read
+      id-token: write
+    # A full desktop closure (Sway, Firefox, Emacs, claude-code) plus a
+    # real graphical boot, a real greetd/tuigreet login, and OCR-paced
+    # typing — the same shape as desktop-loop-test.yml, whose own
+    # budget this mirrors rather than guesses at.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+
+      # Same fix, same reasoning as desktop-loop-test.yml's identical
+      # step: a full graphical boot under TCG emulation would blow past
+      # any reasonable timeout-minutes budget in a way that reads as
+      # "direnv delivery is broken" rather than "this runner has no
+      # KVM."
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-castle-turing-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            ls -la /dev/kvm
+          else
+            msg="KVM unavailable on this runner; a full graphical boot under TCG would exceed the job's time budget — failing fast rather than timing out opaquely."
+            echo "$msg" >&2
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # test/ci/retry-on-known-transient.sh: the same bounded,
+      # signature-matched retry the sibling VM-test workflows use for
+      # CI's own recognizable infrastructure flakes (docs/tasks/0041).
+      # --keep-failed preserves the QEMU/OCR sandbox (screenshots
+      # included) on a failing run — see desktop-loop-test.yml's own
+      # comment on why the store path is read from a file and
+      # validated before anything is copied from it, rather than
+      # trusted blindly.
+      - name: Build and run the direnv-delivery test
+        run: |
+          test/ci/retry-on-known-transient.sh --stdout /tmp/direnv-delivery-out-path.txt -- \
+            bash -c 'sudo rm -rf /tmp/nix-build-*direnv-delivery* 2>/dev/null; exec nix build .#direnv-delivery-test -L --keep-failed --no-link --print-out-paths'
+
+      - name: Collect artifacts (screenshots) from a successful run
+        if: success()
+        run: |
+          set -euo pipefail
+          mkdir -p direnv-delivery-artifacts
+          OUT="$(cat /tmp/direnv-delivery-out-path.txt)"
+          case "$OUT" in
+            /nix/store/*) ;;
+            *)
+              echo "direnv-delivery-out-path.txt did not contain a Nix store path (got: '$OUT'); refusing to copy from it." >&2
+              exit 1
+              ;;
+          esac
+          cp -r "$OUT"/. direnv-delivery-artifacts/
+          echo "Collected $(find direnv-delivery-artifacts -type f | wc -l) file(s) from $OUT"
+
+      - name: Collect artifacts (screenshots) from a failed run
+        if: failure()
+        continue-on-error: true
+        run: |
+          mkdir -p direnv-delivery-artifacts
+          sudo find /tmp -maxdepth 1 -name 'nix-build-*direnv-delivery*' \
+            -exec sh -c 'cp -r "$1"/. direnv-delivery-artifacts/ 2>/dev/null' _ {} \; || true
+          sudo chown -R "$(id -u):$(id -g)" direnv-delivery-artifacts || true
+          echo "Collected $(find direnv-delivery-artifacts -type f | wc -l) file(s) from any --keep-failed build directory found"
+
+      - name: Upload direnv-delivery-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: direnv-delivery-test-artifacts
+          path: direnv-delivery-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
