@@ -375,7 +375,8 @@ judgment stays there. `check` reads the slate the seat produced and says
 whether the discipline was followed: every requirements clause is
 carried by some brief or deferred with a reason, every clause a brief
 claims to serve exists, every brief carries the tier and the reason for
-the tier and at least one verification criterion, the brief count is
+the tier and at least one verification criterion with the disposition that
+answers it, the brief count is
 within the budget declared before the run, the dependency graph is
 acyclic with a reason on every edge, and no proposed number is already
 taken.
@@ -402,3 +403,53 @@ touches a journal and never runs as a seat, the artifacts it reads are
 files in this repository, and the sessions running it are sessions
 editing this repository. When the phase it serves is wired into the
 product, the checks belong wherever the seat does.
+
+## `accept/` — run a brief's criteria, report the run as a receipt
+
+```
+tools/accept/accept run <brief> --base origin/main -o <receipt>
+tools/accept/accept check <receipt>
+```
+
+The acceptance harness specced in task 0080 and written out in
+`docs/planning.md`, beside the seat that authors the criteria it runs. The
+failure mode it exists for is an implementer reporting work complete while
+holding a different definition of complete than the resident: unit tests
+passing is not "works the way the resident expects", and task 0070 is the
+specimen — every test green, the gate armed, and the resident's reading
+unmet until a person read the pull request.
+
+`run` reads a brief's `Criterion:` fields and the `Check:` or `Manual:`
+disposition under each, runs the checks where the criteria say to run them,
+and writes a receipt reporting each criterion one at a time with its
+command, its exit status and its transcript. It refuses four things rather
+than passing them: a brief with no criteria or no disposition, a criterion
+edited on the branch being measured against it (`--base`), a run past the
+repair cap, and a brief no criterion of which is executable — a green exit
+over nothing exercised is a verdict wearing an exit status.
+
+`check` reads a receipt on its own, which is the case that needs a checker
+at all: a receipt handed in by an acceptance agent is prose somebody wrote,
+in the register a model reaches for when asked whether work is done. It
+holds the format, the evidence under each criterion, and the
+completion-assertion vocabulary ban that `tools/handover-check.py` enforces
+on the handover — the same list, held identical by `test/accept/run.sh`.
+
+Two results are escalations rather than failures: a command that could not
+be found and a check that never finished. Nothing here can tell a missing
+artifact from a broken check, so the run says so and stops instead of
+interpreting it.
+
+`oracle/brief.md` carries task 0072's criteria read back post-hoc — "a row
+appears when a task lands", the criterion whose absence let 0070 through —
+and `oracle/receipt.md` is the receipt of a real run over them, kept as a
+specimen rather than a golden file. `test/accept/run.sh` is mostly the
+negative half: nearly forty cases, each asserted to be caught by the rule that
+owns it, including both directions of the frozen rule over throwaway git
+repositories.
+
+What it cannot do is the half that matters. A receipt is evidence that a
+mechanism fired and weak evidence that a person is satisfied; whether the
+criteria were the right criteria, and whether the agent reading the receipt
+ran in a separate context from the implementer, are outside any tool.
+Neither this script nor anything reading its output approves work.

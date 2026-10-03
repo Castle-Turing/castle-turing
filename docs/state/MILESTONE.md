@@ -100,6 +100,30 @@ it explicitly.
   document has been decomposed for real yet. The falsifier is unrun —
   one real slate review against the checklist, whose six judgment
   items no checker can carry.
+- Acceptance of finished work: the artifact and the discipline are
+  built (task 0080). The acceptance run is written out in
+  `docs/planning.md` beside the seat that authors the criteria, and
+  `tools/accept/accept` runs one brief's criteria against what got
+  built and reports the run as a **receipt** — each criterion with its
+  command, its exit status and its transcript, never a verdict. A
+  criterion now carries the disposition that answers it: `Check:` with a
+  command, or `Manual:` with the step a person takes instead, checked at
+  spec time by `plan check` so that a criterion nothing can run and
+  nobody was asked to take cannot reach an implementer. The frozen rule
+  flags any criterion changed on the branch being measured against it,
+  and repair cycles stop at a cap that names the measured stopping rule
+  it stands in for. One worked example ships
+  (`tools/accept/oracle/`, task 0072's criteria read back post-hoc, with
+  the receipt of a real run committed beside it). It works over plain
+  files only: nothing runs it on a pull request, no brief in
+  `docs/tasks/` yet carries the disposition fields, and no second agent
+  reads a receipt. The falsifier is unrun — the resident's sampled reads
+  of real receipts against their own judgment, which is also the only
+  thing that can tell whether the compilation from criterion to check is
+  right. [inferred] the second clause of [m2-constraints] binds this
+  surface hardest and is met mechanically: the receipt's completion
+  vocabulary is a blocking lint and its standing limit is required
+  verbatim.
 - Question routing to the resident: product plumbing exists (the
   answer chord, task 0022); pipeline wiring not designed.
 - emcee dispatch: operating (sprints through task 0060 and PRs
