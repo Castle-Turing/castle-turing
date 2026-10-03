@@ -115,13 +115,23 @@ confirming the delivery gap.
   clones and `.envrc` edits with no ceremony, which is the point;
   per-project `direnv allow` was rejected because its failure mode is
   the silent fallback described above.
-- **Non-interactive delivery: a guarded `BASH_ENV` script.** The host
-  sets `BASH_ENV` (via `environment.variables`, so login sessions and
-  the shells they spawn inherit it, while systemd services and build
-  sandboxes do not) to a nix-store script that, when `direnv` is on
-  PATH, `DIRENV_DIR` is unset, and an `.envrc` governs the current
-  directory, runs `eval "$(direnv export bash)"`. direnv itself
-  enforces the trust policy, so unauthorized directories load nothing.
+- **Non-interactive delivery: a guarded `BASH_ENV` script, set via
+  `environment.sessionVariables` — not `environment.variables`.**
+  Post-merge review caught the first draft using
+  `environment.variables`, which this repo has already been burned by:
+  task 0013's Bug 2 records that it lands in `/etc/set-environment`,
+  sourced by login shells only, and the greetd→tuigreet→sway path never
+  sources it — so `BASH_ENV` would silently never reach a shell spawned
+  from the compositor, which is every agent shell this entry is about.
+  `modules/agent` crossed the same bridge and uses
+  `environment.sessionVariables` (the PAM path), confirmed working on a
+  greetd session; its config comment is the precedent to cite. The PAM
+  format caveat documented there (values must not contain `"`) is
+  satisfied here by construction: the value is a nix-store path.
+  `BASH_ENV` points at a store script that, when `direnv` is on PATH,
+  `DIRENV_DIR` is unset, and an `.envrc` governs the current directory,
+  runs `eval "$(direnv export bash)"`. direnv itself enforces the trust
+  policy, so unauthorized directories load nothing.
   Considered and rejected: documenting `direnv exec <dir> <cmd>` as
   the required invocation (pure guidance — the compliance weakness
   this entry documents), and harness-native direnv integration (not
@@ -164,7 +174,8 @@ confirming the delivery gap.
 1. `modules/dev/default.nix`: set `programs.direnv.enable = true`
    (nix-direnv rides the default), `programs.direnv.silent = true`,
    and the `BASH_ENV` delivery script (a `pkgs.writeShellScript` plus
-   `environment.variables.BASH_ENV`). Leave
+   `environment.sessionVariables.BASH_ENV` — see the delivery decision
+   above for why not `environment.variables`). Leave
    `programs.direnv.settings.whitelist` unset — hosts or the private
    layer declare their own prefixes; add one comment line saying
    exactly that and why (Principle 01).
@@ -175,13 +186,19 @@ confirming the delivery gap.
 3. `test/direnv-delivery/test.nix`: VM test, oomd-liveness pattern
    (inject the real generated artifacts, do not re-type them). One
    node, a sample flake project with a devShell exporting a marker
-   variable and a committed `.envrc` (`use flake`). Assert: (a) a
-   **non-interactive** `bash -c 'echo $MARKER'` in a whitelisted
-   project prints the marker; (b) the same in a non-whitelisted copy
-   prints nothing; (c) after editing `.envrc` in the whitelisted
-   project, the marker (or its successor) still loads with no manual
-   `direnv allow`; (d) `direnv` and nix-direnv are wired into
-   interactive bash init — the static regression half.
+   variable and a committed `.envrc` (`use flake`). The delivery
+   assertions must run **inside a session established through the real
+   login path** (greetd, as `test/desktop-loop` already drives — extend
+   or mirror it), not in the test driver's own root shell: task 0013's
+   Bug 2b is the precedent — a probe that does not cross PAM cannot
+   fail on the set-environment-versus-sessionVariables distinction,
+   and a test that cannot fail on the bug is not evidence about it.
+   Assert: (a) a **non-interactive** `bash -c 'echo $MARKER'` in a
+   whitelisted project prints the marker; (b) the same in a
+   non-whitelisted copy prints nothing; (c) after editing `.envrc` in
+   the whitelisted project, the marker (or its successor) still loads
+   with no manual `direnv allow`; (d) `direnv` and nix-direnv are wired
+   into interactive bash init — the static regression half.
 4. `test/eval-storm/test.nix`: VM test. Drive N synthetic nix-daemon
    connections (trivial `nix store ping`-class calls) above threshold
    within the window; assert the unit fails and the notify command

@@ -104,6 +104,20 @@ adopting uwsm is a larger, riskier change than the failure justifies. If
 a future need (real `app-*.scope` naming, XDG autostart integration)
 earns it, that is its own backlog entry, not a dependency of this fix.
 
+**Alternative considered and rejected: app2unit.** Post-merge review
+surfaced that the pinned nixpkgs packages `app2unit` (v1.4.4, from
+uwsm's author) — a standalone launcher that puts commands into XDG
+`app-*.scope`/`.service` units without uwsm's session takeover, sitting
+exactly between rejected-uwsm and a hand-rolled wrapper. Rejected
+anyway, for scope-of-mechanism reasons rather than taste: app2unit is
+Desktop-Entry-oriented (it resolves and launches `.desktop` entries,
+with terminal handling via `xdg-terminal-exec`), while every call site
+this brief wraps launches a raw command line; adopting it would add a
+dependency and a desktop-entry indirection to get, today, the same
+`systemd-run` call the three-flag wrapper makes directly. It is the
+natural candidate if the future `app-*.scope`-naming entry (above) is
+ever opened — record it there when that happens.
+
 **2. Reach: terminals included, not launcher picks only.** The
 2026-10-02 trigger was an agent session inside a terminal, not a
 launcher pick, and launcher-only wrapping would not have contained it.
