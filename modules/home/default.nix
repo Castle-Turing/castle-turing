@@ -221,9 +221,9 @@ in
   # systemd unit properties that class's transient scope is created
   # with. Nothing here sets a bound: this task is only about the
   # *topology* (one cgroup per app instead of one for the desktop), and
-  # what a sensible MemoryHigh= would be is a separate question with a
-  # separate backlog entry behind it. The slot exists so that answer
-  # lands as a list entry rather than as a reshaping of the wrapper.
+  # what a sensible MemoryHigh= would be is task 0085's question. The
+  # slot exists so that answer lands as a list entry rather than as a
+  # reshaping of the wrapper.
   options.castle.launch = lib.mapAttrs (_class: what: {
     extraProperties = lib.mkOption {
       type = lib.types.listOf lib.types.str;
