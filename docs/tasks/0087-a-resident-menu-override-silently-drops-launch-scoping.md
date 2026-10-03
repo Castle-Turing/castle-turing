@@ -1,7 +1,6 @@
 Title: Expose the launch wrapper and assert the menu routes through it
 Model: standard
 Milestone: none — hygiene
-Status: ready
 Model-because: every design decision is made in this brief — the option
 shape, the assertion's exact predicate and gate, which definition drops
 to mkDefault and which deliberately does not — and the two assumptions

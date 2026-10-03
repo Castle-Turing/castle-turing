@@ -82,3 +82,5 @@ schema	task	attempt	queued	landed	outcome	tier	model	milestone	pr	cost_usd	turns
 1	0083-a-dev-shell-entry-costs-a-nixpkgs-eval-per-command	1	2026-10-02	2026-10-02	merged	standard	-	none-hygiene	149	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
 1	0084-an-oomd-kill-takes-the-whole-desktop	1	2026-09-15	2026-09-16	merged	deep	-	none-hygiene	128	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
 1	0085-an-agent-workload-can-thrash-the-host	1	2026-09-06	2026-09-06	merged	standard	-	none-hygiene	103	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
+1	0086-the-direnv-delivery-test-is-timing-flaky-in-ci	1	2026-10-03	-	-	standard	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0087-a-resident-menu-override-silently-drops-launch-scoping	1	2026-10-03	-	-	standard	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-

@@ -1,7 +1,6 @@
 Title: The direnv probe names its own timeout and logs its duration
 Model: standard
 Milestone: none — hygiene
-Status: ready
 Model-because: the edit is small and fully specified — one probe
 script, one reader function, one bound — but it sits in measured-timing
 terrain where the failure mode of a wrong change is the exact flake
