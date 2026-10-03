@@ -134,6 +134,19 @@ in
         Type = "oneshot";
         ExecStart = "${checkScript}";
       };
+      # Every unit the user manager starts inherits BASH_ENV from
+      # modules/dev's own DefaultEnvironment — including this one, and
+      # bash sources $BASH_ENV for any non-interactive invocation (a
+      # shebang-exec'd script included), not only `bash -c`. This unit
+      # sets no WorkingDirectory, so it defaults to the resident's
+      # home; if that happens to be a whitelisted, direnv-managed
+      # checkout (a private-layer dotfiles repo is a plausible one),
+      # every two-minute tick would pay its own `direnv export` and
+      # potentially its own nix-daemon connection — folding the
+      # detector's own operation into the exact count it exists to
+      # watch. CASTLE_DIRENV_DISABLE is this module's own documented
+      # opt-out for precisely this shape of case.
+      environment.CASTLE_DIRENV_DISABLE = "1";
     };
 
     systemd.user.timers.castle-eval-storm-check = {
