@@ -149,13 +149,45 @@ let
     "--quiet"
   ];
 
+  # docs/tasks/0085. The three typed bounds, rendered as the same
+  # `--property=` flags extraProperties produces, only when set. Typed
+  # rather than left for a resident to spell out in extraProperties
+  # themselves so the throttle-versus-cap distinction below has one
+  # place to live next to the values it governs, and so a size string
+  # is validated (`nullOr str`) rather than hidden inside a free-form
+  # list entry.
+  #
+  # MemoryHigh= is a throttle, not a ceiling: systemd reclaims
+  # aggressively and slows the cgroup above this value, but usage may
+  # exceed it indefinitely if unavoidable — a runaway allocation
+  # becomes a slow one. MemoryMax= is the hard cap: the kernel
+  # OOM-kills within the scope once usage reaches it. The two are not
+  # one "aggregate bound" (cross-model review on this task's PR caught
+  # an earlier draft of this comment calling them that); a host that
+  # wants a real ceiling sets memoryMax, not just memoryHigh.
+  #
+  # memorySwapMax is MemoryHigh's companion on a zram-only host:
+  # MemoryHigh relieves pressure by pushing pages to swap, and when
+  # swap is zram, swap *is* RAM — reclaim converts a runaway's
+  # footprint at roughly the compression ratio rather than evicting it
+  # anywhere. Capping swap here keeps that conversion itself bounded.
+  memoryProperties =
+    class:
+    let
+      c = launchCfg.${class};
+    in
+    lib.optional (c.memoryHigh != null) "MemoryHigh=${c.memoryHigh}"
+    ++ lib.optional (c.memorySwapMax != null) "MemorySwapMax=${c.memorySwapMax}"
+    ++ lib.optional (c.memoryMax != null) "MemoryMax=${c.memoryMax}";
+
   # escapeShellArgs, not bare interpolation: these words are generated
   # into a shell script, and a property value a private layer wrote
   # with a space or a quote in it must stay one argument.
   runCommand =
     class:
     lib.escapeShellArgs (
-      scopeFlags ++ map (p: "--property=${p}") launchCfg.${class}.extraProperties
+      scopeFlags
+      ++ map (p: "--property=${p}") (launchCfg.${class}.extraProperties ++ memoryProperties class)
     );
 
   # Usage: castle-launch <class> -- <command> [args...]
@@ -217,26 +249,78 @@ in
     };
   };
 
-  # docs/tasks/0084. One entry per launch class, each carrying the
-  # systemd unit properties that class's transient scope is created
-  # with. Nothing here sets a bound: this task is only about the
-  # *topology* (one cgroup per app instead of one for the desktop), and
-  # what a sensible MemoryHigh= would be is task 0085's question. The
-  # slot exists so that answer lands as a list entry rather than as a
-  # reshaping of the wrapper.
+  # docs/tasks/0084 (topology) and 0085 (the three typed bounds below).
+  # One entry per launch class, each carrying the systemd unit
+  # properties that class's transient scope is created with. The
+  # framework sets no numbers anywhere in this repo (Principle 01): a
+  # host that wants a bound supplies its own value from the private
+  # layer — see docs/private-layer.md.
   options.castle.launch = lib.mapAttrs (_class: what: {
     extraProperties = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "MemoryHigh=4G" ];
+      example = [ "TasksMax=256" ];
       description = ''
         Extra systemd unit properties for the transient scope holding
         ${what}, each rendered as one `--property=` flag to
         `systemd-run --user --scope`. See systemd.resource-control(5)
-        for what can be set; `MemoryHigh=`/`MemoryMax=` are the ones a
-        resident is most likely to want. Framework default is the empty
-        list — a scope with no bounds, which is still its own
-        oomd-eligible leaf.
+        for the full vocabulary. The three properties a resident is
+        most likely to want — MemoryHigh=, MemorySwapMax=, MemoryMax=
+        — have their own typed options below; use this list for
+        anything else. Framework default is the empty list — a scope
+        with no bounds, which is still its own oomd-eligible leaf.
+      '';
+    };
+
+    # docs/tasks/0085. All three are `nullOr str` (a systemd size
+    # string: "6G", "512M") and default to `null`, meaning: no
+    # property passed, exactly the behavior before this task. Values
+    # are private-layer configuration (Principle 01) — the repo ships
+    # no numbers, because what a given scope deserves depends on the
+    # host's RAM and workload, not on the framework.
+    memoryHigh = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "6G";
+      description = ''
+        `MemoryHigh=` for the transient scope holding ${what} — a
+        throttle, not a ceiling (systemd.resource-control(5)): usage
+        above this value is slowed and reclaimed aggressively, but may
+        still exceed it if unavoidable. Rendered as
+        `--property=MemoryHigh=<value>` when set. On a host whose swap
+        is zram, pair this with memorySwapMax — reclaim here pushes
+        pages into compressed RAM, not off it. For a hard cap, see
+        memoryMax. Default `null`: no property passed.
+      '';
+    };
+
+    memorySwapMax = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "2G";
+      description = ''
+        `MemorySwapMax=` for the transient scope holding ${what},
+        capping how much swap it may use. Rendered as
+        `--property=MemorySwapMax=<value>` when set. Matters most
+        alongside memoryHigh on a zram-only host: MemoryHigh relieves
+        pressure by pushing pages to swap, and when swap is zram, swap
+        *is* RAM, so reclaim converts the scope's footprint at roughly
+        the compression ratio rather than evicting it anywhere — this
+        option bounds that conversion. Default `null`: no property
+        passed.
+      '';
+    };
+
+    memoryMax = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "8G";
+      description = ''
+        `MemoryMax=` for the transient scope holding ${what} — the
+        hard cap (systemd.resource-control(5)): unlike memoryHigh,
+        usage cannot exceed this, and the kernel OOM-kills within the
+        scope once it does. Rendered as `--property=MemoryMax=<value>`
+        when set. Default `null`: no property passed.
       '';
     };
   }) launchClasses;
