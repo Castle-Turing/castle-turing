@@ -22,7 +22,6 @@ session verifies that allocation against the live directory first — a
 `Requires:` naming a brief that exists nowhere must never land in
 `docs/tasks/`, so if the directory has moved, a fix to this header
 precedes transfer.
-Status: ready
 
 # An agent workload can thrash the host, and nothing bounds it
 

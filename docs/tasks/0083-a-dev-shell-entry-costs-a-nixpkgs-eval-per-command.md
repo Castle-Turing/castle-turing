@@ -11,7 +11,6 @@ model historically writes tests that assert the happy path and call it
 done. The brief's tests are specified below precisely so the
 implementer's judgment is spent on making them honest, not inventing
 them.
-Status: ready
 
 # A dev-shell entry costs a nixpkgs evaluation per command, and agents pay it in loops
 

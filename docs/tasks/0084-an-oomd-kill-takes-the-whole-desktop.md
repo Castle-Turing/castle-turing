@@ -10,7 +10,6 @@ likely produce a desktop that works while the wrapping silently does
 not — the exact silent revert the detector exists to catch — and this
 task needs an implementer with the judgment to argue with the spec if
 the pinned systemd or home-manager behaves differently than stated.
-Status: ready
 
 # An oomd kill takes the whole desktop, because every app shares one cgroup
 
