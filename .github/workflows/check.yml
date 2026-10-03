@@ -366,22 +366,24 @@ jobs:
           # so it can't be trusted alone to guard the regression. This
           # step grep-asserts that a representative sample of the
           # defaults home-manager ships (terminal, kill, exit, one
-          # workspace switch) and this repo's single castle-modal chord
-          # — Mod4+Shift+Return, opening the inbox (docs/tasks/0034,
-          # which retired the separate answer chord docs/tasks/0022
-          # added; its ABSENCE is asserted right after the loop,
-          # mirroring flake.nix's eval-time guard in the rendered
-          # artifact) — are present in the same generated file. A
+          # workspace switch) is present in the generated file. A
           # castle chord landing at the wrong priority is exactly the
-          # shape this check exists to catch. The castle entry names
-          # the FULL exec command including `--mode`: a prefix match
-          # would stay green if the binding regressed to an older
-          # mode, which is a live risk now that every mode hangs off
-          # one chord. It is
+          # shape this check exists to catch. It is
           # deliberately a sample, not an exhaustive re-listing of every
           # default binding — the point is to fail loudly if the whole
           # default set goes missing again, not to pin every keybind
           # home-manager happens to ship today.
+          #
+          # The castle-modal chord — Mod4+Shift+Return, opening the
+          # inbox (docs/tasks/0034, which retired the separate answer
+          # chord docs/tasks/0022 added; its ABSENCE is asserted right
+          # after the loop, mirroring flake.nix's eval-time guard in
+          # the rendered artifact) — is asserted in the step below
+          # instead of in this fixed-string loop. Since docs/tasks/0084
+          # its command is prefixed by a `castle-launch` store path
+          # whose hash no fixed string can spell, and the same is now
+          # true of the terminal and launcher bindings, so all three
+          # moved to one regex step together.
           #
           # 'bindsym Mod1+Shift+space floating toggle' is in the sample
           # for a second, different reason (docs/tasks/0019, defect 2):
@@ -400,8 +402,7 @@ jobs:
             'bindsym Mod1+Shift+q kill' \
             'bindsym Mod1+Shift+e exec swaynag' \
             'bindsym Mod1+1 workspace number 1' \
-            'bindsym Mod1+Shift+space floating toggle' \
-            'bindsym Mod4+Shift+Return exec foot --app-id=castle-modal -e castle-modal --mode inbox'
+            'bindsym Mod1+Shift+space floating toggle'
           do
             if ! grep -qF "$expected" "$SWAY_CONFIG"; then
               echo "MISSING expected binding: $expected"
@@ -420,6 +421,57 @@ jobs:
             echo "If this is a deliberate rebind, update the expected list above. If it isn't,"
             echo "this is the finding-1 lockout regressing: a keybindings definition at the"
             echo "wrong priority is silently discarding home-manager's default bindings again."
+            exit 1
+          fi
+
+      - name: Assert every app-launch binding goes through castle-launch
+        run: |
+          # docs/tasks/0084. Three bindings launch applications —
+          # the terminal, the launcher's pick, and the castle-modal
+          # chord — and each must hand its command to `castle-launch`
+          # so the app lands in its own transient scope instead of
+          # sharing the compositor's cgroup. An oomd kill against one
+          # undifferentiated leaf takes the whole desktop, which is
+          # what happened on this project's own machine.
+          #
+          # This is the cheap, fast-gate half of that task's detector:
+          # it proves the *generated config* still routes all three.
+          # The expensive half — that the routing actually produces
+          # distinct `run-*.scope` cgroups at runtime — is the VM
+          # probe in test/app-scopes, which runs under its own
+          # workflow. Neither replaces the other: this one would stay
+          # green if systemd-run silently stopped making scopes, and
+          # the VM probe is far too slow to run on every PR.
+          #
+          # Regexes rather than the fixed-string loop above because
+          # the wrapper's store path carries a hash. Each pattern
+          # anchors on the whole line, so a binding that keeps the
+          # wrapper but loses its payload (an older --mode, a
+          # different terminal) still fails.
+          #
+          # `IFS='|' read -r what pattern` splits only on the FIRST
+          # `|`: read assigns the whole remainder of the line to its
+          # last variable, delimiters included, so the launcher
+          # pattern's own escaped `\|` pipes survive intact.
+          launch_missing=0
+          while IFS='|' read -r what pattern; do
+            if ! grep -qE "$pattern" "$SWAY_CONFIG"; then
+              echo "MISSING per-app scope wrapping for: $what"
+              echo "  expected a line matching: $pattern"
+              launch_missing=1
+            fi
+          done <<'PATTERNS'
+          terminal|^bindsym Mod1\+Return exec /nix/store/[^ ]+-castle-launch terminal -- /nix/store/[^ ]+/bin/foot$
+          launcher pick|^bindsym Mod1\+d exec .*/bin/dmenu_path \| .*/bin/dmenu \| .*/bin/xargs swaymsg exec -- /nix/store/[^ ]+-castle-launch menu --$
+          castle-modal chord|^bindsym Mod4\+Shift\+Return exec /nix/store/[^ ]+-castle-launch modal -- foot --app-id=castle-modal -e castle-modal --mode inbox$
+          PATTERNS
+          if [ "$launch_missing" -ne 0 ]; then
+            echo "An app-launch binding is no longer wrapped in castle-launch."
+            echo "Every app Sway launches otherwise inherits the compositor's cgroup,"
+            echo "which makes the whole session the only cgroup systemd-oomd can kill"
+            echo "(docs/tasks/0084-an-oomd-kill-takes-the-whole-desktop.md). If a"
+            echo "home-manager bump changed one of these defaults, update the pattern"
+            echo "AND modules/home/default.nix's restatement of that default together."
             exit 1
           fi
 

@@ -570,16 +570,32 @@
                   # generated attrset with `nix eval`, not read off the
                   # module source, for the same reason the comment two
                   # assertions up already gives for this whole block.
+                  #
+                  # Since docs/tasks/0084 the command is wrapped in
+                  # `castle-launch modal --`, whose store path carries
+                  # a hash this expression cannot spell, so the test
+                  # is split in two rather than relaxed to a bare
+                  # `hasInfix` on the tail: the prefix pins that the
+                  # wrapper is there at all (a binding that lost it
+                  # would silently hand the modal back to the
+                  # compositor's cgroup) and the infix pins the exec
+                  # command the wrapper is handed, `--mode` included.
                   assertion =
-                    (keybindings."Mod4+Shift+Return" or null)
-                    == "exec foot --app-id=castle-modal -e castle-modal --mode inbox";
+                    let
+                      chord = keybindings."Mod4+Shift+Return" or null;
+                    in
+                    chord != null
+                    && lib.hasPrefix "exec /nix/store/" chord
+                    && lib.hasInfix "-castle-launch modal -- foot --app-id=castle-modal -e castle-modal --mode inbox" chord;
                   message = ''
                     nixosConfigurations.example-mod4: keybindings."Mod4+Shift+Return"
-                    is not the inbox-modal exec command. modules/home/default.nix
-                    hardcodes the modal chord under a literal Mod4 prefix
-                    (docs/tasks/0019) specifically so it keeps working
-                    regardless of a resident's own `modifier` setting — this
-                    means that guarantee broke.
+                    is not the inbox-modal exec command run through castle-launch.
+                    modules/home/default.nix hardcodes the modal chord under a
+                    literal Mod4 prefix (docs/tasks/0019) specifically so it keeps
+                    working regardless of a resident's own `modifier` setting, and
+                    routes it through the per-app scope wrapper (docs/tasks/0084)
+                    so an oomd kill cannot take the whole session — one of those
+                    two guarantees broke.
                   '';
                 }
                 {
@@ -1164,6 +1180,22 @@
       # still real boots.
       packages.x86_64-linux.eval-storm-test =
         nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (import ./test/eval-storm/test.nix);
+
+      # docs/tasks/0084: boots the real desktop stack, logs in through
+      # the real greetd+tuigreet, presses all three real app-launch
+      # chords, and asserts each launch lands in a transient scope
+      # cgroup of its own rather than the compositor's — the topology
+      # that decides whether a systemd-oomd kill takes one application
+      # or the whole session. A `packages.*` output for the same reason
+      # as the two tests above: it boots a VM, so it stays out of bare
+      # `nix flake check`'s fast gate. The cheap half of this detector
+      # does run in that gate — check.yml's sway-config-check greps the
+      # generated Sway config for the three wrapped bindings; see
+      # test/app-scopes/test.nix's header for why both halves exist.
+      packages.x86_64-linux.app-scopes-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+          import ./test/app-scopes/test.nix { inherit self; }
+        );
 
       # docs/tasks/0036-reminder-banner-states.md: the password-reminder
       # state machine and its banner wording, table-tested against the

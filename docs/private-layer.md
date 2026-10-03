@@ -399,6 +399,12 @@ The values this repo may never contain:
   non-null framework default of their own — see "The display-preference
   slot" below for which is which and why `null` no longer means the
   same thing everywhere in this set.
+- `castle.launch.{terminal,menu,modal}.{memoryHigh,memorySwapMax,
+  memoryMax,extraProperties}` — resource limits for the transient scope
+  each kind of application launch runs in. Empty or `null` everywhere
+  by default, and a working desktop needs none of them; see
+  "Per-application memory bounds" below for what the scopes are for
+  and why the framework sets no number.
 
 ## The display-preference slot
 
@@ -549,6 +555,65 @@ module does:
   asserts against that combination on a machine with no swap rather
   than letting it fail at the moment the battery dies. On a
   zram-only host, `"PowerOff"` is the honest answer.
+
+## Per-application memory bounds (optional)
+
+`nixosModules.home` launches every application the desktop starts —
+your terminal, whatever the launcher picks, and the Castle chord's
+window — inside its own transient systemd scope. There is nothing to
+opt into and nothing to configure for that part; it is how the desktop
+starts programs.
+
+It matters because `systemd-oomd` kills a *cgroup*, and a compositor
+that starts everything as a plain child of itself puts the whole
+desktop in one. The eligible victim is then the entire session —
+compositor, terminals, and anything running inside them — rather than
+the one program that misbehaved. A scope per application makes each
+one killable on its own. The compositor deliberately stays outside
+this, in the login session's own scope, so a kill leaves something
+running that can show you what happened.
+
+Each launch class has three typed options for the bounds a resident is
+most likely to want, plus a catch-all list for anything else. All four
+are empty or `null` by default:
+
+```nix
+  # Stop one runaway terminal from taking the machine with it. Unset
+  # (null) means no property at all — still separately killable, just
+  # unbounded.
+  castle.launch.terminal = {
+    memoryHigh = "4G";       # throttle: reclaimed hard above this, but may still exceed it
+    memorySwapMax = "2G";    # caps swap use — see the zram note below
+    memoryMax = "6G";        # hard cap: OOM-killed within the scope at this value
+  };
+```
+
+- `castle.launch.{terminal,menu,modal}.memoryHigh` — `MemoryHigh=` for
+  that class's scope. A **throttle, not a ceiling**
+  (`systemd.resource-control(5)`): usage above this value is slowed
+  and reclaimed aggressively, but may still exceed it if unavoidable.
+  Not the same thing as a hard bound — see `memoryMax` for that.
+- `castle.launch.{terminal,menu,modal}.memorySwapMax` — `MemorySwapMax=`,
+  capping how much swap that scope may use. Its reason to exist is
+  `memoryHigh`'s: on a zram-only host (no disk swap), `memoryHigh`
+  relieves pressure by pushing pages to swap, and when swap *is* zram,
+  swap *is* RAM — reclaim converts the scope's footprint at roughly the
+  compression ratio rather than evicting it anywhere. Set this
+  alongside `memoryHigh` on such a host, or the throttle buys less than
+  it looks like.
+- `castle.launch.{terminal,menu,modal}.memoryMax` — `MemoryMax=`, the
+  actual hard cap: unlike `memoryHigh`, usage cannot exceed this, and
+  the kernel OOM-kills within the scope once it does.
+- `castle.launch.{terminal,menu,modal}.extraProperties` — lists of
+  strings for anything else, each passed to `systemd-run` as one
+  `--property=` flag. See `systemd.resource-control(5)` for the full
+  vocabulary.
+
+**The framework sets no limit anywhere**, and that is a decision
+rather than an omission: a number that is right for your machine
+depends on how much memory it has and what you run, and a wrong one
+turns "slow under pressure" into "killed at random". Setting one is
+worth doing deliberately, after watching a real workload.
 
 ## The agent's state
 
