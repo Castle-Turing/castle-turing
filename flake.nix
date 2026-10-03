@@ -1158,6 +1158,22 @@
           import ./test/oomd-liveness/test.nix { inherit self; }
         );
 
+      # docs/tasks/0084: boots the real desktop stack, logs in through
+      # the real greetd+tuigreet, presses all three real app-launch
+      # chords, and asserts each launch lands in a transient scope
+      # cgroup of its own rather than the compositor's — the topology
+      # that decides whether a systemd-oomd kill takes one application
+      # or the whole session. A `packages.*` output for the same reason
+      # as the two tests above: it boots a VM, so it stays out of bare
+      # `nix flake check`'s fast gate. The cheap half of this detector
+      # does run in that gate — check.yml's sway-config-check greps the
+      # generated Sway config for the three wrapped bindings; see
+      # test/app-scopes/test.nix's header for why both halves exist.
+      packages.x86_64-linux.app-scopes-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (
+          import ./test/app-scopes/test.nix { inherit self; }
+        );
+
       # docs/tasks/0036-reminder-banner-states.md: the password-reminder
       # state machine and its banner wording, table-tested against the
       # *generated* artifacts of nixosConfigurations.example rather
