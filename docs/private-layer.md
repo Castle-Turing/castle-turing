@@ -615,6 +615,37 @@ depends on how much memory it has and what you run, and a wrong one
 turns "slow under pressure" into "killed at random". Setting one is
 worth doing deliberately, after watching a real workload.
 
+### Overriding the launcher
+
+`menu` (what the launcher's pick executes) is the one launch class the
+framework lets your own `resident.nix` replace outright, at normal
+`lib.mkDefault` priority — unlike `terminal`, which the framework sets
+at normal priority and expects you to override only with `lib.mkForce`
+if you ever do. If you replace `menu` with your own pipeline, end it
+by exec'ing through the same wrapper the framework's own default uses,
+so your launcher's picks stay in their own transient scope and keep
+whatever bounds you set on `castle.launch.menu` above:
+
+```nix
+  wayland.windowManager.sway.config.menu = ''
+    ${pkgs.fuzzel}/bin/fuzzel --dmenu | ${pkgs.findutils}/bin/xargs swaymsg exec -- ${config.castle.launch.wrapper} menu --
+  '';
+```
+
+`config.castle.launch.wrapper` is a read-only option exposing the
+store path of `castle-launch`, the module-internal dispatcher — this
+is the one case a private layer needs that path at all, since
+everything else in this document only ever sets typed options the
+framework itself routes through the wrapper.
+
+An eval-time assertion in `nixosModules.home` checks the *merged*
+`menu` value for the wrapper's path and fails the build with a message
+naming this fix if it is missing — so an override that forgets the
+wrapper is a build-time error, not a silent loss of scoping discovered
+later. If you genuinely want menu picks to launch unscoped, say so
+explicitly with `castle.launch.requireMenuScoping = false`: the
+assertion itself cannot be overridden with `lib.mkForce`.
+
 ## The agent's state
 
 `docs/architecture.md` and `agent/README.md` (the mechanism itself)
