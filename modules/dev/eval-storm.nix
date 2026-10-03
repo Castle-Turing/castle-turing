@@ -34,6 +34,17 @@ let
   # fails loudly rather than reporting a false "quiet", and the VM
   # test's notification-delivery assertion (not just unit success) is
   # what would catch the regression.
+  #
+  # One residual risk this script cannot close on its own: `grep -c
+  # "accepted connection"` matches today's nix-daemon log wording
+  # literally. A future nix-daemon that rewords or drops that phrase
+  # degrades silently to a permanent "0 connections" (`|| true`
+  # neutralizes grep's own nonzero exit on no match, by design, for
+  # the ordinary quiet-window case) — unlike the permissions gap
+  # above, there is no loud-failure path for a wording change,
+  # because the script has no independent way to tell "quiet" from
+  # "the string stopped matching." Catching that drift is scoped to
+  # whichever future task bumps the nixpkgs pin far enough to trip it.
   checkScript = pkgs.writeShellScript "castle-eval-storm-check" ''
     set -euo pipefail
 

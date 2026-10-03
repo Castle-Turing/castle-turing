@@ -150,6 +150,18 @@ in
     # `programs.direnv.settings.whitelist.prefix` itself. Left unset,
     # this module authorizes nothing, and every `.envrc` everywhere
     # keeps needing an explicit `direnv allow`.
+    #
+    # One path a prefix list can never cover, noted rather than
+    # worked around here: the agent layer's worker seat
+    # (modules/agent, docs/tasks/0053) copies each configured checkout
+    # into a fresh `tempfile.mkdtemp` scratch directory every turn
+    # (`CASTLE_EDIT_DIR`). That mirror's own path is never any
+    # resident's whitelisted project root, however the original
+    # checkout is configured, so a worker-seat bash sees no project
+    # environment inside its own copy. Giving the worker seat the
+    # same benefit this module gives an interactive session is a
+    # question for whatever task touches CASTLE_EDIT_DIR's own
+    # lifecycle, not this one.
   };
 
   # The pinned direnv module's own `environment.variables.DIRENV_CONFIG
