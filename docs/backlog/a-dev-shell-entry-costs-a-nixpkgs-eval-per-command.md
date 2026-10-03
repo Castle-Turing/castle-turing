@@ -115,13 +115,57 @@ confirming the delivery gap.
   clones and `.envrc` edits with no ceremony, which is the point;
   per-project `direnv allow` was rejected because its failure mode is
   the silent fallback described above.
-- **Non-interactive delivery: a guarded `BASH_ENV` script.** The host
-  sets `BASH_ENV` (via `environment.variables`, so login sessions and
-  the shells they spawn inherit it, while systemd services and build
-  sandboxes do not) to a nix-store script that, when `direnv` is on
-  PATH, `DIRENV_DIR` is unset, and an `.envrc` governs the current
-  directory, runs `eval "$(direnv export bash)"`. direnv itself
-  enforces the trust policy, so unauthorized directories load nothing.
+- **Non-interactive delivery: a guarded `BASH_ENV` script, set via
+  `environment.sessionVariables` — not `environment.variables`.**
+  Post-merge review caught the first draft using
+  `environment.variables`, which this repo has already been burned by:
+  task 0013's Bug 2 records that it lands in `/etc/set-environment`,
+  sourced by login shells only, and the greetd→tuigreet→sway path never
+  sources it — so `BASH_ENV` would silently never reach a shell spawned
+  from the compositor, which is every agent shell this entry is about.
+  `modules/agent` crossed the same bridge and uses
+  `environment.sessionVariables` (the PAM path), confirmed working on a
+  greetd session; its config comment is the precedent to cite. The PAM
+  format caveat documented there (values must not contain `"`) is
+  satisfied here by construction: the value is a nix-store path.
+  `BASH_ENV` points at a store script that, when `direnv` is on PATH
+  and an `.envrc` governs the current directory, runs
+  `eval "$(direnv export bash)"`. direnv itself enforces the trust
+  policy, so unauthorized directories load nothing. The script's
+  re-entrancy guard is a design point the implementer must verify
+  against direnv's documented variables, not recall: review caught an
+  earlier `DIRENV_DIR`-unset guard as wrong in both directions
+  (direnv's own `.envrc`-evaluation subshells start without it but
+  inherit `BASH_ENV`, so a cold-cache load recurses — the eval storm
+  with recursion; while a shell carrying project A's load skips
+  project B entirely). `DIRENV_IN_ENVRC` exists for the re-entrancy
+  half, and `direnv export` is itself an idempotent no-op when the
+  environment is current; the VM test asserts both directions — a
+  cold-cache load evaluates exactly once (count nix-daemon connections
+  in the test), and a shell that loaded project A still loads project
+  B.
+  Two further delivery constraints the same review verified. First,
+  PAM session variables reach the login-session ancestry only: a
+  systemd *user unit* — castle's dispatch workers, the fleet's own
+  headless agent path — crosses no PAM, so the brief also delivers
+  `BASH_ENV` into the user manager's environment (`environment.d` or
+  an equivalent the implementer verifies on the pin), and the VM test
+  carries a user-unit case beside the login-session one. Second, the
+  pinned direnv module exports `DIRENV_CONFIG` — which is how the
+  whitelist file is found — via `environment.variables`, the exact
+  mechanism task 0013 documents as not reaching these ancestries: the
+  implementer verifies the whitelist is actually honored in both
+  ancestries, and delivers `DIRENV_CONFIG` alongside `BASH_ENV` if the
+  pin leaves it stranded. Third, the hook is host-global: any
+  non-interactive bash whose lineage carries `BASH_ENV` and whose
+  working directory sits in a whitelisted project — deploy scripts,
+  git hooks, make recipes, not only agent shells — loads the project
+  environment, and on a cold cache stalls on the evaluation. Accepted
+  deliberately for whitelisted roots (the whitelist is the resident's
+  trust decision about exactly those trees), bounded two ways: the
+  module comment states the behavior, and the script honors an
+  explicit opt-out variable (name it in the module; one `if` at the
+  top) so any script can pin itself to the ambient environment.
   Considered and rejected: documenting `direnv exec <dir> <cmd>` as
   the required invocation (pure guidance — the compliance weakness
   this entry documents), and harness-native direnv integration (not
@@ -135,9 +179,18 @@ confirming the delivery gap.
   a system service has no session D-Bus anyway, so the threshold would
   trip and notify no one. The detector therefore runs in the user
   manager (`systemd.user.timers`/`.services`, every 2 minutes — the
-  same home as castle's own timers), where the session notification
-  path exists; over threshold it notifies through that path and exits
-  nonzero so the failed unit is visible to anything watching units. It
+  same home as castle's own timers). Notification goes through the
+  detector's **own option**, `castle.evalStorm.notifyCommand`
+  (`nullOr str`, default `null`), not through
+  `castle.agent.notify.command`: post-merge review caught that reading
+  an option another optional module declares breaks any host importing
+  `modules/dev` without `modules/agent`, and that the agent option's
+  contract is the blocking notify-waiter's, not a generic command
+  sink. With the default `null`, the detector's floor is the loud
+  nonzero exit — a visibly failed user unit — on every host including
+  headless ones; a host with a session notifier wires the option to
+  it (the resident's, in host or private config). Over threshold it
+  runs the configured command if any and exits nonzero either way. It
   counts nix-daemon "accepted connection" lines in the last window via
   `journalctl -u nix-daemon --since`. One constraint to verify, not
   assume: a user unit reads the system journal only if the resident's
@@ -146,25 +199,41 @@ confirming the delivery gap.
   delivery, not merely unit success, so a missing grant fails loudly,
   and granting read access is in scope if absent. Spelling-agnostic
   by construction: it counts daemon connections, not subcommands.
-  Public options `castle.evalStorm.{enable,threshold,windowMinutes}`,
-  defaults `true`/`6`/`10` — calibration values: the 2026-10-02 storm
-  ran ~0.8 connections/min (would trip ~7 in 10), the 2026-09-06 one
-  2/min; an ordinary `nixos-rebuild` makes a handful. The implementer
-  measures a rebuild and a quiet hour on the example configuration and
-  adjusts the default threshold if either side is within 2 of it,
-  recording the measurement in the PR.
+  Public options
+  `castle.evalStorm.{enable,threshold,windowMinutes,notifyCommand}`,
+  defaults `true`/`6`/`10`/`null` — calibration values: the 2026-10-02
+  storm ran ~0.8 connections/min (would trip ~7 in 10), the 2026-09-06
+  one 2/min; an ordinary `nixos-rebuild` makes a handful. The
+  implementer measures a rebuild and a quiet hour and records both in
+  the PR, under one invariant review added after the first calibration
+  rule proved self-defeating: **both founding storms must stay above
+  the shipped threshold after calibration** — a detector its own
+  incidents cannot trip is not a detector. If rebuild noise and storm
+  rates cannot be separated by count alone, scope the counting
+  (exclude the rebuild path's connection pattern) rather than raising
+  the threshold over the storms.
 - **nix-direnv cache location: upstream default.** Nothing in this
   repo depends on it; stating it would be an unsourced closure.
 - **Other repos' `.envrc` and agent-guidance rewording: out of this
-  repo's reach, tracked in the resident's profile, not here.** This
-  brief's deliverable is the host default and the detector only.
+  repo's reach, and as of this writing tracked nowhere.** Post-merge
+  review caught the earlier closure ("tracked in the resident's
+  profile") naming a tracker that does not contain the item — an
+  unsourced closure. The open form: the rollout is load-bearing (a
+  whitelisted host does nothing for a project with no `.envrc`), the
+  resident's profile is its natural home, and landing it there is the
+  resident's follow-up, surfaced to them when this brief was fixed.
+  This brief's deliverable is the host default and the detector only.
 
 ## Plan
 
 1. `modules/dev/default.nix`: set `programs.direnv.enable = true`
    (nix-direnv rides the default), `programs.direnv.silent = true`,
-   and the `BASH_ENV` delivery script (a `pkgs.writeShellScript` plus
-   `environment.variables.BASH_ENV`). Leave
+   and the `BASH_ENV` delivery script (a `pkgs.writeShellScript`,
+   delivered via `environment.sessionVariables` for the login-session
+   ancestry and via the user manager's environment for user units —
+   see the delivery decision above for why not `environment.variables`,
+   and carry `DIRENV_CONFIG` the same way if the pin leaves it
+   stranded). Leave
    `programs.direnv.settings.whitelist` unset — hosts or the private
    layer declare their own prefixes; add one comment line saying
    exactly that and why (Principle 01).
@@ -175,25 +244,48 @@ confirming the delivery gap.
 3. `test/direnv-delivery/test.nix`: VM test, oomd-liveness pattern
    (inject the real generated artifacts, do not re-type them). One
    node, a sample flake project with a devShell exporting a marker
-   variable and a committed `.envrc` (`use flake`). Assert: (a) a
-   **non-interactive** `bash -c 'echo $MARKER'` in a whitelisted
-   project prints the marker; (b) the same in a non-whitelisted copy
-   prints nothing; (c) after editing `.envrc` in the whitelisted
-   project, the marker (or its successor) still loads with no manual
-   `direnv allow`; (d) `direnv` and nix-direnv are wired into
-   interactive bash init — the static regression half.
+   variable and a committed `.envrc` (`use flake`). The delivery
+   assertions must run **inside a session established through the real
+   login path** (greetd, as `test/desktop-loop` already drives — extend
+   or mirror it), not in the test driver's own root shell: task 0013's
+   Bug 2b is the precedent — a probe that does not cross PAM cannot
+   fail on the set-environment-versus-sessionVariables distinction,
+   and a test that cannot fail on the bug is not evidence about it.
+   Assert: (a) a **non-interactive** `bash -c 'echo $MARKER'` in a
+   whitelisted project prints the marker; (b) the same in a
+   non-whitelisted copy prints nothing; (c) after editing `.envrc` in
+   the whitelisted project, the marker (or its successor) still loads
+   with no manual `direnv allow`; (d) `direnv` and nix-direnv are wired
+   into interactive bash init — the static regression half; (e) a
+   **systemd user unit** running the same probe sees the marker — the
+   headless worker ancestry; (f) a cold-cache load evaluates exactly
+   once (no hook recursion), and a shell that loaded one project loads
+   the other — the two re-entrancy failure directions from the
+   delivery decision.
 4. `test/eval-storm/test.nix`: VM test. Drive N synthetic nix-daemon
    connections (trivial `nix store ping`-class calls) above threshold
    within the window; assert the unit fails and the notify command
-   fired (stub `castle.agent.notify.command` with a file-touching
+   fired (stub `castle.evalStorm.notifyCommand` with a file-touching
    script, the repo's existing stub pattern). Below threshold: assert
-   quiet.
-5. Wire both tests into the flake's checks beside the existing ones.
+   quiet. One more case, the shipped default: with `notifyCommand`
+   left `null`, assert the over-threshold run still fails the unit
+   visibly and nothing crashes — the one configuration every host
+   gets must be the one the test exercises.
+5. Land each test as a `packages.x86_64-linux.*` output with its own
+   path-filtered workflow in the mold of
+   `.github/workflows/oomd-liveness-test.yml` — **not** under
+   `checks.*`: post-merge review caught the earlier wording here, and
+   the flake's own comments at `oomd-liveness-test` explain the
+   division — VM boots are deliberately kept out of bare
+   `nix flake check` so the fast gate stays fast, and a test wired
+   nowhere is a detector that never runs.
 
 ## Verification plan
 
-Unaided: `nix flake check` (both new VM tests plus existing ones);
-the threshold measurement from the Decisions section. Resident's
+Unaided: `nix flake check` (module evaluation; the VM tests are
+`packages.*` built by their own workflows — `nix build .#<test> -L`
+locally, per Plan step 5); the threshold measurement from the
+Decisions section. Resident's
 hands: one switch on xps9370, then `cd` into a real whitelisted flake
 project and confirm a fresh non-interactive `bash -c` sees the
 environment; and the first week of eval-storm defaults in real use —
@@ -210,6 +302,8 @@ renamed in the pin, a test pattern that cannot inject what it needs),
 argue with the spec in the PR and record the deviation rather than
 silently complying. Do not touch `modules/base`, any `hosts/*`
 module, or any file under `docs/` other than growing this brief's
-record. The three scar-tissue rules in the resident's profile and this
+record and the outcome-row append in `docs/log/` that CLAUDE.md
+requires before the PR opens — review caught the earlier blanket ban
+contradicting that standing obligation. The three scar-tissue rules in the resident's profile and this
 repo's CLAUDE.md apply unreduced: no per-command `nix shell` while
 building this, of all things.

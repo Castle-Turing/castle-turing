@@ -104,6 +104,20 @@ adopting uwsm is a larger, riskier change than the failure justifies. If
 a future need (real `app-*.scope` naming, XDG autostart integration)
 earns it, that is its own backlog entry, not a dependency of this fix.
 
+**Alternative considered and rejected: app2unit.** Post-merge review
+surfaced that the pinned nixpkgs packages `app2unit` (v1.4.4, from
+uwsm's author) — a standalone launcher that puts commands into XDG
+`app-*.scope`/`.service` units without uwsm's session takeover, sitting
+exactly between rejected-uwsm and a hand-rolled wrapper. Rejected
+anyway, for scope-of-mechanism reasons rather than taste: app2unit is
+Desktop-Entry-oriented (it resolves and launches `.desktop` entries,
+with terminal handling via `xdg-terminal-exec`), while every call site
+this brief wraps launches a raw command line; adopting it would add a
+dependency and a desktop-entry indirection to get, today, the same
+`systemd-run` call the three-flag wrapper makes directly. It is the
+natural candidate if the future `app-*.scope`-naming entry (above) is
+ever opened — record it there when that happens.
+
 **2. Reach: terminals included, not launcher picks only.** The
 2026-10-02 trigger was an agent session inside a terminal, not a
 launcher pick, and launcher-only wrapping would not have contained it.
@@ -181,9 +195,13 @@ alongside the existing sway config, not in `hosts/xps9370`.
 Automated, no human hands:
 
 - **Static regression probe, as a VM test in the mold of
-  `test/oomd-liveness/`**, wired into `flake.nix` as a
-  `packages.x86_64-linux.*` that `nix flake check` runs (same shape as
-  `oomd-liveness-test`). Boot the real desktop stack in a NixOS VM (the
+  `test/oomd-liveness/`**, landed as a `packages.x86_64-linux.*`
+  output with its own path-filtered workflow in the mold of
+  `.github/workflows/oomd-liveness-test.yml`. Post-merge review caught
+  the earlier wording claiming `nix flake check` runs that shape — it
+  deliberately does not (the flake's comments at `oomd-liveness-test`
+  explain the fast-gate division), so without its workflow the probe
+  would be a detector that never runs. Boot the real desktop stack in a NixOS VM (the
   `test/desktop-loop/` harness already logs in through the real
   greetd+tuigreet and presses real chords — extend or mirror it), launch
   an app through *each* wrapped path (the terminal, the menu's exec
@@ -194,9 +212,10 @@ Automated, no human hands:
   chord wrapped detects nothing. This is the detector the incident ships: it turns
   "a GUI app's cgroup differs from the compositor's" from a hope into a
   check that fails if a future edit collapses the layout back.
-- **`nix flake check`** stays green — the module still evaluates and the
-  `desktop-loop` acceptance test still passes, i.e. the wrapped launches
-  do not break the real chord that test asserts on.
+- **`nix flake check`** stays green (module evaluation), and the
+  `desktop-loop` acceptance test — built via its own workflow, `nix
+  build .#desktop-loop-test -L` locally — still passes, i.e. the
+  wrapped launches do not break the real chord that test asserts on.
 
 Deliberately *not* in this brief: the full memory-exhaustion drill that
 fires a real oomd rule and measures which cgroup dies. That is the

@@ -12,7 +12,16 @@ verdict.
 Requires-because: the bounds this task exposes are properties on the
 per-app transient scopes that task creates; without the wrapper there
 is no unit to bound — every desktop process shares one session scope
-and a bound on it is a bound on the whole desktop.
+and a bound on it is a bound on the whole desktop. The number 0084 is
+the planned allocation for the wrapper entry
+(an-oomd-kill-takes-the-whole-desktop), named before transfer because
+verbatim transfer forbids fixing it later: the directory tops out at
+0082 at spec time and the three incident entries transfer together in
+order (0083 dev-shell, 0084 wrapper, 0085 this). The transferring
+session verifies that allocation against the live directory first — a
+`Requires:` naming a brief that exists nowhere must never land in
+`docs/tasks/`, so if the directory has moved, a fix to this header
+precedes transfer.
 Status: ready
 
 # An agent workload can thrash the host, and nothing bounds it
