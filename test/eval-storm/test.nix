@@ -49,7 +49,20 @@ let
     users.users.tester = {
       isNormalUser = true;
       uid = 1000;
+      # modules/base unconditionally puts the real admin account in
+      # `wheel`, and that membership is exactly what lets
+      # castle-eval-storm-check read nix-daemon's log lines (owned by
+      # root) with no extra grant — see modules/dev/eval-storm.nix's
+      # own comment on the systemd tmpfiles ACL this relies on. This
+      # test deliberately does not import modules/base (see header),
+      # so it has to reproduce that one fact about the admin account
+      # by hand rather than get it for free.
+      extraGroups = [ "wheel" ];
     };
+    # `nix store ping` needs the nix-command experimental feature —
+    # normally on by every host via modules/base, which this test
+    # deliberately does not import (see header).
+    nix.settings.experimental-features = [ "nix-command" ];
     imports = [ ../../modules/dev/eval-storm.nix ];
   };
 
@@ -81,7 +94,12 @@ in
     };
   };
 
-  nodes.nullNotify = {
+  # `nullNotify` is not a valid bare identifier the test driver's
+  # auto-generated Python globals can bind (node names become Python
+  # variables verbatim, with no camelCase-to-snake_case conversion) —
+  # named with an underscore for exactly that reason, matching how it
+  # is referred to in testScript below.
+  nodes.null_notify = {
     imports = [ testerModule ];
     castle.evalStorm = {
       inherit threshold windowMinutes;
@@ -92,8 +110,6 @@ in
   };
 
   testScript = ''
-    import time
-
     for m in (over, under, null_notify):
         m.start()
         m.wait_for_unit("multi-user.target")
@@ -101,30 +117,31 @@ in
         m.wait_until_succeeds("systemctl --user --machine=tester@ is-system-running")
 
     with subtest("count >= threshold trips the check and fires the notifier"):
-        for _ in range(threshold):
+        for _ in range(${toString threshold}):
             over.succeed("runuser -u tester -- nix store ping")
         over.fail("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
         over.succeed(
-            "journalctl --user-unit=castle-eval-storm-check.service | grep -q 'at or above threshold'"
+            "runuser -u tester -- journalctl --user-unit=castle-eval-storm-check.service "
+            "| grep -q 'at or above threshold'"
         )
         over.succeed("runuser -u tester -- cat /tmp/castle-eval-storm-notified")
 
     with subtest("count below threshold stays quiet and fires nothing"):
-        for _ in range(threshold - 1):
+        for _ in range(${toString threshold} - 1):
             under.succeed("runuser -u tester -- nix store ping")
         under.succeed("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
         under.fail("runuser -u tester -- test -e /tmp/castle-eval-storm-notified")
 
     with subtest("the shipped default (notifyCommand unset) still fails loudly, and the script itself does not crash"):
-        for _ in range(threshold):
+        for _ in range(${toString threshold}):
             null_notify.succeed("runuser -u tester -- nix store ping")
         null_notify.fail("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
         # "does not crash" means the script ran to its own `exit 1`,
         # not that it died earlier (a missing binary, a syntax error) —
         # the count line on stdout only appears if it got that far.
         null_notify.succeed(
-            "journalctl --user-unit=castle-eval-storm-check.service "
-            + f"| grep -q '{threshold} nix-daemon connection'"
+            "runuser -u tester -- journalctl --user-unit=castle-eval-storm-check.service "
+            "| grep -q '${toString threshold} nix-daemon connection'"
         )
   '';
 }
