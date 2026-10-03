@@ -104,7 +104,7 @@ let
       # capture has to be the very next thing after the invocation, before
       # anything else can touch $?.
       start_s=$(date +%s)
-      timeout 600 bash -c 'printf "RESULT %s %s\n" "''${MARKER:-}" "''${EDITED_MARKER:-}"'
+      timeout 1 bash -c 'printf "RESULT %s %s\n" "''${MARKER:-}" "''${EDITED_MARKER:-}"'
       status=$?
       end_s=$(date +%s)
       echo "PROBE_STATUS $status"
