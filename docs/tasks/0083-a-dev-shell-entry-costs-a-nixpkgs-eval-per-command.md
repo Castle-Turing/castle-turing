@@ -298,6 +298,64 @@ project and confirm a fresh non-interactive `bash -c` sees the
 environment; and the first week of eval-storm defaults in real use —
 false positives are a redirect, not a code defect.
 
+## Deviations found during implementation
+
+Four places where reality contradicted this brief, found by actually
+running the VM tests against a real nix-daemon and a real greetd
+session rather than trusting the design on paper — recorded here per
+this brief's own implementation prompt, rather than only in the PR.
+
+- **The re-entrancy guard is not `DIRENV_IN_ENVRC`.** Verified against
+  the pinned direnv (2.37.1) by reading `internal/cmd/rc.go` and
+  `stdlib.sh`: the nested bash direnv forks to evaluate a `.envrc`
+  inherits the caller's `BASH_ENV` with nothing stripping it (neither
+  variable appears in `env_diff.go`'s `IgnoredKeys`), and
+  `DIRENV_IN_ENVRC` is exported by a line *inside* that nested bash's
+  own script body — which only runs after that bash's own BASH_ENV
+  sourcing has already finished, at every recursion depth. Checking it
+  at the top of the hook therefore never sees it set, by construction,
+  and cannot break the recursion. Confirmed empirically: an unguarded
+  hook pointed at a cold-cache `.envrc` forked dozens of direnv/bash
+  pairs in seconds before being killed. The fix shipped instead is a
+  self-exported marker (`CASTLE_DIRENV_BASH_ENV_GUARD`), set before
+  calling direnv and unset once direnv's own call returns — the unset
+  itself was a second bug this entry's own VM test caught (the guard
+  leaking to a later, unrelated non-interactive bash spawned by the
+  same probe process, which happened to fire the hook once, harmlessly,
+  before `cd`-ing into the actual project).
+- **No `systemd-journal` grant was added, and testing it live confirmed
+  that decision.** `getfacl` on a running xps9370-pinned host showed
+  systemd's own upstream tmpfiles rule already grants the `wheel` group
+  read+execute on `/var/log/journal`, and `modules/base` unconditionally
+  puts the admin account in `wheel` — so the admin account already
+  reads nix-daemon's log lines with no extra grant. The VM test's
+  synthetic `tester` account needed `wheel` added by hand, since that
+  test deliberately does not import `modules/base` (see its own header)
+  and so does not get that membership for free — this is a test-fixture
+  fact, not a deviation in the shipped module.
+- **The calibration invariant's measurement came from the implementation
+  session itself, not a `nixos-rebuild`.** This machine cannot safely
+  run `nixos-rebuild switch` to measure an ordinary rebuild's own
+  nix-daemon connection count. What was measured instead: this session's
+  own research and implementation activity (many separate `nix build`/
+  `nix eval` invocations in quick succession, the same per-command shape
+  an agent's edit loop has) tripped the shipped default (6 in 10
+  minutes) by itself, which is consistent with — not a substitute for —
+  the brief's own calibration numbers. A single `nix build`/
+  `nixos-rebuild`-equivalent command opens exactly one nix-daemon
+  connection (confirmed directly), so an ordinary rebuild should stay
+  far below the threshold; the resident's own first week of real
+  `nixos-rebuild` traffic is still the authoritative measurement the
+  Verification plan already calls for.
+- **"Evaluates exactly once" undercounts a real cold load.** Measured
+  directly in test/direnv-delivery's own VM: a single, genuinely cold
+  `nix print-dev-env` (what `use flake` actually calls) opens five
+  separate nix-daemon connections for its own sub-operations (querying
+  path info, evaluating, and so on), not one. The re-entrancy guard's
+  real job is bounding recursion — the measured failure mode without it
+  is dozens of forked pairs in seconds, not a handful — so the VM test
+  asserts a generous ceiling (≤15) rather than an exact count of one.
+
 ## Implementation prompt
 
 Read this file end to end, then `modules/dev/default.nix`,
