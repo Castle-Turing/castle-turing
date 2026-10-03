@@ -3,7 +3,7 @@
 # OOM-killed a resident's session on 2026-10-02 (`nix develop --command
 # ...` in an edit-then-test loop) and, under the different spelling
 # `nix shell nixpkgs#...`, hung a host on 2026-09-06
-# (docs/backlog/an-agent-workload-can-thrash-the-host.md). Both
+# (docs/tasks/0085-an-agent-workload-can-thrash-the-host.md). Both
 # incidents talk to nix-daemon once per evaluation no matter what
 # subcommand asked for it, so this counts nix-daemon client
 # connections in a trailing window rather than parsing any one
