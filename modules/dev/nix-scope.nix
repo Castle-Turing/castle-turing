@@ -113,40 +113,74 @@ let
       # print noise and silently void the root guard (review finding).
 
       ${lib.optionalString (name == "nix") ''
+        # Find the subcommand before classifying it. It is NOT $1:
+        # nix accepts global options before the subcommand, and
+        # nix-direnv's own `use flake` call is
+        # `nix --no-warn-dirty --extra-experimental-features "..."
+        # print-dev-env ...` — so a $1 check reads `--no-warn-dirty`,
+        # misses the subcommand, and scopes it. That is exactly the
+        # bug that hung direnv's capture (the regression this fixes):
+        # a $1-matched exemption never fired, and a cold scoped
+        # print-dev-env blocks on I/O until a caller's timeout kills
+        # it. The loop skips leading options, skipping the separate
+        # value of those global options that take one (nix-direnv
+        # uses --extra-experimental-features; the rest are the common
+        # value-takers), and stops at the first bare word.
+        sub=
+        skip=0
+        for a in "$@"; do
+          if [ "$skip" -gt 0 ]; then
+            skip=$((skip - 1))
+            continue
+          fi
+          case "$a" in
+            --option | --arg | --argstr)
+              skip=2 # these take two separate values (name, value)
+              ;;
+            --max-jobs | -j | --cores | --log-format | --store | --eval-store \
+              | --builders | --extra-experimental-features | --experimental-features \
+              | --include | -I | --file | -f | --expr | --substituters \
+              | --extra-substituters)
+              skip=1 # these take one separate value
+              ;;
+            --*=* | -*) ;; # a flag, or --opt=value in one token: no separate value
+            *)
+              sub="$a"
+              break
+              ;;
+          esac
+        done
+
         # Interactive environments and arbitrary-duration payloads
         # stay unscoped: memoryMax is sized for one evaluation, and an
         # hours-long `nix develop` shell must not live under an
         # eval-sized ceiling; that would recreate the whole-session
         # kill this module exists to end (review finding on this
         # task's PR). `nix run` execs a payload of unknowable
-        # duration, same reasoning. The founding incidents' spellings
-        # stay covered: `nix develop --command` and `nix shell -c`
-        # are non-interactive and get their scope. Two documented
-        # heuristic boundaries: `nix --option a b develop` slips the
-        # first-argument match and gets scoped — the strict
-        # direction; and `nix develop --command bash` is classified
-        # non-interactive (indistinguishable here from
-        # `--command make`), so an interactive shell wanted under a
-        # bound-free scope is spelled bare `nix develop`, or opted
+        # duration, same reasoning. `nix develop --command` and
+        # `nix shell -c` are non-interactive and get their scope —
+        # `nix develop --command bash` is indistinguishable in argv
+        # from `--command make`, so an interactive shell wanted under
+        # a bound-free scope is spelled bare `nix develop`, or opted
         # out with CASTLE_NIX_SCOPE_DISABLE.
         #
-        # `print-dev-env` is the capture invocation nix-direnv runs
-        # for `use flake`, and it must NOT be scoped: its caller
-        # consumes its output synchronously, and routing it through a
-        # transient scope hangs that capture — measured on this task's
-        # own direnv-delivery VM, where a scoped print-dev-env burned
-        # 20s CPU, evaluated fully (466M peak, far under any bound),
-        # then blocked on I/O for ~160s until the probe's timeout
-        # killed it, leaving direnv with no environment. It belongs in
-        # this exemption on its merits regardless: nix-direnv caches it
-        # per flake.lock change rather than per command, so it is not
-        # the edit-then-build loop surface 0089 targets, and it mirrors
-        # the bare `nix develop` already exempted just above. The
-        # consequence, recorded in the brief: a direnv-driven dev-env
-        # evaluation is unbounded, while the loop-prone surfaces
-        # (`nix build`, `nix flake check`, `nix eval`, `nix develop
-        # --command`) stay scoped.
-        case "''${1:-}" in
+        # `print-dev-env` must NOT be scoped: it is a capture
+        # invocation whose caller (nix-direnv's `use flake`, lorri, a
+        # hand pipeline) consumes its stdout synchronously, and
+        # routing it through a transient scope hangs that capture —
+        # measured on this task's own direnv-delivery VM, where a
+        # scoped print-dev-env burned 20s CPU, evaluated fully (487M
+        # peak, under any bound), then blocked on I/O for ~160s until
+        # the probe's timeout killed it, leaving direnv with no
+        # environment. It earns the exemption on its merits besides:
+        # nix-direnv caches it per flake.lock change, not per command,
+        # so it is not the edit-then-build loop surface 0089 targets,
+        # and it mirrors the bare `nix develop` exempted beside it.
+        # The consequence, recorded in the brief: a direnv-driven
+        # dev-env evaluation is unbounded, while the loop-prone
+        # surfaces (`nix build`, `nix flake check`, `nix eval`,
+        # `nix develop --command`) stay scoped.
+        case "$sub" in
           repl | run | print-dev-env)
             exec ${nixBin}/${name} "$@"
             ;;

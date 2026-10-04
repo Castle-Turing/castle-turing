@@ -82,8 +82,13 @@ let
   # trick because the wrapper direct-execs an exempt invocation (no
   # backgrounding), so the repl keeps the pipe as its real stdin —
   # exactly the inheritance the scoped parker above cannot rely on.
+  # The experimental-features flag sits BEFORE `repl`, as a global
+  # option, on purpose: it proves the wrapper finds the subcommand
+  # past leading options rather than reading $1 — the exact bug that
+  # scoped nix-direnv's `nix --no-warn-dirty --extra-experimental-
+  # features ... print-dev-env` and hung direnv's capture.
   parkReplScript = pkgs.writeShellScript "nix-scope-park-repl" ''
-    sleep 60 | nix repl --extra-experimental-features nix-command >/dev/null 2>&1 &
+    sleep 60 | nix --extra-experimental-features nix-command repl >/dev/null 2>&1 &
   '';
 
   # The wrapper script's own comm is also `nix` (a shebang script
@@ -259,31 +264,18 @@ in
             f"opted-out evaluation still landed in a user-manager scope: {cg!r}"
         )
 
-    with subtest("an interactive-class invocation (nix repl) is exempt from scoping"):
+    with subtest("an exempt subcommand is found past leading global options (nix repl)"):
+        # parkReplScript puts --extra-experimental-features *before*
+        # `repl`, so an exemption that lands here proves the wrapper
+        # skipped the global option to find the subcommand rather than
+        # reading $1 — the fix for the direnv regression, where
+        # nix-direnv's leading options hid `print-dev-env` from a $1
+        # check and got it scoped and hung. The end-to-end guard for
+        # print-dev-env specifically is direnv-delivery-test, which
+        # runs the real nix-direnv path on every modules/dev change.
         cg = parked_cgroup(park="${parkReplScript}")
         assert "user@1000.service" not in cg, (
-            f"interactive repl was scoped despite the exemption: {cg!r}"
-        )
-
-    with subtest("print-dev-env is exempt so its synchronous capture does not hang"):
-        # The direnv regression in the flesh: nix-direnv runs
-        # `print-dev-env` and consumes its stdout synchronously;
-        # routing it through a transient scope hung that capture
-        # (20s CPU, then ~160s blocked on I/O until a timeout killed
-        # it). A dependency-free derivation keeps this offline and
-        # sub-second — no flake, no nixpkgs — and a `timeout` makes a
-        # regression a fast red rather than a hang. The captured env
-        # carries the derivation's own MARKER, proving the output
-        # actually flowed back.
-        out = machine.succeed(
-            f"runuser -u tester -- env {env} timeout 60 nix print-dev-env"
-            " --extra-experimental-features nix-command --impure"
-            " --expr 'derivation { name = \"ns-pde\";"
-            " system = builtins.currentSystem; builder = \"/bin/sh\";"
-            " MARKER = \"nix-scope-pde-ok\"; }'"
-        )
-        assert "nix-scope-pde-ok" in out, (
-            f"print-dev-env capture did not return the marker: {out!r}"
+            f"an exempt subcommand behind a global option was scoped: {cg!r}"
         )
   '';
 }

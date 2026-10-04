@@ -162,37 +162,45 @@ the design above rather than a style point:
   to the client bypasses the mechanism, and the module header and
   `enable` description now say so instead of claiming "every"
   invocation.
-- **One classification limit documented, not fixed:**
-  `nix develop --command bash` is indistinguishable from
-  `--command make` in argv and is scoped; an interactive shell that
-  must not live under an eval-sized bound is spelled bare
-  `nix develop`, or opted out.
-- **`print-dev-env` is exempt, and direnv loads are therefore
-  unbounded.** The resident's challenge caught a deterministic
-  regression the first draft shipped: `direnv-delivery-test` failed
-  its core "a whitelisted project's non-interactive bash sees the
-  marker" assertion on three consecutive runs. The mechanism, from
-  the VM's own scope accounting: nix-direnv runs `nix print-dev-env`
-  for `use flake` and consumes its stdout synchronously, and routing
-  that through a transient scope hung the capture — the scoped
-  `print-dev-env` burned 20s CPU, evaluated fully (466M peak, far
-  under any bound), then blocked on I/O for ~160s until the probe's
-  180s timeout killed it, leaving direnv with no environment. The
-  fix direct-execs `print-dev-env` alongside the interactive
-  exemptions. It earns the exemption on its merits, not only to
-  unbreak the test: nix-direnv caches it per `flake.lock` change
-  rather than per command, so it is not the edit-then-build loop
-  surface this task targets, and it mirrors the bare `nix develop`
-  already exempt. The honest cost: a direnv-driven dev-env
-  evaluation runs unbounded. Acceptable because it is cached and
-  infrequent and the loop-prone surfaces (`nix build`,
-  `nix flake check`, `nix eval`, `nix develop --command`) stay
-  scoped — but a resident who wants even that capture bounded has
-  no knob for it here, which is the residual this records rather
-  than closes. `test/nix-scope/test.nix` grows a subtest asserting
-  the capture returns (the faithful inverse of the hang), and
+- **The subcommand is found past leading global options, not read
+  from `$1`; `print-dev-env` is exempt, and direnv loads are
+  therefore unbounded.** The resident's challenge caught a
+  deterministic regression the first draft shipped:
+  `direnv-delivery-test` failed its core "a whitelisted project's
+  non-interactive bash sees the marker" assertion. The mechanism,
+  from the VM's own scope accounting: nix-direnv's `use flake` runs
+  `nix --no-warn-dirty --extra-experimental-features "…"
+  print-dev-env …`, so the subcommand is not `$1` — the first draft
+  matched `$1`, read `--no-warn-dirty`, missed the exemption, and
+  scoped `print-dev-env`; the scoped capture burned 20s CPU,
+  evaluated fully (487M peak, under any bound), then blocked on I/O
+  for ~160s until the probe's 180s timeout killed it, leaving direnv
+  with no environment. (The exemption had in fact *never* fired for
+  nix-direnv; an earlier green run was a scoped print-dev-env that
+  happened to finish under 180s on a warm cache.) The fix walks the
+  arguments past leading global options — skipping the separate
+  value of those that take one, as `--extra-experimental-features`
+  does — to the real subcommand, then exempts `repl`, `run`, and
+  `print-dev-env`. `print-dev-env` must not be scoped: its caller
+  consumes its stdout synchronously and a transient scope hangs that
+  capture. It earns the exemption on its merits besides — nix-direnv
+  caches it per `flake.lock` change, not per command, so it is not
+  the edit-then-build loop surface this task targets, and it mirrors
+  the bare `nix develop` exempted beside it. The honest cost: a
+  direnv-driven dev-env evaluation runs unbounded; acceptable
+  because it is cached and infrequent while the loop-prone surfaces
+  (`nix build`, `nix flake check`, `nix eval`, `nix develop
+  --command`) stay scoped, with no knob to bound the capture — a
+  residual this records rather than closes. `nix-scope-test` grows a
+  subtest proving an exempt subcommand is found behind a leading
+  global option (the exact regression shape), and
   `direnv-delivery-test` — which caught this — is the end-to-end
-  detector on every `modules/dev` change.
+  detector exercising the real nix-direnv path on every
+  `modules/dev` change.
+- **A `nix develop --command bash` limit remains documented, not
+  fixed:** it is indistinguishable in argv from `--command make`
+  and is scoped; an interactive shell that must not live under an
+  eval-sized bound is spelled bare `nix develop`, or opted out.
 
 - **Interactive environments are exempt from scoping.** Bare
   `nix develop`/`nix shell`/`nix repl`/`nix-shell`, and `nix run`'s
