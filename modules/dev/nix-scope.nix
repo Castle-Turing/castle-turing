@@ -95,9 +95,78 @@ let
       #    the command.
       if [ -n "''${CASTLE_NIX_SCOPE_DISABLE:-}" ] \
         || [ -n "''${CASTLE_NIX_IN_SCOPE:-}" ] \
-        || [ "$(id -u)" = 0 ] \
+        || [ "''${EUID:-}" = 0 ] \
         || [ -z "''${XDG_RUNTIME_DIR:-}" ] \
         || [ ! -S "''${XDG_RUNTIME_DIR}/systemd/private" ]; then
+        exec ${nixBin}/${name} "$@"
+      fi
+      # $EUID, not $(id -u): this script's own rule is absolute store
+      # paths, and a PATH-resolved id in a stripped-PATH context would
+      # print noise and silently void the root guard (review finding).
+
+      ${lib.optionalString (name == "nix") ''
+        # Interactive environments and arbitrary-duration payloads
+        # stay unscoped: memoryMax is sized for one evaluation, and an
+        # hours-long `nix develop` shell — the whole session working
+        # inside it, every inner nix call direct-exec'd by the marker
+        # below — must not live under an eval-sized ceiling; that
+        # would recreate the whole-session kill this module exists to
+        # end (review finding on this task's PR). `nix run` execs a
+        # payload of unknowable duration, same reasoning. The founding
+        # incidents' spellings stay covered: `nix develop --command`
+        # and `nix shell -c` are non-interactive and get their scope.
+        # First-argument subcommand matching is a documented
+        # heuristic: a spelling like `nix --option a b develop` slips
+        # past it and gets scoped — the strict direction, never the
+        # lax one.
+        case "''${1:-}" in
+          repl | run)
+            exec ${nixBin}/${name} "$@"
+            ;;
+          develop | shell)
+            interactive=1
+            for a in "$@"; do
+              case "$a" in
+                -c | --command)
+                  interactive=
+                  break
+                  ;;
+              esac
+            done
+            if [ -n "$interactive" ]; then
+              exec ${nixBin}/${name} "$@"
+            fi
+            ;;
+        esac
+      ''}
+      ${lib.optionalString (name == "nix-shell") ''
+        # Same exemption for the legacy spelling: bare nix-shell is an
+        # interactive environment; --run/--command is the bounded,
+        # loop-prone form.
+        interactive=1
+        for a in "$@"; do
+          case "$a" in
+            --run | --command)
+              interactive=
+              break
+              ;;
+          esac
+        done
+        if [ -n "$interactive" ]; then
+          exec ${nixBin}/${name} "$@"
+        fi
+      ''}
+
+      # A socket on disk is not a live manager: an uncleanly dead
+      # systemd --user leaves $XDG_RUNTIME_DIR/systemd/private behind,
+      # and a foreign XDG_RUNTIME_DIR (sudo with env kept) points at a
+      # manager that will refuse us — either way systemd-run would
+      # fail before nix ever ran, failing a workable invocation
+      # closed (review finding). One no-op scope probes the real
+      # thing; on any failure, fall open. The probe costs one
+      # manager round-trip per scoped invocation — milliseconds,
+      # against a client call that talks to nix-daemon anyway.
+      if ! ${systemdRun} --user --scope --collect --quiet -- true 2>/dev/null; then
         exec ${nixBin}/${name} "$@"
       fi
 
@@ -128,7 +197,7 @@ let
         -- ${nixBin}/${name} "$@"
       rc=$?
       if [ "$rc" -eq 137 ]; then
-        echo "castle-nix-scope: ${name} was killed by SIGKILL inside its own transient scope${boundNote} — almost certainly a memory kill: the kernel's cgroup OOM at the scope's MemoryMax, or systemd-oomd selecting the scope under pressure. The kill record is in \`journalctl -k\` (kernel cgroup kills) or \`journalctl --user\` (oomd kills)." >&2
+        echo "castle-nix-scope: ${name} was killed by SIGKILL inside its own transient scope${boundNote} — most likely a memory kill: the kernel's cgroup OOM at the scope's MemoryMax, or systemd-oomd selecting the scope under pressure. An external kill -9 looks identical from here; the kill record, if it was memory, is in the system journal: \`journalctl -k\` for kernel cgroup kills, \`journalctl -u systemd-oomd\` for oomd's." >&2
       fi
       exit "$rc"
     '';
@@ -158,7 +227,13 @@ in
       description = ''
         `MemoryMax=` for each nix invocation's scope — the hard cap at
         which the kernel OOM-kills inside that scope, leaving the
-        invoking shell alive to report it. A systemd size string. The
+        invoking shell alive to report it. A systemd size string.
+        Binds one invocation, not a session: interactive environments
+        (bare `nix develop`/`nix shell`/`nix repl`/`nix-shell`, and
+        `nix run`'s arbitrary-duration payload) are exempt from
+        scoping precisely so this value can be sized to a single
+        evaluation without becoming the ceiling on an hours-long
+        shell. The
         framework ships no number (Principle 01): what one evaluation
         deserves depends on the host's RAM and the resident's
         workload. Sized against the known cost of the workload this

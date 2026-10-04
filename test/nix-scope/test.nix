@@ -43,6 +43,14 @@ let
       --expr 'builtins.readFile "/dev/stdin"' >/dev/null 2>&1 &
   '';
 
+  # Same parking trick for an interactive-class invocation: a repl on
+  # a piped stdin blocks reading its first command. The wrapper must
+  # have direct-exec'd this one (interactive exemption), so it stays
+  # in the caller's cgroup rather than a transient scope.
+  parkReplScript = pkgs.writeShellScript "nix-scope-park-repl" ''
+    sleep 60 | nix repl --extra-experimental-features nix-command >/dev/null 2>&1 &
+  '';
+
   # The wrapper script's own comm is also `nix` (a shebang script
   # carries its script name), so pgrep alone is ambiguous between the
   # wrapper shell and the real evaluator. The real one is the ELF
@@ -100,16 +108,24 @@ in
     machine.start()
     machine.wait_for_unit("multi-user.target")
     machine.succeed("loginctl enable-linger tester")
-    machine.wait_until_succeeds("systemctl --user --machine=tester@ is-system-running")
+    # running OR degraded: is-system-running exits nonzero on
+    # `degraded` forever, so the bare spelling burns the whole retry
+    # timeout if any incidental user unit failed at linger startup —
+    # the manager is up and usable either way (review finding; the
+    # same latent flake exists verbatim in test/eval-storm/test.nix).
+    machine.wait_until_succeeds(
+        "systemctl --user --machine=tester@ is-system-running 2>/dev/null"
+        " | grep -Eq '^(running|degraded)$'"
+    )
 
     # Every tester probe needs the user manager reachable; runuser
     # alone does not set XDG_RUNTIME_DIR, so each probe states it.
     env = "XDG_RUNTIME_DIR=/run/user/1000"
 
 
-    def parked_cgroup(extra_env=""):
-        """Park a wrapped evaluation, return the evaluator's cgroup, clean up."""
-        machine.succeed(f"runuser -u tester -- env {env} {extra_env} ${parkScript}")
+    def parked_cgroup(park="${parkScript}", extra_env=""):
+        """Park a wrapped nix process, return its cgroup, clean up."""
+        machine.succeed(f"runuser -u tester -- env {env} {extra_env} {park}")
         cg = machine.wait_until_succeeds("${findEvaluator}")
         machine.succeed("pkill -u tester -x nix || true; pkill -u tester -x sleep || true")
         machine.wait_until_fails("pgrep -u tester -x nix")
@@ -178,6 +194,12 @@ in
         cg = parked_cgroup(extra_env="CASTLE_NIX_SCOPE_DISABLE=1")
         assert "user@1000.service" not in cg, (
             f"opted-out evaluation still landed in a user-manager scope: {cg!r}"
+        )
+
+    with subtest("an interactive-class invocation (nix repl) is exempt from scoping"):
+        cg = parked_cgroup(park="${parkReplScript}")
+        assert "user@1000.service" not in cg, (
+            f"interactive repl was scoped despite the exemption: {cg!r}"
         )
   '';
 }

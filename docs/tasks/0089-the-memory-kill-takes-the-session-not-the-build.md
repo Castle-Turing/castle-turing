@@ -128,6 +128,32 @@ review.
   mysteriously failed command in-band, which was this entry's one
   non-negotiable requirement.
 
+Three amendments from this task's own review passes, each a real
+defect in the design above rather than a style point:
+
+- **Interactive environments are exempt from scoping.** Bare
+  `nix develop`/`nix shell`/`nix repl`/`nix-shell`, and `nix run`'s
+  arbitrary-duration payload, direct-exec: a memoryMax sized for one
+  evaluation must not become the ceiling on an hours-long dev-shell
+  session — with the in-scope marker suppressing inner scopes, that
+  would have recreated the whole-session kill inside every dev
+  shell, likelier than before. The founding incidents' spellings
+  (`nix develop --command`, `nix shell -c`, every `nix build`/
+  `eval`/`flake` call) stay scoped. Subcommand detection is a
+  first-argument heuristic that errs toward scoping.
+- **The manager is probed live, not inferred from a socket on
+  disk.** An uncleanly dead `systemd --user` leaves its socket
+  behind, and a foreign `XDG_RUNTIME_DIR` points at a manager that
+  refuses the caller — both made the wrapper fail a workable nix
+  invocation closed. A no-op scope probe precedes the real one; any
+  probe failure falls open to direct exec.
+- **The kill report is calibrated.** An external `kill -9` is
+  indistinguishable from a memory kill at the wrapper ("most
+  likely", not "almost certainly"), and the pointers name where
+  records actually land: `journalctl -k` for kernel cgroup kills,
+  `journalctl -u systemd-oomd` for oomd's — not `journalctl --user`,
+  where a `--collect`ed scope leaves nothing.
+
 ## How it would have been caught sooner, and the detector this ships
 
 The incident's detector half already exists (`castle-eval-storm-check`
