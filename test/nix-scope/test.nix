@@ -115,6 +115,16 @@ in
     # `nix eval` needs the nix-command feature — normally on via
     # modules/base, which this test deliberately does not import.
     nix.settings.experimental-features = [ "nix-command" ];
+    # The NixOS test guest defaults to vm.panic_on_oom=2, which
+    # panics the whole kernel on *any* OOM — including a
+    # cgroup-contained one, the very event under test. On a real
+    # host panic_on_oom is 0 and a cgroup OOM kills only the
+    # offending process inside its scope, leaving the box up; this
+    # mirrors that regime so the descoping can be observed rather
+    # than crashing the guest. Confirmed necessary: the cgroup kill
+    # fired correctly (oom-killer named run-*.scope) and the guest
+    # panicked anyway on the first chunked-runaway run.
+    boot.kernel.sysctl."vm.panic_on_oom" = 0;
     castle.nixScope = {
       # Small enough that the runaway dies in moments, large enough
       # that the evaluator starts up and begins allocating. A
