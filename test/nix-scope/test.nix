@@ -37,8 +37,12 @@ let
   # also how a real evaluation's footprint actually grows on a host
   # whose RAM exceeds the cap. A real nix client killed by the real
   # kernel at the real bound — not a stub hog.
+  # No apostrophes anywhere in the expression — it is interpolated
+  # into a single-quoted shell argument in probeScript, and foldl's
+  # primed name has already broken that once (writeShellScript's own
+  # syntax check caught it).
   runawayExpr =
-    "builtins.length (builtins.foldl' (acc: i: acc ++ [ (builtins.genList (x: x) 1000000) ]) [ ] (builtins.genList (x: x) 1000))";
+    "let cs = builtins.genList (i: builtins.genList (x: x) 1000000) 1000; in builtins.deepSeq cs (builtins.length cs)";
 
   # Parks a wrapped evaluator: readFile on stdin blocks until the
   # 60-second sleep upstream closes the pipe, leaving a live nix
