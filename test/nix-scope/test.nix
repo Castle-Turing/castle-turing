@@ -48,10 +48,14 @@ let
   # 60-second sleep upstream closes the pipe, leaving a live nix
   # process whose cgroup the driver can read at leisure. The script
   # exits immediately (the pipeline is backgrounded and orphaned);
-  # the driver finds the evaluator by pid afterwards.
+  # the driver finds the evaluator by pid afterwards. `$!` after a
+  # backgrounded pipeline is its last element — the `nix` wrapper —
+  # recorded so the orphan subtest can kill exactly the pid a
+  # harness would hold, with no comm/exe guesswork.
   parkScript = pkgs.writeShellScript "nix-scope-park" ''
     sleep 60 | nix eval --extra-experimental-features nix-command --impure \
       --expr 'builtins.readFile "/dev/stdin"' >/dev/null 2>&1 &
+    echo $! > /tmp/nix-scope-wrapper-pid
   '';
 
   # Same parking trick for an interactive-class invocation: a repl on
@@ -226,10 +230,11 @@ in
         # The harness-cancellation shape: kill $! targets the wrapper
         # shell, and without signal forwarding the evaluator survives
         # as an orphan, still consuming inside its scope (review
-        # finding, confirmed against the real systemd-run).
+        # finding, confirmed against the real systemd-run). The
+        # wrapper pid is the one parkScript recorded.
         machine.succeed(f"runuser -u tester -- env {env} ${parkScript}")
         machine.wait_until_succeeds("${findEvaluator}")
-        machine.succeed("kill -TERM \"$(${findWrapperPid})\"")
+        machine.succeed("kill -TERM \"$(cat /tmp/nix-scope-wrapper-pid)\"")
         machine.wait_until_fails("${findEvaluator}")
         machine.succeed("pkill -u tester -x sleep || true")
         machine.wait_until_fails("pgrep -u tester -x nix")
