@@ -202,11 +202,26 @@ evaluation driven past a real 192M `MemoryMax` must die by SIGKILL in
 a transient scope of its own while the invoking shell survives,
 keeps executing, and holds the wrapper's stderr explanation — plus
 the PATH-resolution, transparency, root-fallback, and opt-out
-assertions. One half is not mechanically testable and is stated
-rather than faked: the oomd-versus-kernel race under slow realistic
-thrash (the VM test's kill is the kernel's cap, near-instant). The
-claim that oomd's leaf selection prefers the sub-scope rests on
-oomd's documented leaf-cgroup behavior, not on a test.
+assertions. CI confirms the kill lands as `CONSTRAINT_MEMCG` inside
+the invocation's own `run-*.scope` with the shell surviving (eight
+subtests green on run 37177001312). One half remains not
+mechanically testable and is stated rather than faked: the
+oomd-versus-kernel race under slow realistic thrash (the VM test's
+kill is the kernel's cap, near-instant). The claim that oomd's leaf
+selection prefers the sub-scope rests on oomd's documented
+leaf-cgroup behavior, not on a test.
+
+Two VM-fixture facts the test node carries, each found the hard way
+on CI rather than reasoned up front: `vm.panic_on_oom = 0` (the
+NixOS test default is 2, which panics the whole guest even on a
+cgroup-contained kill — the event under test), and a runaway that
+commits memory in ~8M chunks rather than one multi-gigabyte
+allocation (a single oversized `mmap` in a 2 GB guest is refused by
+the overcommit heuristic with ENOMEM, exit 1, before the cgroup cap
+can fire). Both are the small-guest regime diverging from a real
+host whose RAM exceeds the cap, not the mechanism — a real host runs
+`panic_on_oom = 0` and the chunked growth touches pages until the
+cgroup OOM kills only the evaluator.
 
 ## Verification plan
 
