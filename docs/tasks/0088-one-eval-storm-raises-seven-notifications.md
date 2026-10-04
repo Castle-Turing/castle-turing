@@ -55,3 +55,41 @@ Whether the all-clear is itself worth one notification ("storm
 ended, N connections total"), which would also give the suppressed
 ticks somewhere citable to land, or whether silence after the first
 alert is fine.
+
+**What shipped.** Both open questions resolved toward the smaller
+mechanism:
+
+- *Re-arm on one quiet tick*, not on the full window draining with
+  no storm ticks at all. This is also the shape the "what we already
+  know" section above already named, and it costs one `rm -f` on a
+  marker file rather than tracking a last-tripped timestamp and
+  comparing elapsed time against `windowMinutes` on every tick. The
+  trade-off accepted: a storm whose rate flickers exactly at the
+  threshold boundary could re-notify mid-storm if one tick's
+  trailing-window count dips below threshold and the next recovers —
+  the same defect this task fixes, just smaller. Left for a future
+  entry if ever observed; the threshold's own calibration already
+  carries headroom over both founding incidents' rates
+  (`modules/dev/eval-storm.nix`'s `threshold` option doc), which makes
+  a boundary flicker unlikely in practice.
+- *No all-clear notification.* This task's own title is "fires once
+  per storm" — a start notification plus an end notification is two,
+  not one, and reopens the alert-fatigue failure mode this task
+  exists to close. Silence after the first alert is the smaller
+  mechanism; the next storm's own transition notification is the only
+  other signal.
+
+Mechanism: a marker file's bare existence under `$XDG_RUNTIME_DIR`
+(always set for a `systemd.user.*` unit by the user manager itself).
+A storm tick notifies and creates the marker only when the marker is
+absent (the quiet→storm transition); while the marker exists, storm
+ticks still `exit 1` but skip the notify call; a quiet tick removes
+the marker unconditionally. `test/eval-storm/test.nix` gained a
+fourth node (`rearm`) with a short (`1`-minute) window so a quiet
+tick can be produced by actually waiting out the window, rather than
+a test asserting a time jump it never took; its subtest asserts one
+notification across two persisting-storm ticks, then a genuine quiet
+tick with the notification count unchanged (no all-clear), then a
+second storm raising a second notification (re-arm confirmed). The
+stub `notifyCommand` now appends rather than overwrites, so a line
+count is a direct invocation count.

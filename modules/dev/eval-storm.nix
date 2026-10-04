@@ -45,8 +45,50 @@ let
   # because the script has no independent way to tell "quiet" from
   # "the string stopped matching." Catching that drift is scoped to
   # whichever future task bumps the nixpkgs pin far enough to trip it.
+  # docs/tasks/0088: deduplicate notifyCommand delivery across a single
+  # storm. Without this, a storm that remains inside the trailing
+  # window for several consecutive two-minute ticks fires one
+  # notification per tick — observed as seven notifications for one
+  # storm on 2026-10-03. The per-tick nonzero exit (below) is
+  # deliberately untouched: systemd already collapses repeated failures
+  # into one failed-unit state, so that path has no spam problem to
+  # fix, and the visibly-failed unit stays the headless host's floor
+  # with no notifier configured at all.
+  #
+  # State is a marker file's mere existence under $XDG_RUNTIME_DIR —
+  # always set for a `systemd.user.*` unit by the user manager itself,
+  # so no fallback is needed — deliberately not tmpfs-persisted or
+  # written anywhere that survives a reboot, since a storm marker
+  # outliving the session it describes would silently suppress the
+  # next real storm's first notification.
+  #
+  # Two semantics the brief left open, decided here:
+  #
+  # 1. Re-arm waits for exactly one quiet tick (count below threshold),
+  #    not for the full ten-minute window to drain with no storm
+  #    ticks at all. The smaller rule is also the one the brief's own
+  #    "what we already know" section already named as the standard
+  #    shape, and it costs one `rm -f` rather than tracking a
+  #    last-tripped timestamp and comparing elapsed time against
+  #    `windowMinutes` on every tick. The trade-off this accepts: a
+  #    storm whose rate flickers exactly at the threshold boundary
+  #    could re-notify mid-storm if one tick's trailing-window count
+  #    dips below threshold and the next recovers. That edge case is
+  #    the same shape as the regression this task fixes, just smaller,
+  #    and is left for a future entry if it is ever observed — the
+  #    threshold's own calibration (see `threshold`'s description) was
+  #    already chosen with headroom over both founding incidents'
+  #    rates, which makes a boundary flicker unlikely in practice.
+  # 2. No all-clear notification. The task's own title is "fires once
+  #    per storm" — a start notification plus an end notification is
+  #    two, not one, and would reopen the exact alert-fatigue failure
+  #    mode this task exists to close. Silence after the first alert,
+  #    with the next storm's own transition notification as the only
+  #    other signal, is the smaller mechanism.
   checkScript = pkgs.writeShellScript "castle-eval-storm-check" ''
     set -euo pipefail
+
+    marker="$XDG_RUNTIME_DIR/castle-eval-storm-active"
 
     output=$(journalctl -u nix-daemon --no-pager --since "-${toString cfg.windowMinutes} minutes")
     # `grep -c` always prints a count (0 included) and exits 1 on no
@@ -58,10 +100,19 @@ let
 
     if [ "$count" -ge ${toString cfg.threshold} ]; then
       echo "castle-eval-storm-check: at or above threshold" >&2
-      ${lib.optionalString (cfg.notifyCommand != null) ''
-        ${cfg.notifyCommand} "Eval storm detected" "$count nix-daemon connections in the last ${toString cfg.windowMinutes} minutes (threshold ${toString cfg.threshold})" || true
-      ''}
+      if [ ! -e "$marker" ]; then
+        # Quiet-to-storm transition: this tick is the first to see the
+        # marker absent, so it is the one that notifies.
+        ${lib.optionalString (cfg.notifyCommand != null) ''
+          ${cfg.notifyCommand} "Eval storm detected" "$count nix-daemon connections in the last ${toString cfg.windowMinutes} minutes (threshold ${toString cfg.threshold})" || true
+        ''}
+        touch "$marker"
+      fi
       exit 1
+    else
+      # A quiet tick re-arms the notifier for the next storm (see this
+      # script's header comment for why one tick, not a full window).
+      rm -f "$marker"
     fi
   '';
 in
