@@ -44,24 +44,44 @@ let
   runawayExpr =
     "let cs = builtins.genList (i: builtins.genList (x: x) 1000000) 1000; in builtins.deepSeq cs (builtins.length cs)";
 
-  # Parks a wrapped evaluator: readFile on stdin blocks until the
-  # 60-second sleep upstream closes the pipe, leaving a live nix
-  # process whose cgroup the driver can read at leisure. The script
-  # exits immediately (the pipeline is backgrounded and orphaned);
-  # the driver finds the evaluator by pid afterwards. `$!` after a
-  # backgrounded pipeline is its last element — the `nix` wrapper —
-  # recorded so the orphan subtest can kill exactly the pid a
-  # harness would hold, with no comm/exe guesswork.
+  # A multi-second, low-memory evaluation that holds a *scoped* nix
+  # alive long enough for the driver to read its cgroup or kill it.
+  # It must NOT depend on stdin: the wrapper backgrounds the real nix
+  # for scoped invocations, and a backgrounded process in a
+  # non-interactive shell has its stdin redirected to /dev/null — so
+  # the earlier `readFile "/dev/stdin"` parker read EOF and exited at
+  # once, making every scoped-parking subtest a race it won by luck.
+  # The nested foldl' runs tens of millions of additions while each
+  # inner list is built and immediately discarded, so wall time is
+  # seconds but peak memory stays a few MB — far under the node cap,
+  # so the parker is never itself the OOM victim. In a file because a
+  # single-quoted --expr cannot carry foldl's apostrophe.
+  # Erring long on purpose: every subtest kills the parked process as
+  # soon as it has read what it needs, so a too-long eval only wastes
+  # a kill, while a too-short one could finish before the driver's
+  # poll catches it alive — the worse failure.
+  parkExpr = pkgs.writeText "nix-scope-park-expr.nix" ''
+    builtins.foldl'
+      (acc: _: acc + (builtins.foldl' (a: b: a + b) 0 (builtins.genList (x: x) 2000)))
+      0
+      (builtins.genList (y: y) 200000)
+  '';
+
+  # Parks a wrapped evaluator on real work (parkExpr), backgrounded so
+  # the script returns at once; the driver finds the live evaluator by
+  # pid afterwards. `$!` of a single backgrounded command is the `nix`
+  # wrapper itself, recorded so the orphan subtest can kill exactly
+  # the pid a harness would hold, with no comm/exe guesswork.
   parkScript = pkgs.writeShellScript "nix-scope-park" ''
-    sleep 60 | nix eval --extra-experimental-features nix-command --impure \
-      --expr 'builtins.readFile "/dev/stdin"' >/dev/null 2>&1 &
+    nix eval --extra-experimental-features nix-command -f ${parkExpr} >/dev/null 2>&1 &
     echo $! > /tmp/nix-scope-wrapper-pid
   '';
 
-  # Same parking trick for an interactive-class invocation: a repl on
-  # a piped stdin blocks reading its first command. The wrapper must
-  # have direct-exec'd this one (interactive exemption), so it stays
-  # in the caller's cgroup rather than a transient scope.
+  # An interactive-class invocation held open: a repl on a piped stdin
+  # blocks reading its first command. This one stays on the stdin
+  # trick because the wrapper direct-execs an exempt invocation (no
+  # backgrounding), so the repl keeps the pipe as its real stdin —
+  # exactly the inheritance the scoped parker above cannot rely on.
   parkReplScript = pkgs.writeShellScript "nix-scope-park-repl" ''
     sleep 60 | nix repl --extra-experimental-features nix-command >/dev/null 2>&1 &
   '';
@@ -74,22 +94,6 @@ let
     for p in $(pgrep -u tester -x nix); do
       if readlink -f "/proc/$p/exe" 2>/dev/null | grep -q 'bin/nix$'; then
         cat "/proc/$p/cgroup"
-        exit 0
-      fi
-    done
-    exit 1
-  '';
-
-  # The wrapper bash's pid: the evaluator's parent. Not found via
-  # pgrep -x nix — a shebang script's comm is its interpreter, not
-  # the script name, so the wrapper is invisible to a comm match
-  # (the evaluator, a real ELF, has comm `nix`). The evaluator's
-  # PPid is the wrapper that backgrounded it, which is exactly the
-  # pid a harness holds and would kill.
-  findWrapperPid = pkgs.writeShellScript "nix-scope-find-wrapper" ''
-    for p in $(pgrep -u tester -x nix); do
-      if readlink -f "/proc/$p/exe" 2>/dev/null | grep -q 'bin/nix$'; then
-        awk '{print $4}' "/proc/$p/stat"
         exit 0
       fi
     done
@@ -135,12 +139,12 @@ in
     # panicked anyway on the first chunked-runaway run.
     boot.kernel.sysctl."vm.panic_on_oom" = 0;
     castle.nixScope = {
-      # Small enough that the runaway dies in moments, large enough
-      # that the evaluator starts up and begins allocating. A
-      # calibration value for this fixture only — hosts set their own
-      # (Principle 01).
-      memoryMax = "192M";
-      memorySwapMax = "64M";
+      # Large enough that the low-memory parker (a few MB) is never
+      # the OOM victim, small enough that the chunked runaway crosses
+      # it in moments and well under the 2G guest. A calibration value
+      # for this fixture only — hosts set their own (Principle 01).
+      memoryMax = "512M";
+      memorySwapMax = "128M";
     };
     virtualisation.memorySize = 2048;
   };
