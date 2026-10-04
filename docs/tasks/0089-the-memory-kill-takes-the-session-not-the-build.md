@@ -66,3 +66,94 @@ high-to-max band — is worth shipping while the wrapper is specced.
 How a killed evaluation's death reaches the surviving session as
 "your build hit its memory bound" rather than as a mysteriously
 failed command.
+
+## Decisions, closing this entry's open questions
+
+Made at implementation (the brief transferred with its architecture
+deliberately open — its own `Model-because:` says choosing it is the
+implementer's deliverable); each is the resident's to overturn at
+review.
+
+- **The per-invocation sub-scope, delivered by PATH shadowing —
+  `modules/dev/nix-scope.nix`.** A `lib.hiPrio` package shadows the
+  five evaluating client commands (`nix`, `nix-build`, `nix-shell`,
+  `nix-instantiate`, `nix-env`); each wrapper runs the real client —
+  by absolute store path, so the shadow cannot recurse — under
+  `systemd-run --user --scope --collect --quiet` with this module's
+  bounds. PATH shadowing is accepted for the same reason task 0083
+  rejected guidance-only delivery: nothing else reaches an agent's
+  non-interactive bash mechanically, and both founding incidents
+  walked through exactly the gap guidance leaves. Three guards keep
+  the shadow honest: `CASTLE_NIX_SCOPE_DISABLE` (documented opt-out,
+  the `CASTLE_DIRENV_DISABLE` contract), `CASTLE_NIX_IN_SCOPE` (one
+  scope per top-level invocation — a `nix develop` shell's own nix
+  calls stay in their develop scope rather than stacking siblings),
+  and a fail-open direct exec for root or any context with no
+  reachable user manager (`$XDG_RUNTIME_DIR/systemd/private` absent)
+  — `nixos-rebuild` runs nix as root, and breaking a switch is the
+  one unforgivable failure available here.
+- **Band-closing is rejected as the mechanism, not just deferred.**
+  It is pure private-layer arithmetic, so there is nothing for this
+  repo to ship; and the incident evidence above already shows the
+  shape of its weakness — the kill race is decided by reclaim
+  pressure, which a scope at its cap with swap allowance still
+  generates, so oomd can still take the whole scope first. The
+  sub-scope wins both endgames: a kernel cap kill lands inside the
+  invocation's scope, and an oomd pressure kill now selects the leaf
+  actually generating the pressure.
+- **The framework ships no bound values (Principle 01).** Options are
+  `castle.nixScope.{enable,memoryMax,memorySwapMax}`, the memory pair
+  defaulting `null`. `memoryHigh` is deliberately not offered: the
+  throttle is what converted the founding incident's runaway into
+  minutes of thrash ending in a whole-scope kill anyway. Even with
+  no bounds set, the wrapper changes kill granularity — each
+  invocation is its own oomd-eligible leaf — which is why
+  `enable` defaults `true`, on the eval-storm rationale that nothing
+  opted in to the incidents.
+- **The parent scope keeps its own bounds, unchanged — with one
+  consequence stated plainly:** a transient user scope is registered
+  under the user manager, not nested in the caller's cgroup, so a
+  wrapped evaluation's memory no longer counts against the terminal
+  scope's `castle.launch` budget at all. That is the point (the
+  terminal budget stops paying for builds), but a resident sizing
+  budgets should know the nix client moved out from under them.
+- **The death report is the wrapper's own stderr line.** The wrapper
+  does not `exec` its final step; it stays resident, and when the
+  scoped client exits 137 (SIGKILL) it prints
+  `castle-nix-scope: <cmd> was killed … almost certainly a memory
+  kill`, naming the configured `MemoryMax` and where the kill record
+  lives (`journalctl -k` for kernel cap kills, `journalctl --user`
+  for oomd). The surviving shell — and the agent reading its output —
+  gets the distinction between "my build hit its bound" and a
+  mysteriously failed command in-band, which was this entry's one
+  non-negotiable requirement.
+
+## How it would have been caught sooner, and the detector this ships
+
+The incident's detector half already exists (`castle-eval-storm-check`
+named the storm 18 minutes before the kill); what nothing checked is
+the kill *granularity*. The detector landing here is
+`test/nix-scope/test.nix` (a `packages.x86_64-linux.nix-scope-test`
+VM, workflow `.github/workflows/nix-scope-test.yml`): a real
+evaluation driven past a real 192M `MemoryMax` must die by SIGKILL in
+a transient scope of its own while the invoking shell survives,
+keeps executing, and holds the wrapper's stderr explanation — plus
+the PATH-resolution, transparency, root-fallback, and opt-out
+assertions. One half is not mechanically testable and is stated
+rather than faked: the oomd-versus-kernel race under slow realistic
+thrash (the VM test's kill is the kernel's cap, near-instant). The
+claim that oomd's leaf selection prefers the sub-scope rests on
+oomd's documented leaf-cgroup behavior, not on a test.
+
+## Verification plan
+
+Unaided: `nix flake check` via check.yml (module evaluates);
+`nix-scope-test` on CI (its workflow carries `workflow_dispatch`, so
+the branch can be checked before the PR exists). Resident's hands:
+one switch on a real host, then — in a terminal they are willing to
+lose if this is wrong — `nix eval --expr` something enormous and
+confirm the shell survives with the `castle-nix-scope:` line on
+stderr; and the first week of real use, watching specifically for a
+context where the wrapper's fail-open conditions misfire (a workable
+nix invocation refused, or a switch misbehaving), which is a
+redirect, not a code defect.
