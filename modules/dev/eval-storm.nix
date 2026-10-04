@@ -115,6 +115,14 @@ let
         # permanently silence the rest of this storm with no retry —
         # leaving the marker absent on failure means the next tick
         # tries again rather than finding itself already "notified".
+        #
+        # `:` is a real no-op statement, not decoration: with
+        # notifyCommand unset, `lib.optionalString` below expands to
+        # nothing, and bash does not accept an `if … then; fi` with an
+        # empty body (confirmed the hard way — the shipped-default
+        # node's build failed on exactly this syntax error before this
+        # line was added).
+        :
         ${lib.optionalString (cfg.notifyCommand != null) ''
           if ${cfg.notifyCommand} "Eval storm detected" "$count nix-daemon connections in the last ${toString cfg.windowMinutes} minutes (threshold ${toString cfg.threshold})"; then
             touch "$marker"
