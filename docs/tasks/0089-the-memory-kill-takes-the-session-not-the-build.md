@@ -11,7 +11,6 @@ here the trade is the deliverable, and the wrong granularity
 reproduces the incident on a later date with a bigger budget. Any
 open question that needs the resident travels back up rather than
 being answered in-branch.
-Status: ready
 
 # The memory kill takes the session, not the build
 

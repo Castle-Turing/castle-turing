@@ -13,7 +13,6 @@ BASH_ENV re-entrancy guard took two rounds to get right); the
 implementer decides the open points and records them in this brief
 per the design-shift rule, which is judgment a cheap model follows
 off a cliff rather than exercises.
-Status: ready
 
 # One eval storm raises seven notifications
 
