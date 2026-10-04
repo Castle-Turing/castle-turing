@@ -1181,6 +1181,18 @@
       packages.x86_64-linux.eval-storm-test =
         nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (import ./test/eval-storm/test.nix);
 
+      # docs/tasks/0089: proves the nix-client scope wrapper
+      # (modules/dev/nix-scope.nix) descopes a memory kill — a real
+      # evaluation driven past a real MemoryMax dies alone in its own
+      # transient scope while the invoking shell survives and is told
+      # why, plus the root and opt-out fallbacks. A `packages.*`
+      # output for the same reason as its neighbors: one real VM
+      # boot, kept out of bare `nix flake check`'s fast gate. Like
+      # eval-storm-test, it imports the module file directly and
+      # needs nothing from the flake's own outputs.
+      packages.x86_64-linux.nix-scope-test =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest (import ./test/nix-scope/test.nix);
+
       # docs/tasks/0084: boots the real desktop stack, logs in through
       # the real greetd+tuigreet, presses all three real app-launch
       # chords, and asserts each launch lands in a transient scope

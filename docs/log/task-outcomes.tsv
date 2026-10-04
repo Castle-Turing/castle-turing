@@ -84,3 +84,4 @@ schema	task	attempt	queued	landed	outcome	tier	model	milestone	pr	cost_usd	turns
 1	0085-an-agent-workload-can-thrash-the-host	1	2026-09-06	2026-09-06	merged	standard	-	none-hygiene	103	-	-	-	-	-	-	-	-	-	-	-	e1	live	-
 1	0086-the-direnv-delivery-test-is-timing-flaky-in-ci	1	2026-10-03	-	-	standard	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
 1	0087-a-resident-menu-override-silently-drops-launch-scoping	1	2026-10-03	-	-	standard	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-
+1	0089-the-memory-kill-takes-the-session-not-the-build	1	2026-10-03	-	-	deep	-	none-hygiene	-	-	-	-	-	-	-	-	-	-	-	-	e2	live	-

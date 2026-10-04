@@ -105,7 +105,14 @@ let
 in
 
 {
-  imports = [ ./eval-storm.nix ];
+  imports = [
+    ./eval-storm.nix
+    # docs/tasks/0089: per-invocation scopes for the nix client, so a
+    # memory kill lands on the build rather than the session. Sibling
+    # of eval-storm.nix on purpose: the detector names the storm, the
+    # scope decides who dies when one wins anyway.
+    ./nix-scope.nix
+  ];
 
   # claude-code is packaged under an unfree license in nixpkgs; scoped to
   # just this package rather than a blanket `allowUnfree`, so adding it
