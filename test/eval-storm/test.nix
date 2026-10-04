@@ -4,9 +4,12 @@
 # (`count >= threshold`), against a real systemd --user instance and a
 # real nix-daemon, driven by real `nix store ping` calls — not a
 # re-implementation of the counting logic, and not a guess about what
-# `journalctl -u nix-daemon` prints.
+# `journalctl -u nix-daemon` prints. docs/tasks/0088 adds the fourth
+# node (`rearm`) and extends the stub notifier to prove the
+# storm-level notification dedup added there: one notification per
+# storm, not one per tick, and a genuinely quiet tick re-arms it.
 #
-# Three nodes, each importing the real `modules/dev/eval-storm.nix`
+# Four nodes, each importing the real `modules/dev/eval-storm.nix`
 # module directly (not a frozen config pulled from
 # `nixosConfigurations.example`, unlike test/oomd-liveness/test.nix's
 # own pattern): this module's options — threshold, windowMinutes,
@@ -40,9 +43,13 @@ let
   # arguments, rather than actually raising a desktop notification —
   # the same file-touching stub shape this repo already uses to
   # observe a fired side effect without a real notifier
-  # (test/agent-loop's worker/notify stand-ins).
+  # (test/agent-loop's worker/notify stand-ins). Appends (docs/tasks/
+  # 0088) rather than overwriting, so a line count is a direct count
+  # of invocations — the regression check for "one storm, one
+  # notification" needs to tell one invocation from several, not just
+  # whether the file exists.
   stubNotify = pkgs.writeShellScript "castle-eval-storm-test-notify" ''
-    printf '%s\n' "$1: $2" > /tmp/castle-eval-storm-notified
+    printf '%s\n' "$1: $2" >> /tmp/castle-eval-storm-notified
   '';
 
   testerModule = {
@@ -74,6 +81,13 @@ let
   # cover.
   threshold = 3;
   windowMinutes = 5;
+
+  # docs/tasks/0088: the dedup/re-arm node needs a genuinely quiet
+  # tick, which means actually waiting out `windowMinutes` of
+  # wall-clock time so the trailing journalctl window drains for
+  # real — not a fabricated "skip ahead". A one-minute window keeps
+  # that wait short relative to this test's own runtime.
+  rearmWindowMinutes = 1;
 in
 {
   name = "eval-storm";
@@ -109,8 +123,20 @@ in
     };
   };
 
+  # docs/tasks/0088: a dedicated node for the dedup/re-arm assertions,
+  # with its own (short) window rather than reusing `over` — see
+  # `rearmWindowMinutes` above for why.
+  nodes.rearm = {
+    imports = [ testerModule ];
+    castle.evalStorm = {
+      inherit threshold;
+      windowMinutes = rearmWindowMinutes;
+      notifyCommand = "${stubNotify}";
+    };
+  };
+
   testScript = ''
-    for m in (over, under, null_notify):
+    for m in (over, under, null_notify, rearm):
         m.start()
         m.wait_for_unit("multi-user.target")
         m.succeed("loginctl enable-linger tester")
@@ -143,5 +169,37 @@ in
             "runuser -u tester -- journalctl --user-unit=castle-eval-storm-check.service "
             "| grep -q '${toString threshold} nix-daemon connection'"
         )
+
+    with subtest("docs/tasks/0088: a persisting storm notifies once, not once per tick, and a genuinely quiet tick re-arms it for the next storm"):
+        for _ in range(${toString threshold}):
+            rearm.succeed("runuser -u tester -- nix store ping")
+        rearm.fail("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
+        rearm.succeed("runuser -u tester -- cat /tmp/castle-eval-storm-notified")
+        rearm.succeed("test $(cat /tmp/castle-eval-storm-notified | wc -l) -eq 1")
+
+        # Same storm, same window: the check still fails loudly on
+        # every over-threshold tick (the per-tick nonzero exit is
+        # untouched by this task), but the notifier must not fire a
+        # second time for it.
+        rearm.fail("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
+        rearm.succeed("test $(cat /tmp/castle-eval-storm-notified | wc -l) -eq 1")
+
+        # Wait out the window for real, so the trailing journalctl
+        # window drains past the storm's own connections rather than
+        # this test asserting a time jump it never took.
+        rearm.sleep(${toString (rearmWindowMinutes * 60 + 15)})
+        rearm.succeed("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
+        # The quiet tick re-arms silently — no all-clear notification
+        # (docs/tasks/0088's second open decision) — so the count is
+        # still 1 here, not 2.
+        rearm.succeed("test $(cat /tmp/castle-eval-storm-notified | wc -l) -eq 1")
+
+        # A fresh storm after the re-arm must notify again: silence
+        # forever after the first alert would be the same defect this
+        # task fixes, just moved one storm later.
+        for _ in range(${toString threshold}):
+            rearm.succeed("runuser -u tester -- nix store ping")
+        rearm.fail("systemctl --user --machine=tester@ start castle-eval-storm-check.service")
+        rearm.succeed("test $(cat /tmp/castle-eval-storm-notified | wc -l) -eq 2")
   '';
 }

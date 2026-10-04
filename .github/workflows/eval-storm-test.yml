@@ -48,11 +48,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # Three minimal (no desktop, no home-manager) VMs booting to
+    # Four minimal (no desktop, no home-manager) VMs booting to
     # multi-user.target, each driving a handful of `nix store ping`
-    # calls — locally this whole test finishes in well under two
-    # minutes once the closure is substituted. Generous headroom over
-    # that for a cold cache.
+    # calls — docs/tasks/0088's `rearm` node adds one genuine ~75s
+    # wait for its window to drain, so the whole test now runs in a
+    # few minutes once the closure is substituted. Generous headroom
+    # over that for a cold cache.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
