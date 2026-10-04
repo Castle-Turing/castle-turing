@@ -1,12 +1,13 @@
 name: eval-storm-test
 
-# docs/tasks/0083: boots three minimal NixOS VMs — each importing the
+# docs/tasks/0083: boots minimal NixOS VMs — each importing the
 # real modules/dev/eval-storm.nix module directly with different
 # castle.evalStorm.* option values — and proves castle-eval-storm-check
 # counts real nix-daemon client connections (driven by real
 # `nix store ping` calls) and trips at the inclusive `count >=
-# threshold` boundary, with and without a notifyCommand configured. See
-# test/eval-storm/test.nix for the three-node design.
+# threshold` boundary, with and without a notifyCommand configured.
+# docs/tasks/0088 added a fourth node for the notification-dedup
+# assertions. See test/eval-storm/test.nix for the node-by-node design.
 #
 # Its own workflow, not folded into check.yml's flake-check job, same
 # reasoning as the other VM-test workflows in this repo: this boots
@@ -48,11 +49,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # Three minimal (no desktop, no home-manager) VMs booting to
+    # Four minimal (no desktop, no home-manager) VMs booting to
     # multi-user.target, each driving a handful of `nix store ping`
-    # calls — locally this whole test finishes in well under two
-    # minutes once the closure is substituted. Generous headroom over
-    # that for a cold cache.
+    # calls — docs/tasks/0088's `rearm` node adds one genuine ~75s
+    # wait for its window to drain, so the whole test now runs in a
+    # few minutes once the closure is substituted. Generous headroom
+    # over that for a cold cache.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -63,9 +65,9 @@ jobs:
 
       # Same fix, same reasoning as the other VM-test workflows:
       # GitHub's hosted runners have nested virtualization available but
-      # /dev/kvm isn't group-writable by default, and this test's three
-      # VMs under TCG emulation would be needlessly slow rather than
-      # simply not run.
+      # /dev/kvm isn't group-writable by default, and this test's VMs
+      # under TCG emulation would be needlessly slow rather than simply
+      # not run.
       - name: Enable KVM access
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
