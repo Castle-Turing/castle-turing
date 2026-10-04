@@ -76,11 +76,16 @@ let
     exit 1
   '';
 
-  # The complement: the wrapper shell's pid — comm `nix`, exe bash.
+  # The wrapper bash's pid: the evaluator's parent. Not found via
+  # pgrep -x nix — a shebang script's comm is its interpreter, not
+  # the script name, so the wrapper is invisible to a comm match
+  # (the evaluator, a real ELF, has comm `nix`). The evaluator's
+  # PPid is the wrapper that backgrounded it, which is exactly the
+  # pid a harness holds and would kill.
   findWrapperPid = pkgs.writeShellScript "nix-scope-find-wrapper" ''
     for p in $(pgrep -u tester -x nix); do
-      if ! readlink -f "/proc/$p/exe" 2>/dev/null | grep -q 'bin/nix$'; then
-        echo "$p"
+      if readlink -f "/proc/$p/exe" 2>/dev/null | grep -q 'bin/nix$'; then
+        awk '{print $4}' "/proc/$p/stat"
         exit 0
       fi
     done
