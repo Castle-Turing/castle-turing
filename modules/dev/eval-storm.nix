@@ -85,6 +85,12 @@ let
   #    mode this task exists to close. Silence after the first alert,
   #    with the next storm's own transition notification as the only
   #    other signal, is the smaller mechanism.
+  #
+  # The marker is written only once `notifyCommand` itself reports
+  # success — caught by cross-vendor review: a transient delivery
+  # failure (the notification bus briefly unavailable, say) must not
+  # mark the storm "already notified" when nothing was ever delivered,
+  # or the rest of the storm goes silent with no retry.
   checkScript = pkgs.writeShellScript "castle-eval-storm-check" ''
     set -euo pipefail
 
@@ -102,11 +108,18 @@ let
       echo "castle-eval-storm-check: at or above threshold" >&2
       if [ ! -e "$marker" ]; then
         # Quiet-to-storm transition: this tick is the first to see the
-        # marker absent, so it is the one that notifies.
+        # marker absent, so it is the one that notifies. The marker is
+        # written only on a successful delivery (cross-vendor review on
+        # docs/tasks/0088): a transient notifyCommand failure (the
+        # notification bus briefly unavailable, say) must not
+        # permanently silence the rest of this storm with no retry —
+        # leaving the marker absent on failure means the next tick
+        # tries again rather than finding itself already "notified".
         ${lib.optionalString (cfg.notifyCommand != null) ''
-          ${cfg.notifyCommand} "Eval storm detected" "$count nix-daemon connections in the last ${toString cfg.windowMinutes} minutes (threshold ${toString cfg.threshold})" || true
+          if ${cfg.notifyCommand} "Eval storm detected" "$count nix-daemon connections in the last ${toString cfg.windowMinutes} minutes (threshold ${toString cfg.threshold})"; then
+            touch "$marker"
+          fi
         ''}
-        touch "$marker"
       fi
       exit 1
     else
