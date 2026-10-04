@@ -90,12 +90,25 @@ let
     set -u
     cd "$1" || exit 1
     {
-      # 180s, not a short safety margin: a genuinely cold `use flake`
-      # load measured up to ~105s here even with nothing left to
-      # build (just evaluation) — see virtualisation.additionalPaths'
+      # 600s: a genuinely cold `use flake` load measures up to ~105s
+      # here on an idle runner (see virtualisation.additionalPaths'
       # own comment below for why a build was ever in the picture at
-      # all.
-      timeout 180 bash -c 'printf "RESULT %s %s\n" "''${MARKER:-}" "''${EDITED_MARKER:-}"'
+      # all) and a loaded CI runner has measurably exceeded that idle
+      # figure. 600s stays well inside the test driver's own default
+      # 900s wait_until_succeeds bound on PROBE_DONE, so a genuine
+      # hang is still caught here first, with its own named status,
+      # before the driver's generic timeout fires.
+      #
+      # No `set -e` in this script, so a non-zero status from `timeout`
+      # reaches the capture below rather than aborting the block — the
+      # capture has to be the very next thing after the invocation, before
+      # anything else can touch $?.
+      start_s=$(date +%s)
+      timeout 600 bash -c 'printf "RESULT %s %s\n" "''${MARKER:-}" "''${EDITED_MARKER:-}"'
+      status=$?
+      end_s=$(date +%s)
+      echo "PROBE_STATUS $status"
+      echo "PROBE_SECONDS $((end_s - start_s))"
       echo "PROBE_DONE"
     } >"$2" 2>&1
   '';
@@ -214,10 +227,35 @@ in
           machine.wait_until_succeeds(f"grep -q '^PROBE_DONE$' {out_path}")
           raw = machine.succeed(f"cat {out_path}")
           print(f"probe output ({out_path}):\n{raw}")
+          status = None
+          seconds = None
+          result = ""
           for line in raw.splitlines():
-              if line.startswith("RESULT "):
-                  return line[len("RESULT "):].strip()
-          return ""
+              if line.startswith("PROBE_STATUS "):
+                  status = line[len("PROBE_STATUS "):].strip()
+              elif line.startswith("PROBE_SECONDS "):
+                  seconds = line[len("PROBE_SECONDS "):].strip()
+              elif line.startswith("RESULT "):
+                  result = line[len("RESULT "):].strip()
+          # Printed on every probe, pass or fail, so creeping eval cost
+          # shows up in CI logs as a trend long before it crosses the
+          # 600s bound.
+          print(f"probe duration ({out_path}): PROBE_SECONDS={seconds} PROBE_STATUS={status}")
+          # The status check is uniform across every probe call — any
+          # future probe that gets killed names itself the same way,
+          # rather than only the cold-cache one this was first found on.
+          if status == "124":
+              raise AssertionError(
+                  f"probe at {out_path} was killed by its own 600s timeout "
+                  f"after {seconds}s — this is load or eval-cost growth "
+                  "outrunning the bound, not a missing marker"
+              )
+          if status != "0":
+              raise AssertionError(
+                  f"probe at {out_path} exited with status {status} "
+                  f"(not a timeout) after {seconds}s"
+              )
+          return result
 
       def probe(project, out_path):
           # swaymsg exec asks the compositor itself — a direct,

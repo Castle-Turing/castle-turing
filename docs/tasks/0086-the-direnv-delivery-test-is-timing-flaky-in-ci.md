@@ -140,10 +140,13 @@ Machine-only, no human hands:
 - `nix build .#direnv-delivery-test` passes with the final bound —
   the test still proves everything it proved before (markers,
   whitelist, re-entrancy storm count, warm-cache zero).
-- The bound-set-to-1 scratch run (not committed) demonstrates the
-  timeout path produces the named `PROBE_STATUS 124` failure rather
-  than a marker-absent assertion — the detector's own detector, run
-  once by the implementer and reported in the PR description.
+- The bound-set-to-1 proof runs through CI rather than a local scratch
+  run (this host has no `nix` build capacity for the VM test): a commit
+  setting the bound to 1 is pushed, triggered via `workflow_dispatch`,
+  and observed to fail with the named `PROBE_STATUS 124` message rather
+  than a marker-absent assertion, then reverted on the branch (`git
+  revert`, keeping both commits in history) — the detector's own
+  detector, with both runs' ids reported in the PR description.
 - The probe output in the passing run's log shows `PROBE_SECONDS` for
   every probe — the trend instrumentation exists from day one.
 
