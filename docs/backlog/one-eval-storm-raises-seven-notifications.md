@@ -1,3 +1,20 @@
+Title: The eval-storm notifier fires once per storm
+Model: standard
+Milestone: none — hygiene
+Model-because: the mechanism is settled in the body — a transition
+rule deduplicating notifyCommand delivery only, state in
+$XDG_RUNTIME_DIR, the existing VM-test stub extended to assert one
+notification per storm — so deep would mostly re-derive recorded
+decisions. What keeps it off the cheap tier: two semantics transfer
+open (re-arm after one quiet tick or only after the window drains;
+whether an all-clear notification fires) and this module's own record
+shows shell-plus-state edges here reversing under scrutiny (the
+BASH_ENV re-entrancy guard took two rounds to get right); the
+implementer decides the open points and records them in this brief
+per the design-shift rule, which is judgment a cheap model follows
+off a cliff rather than exercises.
+Status: ready
+
 # One eval storm raises seven notifications
 
 **What.** `castle-eval-storm-check` (modules/dev/eval-storm.nix, task

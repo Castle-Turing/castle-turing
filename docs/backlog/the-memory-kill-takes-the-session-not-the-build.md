@@ -1,3 +1,18 @@
+Title: The memory kill lands on the build, not the session
+Model: deep
+Milestone: none — hygiene
+Model-because: this brief transfers with its central decision open —
+closing the high-to-max band versus a per-invocation sub-scope, and
+whether PATH-shadowing `nix` host-wide is acceptable at all — so the
+implementer is choosing an architecture, not following one. A
+standard-tier implementer handed an unmade decision reliably picks
+the nearest plausible shape and ships it without arguing the trade;
+here the trade is the deliverable, and the wrong granularity
+reproduces the incident on a later date with a bigger budget. Any
+open question that needs the resident travels back up rather than
+being answered in-branch.
+Status: ready
+
 # The memory kill takes the session, not the build
 
 **What.** When a bounded terminal scope runs away, what dies is
