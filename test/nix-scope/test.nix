@@ -260,5 +260,26 @@ in
         assert "user@1000.service" not in cg, (
             f"interactive repl was scoped despite the exemption: {cg!r}"
         )
+
+    with subtest("print-dev-env is exempt so its synchronous capture does not hang"):
+        # The direnv regression in the flesh: nix-direnv runs
+        # `print-dev-env` and consumes its stdout synchronously;
+        # routing it through a transient scope hung that capture
+        # (20s CPU, then ~160s blocked on I/O until a timeout killed
+        # it). A dependency-free derivation keeps this offline and
+        # sub-second — no flake, no nixpkgs — and a `timeout` makes a
+        # regression a fast red rather than a hang. The captured env
+        # carries the derivation's own MARKER, proving the output
+        # actually flowed back.
+        out = machine.succeed(
+            f"runuser -u tester -- env {env} timeout 60 nix print-dev-env"
+            " --extra-experimental-features nix-command --impure"
+            " --expr 'derivation { name = \"ns-pde\";"
+            " system = builtins.currentSystem; builder = \"/bin/sh\";"
+            " MARKER = \"nix-scope-pde-ok\"; }'"
+        )
+        assert "nix-scope-pde-ok" in out, (
+            f"print-dev-env capture did not return the marker: {out!r}"
+        )
   '';
 }

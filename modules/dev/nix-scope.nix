@@ -129,8 +129,25 @@ let
         # `--command make`), so an interactive shell wanted under a
         # bound-free scope is spelled bare `nix develop`, or opted
         # out with CASTLE_NIX_SCOPE_DISABLE.
+        #
+        # `print-dev-env` is the capture invocation nix-direnv runs
+        # for `use flake`, and it must NOT be scoped: its caller
+        # consumes its output synchronously, and routing it through a
+        # transient scope hangs that capture — measured on this task's
+        # own direnv-delivery VM, where a scoped print-dev-env burned
+        # 20s CPU, evaluated fully (466M peak, far under any bound),
+        # then blocked on I/O for ~160s until the probe's timeout
+        # killed it, leaving direnv with no environment. It belongs in
+        # this exemption on its merits regardless: nix-direnv caches it
+        # per flake.lock change rather than per command, so it is not
+        # the edit-then-build loop surface 0089 targets, and it mirrors
+        # the bare `nix develop` already exempted just above. The
+        # consequence, recorded in the brief: a direnv-driven dev-env
+        # evaluation is unbounded, while the loop-prone surfaces
+        # (`nix build`, `nix flake check`, `nix eval`, `nix develop
+        # --command`) stay scoped.
         case "''${1:-}" in
-          repl | run)
+          repl | run | print-dev-env)
             exec ${nixBin}/${name} "$@"
             ;;
           develop | shell)
