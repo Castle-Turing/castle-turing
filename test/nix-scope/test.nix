@@ -131,6 +131,21 @@ in
         )
         assert out.strip() == "2", f"wrapped nix eval returned {out!r}, not 2"
 
+    with subtest("argv survives the wrapper byte-for-byte (no environment expansion)"):
+        # systemd-run expands ''${NAME} in command arguments unless
+        # told not to; a nix expression is exactly where such bytes
+        # live. The expr is the nix string escape \''${PATH}, whose
+        # correct evaluation is the literal text ''${PATH} — any
+        # expansion en route makes nix print the live PATH instead.
+        out = machine.succeed(
+            f"runuser -u tester -- env {env} nix eval"
+            " --extra-experimental-features nix-command"
+            + " --expr '\"\\''${PATH}\"'"
+        )
+        assert out.strip() == "\"''${PATH}\"", (
+            f"argument was rewritten in transit: {out!r}"
+        )
+
     with subtest("the evaluator runs in a transient scope of its own under the user manager"):
         cg = parked_cgroup()
         assert "user@1000.service" in cg and "run-" in cg and ".scope" in cg, (

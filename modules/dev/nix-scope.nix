@@ -116,7 +116,15 @@ let
       # distinguishable from a mysteriously failed command — that
       # distinction is the one non-negotiable requirement in
       # docs/tasks/0089.
-      ${systemdRun} --user --scope --collect --quiet ${lib.escapeShellArgs memoryProperties} \
+      # --expand-environment=no: systemd-run otherwise rewrites
+      # ''${NAME} sequences inside the command's own arguments from
+      # the environment — verified live: `systemd-run --user --scope
+      # -- echo 'x ''${HOME} y'` prints the expansion. Nix expressions
+      # are full of ''${...}; a wrapper that corrupts argv is worse
+      # than no wrapper. (Cross-model review finding on this task's
+      # PR; confirmed empirically before fixing.)
+      ${systemdRun} --user --scope --collect --quiet --expand-environment=no \
+        ${lib.escapeShellArgs memoryProperties} \
         -- ${nixBin}/${name} "$@"
       rc=$?
       if [ "$rc" -eq 137 ]; then
