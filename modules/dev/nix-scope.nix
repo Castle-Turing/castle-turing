@@ -27,13 +27,22 @@
 # ("remember to run nix under systemd-run") is exactly the
 # one-spelling weakness both founding incidents walked through, and
 # nothing else reaches an agent's non-interactive bash mechanically.
-# Three guards keep the shadow honest, each with a visible reason
-# in the script below: an explicit opt-out (CASTLE_NIX_SCOPE_DISABLE),
-# an in-scope marker so a wrapped nix that spawns nix (a `nix develop`
-# shell) does not stack scopes per call, and a fallback to direct
-# exec wherever the user manager is unreachable — root (nixos-rebuild
-# runs nix as root; breaking a switch would be the one unforgivable
-# failure here), or any context without a running user manager.
+# The boundary that implies, stated rather than implied: only
+# PATH-resolved invocations are covered. A caller that interpolates
+# an absolute store path to the client (a unit ExecStart, a script
+# carrying ''${nix}/bin/nix) bypasses the shadow and evaluates in its
+# own cgroup, exactly as before this module.
+# Guards keep the shadow honest, each with a visible reason in the
+# script below: an explicit opt-out (CASTLE_NIX_SCOPE_DISABLE), and a
+# fallback to direct exec wherever the user manager is unreachable —
+# root (nixos-rebuild runs nix as root; breaking a switch would be
+# the one unforgivable failure here), or any context without a
+# running user manager. A nix invocation spawned from inside an
+# already-scoped one gets a sibling scope of its own, deliberately:
+# an inheritable in-scope marker was tried and rejected because any
+# long-lived descendant of a scoped invocation (a --command-started
+# tmux, an agent) would carry it forever and silently disable
+# scoping for everything it spawned.
 {
   config,
   lib,
@@ -81,10 +90,6 @@ let
       # Direct exec, in the order the reasons bind:
       #  - CASTLE_NIX_SCOPE_DISABLE: the documented opt-out, same
       #    contract as CASTLE_DIRENV_DISABLE in modules/dev.
-      #  - CASTLE_NIX_IN_SCOPE: this invocation is already inside a
-      #    scope this wrapper made (a `nix develop` shell's own nix
-      #    calls land here) — one scope per top-level invocation, not
-      #    one per descendant.
       #  - root: nixos-rebuild and the daemon's own helpers run nix as
       #    root with no user manager to register a scope with; a
       #    switch must never fail because of this wrapper.
@@ -93,8 +98,11 @@ let
       #    contexts, stripped environments), systemd-run --user cannot
       #    work, and failing open to the old behavior beats failing
       #    the command.
+      # Deliberately no in-scope guard: a nested nix call from inside
+      # a scoped invocation gets its own sibling scope with its own
+      # bound — see the header for why an inheritable marker was
+      # rejected.
       if [ -n "''${CASTLE_NIX_SCOPE_DISABLE:-}" ] \
-        || [ -n "''${CASTLE_NIX_IN_SCOPE:-}" ] \
         || [ "''${EUID:-}" = 0 ] \
         || [ -z "''${XDG_RUNTIME_DIR:-}" ] \
         || [ ! -S "''${XDG_RUNTIME_DIR}/systemd/private" ]; then
@@ -107,18 +115,20 @@ let
       ${lib.optionalString (name == "nix") ''
         # Interactive environments and arbitrary-duration payloads
         # stay unscoped: memoryMax is sized for one evaluation, and an
-        # hours-long `nix develop` shell — the whole session working
-        # inside it, every inner nix call direct-exec'd by the marker
-        # below — must not live under an eval-sized ceiling; that
-        # would recreate the whole-session kill this module exists to
-        # end (review finding on this task's PR). `nix run` execs a
-        # payload of unknowable duration, same reasoning. The founding
-        # incidents' spellings stay covered: `nix develop --command`
-        # and `nix shell -c` are non-interactive and get their scope.
-        # First-argument subcommand matching is a documented
-        # heuristic: a spelling like `nix --option a b develop` slips
-        # past it and gets scoped — the strict direction, never the
-        # lax one.
+        # hours-long `nix develop` shell must not live under an
+        # eval-sized ceiling; that would recreate the whole-session
+        # kill this module exists to end (review finding on this
+        # task's PR). `nix run` execs a payload of unknowable
+        # duration, same reasoning. The founding incidents' spellings
+        # stay covered: `nix develop --command` and `nix shell -c`
+        # are non-interactive and get their scope. Two documented
+        # heuristic boundaries: `nix --option a b develop` slips the
+        # first-argument match and gets scoped — the strict
+        # direction; and `nix develop --command bash` is classified
+        # non-interactive (indistinguishable here from
+        # `--command make`), so an interactive shell wanted under a
+        # bound-free scope is spelled bare `nix develop`, or opted
+        # out with CASTLE_NIX_SCOPE_DISABLE.
         case "''${1:-}" in
           repl | run)
             exec ${nixBin}/${name} "$@"
@@ -142,13 +152,26 @@ let
       ${lib.optionalString (name == "nix-shell") ''
         # Same exemption for the legacy spelling: bare nix-shell is an
         # interactive environment; --run/--command is the bounded,
-        # loop-prone form.
+        # loop-prone form. One more non-interactive shape carries
+        # neither flag: a `#!/usr/bin/env nix-shell` script, whose
+        # `#! nix-shell -i ...` directives live on line 2 of the
+        # script file and are parsed only by the real nix-shell —
+        # the wrapper sees just [script, args] (review finding). A
+        # positional argument that is a file with nix-shell on its
+        # second line is that shape, and it gets its scope.
         interactive=1
         for a in "$@"; do
           case "$a" in
             --run | --command)
               interactive=
               break
+              ;;
+            -*) ;;
+            *)
+              if [ -f "$a" ] && sed -n 2p "$a" 2>/dev/null | grep -q 'nix-shell'; then
+                interactive=
+                break
+              fi
               ;;
           esac
         done
@@ -170,8 +193,6 @@ let
         exec ${nixBin}/${name} "$@"
       fi
 
-      export CASTLE_NIX_IN_SCOPE=1
-
       # --scope: the command stays a child of this process on this
       # terminal (interactive `nix develop` and `nix repl` keep their
       # tty), while its cgroup becomes an oomd-eligible leaf of its
@@ -192,10 +213,31 @@ let
       # are full of ''${...}; a wrapper that corrupts argv is worse
       # than no wrapper. (Cross-model review finding on this task's
       # PR; confirmed empirically before fixing.)
+      #
+      # Backgrounded with signals forwarded, not run foreground: a
+      # harness that cancels a build kills the PID it spawned — this
+      # wrapper — and a foreground child would survive that as an
+      # orphan, still evaluating inside its scope (review finding,
+      # confirmed live: the payload reparents to PID 1 and keeps
+      # running). A non-interactive shell puts a background child in
+      # the caller's own process group, so tty reads and ^C reach it
+      # exactly as before; the traps cover the directed kill that
+      # would otherwise orphan the evaluator. The wait loop re-waits
+      # after a trap interrupts it, so the translated exit status is
+      # the child's own.
       ${systemdRun} --user --scope --collect --quiet --expand-environment=no \
         ${lib.escapeShellArgs memoryProperties} \
-        -- ${nixBin}/${name} "$@"
+        -- ${nixBin}/${name} "$@" &
+      child=$!
+      for sig in TERM INT HUP; do
+        trap "kill -''${sig} ''${child} 2>/dev/null" "''${sig}"
+      done
+      wait "$child"
       rc=$?
+      while kill -0 "$child" 2>/dev/null; do
+        wait "$child"
+        rc=$?
+      done
       if [ "$rc" -eq 137 ]; then
         echo "castle-nix-scope: ${name} was killed by SIGKILL inside its own transient scope${boundNote} — most likely a memory kill: the kernel's cgroup OOM at the scope's MemoryMax, or systemd-oomd selecting the scope under pressure. An external kill -9 looks identical from here; the kill record, if it was memory, is in the system journal: \`journalctl -k\` for kernel cgroup kills, \`journalctl -u systemd-oomd\` for oomd's." >&2
       fi
@@ -210,13 +252,16 @@ in
       default = true;
       description = ''
         Shadow the nix client commands with wrappers that run each
-        invocation in its own transient user scope, so a memory kill
-        lands on that invocation rather than on the terminal scope
-        around it (docs/tasks/0089). Default on for the same reason
-        castle.evalStorm is: nothing opted in to the incidents this
-        answers. With no bounds configured below, the wrapper changes
-        kill granularity only — each invocation becomes its own
-        oomd-eligible leaf — and imposes no limit of any kind.
+        PATH-resolved invocation in its own transient user scope, so
+        a memory kill lands on that invocation rather than on the
+        terminal scope around it (docs/tasks/0089). PATH-resolved is
+        the coverage boundary: a caller holding an absolute store
+        path to the client bypasses the shadow entirely. Default on
+        for the same reason castle.evalStorm is: nothing opted in to
+        the incidents this answers. With no bounds configured below,
+        the wrapper changes kill granularity only — each invocation
+        becomes its own oomd-eligible leaf — and imposes no limit of
+        any kind.
       '';
     };
 

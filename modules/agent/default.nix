@@ -1301,6 +1301,16 @@ in
         CASTLE_PRIVATE_ROOT = cfg.repo.private;
         CASTLE_APPLY_EVALUATE_FLAKE = lib.boolToString cfg.apply.evaluateFlake;
         CASTLE_APPLY_TIMEOUT = toString cfg.apply.timeoutSeconds;
+        # The optional flake check resolves nix via this unit's PATH,
+        # which modules/dev's nix-scope wrapper now shadows
+        # (docs/tasks/0089) — and a sibling transient scope would put
+        # the evaluation outside this unit's own cgroup, where
+        # `systemctl --user stop castle-apply`, TimeoutStopSec, and
+        # the unit's resource accounting no longer reach it. This
+        # unit manages its own children (killpg on timeout) and wants
+        # them inside its cgroup; the wrapper's documented opt-out
+        # keeps them there.
+        CASTLE_NIX_SCOPE_DISABLE = "1";
       }
       # optionalAttrs, not a bare assignment, for hygiene rather than
       # necessity — and the distinction was settled by building it, not

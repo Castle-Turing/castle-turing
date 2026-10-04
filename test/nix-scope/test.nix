@@ -65,6 +65,17 @@ let
     exit 1
   '';
 
+  # The complement: the wrapper shell's pid — comm `nix`, exe bash.
+  findWrapperPid = pkgs.writeShellScript "nix-scope-find-wrapper" ''
+    for p in $(pgrep -u tester -x nix); do
+      if ! readlink -f "/proc/$p/exe" 2>/dev/null | grep -q 'bin/nix$'; then
+        echo "$p"
+        exit 0
+      fi
+    done
+    exit 1
+  '';
+
   # Driven as the tester user with the user manager reachable. The
   # wrapper's own fallback conditions are exactly what the env here
   # satisfies (non-root, XDG_RUNTIME_DIR pointing at a live manager) —
@@ -133,11 +144,11 @@ in
 
 
     with subtest("the wrapper wins PATH resolution over the real nix client"):
-        # Content-based, not name-based: the wrapper's store path is
-        # also named `nix`, so resolve the symlink chain and look for
-        # the wrapper's own marker in the script text.
+        # The property, not an implementation spelling (review
+        # finding): what PATH resolves to must be a script — the real
+        # client is an ELF whose first bytes are not a shebang.
         machine.succeed(
-            "grep -q CASTLE_NIX_IN_SCOPE \"$(readlink -f \"$(command -v nix)\")\""
+            "head -c 2 \"$(readlink -f \"$(command -v nix)\")\" | grep -q '#!'"
         )
 
     with subtest("a wrapped evaluation is transparent"):
@@ -158,7 +169,12 @@ in
             " --extra-experimental-features nix-command"
             + " --expr '\"\\''${PATH}\"'"
         )
-        assert out.strip() == "\"''${PATH}\"", (
+        # nix re-escapes dollar-brace when printing string values, so
+        # the correct output keeps the backslash (review finding —
+        # the unescaped expectation fails even with a correct
+        # wrapper). Expansion en route would substitute the live
+        # PATH; either way the assertion distinguishes.
+        assert out.strip() == "\"\\''${PATH}\"", (
             f"argument was rewritten in transit: {out!r}"
         )
 
@@ -179,6 +195,18 @@ in
         # The kill was the kernel's cgroup OOM at the scope's
         # MemoryMax, on record — not an incidental crash.
         machine.succeed("journalctl -k | grep -qi 'memory cgroup out of memory'")
+
+    with subtest("killing the wrapper's own pid takes the scoped evaluator with it"):
+        # The harness-cancellation shape: kill $! targets the wrapper
+        # shell, and without signal forwarding the evaluator survives
+        # as an orphan, still consuming inside its scope (review
+        # finding, confirmed against the real systemd-run).
+        machine.succeed(f"runuser -u tester -- env {env} ${parkScript}")
+        machine.wait_until_succeeds("${findEvaluator}")
+        machine.succeed("kill -TERM \"$(${findWrapperPid})\"")
+        machine.wait_until_fails("${findEvaluator}")
+        machine.succeed("pkill -u tester -x sleep || true")
+        machine.wait_until_fails("pgrep -u tester -x nix")
 
     with subtest("root falls back to direct exec and still works"):
         # nixos-rebuild runs nix as root, where no user manager is

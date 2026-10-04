@@ -128,16 +128,53 @@ review.
   mysteriously failed command in-band, which was this entry's one
   non-negotiable requirement.
 
-Three amendments from this task's own review passes, each a real
-defect in the design above rather than a style point:
+Amendments from this task's own review passes, each a real defect in
+the design above rather than a style point:
+
+- **There is no in-scope marker.** The first design exported
+  `CASTLE_NIX_IN_SCOPE` into the scoped payload so nested nix calls
+  would not stack scopes — and review showed the marker is
+  inheritable forever: any long-lived descendant of one scoped
+  invocation (a `--command`-started tmux or agent) would silently
+  disable scoping for everything it ever spawned, recreating the
+  founding incident with no sign the guard was off. Nested
+  invocations now get sibling scopes of their own, each bounded,
+  which is the better behavior anyway.
+- **A wrapper death takes the evaluator with it.** The scoped client
+  is backgrounded with TERM/INT/HUP forwarded and the exit status
+  re-waited: a harness that cancels a build kills the PID it spawned
+  — the wrapper — and without forwarding, the evaluator survived as
+  an orphan, still consuming inside its scope (confirmed against the
+  real systemd-run).
+- **`nix-shell` shebang scripts are scoped.** Their `#! nix-shell`
+  directives live on line 2 of the script file, invisible in argv,
+  so they classified as interactive and escaped unscoped — exactly
+  a bounded eval-then-run workload. A positional file argument with
+  nix-shell on its second line is now detected.
+- **`castle-apply` opts out.** The agent module's apply unit resolves
+  nix via PATH for its optional flake check; a sibling scope would
+  move that evaluation outside the unit's cgroup, where
+  `systemctl --user stop` and the unit's accounting no longer reach
+  it. The unit sets `CASTLE_NIX_SCOPE_DISABLE=1` — it already
+  manages its own children.
+- **The coverage boundary is stated.** Only PATH-resolved
+  invocations are shadowed; a caller holding an absolute store path
+  to the client bypasses the mechanism, and the module header and
+  `enable` description now say so instead of claiming "every"
+  invocation.
+- **One classification limit documented, not fixed:**
+  `nix develop --command bash` is indistinguishable from
+  `--command make` in argv and is scoped; an interactive shell that
+  must not live under an eval-sized bound is spelled bare
+  `nix develop`, or opted out.
 
 - **Interactive environments are exempt from scoping.** Bare
   `nix develop`/`nix shell`/`nix repl`/`nix-shell`, and `nix run`'s
   arbitrary-duration payload, direct-exec: a memoryMax sized for one
   evaluation must not become the ceiling on an hours-long dev-shell
-  session — with the in-scope marker suppressing inner scopes, that
-  would have recreated the whole-session kill inside every dev
-  shell, likelier than before. The founding incidents' spellings
+  session — that would have recreated the whole-session kill inside
+  every dev shell, likelier than before. The founding incidents'
+  spellings
   (`nix develop --command`, `nix shell -c`, every `nix build`/
   `eval`/`flake` call) stay scoped. Subcommand detection is a
   first-argument heuristic that errs toward scoping.
@@ -174,8 +211,10 @@ oomd's documented leaf-cgroup behavior, not on a test.
 ## Verification plan
 
 Unaided: `nix flake check` via check.yml (module evaluates);
-`nix-scope-test` on CI (its workflow carries `workflow_dispatch`, so
-the branch can be checked before the PR exists). Resident's hands:
+`nix-scope-test` on CI — via its pull-request path trigger, since
+`workflow_dispatch` only works once a workflow exists on the default
+branch, which a brand-new workflow does not until this merges.
+Resident's hands:
 one switch on a real host, then — in a terminal they are willing to
 lose if this is wrong — `nix eval --expr` something enormous and
 confirm the shell survives with the `castle-nix-scope:` line on
