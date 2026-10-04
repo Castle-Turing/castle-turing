@@ -27,11 +27,18 @@
 # take at face value.)
 { pkgs, ... }:
 let
-  # The runaway: force a list far larger than the scope's MemoryMax
-  # allows. 400M elements would want gigabytes; the cap below kills
-  # the evaluator long before that. A real nix client being killed by
-  # the real kernel at the real bound — not a stub hog.
-  runawayExpr = "builtins.length (builtins.genList (x: x) 400000000)";
+  # The runaway: grow memory in ~8M chunks, accumulated so nothing
+  # can be collected, far past the scope's MemoryMax. Chunked, not
+  # one oversized genList: a single multi-gigabyte allocation in a
+  # 2G guest is refused by the kernel's overcommit heuristic
+  # (ENOMEM, exit 1) before the cgroup cap ever matters — observed
+  # on this test's own first CI run — while chunks well under guest
+  # RAM commit page by page until the cgroup kill fires, which is
+  # also how a real evaluation's footprint actually grows on a host
+  # whose RAM exceeds the cap. A real nix client killed by the real
+  # kernel at the real bound — not a stub hog.
+  runawayExpr =
+    "builtins.length (builtins.foldl' (acc: i: acc ++ [ (builtins.genList (x: x) 1000000) ]) [ ] (builtins.genList (x: x) 1000))";
 
   # Parks a wrapped evaluator: readFile on stdin blocks until the
   # 60-second sleep upstream closes the pipe, leaving a live nix
